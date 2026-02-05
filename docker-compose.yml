@@ -1,5 +1,22 @@
 version: '3.8'
 
+# ============================================================================
+# Marty Integration Tests - Service Orchestration
+# ============================================================================
+#
+# This docker-compose configuration orchestrates all Marty services for
+# integration testing. It references service implementations from:
+#   - marty-ui: Gateway and supporting services
+#   - marty-credentials: Issuance service
+#
+# Services are built from their respective repositories using absolute paths.
+# This allows integration tests to run independently while using the actual
+# service code from their source repositories.
+#
+# To update service code: modify the source repo and rebuild the service
+#   docker compose up -d --build <service-name>
+# ============================================================================
+
 # Docker Compose configuration for running gateway integration tests
 # Orchestrates the gateway + all backend services + test runner
 
