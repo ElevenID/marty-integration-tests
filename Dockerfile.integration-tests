@@ -1,0 +1,19 @@
+# Dockerfile for running integration tests
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy test dependencies
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir -e ".[dev]"
+
+# Copy test code
+COPY tests/ ./tests/
+
+# Default command runs all integration tests
+CMD ["pytest", "tests/integration/", "-v"]
