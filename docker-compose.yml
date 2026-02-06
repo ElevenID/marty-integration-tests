@@ -55,7 +55,7 @@ services:
   db-migrations:
     build:
       context: /Volumes/Heart of Gold/Github/work
-      dockerfile: /Volumes/Heart of Gold/Github/work/marty-ui/services/Dockerfile.migrations
+      dockerfile: marty-ui/services/Dockerfile.migrations
     container_name: marty-db-migrations
     environment:
       - DATABASE_URL=postgresql://marty:marty_dev@postgres:5432/marty_credentials
@@ -69,8 +69,8 @@ services:
   # Auth Service (port 8001)
   auth-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work/marty-ui
-      dockerfile: services/Dockerfile
+      context: /Volumes/Heart of Gold/Github/work
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: auth
     environment:
@@ -93,8 +93,8 @@ services:
   # Organization Service (port 8002)
   organization-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work/marty-ui
-      dockerfile: services/Dockerfile
+      context: /Volumes/Heart of Gold/Github/work
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: organization
     environment:
@@ -114,8 +114,8 @@ services:
   # Credential Template Service (port 8003)
   credential-template-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work/marty-ui
-      dockerfile: services/Dockerfile
+      context: /Volumes/Heart of Gold/Github/work
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: credential_template
     environment:
@@ -135,8 +135,8 @@ services:
   # Trust Profile Service (port 8004)
   trust-profile-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work/marty-ui
-      dockerfile: services/Dockerfile
+      context: /Volumes/Heart of Gold/Github/work
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: trust_profile
     environment:
@@ -157,7 +157,7 @@ services:
   issuance-service:
     build:
       context: /Volumes/Heart of Gold/Github/work
-      dockerfile: /Volumes/Heart of Gold/Github/work/marty-credentials/services/Dockerfile
+      dockerfile: marty-credentials/services/Dockerfile
     environment:
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
       - REDIS_URL=redis://redis:6379
@@ -198,8 +198,8 @@ services:
   # Compliance Profile Service (port 8008)
   compliance-profile-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work/marty-ui
-      dockerfile: services/Dockerfile
+      context: /Volumes/Heart of Gold/Github/work
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: compliance_profile
     environment:
@@ -217,8 +217,8 @@ services:
   # Presentation Policy Service (port 8009)
   presentation-policy-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work/marty-ui
-      dockerfile: services/Dockerfile
+      context: /Volumes/Heart of Gold/Github/work
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: presentation_policy
     environment:
@@ -238,8 +238,8 @@ services:
   # Flow Service (port 8011)
   flow-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work/marty-ui
-      dockerfile: services/Dockerfile
+      context: /Volumes/Heart of Gold/Github/work
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: flow
     environment:
@@ -262,8 +262,8 @@ services:
   # Gateway (port 8000)
   gateway:
     build:
-      context: /Volumes/Heart of Gold/Github/work/marty-ui
-      dockerfile: services/Dockerfile
+      context: /Volumes/Heart of Gold/Github/work
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: gateway
     environment:
@@ -313,6 +313,12 @@ services:
     depends_on:
       waltid-postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --timeout=2 --tries=1 -O /dev/null http://localhost:7001/wallet-api 2>/dev/null || (wget --timeout=2 --tries=1 --spider http://localhost:7001/wallet-api 2>&1 | grep -q '404') && exit 0 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - marty-test-network
 
@@ -346,6 +352,8 @@ services:
       - PYTHONUNBUFFERED=1
     depends_on:
       gateway:
+        condition: service_healthy
+      waltid-wallet:
         condition: service_healthy
     networks:
       - marty-test-network

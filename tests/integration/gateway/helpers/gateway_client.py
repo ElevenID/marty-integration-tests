@@ -6,6 +6,8 @@ for all endpoints used by the UI. Handles authentication, error handling, and
 response parsing.
 """
 
+import base64
+import json
 import os
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -664,10 +666,44 @@ class GatewayClient:
         
     async def get_verification_request(self, instance_id: str) -> Dict[str, Any]:
         """Get verification request object (wallet fetches this)"""
-        return await self._request(
-            "GET",
-            f"/v1/flows/instances/{instance_id}/request",
-        )
+        # This endpoint returns a JWT (application/oauth-authz-req+jwt), not JSON
+        # We need to decode it
+        try:
+            response = await self.client.get(
+                f"/v1/flows/instances/{instance_id}/request",
+                headers=self._get_headers(),
+            )
+            response.raise_for_status()
+            
+            # Check content type
+            content_type = response.headers.get("content-type", "")
+            if "jwt" in content_type or not content_type.startswith("application/json"):
+                # It's a JWT - decode the payload (middle part)
+                jwt_token = response.text
+                # JWT format: header.payload.signature
+                parts = jwt_token.split('.')
+                if len(parts) == 3:
+                    # Decode the payload (add padding if needed)
+                    payload_b64 = parts[1]
+                    # Add padding if needed
+                    padding = 4 - len(payload_b64) % 4
+                    if padding != 4:
+                        payload_b64 += '=' * padding
+                    payload_bytes = base64.urlsafe_b64decode(payload_b64)
+                    decoded = json.loads(payload_bytes)
+                    return decoded
+                else:
+                    raise GatewayClientError(f"Invalid JWT format: expected 3 parts, got {len(parts)}")
+            else:
+                # It's JSON
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            error_detail = e.response.text
+            raise GatewayClientError(
+                f"GET /v1/flows/instances/{instance_id}/request failed with {e.response.status_code}: {error_detail}"
+            ) from e
+        except httpx.RequestError as e:
+            raise GatewayClientError(f"Request to /v1/flows/instances/{instance_id}/request failed: {e}") from e
         
     async def submit_verification(
         self,
