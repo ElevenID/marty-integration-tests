@@ -8,11 +8,14 @@ response parsing.
 
 import base64
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class GatewayClientError(Exception):
@@ -23,7 +26,7 @@ class GatewayClientError(Exception):
 class GatewayClient:
     """HTTP client for Gateway API integration tests"""
     
-    def __init__(self, base_url: Optional[str] = None, timeout: float = 30.0):
+    def __init__(self, base_url: Optional[str] = None, timeout: float = 90.0):
         """
         Initialize gateway client.
         
@@ -39,6 +42,7 @@ class GatewayClient:
             follow_redirects=True,
         )
         self._auth_token: Optional[str] = None
+        self._session_id: Optional[str] = None
         
     async def __aenter__(self):
         return self
@@ -50,6 +54,47 @@ class GatewayClient:
         """Close the HTTP client"""
         await self.client.aclose()
         
+    def set_session(self, session_id: str) -> None:
+        """
+        Set the gateway session cookie on this client.
+
+        Call this (or ``authenticate``) before making requests to
+        auth-protected endpoints.
+        """
+        self._session_id = session_id
+        self.client.cookies.set("sessionId", session_id)
+        logger.debug("Gateway client: session cookie set (%s...)", session_id[:8])
+
+    async def authenticate(
+        self,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> str:
+        """
+        Complete the Keycloak PKCE flow and store the resulting session cookie.
+
+        Parameters
+        ----------
+        username:
+            Keycloak username / email.  Falls back to ``TEST_USERNAME`` env var
+            then ``admin@marty.demo``.
+        password:
+            Keycloak password.  Falls back to ``TEST_PASSWORD`` env var
+            then ``MartyTest123!``.
+
+        Returns
+        -------
+        str
+            The ``sessionId`` cookie value.
+        """
+        from .auth_helper import AuthHelper
+
+        helper = AuthHelper()
+        session_id = await helper.get_session_id(username, password)
+        self.set_session(session_id)
+        logger.info("Gateway client: authenticated as %s", username or "default-test-user")
+        return session_id
+
     def _get_headers(self) -> Dict[str, str]:
         """Get request headers with auth if available"""
         headers = {"Content-Type": "application/json"}
@@ -213,6 +258,9 @@ class GatewayClient:
         issuer_certificate_chain_pem: Optional[str] = None,
         issuer_did: Optional[str] = None,
         auto_generate_artifacts: bool = True,
+        zk_predicate_claims: Optional[List[str]] = None,
+        credential_payload_format: Optional[str] = None,
+        wallet_configs: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """
         Create a credential template (master issuance configuration).
@@ -234,6 +282,10 @@ class GatewayClient:
             issuer_certificate_chain_pem: X.509 certificate chain (for mDoc)
             issuer_did: DID for issuer (for DID-based credentials)
             auto_generate_artifacts: Auto-generate missing artifacts in non-production
+            credential_payload_format: Payload structure variant (e.g. 'w3c_vcdm_v2_sd_jwt',
+                'ietf_sd_jwt', 'w3c_vcdm_v2_jwt_vc'). Server default: 'w3c_vcdm_v2_sd_jwt'.
+            wallet_configs: Per-wallet deep-link configs, e.g.
+                [{"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://"}]
             
         Returns:
             Credential template object
@@ -266,7 +318,13 @@ class GatewayClient:
             payload["issuer_did"] = issuer_did
         if schema:
             payload["schema_uri"] = schema
-        
+        if zk_predicate_claims:
+            payload["zk_predicate_claims"] = zk_predicate_claims
+        if credential_payload_format is not None:
+            payload["credential_payload_format"] = credential_payload_format
+        if wallet_configs is not None:
+            payload["wallet_configs"] = wallet_configs
+
         return await self._request(
             "POST",
             "/v1/credential-templates",

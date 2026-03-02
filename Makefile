@@ -39,6 +39,9 @@ test-fast: start
 test-wallet: start
 	pytest -m wallet -v
 
+test-marty-wallet: start
+	pytest -m marty_wallet -v
+
 logs:
 	docker compose logs -f
 

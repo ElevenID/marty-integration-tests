@@ -4,13 +4,13 @@ Pytest configuration and shared fixtures for Gateway integration tests.
 Provides fixtures for gateway client, test organizations, and common test data.
 """
 
-import asyncio
 import os
-from typing import AsyncGenerator, Dict, Any
+from typing import AsyncGenerator, Dict, Any, Optional
 
 import httpx
 import pytest
 
+from .helpers.auth_helper import AuthHelper
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.test_data import TestDataBuilder
 from .helpers.waltid_wallet_client import WaltIdWalletClient
@@ -67,33 +67,75 @@ def pytest_collection_modifyitems(config, items):
 
 
 # =============================================================================
-# Event Loop Fixture
-# =============================================================================
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop for async tests"""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
-# =============================================================================
 # Gateway Client Fixtures
 # =============================================================================
 
 @pytest.fixture
-async def gateway_client() -> AsyncGenerator[GatewayClient, None]:
+async def gateway_client(test_session_id: str) -> AsyncGenerator[GatewayClient, None]:
     """
-    Provide configured gateway client.
-    
+    Provide an authenticated gateway client (Keycloak session via PKCE).
+
+    The session is established once per test session by the ``test_session_id``
+    fixture and reused here so that all downstream fixtures and tests that
+    depend on ``gateway_client`` receive a properly-authenticated client.
+
     Usage:
         async def test_something(gateway_client):
             org = await gateway_client.create_organization("test-org")
     """
     client = GatewayClient()
+    client.set_session(test_session_id)
     try:
-        # Verify gateway is healthy
+        await client.health_check()
+        yield client
+    finally:
+        await client.close()
+
+
+# Module-level session ID cache.
+# Using a plain dict (not an async fixture) ensures the PKCE flow runs
+# exactly ONCE per process even if pytest-asyncio 1.x re-enters the
+# session-scoped fixture in different event loop contexts.
+_SESSION_CACHE: Dict[str, Optional[str]] = {"session_id": None}
+
+
+@pytest.fixture(scope="session")
+async def test_session_id() -> str:
+    """
+    Perform the Keycloak PKCE flow once per test session.
+
+    Returns the ``sessionId`` cookie value for the configured test user
+    (``TEST_USERNAME`` / ``TEST_PASSWORD`` env vars, defaulting to
+    ``admin@marty.demo`` / ``MartyTest123!``).
+
+    The result is stored in the module-level ``_SESSION_CACHE`` dict so
+    that it is shared across all event loop contexts (pytest-asyncio
+    may re-enter session-scoped async fixtures in separate event loops).
+    """
+    if _SESSION_CACHE["session_id"] is None:
+        helper = AuthHelper()
+        _SESSION_CACHE["session_id"] = await helper.get_session_id()
+    return _SESSION_CACHE["session_id"]  # type: ignore[return-value]
+
+
+@pytest.fixture
+async def authenticated_gateway_client(
+    test_session_id: str,
+) -> AsyncGenerator[GatewayClient, None]:
+    """
+    Provide a gateway client pre-authenticated via Keycloak PKCE.
+
+    Sends the ``sessionId`` cookie with every request, mirroring how
+    the browser-based UI communicates with the gateway.
+
+    Usage::
+
+        async def test_something(authenticated_gateway_client):
+            offer = await authenticated_gateway_client.issue_credential(...)
+    """
+    client = GatewayClient()
+    client.set_session(test_session_id)
+    try:
         await client.health_check()
         yield client
     finally:
@@ -188,6 +230,64 @@ async def employee_badge_template(
         Credential template object for employee badge
     """
     template_data = TestDataBuilder.employee_badge_template(
+        organization_id=test_organization["id"],
+    )
+    template = await gateway_client.create_credential_template(**template_data)
+    return template
+
+
+@pytest.fixture
+async def jwt_vc_template(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create a W3C JWT VC (jwt_vc) credential template.
+
+    Returns:
+        Credential template object for VerifiableId (jwt_vc format)
+    """
+    template_data = TestDataBuilder.jwt_vc_template(
+        organization_id=test_organization["id"],
+    )
+    template = await gateway_client.create_credential_template(**template_data)
+    return template
+
+
+@pytest.fixture
+async def jwt_vc_v2_template(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create a W3C JWT VC credential template using the VCDM v2 payload format.
+
+    Sets ``credential_payload_format = "w3c_vcdm_v2_jwt_vc"`` and includes a
+    ``wallet_configs`` entry for the *marty* wallet, so issuance responses
+    will include a ``credential_offer_uris`` dict.
+
+    Returns:
+        Credential template object for VerifiableId (jwt_vc / VCDM v2 format)
+    """
+    template_data = TestDataBuilder.jwt_vc_v2_template(
+        organization_id=test_organization["id"],
+    )
+    template = await gateway_client.create_credential_template(**template_data)
+    return template
+
+
+@pytest.fixture
+async def zk_mdoc_template(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create a ZK mDoc credential template with ZK predicate claims.
+
+    Returns:
+        Credential template object for ZK mDL (zk_mdoc format)
+    """
+    template_data = TestDataBuilder.zk_mdoc_template(
         organization_id=test_organization["id"],
     )
     template = await gateway_client.create_credential_template(**template_data)
@@ -370,3 +470,51 @@ async def test_wallet(
         "did": did_result.get("did"),
         "client": waltid_wallet_client,
     }
+
+
+# =============================================================================
+# Marty Authenticator Web App Fixtures
+# =============================================================================
+
+@pytest.fixture
+async def marty_wallet_url() -> AsyncGenerator[str, None]:
+    """
+    Provide the base URL of the Marty Authenticator Flutter web app.
+
+    The app is built from ``marty-authenticator/docker/Dockerfile.flutter.web.test``
+    and served by nginx on port 9081.  It exposes a ``/health`` endpoint that
+    returns 200 ``OK`` when ready.
+
+    The app accepts an optional ``api_url`` query parameter which overrides the
+    compiled-in ``MARTY_API_URL`` dart-define at runtime, e.g.::
+
+        url = f"{marty_wallet_url}/?api_url=http://gateway:8000"
+
+    Tests interact with the app via Playwright (browser automation) or by
+    navigating to credential-offer deep-links.
+
+    Example::
+
+        @pytest.mark.marty_wallet
+        async def test_credential_offer(marty_wallet_url, page):
+            await page.goto(f"{marty_wallet_url}/")
+            ...
+
+    Skip behaviour: if the ``/health`` endpoint is unreachable or returns a
+    non-200 status the test is automatically skipped with an informative
+    message.
+    """
+    wallet_url = os.getenv("MARTY_WALLET_URL", "http://localhost:9081")
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as probe:
+            response = await probe.get(f"{wallet_url}/health")
+            if response.status_code != 200:
+                pytest.skip(
+                    f"Marty wallet not available at {wallet_url} "
+                    f"(HTTP {response.status_code})"
+                )
+    except Exception as exc:
+        pytest.skip(f"Marty wallet not available at {wallet_url}: {exc}")
+
+    yield wallet_url

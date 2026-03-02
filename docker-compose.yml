@@ -297,6 +297,36 @@ services:
     networks:
       - marty-test-network
 
+  # Marty Authenticator Web App (Flutter) - served from local build output
+  # Uses the pre-built flutter web output from marty-authenticator/build/web
+  # rather than building inside Docker, which avoids the ~15-min Flutter SDK
+  # pull on every test run.
+  #
+  # To rebuild the Flutter artifact:
+  #   cd ../marty-authenticator
+  #   flutter build web --target=lib/mains/main_web_test.dart --release \
+  #     --dart-define=MARTY_API_URL=http://localhost:8000 \
+  #     --dart-define=TEST_MODE=true
+  #
+  # TODO: replace with `image: ghcr.io/your-org/marty-wallet-test:latest`
+  #       once CI publishes the image on every push to main.
+  marty-wallet:
+    image: nginx:alpine
+    container_name: marty-authenticator-web
+    ports:
+      - "9081:80"
+    volumes:
+      - ../marty-authenticator/build/web:/usr/share/nginx/html:ro
+      - ./config/marty-wallet/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - marty-test-network
+
   # Walt.id Wallet API (Community Stack) - using their official configuration
   waltid-wallet:
     image: waltid/wallet-api:latest
@@ -348,12 +378,15 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:8000
       - WALTID_WALLET_URL=http://waltid-wallet:7001
+      - MARTY_WALLET_URL=http://marty-wallet:9081
       - RUN_WALLET_TESTS=true
       - PYTHONUNBUFFERED=1
     depends_on:
       gateway:
         condition: service_healthy
       waltid-wallet:
+        condition: service_healthy
+      marty-wallet:
         condition: service_healthy
     networks:
       - marty-test-network

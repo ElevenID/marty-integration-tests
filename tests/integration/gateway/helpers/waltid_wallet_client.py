@@ -18,6 +18,8 @@ References:
 """
 
 from typing import Any, Dict, List, Optional
+import os
+import urllib.parse
 import httpx
 import logging
 import uuid
@@ -207,6 +209,30 @@ class WaltIdWalletClient:
         response.raise_for_status()
         return response.json()
 
+    @staticmethod
+    def _rewrite_issuer_url(offer_url: str) -> str:
+        """Rewrite the issuer hostname in a credential offer URI.
+
+        When running inside Docker, the wallet container cannot resolve
+        'localhost' on the host machine.  This method replaces the host
+        portion of GATEWAY_URL with WALLET_ISSUER_BASE_URL so the wallet
+        can reach the gateway.
+
+        Handles both plain and percent-encoded occurrences (OID4VC offers
+        URL-encode the credential_issuer value inside the query string).
+        """
+        gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8000")
+        wallet_issuer_url = os.getenv("WALLET_ISSUER_BASE_URL", "http://host.docker.internal:8000")
+        if gateway_url == wallet_issuer_url:
+            return offer_url
+        gw = urllib.parse.urlparse(gateway_url)
+        wi = urllib.parse.urlparse(wallet_issuer_url)
+        gw_host = f"{gw.hostname}:{gw.port}" if gw.port else gw.hostname
+        wi_host = f"{wi.hostname}:{wi.port}" if wi.port else wi.hostname
+        result = offer_url.replace(gw_host, wi_host)
+        result = result.replace(urllib.parse.quote(gw_host, safe=""), urllib.parse.quote(wi_host, safe=""))
+        return result
+
     async def accept_credential_offer(
         self,
         offer_url: str,
@@ -241,6 +267,7 @@ class WaltIdWalletClient:
                 did = dids[0]
 
         logger.info(f"Accepting credential offer with DID: {did}")
+        offer_url = self._rewrite_issuer_url(offer_url)
         logger.info(f"Offer URL: {offer_url}")
 
         # Walt.id API endpoint for accepting credential offers
@@ -390,6 +417,7 @@ class WaltIdWalletClient:
         # 2. openid-credential-offer://?credential_offer_uri=<url>
         # 3. Direct HTTP URL to offer endpoint
         logger.info(f"Resolving credential offer: {offer_url[:100]}...")
+        offer_url = self._rewrite_issuer_url(offer_url)
         
         response = await self.client.post(
             f"/wallet-api/wallet/{wallet_id}/exchange/resolveCredentialOffer",

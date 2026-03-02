@@ -40,6 +40,10 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.7.0",
 ]
+e2e = [
+    "pytest-playwright>=0.4.0",
+    "playwright>=1.40.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["tests"]
@@ -54,6 +58,7 @@ python_functions = ["test_*"]
 markers = [
     "integration: Integration tests (require services running)",
     "wallet: Walt.ID wallet integration tests",
+    "marty_wallet: Marty Authenticator web app integration tests (require RUN_WALLET_TESTS=true)",
     "slow: Slow running tests",
 ]
 addopts = [

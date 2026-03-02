@@ -171,14 +171,19 @@ class TestDataBuilder:
         organization_id: str,
         name: Optional[str] = None,
         application_template_id: Optional[str] = None,
+        wallet_configs: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
-        """Create employee badge credential template"""
+        """Create employee badge credential template (W3C VCDM v2 SD-JWT payload)."""
         data = {
             "organization_id": organization_id,
             "name": name or "Employee Badge",
             "credential_type": "EmployeeBadge",
             "vct": "EmployeeBadge",
             "supported_formats": ["sd_jwt_vc"],
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "wallet_configs": wallet_configs if wallet_configs is not None else [
+                {"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://", "format_variant": "spruce-vc+sd-jwt"}
+            ],
             "compliance_profile": {
                 "name": "Enterprise VC Compliance",
                 "compliance_code": "ENTERPRISE_VC",
@@ -216,6 +221,240 @@ class TestDataBuilder:
     # Application Template Data
     # =============================================================================
     
+    @staticmethod
+    def jwt_vc_template(
+        organization_id: str,
+        name: Optional[str] = None,
+        application_template_id: Optional[str] = None,
+        wallet_configs: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a W3C JWT Verifiable Credential template (jwt_vc format) using
+        the VCDM v1 payload structure (``issuanceDate`` / ``expirationDate``).
+
+        Uses a generic VerifiableId credential type with flat key-value claims
+        — the simplest shape that exercises the jwt_vc_json / VCDM v1 signing path.
+
+        See also: ``jwt_vc_v2_template()`` for the VCDM v2 variant
+        (``validFrom`` / ``validUntil``).
+        """
+        data = {
+            "organization_id": organization_id,
+            "name": name or "Verifiable ID",
+            "credential_type": "VerifiableId",
+            "vct": "VerifiableId",
+            "supported_formats": ["jwt_vc"],
+            # Explicit VCDM v1 format so the test is unambiguous even if the
+            # server default changes in future.
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",  # falls into VCDM v1 branch
+            "wallet_configs": wallet_configs if wallet_configs is not None else [
+                {"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://", "format_variant": "spruce-vc+sd-jwt"}
+            ],
+            "compliance_profile": {
+                "name": "W3C VC Compliance",
+                "compliance_code": "W3C_VC",
+                "credential_format": "jwt_vc",
+                "frameworks": ["w3c_vc"],
+            },
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "givenName": {"type": "string"},
+                    "familyName": {"type": "string"},
+                    "birthDate": {"type": "string", "format": "full-date"},
+                    "nationalityCode": {"type": "string"},
+                    "documentNumber": {"type": "string"},
+                },
+                "required": ["givenName", "familyName", "birthDate", "documentNumber"],
+            },
+            "claims": [
+                {"name": "givenName", "display_name": "Given Name", "required": True},
+                {"name": "familyName", "display_name": "Family Name", "required": True},
+                {"name": "birthDate", "display_name": "Birth Date", "required": True},
+                {"name": "documentNumber", "display_name": "Document Number", "required": True},
+            ],
+            "auto_generate_artifacts": True,
+        }
+
+        if application_template_id:
+            data["application_template_id"] = application_template_id
+
+        return data
+
+    @staticmethod
+    def jwt_vc_v2_template(
+        organization_id: str,
+        name: Optional[str] = None,
+        application_template_id: Optional[str] = None,
+        wallet_configs: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a W3C JWT Verifiable Credential template (jwt_vc format) using
+        the VCDM **v2** payload structure (``validFrom`` / ``validUntil``).
+
+        Sets ``credential_payload_format = "w3c_vcdm_v2_jwt_vc"`` so the signing
+        layer uses v2 timestamps and the v2 ``@context`` / ``type`` values.
+
+        Use with :func:`jwt_vc_claims` to supply subject claim values.
+        """
+        data = {
+            "organization_id": organization_id,
+            "name": name or "Verifiable ID (VCDM v2)",
+            "credential_type": "VerifiableId",
+            "vct": "VerifiableId",
+            "supported_formats": ["jwt_vc"],
+            "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
+            "wallet_configs": wallet_configs if wallet_configs is not None else [
+                {"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://", "format_variant": "spruce-vc+sd-jwt"}
+            ],
+            "compliance_profile": {
+                "name": "W3C VC Compliance",
+                "compliance_code": "W3C_VC",
+                "credential_format": "jwt_vc",
+                "frameworks": ["w3c_vc"],
+            },
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "givenName": {"type": "string"},
+                    "familyName": {"type": "string"},
+                    "birthDate": {"type": "string", "format": "full-date"},
+                    "nationalityCode": {"type": "string"},
+                    "documentNumber": {"type": "string"},
+                },
+                "required": ["givenName", "familyName", "birthDate", "documentNumber"],
+            },
+            "claims": [
+                {"name": "givenName", "display_name": "Given Name", "required": True},
+                {"name": "familyName", "display_name": "Family Name", "required": True},
+                {"name": "birthDate", "display_name": "Birth Date", "required": True},
+                {"name": "documentNumber", "display_name": "Document Number", "required": True},
+            ],
+            "auto_generate_artifacts": True,
+        }
+
+        if application_template_id:
+            data["application_template_id"] = application_template_id
+
+        return data
+
+    @staticmethod
+    def jwt_vc_claims(
+        given_name: str = "Carol",
+        family_name: str = "Chen",
+        birth_date: str = "1988-03-22",
+        document_number: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create claims for a VerifiableId (jwt_vc) credential."""
+        return {
+            "givenName": given_name,
+            "familyName": family_name,
+            "birthDate": birth_date,
+            "nationalityCode": "US",
+            "documentNumber": document_number or f"ID{str(uuid4())[:8].upper()}",
+        }
+
+    @staticmethod
+    def zk_mdoc_template(
+        organization_id: str,
+        name: Optional[str] = None,
+        zk_predicate_claims: Optional[List[str]] = None,
+        application_template_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a ZK-enabled mDoc credential template (`zk_mdoc` format).
+
+        Structurally identical to an mDL template but declares
+        ``supported_formats: ["zk_mdoc"]`` and an explicit list of claims
+        that support zero-knowledge predicate proofs (Longfellow/Ligero).
+
+        ``zk_predicate_claims`` defaults to age and date fields that are
+        typically used for ZK predicates (e.g. ``age_over_18``, ``birth_date``).
+        """
+        data = {
+            "organization_id": organization_id,
+            "name": name or "ZK Mobile Driver's License",
+            "credential_type": "org.iso.18013.5.1.mDL",
+            "vct": "org.iso.18013.5.1.mDL",
+            "supported_formats": ["zk_mdoc"],
+            "zk_predicate_claims": zk_predicate_claims or [
+                "birth_date",
+                "age_over_18",
+                "age_over_21",
+            ],
+            "compliance_profile": {
+                "name": "AAMVA ZK mDL Compliance",
+                "compliance_code": "AAMVA_MDL",
+                "credential_format": "zk_mdoc",
+                "frameworks": ["aamva", "iso_18013_5"],
+            },
+            "schema": {
+                "namespaces": {
+                    "org.iso.18013.5.1": {
+                        "family_name": {"type": "string", "required": True},
+                        "given_name": {"type": "string", "required": True},
+                        "birth_date": {"type": "string", "format": "full-date", "required": True},
+                        "issue_date": {"type": "string", "format": "full-date", "required": True},
+                        "expiry_date": {"type": "string", "format": "full-date", "required": True},
+                        "issuing_country": {"type": "string", "required": True},
+                        "issuing_authority": {"type": "string", "required": True},
+                        "document_number": {"type": "string", "required": True},
+                        "driving_privileges": {"type": "array", "required": True},
+                        "un_distinguishing_sign": {"type": "string", "required": True},
+                        "age_over_18": {"type": "boolean", "required": False},
+                        "age_over_21": {"type": "boolean", "required": False},
+                    }
+                }
+            },
+            "claims": [
+                {"name": "family_name", "display_name": "Family Name", "required": True},
+                {"name": "given_name", "display_name": "Given Name", "required": True},
+                {"name": "birth_date", "display_name": "Birth Date", "required": True},
+                {"name": "document_number", "display_name": "Document Number", "required": True},
+                {"name": "driving_privileges", "display_name": "Driving Privileges", "required": True},
+                {"name": "age_over_18", "display_name": "Age Over 18", "required": False},
+                {"name": "age_over_21", "display_name": "Age Over 21", "required": False},
+            ],
+            "auto_generate_artifacts": True,
+        }
+
+        if application_template_id:
+            data["application_template_id"] = application_template_id
+
+        return data
+
+    @staticmethod
+    def zk_mdoc_claims(
+        given_name: str = "David",
+        family_name: str = "Park",
+        birth_date: str = "1991-08-14",
+        document_number: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create claims for a ZK-enabled mDL credential (same structure as mdl_claims)."""
+        issue_date = datetime.now()
+        expiry_date = issue_date + timedelta(days=365 * 5)
+
+        return {
+            "family_name": family_name,
+            "given_name": given_name,
+            "birth_date": birth_date,
+            "issue_date": issue_date.strftime("%Y-%m-%d"),
+            "expiry_date": expiry_date.strftime("%Y-%m-%d"),
+            "issuing_country": "US",
+            "issuing_authority": "State DMV",
+            "document_number": document_number or f"DL{str(uuid4())[:8].upper()}",
+            "driving_privileges": [
+                {
+                    "vehicle_category_code": "C",
+                    "issue_date": issue_date.strftime("%Y-%m-%d"),
+                    "expiry_date": expiry_date.strftime("%Y-%m-%d"),
+                }
+            ],
+            "un_distinguishing_sign": "USA",
+            "age_over_18": True,
+            "age_over_21": True,
+        }
+
     @staticmethod
     def application_template(
         organization_id: str,
