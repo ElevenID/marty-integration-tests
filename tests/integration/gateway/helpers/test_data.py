@@ -732,3 +732,105 @@ class TestDataBuilder:
                 "identity_document_back": "base64_encoded_back_image",
             }
         }
+    
+    # =============================================================================
+    # Deployment Profile Data
+    # =============================================================================
+    
+    @staticmethod
+    def deployment_profile(
+        organization_id: str,
+        name: Optional[str] = None,
+        site_id: Optional[str] = None,
+        default_presentation_policy_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create deployment profile data for runtime configuration."""
+        return {
+            "organization_id": organization_id,
+            "name": name or f"test-deployment-profile-{str(uuid4())[:8]}",
+            "site_id": site_id or f"site-{str(uuid4())[:6]}",
+            "network_mode": "online",
+            "key_access_mode": "key_vault",
+            "ux_config": {
+                "language": "en",
+                "signage_text": "Please scan your credential",
+                "operator_mode": False,
+                "accessibility": True,
+            },
+            "update_policy": {
+                "auto_update": True,
+                "rollout_percentage": 100,
+            },
+            "offline_cache_ttl_hours": 24,
+            "biometric_required": False,
+            "audit_all_events": True,
+            "default_presentation_policy_id": default_presentation_policy_id,
+        }
+    
+    @staticmethod
+    def lane(
+        deployment_profile_id: str,
+        name: Optional[str] = None,
+        location: Optional[str] = None,
+        device_type: str = "kiosk",
+    ) -> Dict[str, Any]:
+        """Create lane data (logical device grouping)."""
+        return {
+            "deployment_profile_id": deployment_profile_id,
+            "name": name or f"Lane {str(uuid4())[:8]}",
+            "description": "Test lane for verification",
+            "location": location or "Terminal A, Gate 12",
+            "device_type": device_type,
+            "metadata": {
+                "zone": "public",
+                "operator_info": "Security Staff",
+            },
+        }
+    
+    # =============================================================================
+    # ZK Predicate Presentation Policy Data
+    # =============================================================================
+    
+    @staticmethod
+    def presentation_policy_zk_age_verification(
+        organization_id: str,
+        credential_template_id: str,
+        min_age: int = 21,
+        name: Optional[str] = None,
+        fallback_policy: str = "accept_raw",
+    ) -> Dict[str, Any]:
+        """Create presentation policy with ZK predicate for age verification.
+        
+        Requests a zero-knowledge range proof for age instead of raw birth_date.
+        Follows the predicate_spec configuration from Digital_Identity_model.md.
+        """
+        return {
+            "organization_id": organization_id,
+            "name": name or f"ZK Age Verification ({min_age}+)",
+            "purpose": f"Verify holder is at least {min_age} years old using ZK proof",
+            "prefer_predicates": True,
+            "fallback_policy": fallback_policy,
+            "supported_circuits": [f"ligero_age_over_{min_age}", "bbs_range"],
+            "credential_requirements": [
+                {
+                    "credential_template_id": credential_template_id,
+                    "display_name": "Driver's License",
+                    "requested_claims": [
+                        {
+                            "claim_name": "birth_date",
+                            "display_name": "Birth Date",
+                            "required": True,
+                            "predicate_spec": {
+                                "predicate_type": "range_proof",
+                                "params": {
+                                    "threshold": min_age,
+                                    "comparison": "gte",
+                                },
+                                "supported_circuits": [f"ligero_age_over_{min_age}"],
+                                "fallback_policy": fallback_policy,
+                            },
+                        }
+                    ],
+                }
+            ],
+        }

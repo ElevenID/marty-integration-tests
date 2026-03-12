@@ -852,3 +852,185 @@ class GatewayClient:
     async def get_flow_instance(self, instance_id: str) -> Dict[str, Any]:
         """Get flow instance by ID"""
         return await self._request("GET", f"/v1/flows/instances/{instance_id}")
+    
+    # =============================================================================
+    # Deployment Profiles
+    # =============================================================================
+    
+    async def create_deployment_profile(
+        self,
+        organization_id: str,
+        name: str,
+        site_id: str,
+        network_mode: str = "online",
+        key_access_mode: str = "key_vault",
+        ux_config: Optional[Dict] = None,
+        update_policy: Optional[Dict] = None,
+        offline_cache_ttl_hours: int = 24,
+        biometric_required: bool = False,
+        audit_all_events: bool = True,
+        default_presentation_policy_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a deployment profile."""
+        return await self._request(
+            "POST",
+            "/v1/deployment-profiles",
+            json={
+                "organization_id": organization_id,
+                "name": name,
+                "site_id": site_id,
+                "network_mode": network_mode,
+                "key_access_mode": key_access_mode,
+                "ux_config": ux_config or {},
+                "update_policy": update_policy or {},
+                "offline_cache_ttl_hours": offline_cache_ttl_hours,
+                "biometric_required": biometric_required,
+                "audit_all_events": audit_all_events,
+                "default_presentation_policy_id": default_presentation_policy_id,
+            },
+        )
+    
+    async def get_deployment_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Get deployment profile by ID."""
+        return await self._request("GET", f"/v1/deployment-profiles/{profile_id}")
+    
+    async def list_deployment_profiles(
+        self,
+        organization_id: str,
+    ) -> List[Dict[str, Any]]:
+        """List deployment profiles for an organization."""
+        return await self._request(
+            "GET",
+            "/v1/deployment-profiles",
+            params={"organization_id": organization_id},
+        )
+    
+    async def update_deployment_profile(
+        self,
+        profile_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update a deployment profile."""
+        return await self._request(
+            "PUT",
+            f"/v1/deployment-profiles/{profile_id}",
+            json=updates,
+        )
+    
+    async def delete_deployment_profile(self, profile_id: str) -> None:
+        """Delete a deployment profile."""
+        await self._request("DELETE", f"/v1/deployment-profiles/{profile_id}")
+    
+    async def activate_deployment_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Activate a deployment profile."""
+        return await self._request(
+            "POST",
+            f"/v1/deployment-profiles/{profile_id}/activate",
+        )
+    
+    async def generate_deployment_profile_api_key(self, profile_id: str) -> Dict[str, Any]:
+        """Generate API key for deployment profile."""
+        return await self._request(
+            "POST",
+            f"/v1/deployment-profiles/{profile_id}/generate-api-key",
+        )
+    
+    # =============================================================================
+    # Lanes (nested under Deployment Profiles)
+    # =============================================================================
+    
+    async def create_lane(
+        self,
+        profile_id: str,
+        name: str,
+        description: Optional[str] = None,
+        location: Optional[str] = None,
+        device_type: str = "kiosk",
+        metadata: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        """Create a lane within a deployment profile."""
+        return await self._request(
+            "POST",
+            f"/v1/deployment-profiles/{profile_id}/lanes",
+            json={
+                "name": name,
+                "description": description,
+                "location": location,
+                "device_type": device_type,
+                "metadata": metadata or {},
+            },
+        )
+    
+    async def get_lane(self, profile_id: str, lane_id: str) -> Dict[str, Any]:
+        """Get lane by ID."""
+        return await self._request(
+            "GET",
+            f"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
+        )
+    
+    async def list_lanes(self, profile_id: str) -> List[Dict[str, Any]]:
+        """List lanes for a deployment profile."""
+        return await self._request(
+            "GET",
+            f"/v1/deployment-profiles/{profile_id}/lanes",
+        )
+    
+    async def update_lane(
+        self,
+        profile_id: str,
+        lane_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update a lane."""
+        return await self._request(
+            "PUT",
+            f"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
+            json=updates,
+        )
+    
+    async def delete_lane(self, profile_id: str, lane_id: str) -> None:
+        """Delete a lane."""
+        await self._request(
+            "DELETE",
+            f"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
+        )
+    
+    async def assign_device_to_lane(
+        self,
+        profile_id: str,
+        lane_id: str,
+        device_id: str,
+        device_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Assign device to lane."""
+        return await self._request(
+            "POST",
+            f"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}/devices",
+            json={
+                "device_id": device_id,
+                "device_name": device_name,
+            },
+        )
+    
+    # =============================================================================
+    # Revocation
+    # =============================================================================
+    
+    async def revoke_credential(
+        self,
+        issuance_id: str,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Revoke a credential."""
+        return await self._request(
+            "POST",
+            f"/v1/issuance/{issuance_id}/revoke",
+            json={"reason": reason or "Test revocation"},
+        )
+    
+    async def get_revocation_status(self, issuance_id: str) -> Dict[str, Any]:
+        """Get revocation status for a credential."""
+        return await self._request(
+            "GET",
+            f"/v1/issuance/{issuance_id}/revocation-status",
+        )

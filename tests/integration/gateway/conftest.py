@@ -382,6 +382,74 @@ async def mdl_application_template(
 
 
 # =============================================================================
+# Deployment Profile Fixtures
+# =============================================================================
+
+@pytest.fixture
+async def test_deployment_profile(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+    age_verification_policy: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create a deployment profile for testing.
+    
+    Returns:
+        Deployment profile object
+    """
+    profile_data = TestDataBuilder.deployment_profile(
+        organization_id=test_organization["id"],
+        default_presentation_policy_id=age_verification_policy["id"],
+    )
+    profile = await gateway_client.create_deployment_profile(**profile_data)
+    return profile
+
+
+@pytest.fixture
+async def test_lane(
+    gateway_client: GatewayClient,
+    test_deployment_profile: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create a lane within a deployment profile.
+    
+    Returns:
+        Lane object
+    """
+    lane_data = TestDataBuilder.lane(
+        deployment_profile_id=test_deployment_profile["id"],
+    )
+    lane = await gateway_client.create_lane(
+        profile_id=test_deployment_profile["id"],
+        **lane_data,
+    )
+    return lane
+
+
+@pytest.fixture
+async def zk_age_verification_policy(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+    zk_mdoc_template: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create a ZK presentation policy for age verification.
+    
+    Returns:
+        Presentation policy with ZK predicate configuration
+    """
+    policy_data = TestDataBuilder.presentation_policy_zk_age_verification(
+        organization_id=test_organization["id"],
+        credential_template_id=zk_mdoc_template["id"],
+        min_age=21,
+    )
+    policy = await gateway_client.create_presentation_policy(**policy_data)
+    # Activate the policy so it can be used
+    policy = await gateway_client.activate_presentation_policy(policy["id"])
+    return policy
+
+
+# =============================================================================
 # Helper Fixtures
 # =============================================================================
 

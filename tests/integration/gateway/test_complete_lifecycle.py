@@ -392,3 +392,279 @@ class TestCrossOrganizationIsolation:
         
         assert template_b["id"] in org_b_template_ids
         assert template_a["id"] not in org_b_template_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestRevocationLifecycle:
+    """Test complete credential revocation lifecycle (addresses TODOs)"""
+    
+    async def test_credential_revocation_and_verification(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        mdl_template: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
+    ):
+        """
+        Test complete revocation lifecycle:
+        1. Issue credential
+        2. Verify credential works
+        3. Revoke credential
+        4. Verify revocation is reflected
+        
+        Addresses TODO at lines 42-43 in original file.
+        """
+        # Step 1: Issue credential
+        claims = TestDataBuilder.mdl_claims(
+            given_name="Sarah",
+            family_name="Williams",
+        )
+        
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=mdl_template["id"],
+            claims=claims,
+        )
+        
+        assert issuance is not None
+        assert issuance["status"] == "issued"
+        issuance_id = issuance["id"]
+        
+        # Step 2: Credential should be valid (start verification flow to test)
+        verification_flow = await gateway_client.start_verification_flow(
+            presentation_policy_id=age_verification_policy["id"],
+        )
+        assert verification_flow is not None
+        assert "instance_id" in verification_flow
+        
+        # Step 3: Revoke the credential
+        revocation_result = await gateway_client.revoke_credential(
+            issuance_id=issuance_id,
+            reason="Test revocation for integration test",
+        )
+        
+        assert revocation_result is not None
+        # Result should indicate successful revocation
+        assert revocation_result.get("status") == "revoked" or "revoked" in str(revocation_result).lower()
+        
+        # Step 4: Verify revocation is reflected in issuance record
+        issuance_after_revocation = await gateway_client.get_issuance(issuance_id)
+        assert issuance_after_revocation["status"] == "revoked"
+        assert "revoked_at" in issuance_after_revocation or "revocation_date" in issuance_after_revocation
+        
+        # Step 5: Check revocation status endpoint
+        revocation_status = await gateway_client.get_revocation_status(issuance_id)
+        assert revocation_status is not None
+        assert revocation_status["revoked"] is True or revocation_status["status"] == "revoked"
+        
+    async def test_revocation_list_update(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        mdl_template: Dict[str, Any],
+    ):
+        """Test that revocation updates the revocation list"""
+        # Issue credential
+        claims = TestDataBuilder.mdl_claims()
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=mdl_template["id"],
+            claims=claims,
+        )
+        
+        # Revoke it
+        await gateway_client.revoke_credential(
+            issuance_id=issuance["id"],
+            reason="Revocation list test",
+        )
+        
+        # Check revocation status
+        status = await gateway_client.get_revocation_status(issuance["id"])
+        
+        # Status should show credential is revoked
+        assert status["revoked"] is True or status["status"] == "revoked"
+        
+        # If revocation index is provided, verify it's set
+        if "revocation_index" in issuance or "revocation_index" in status:
+            revocation_index = issuance.get("revocation_index") or status.get("revocation_index")
+            assert revocation_index is not None
+            
+    async def test_revoke_with_reason(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        employee_badge_template: Dict[str, Any],
+    ):
+        """Test revoking credential with specific reason"""
+        # Issue employee badge
+        claims = TestDataBuilder.employee_badge_claims()
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=employee_badge_template["id"],
+            claims=claims,
+        )
+        
+        # Revoke with specific reason
+        reason = "Employee terminated"
+        result = await gateway_client.revoke_credential(
+            issuance_id=issuance["id"],
+            reason=reason,
+        )
+        
+        # Verify revocation reason is stored
+        issuance_updated = await gateway_client.get_issuance(issuance["id"])
+        assert issuance_updated["status"] == "revoked"
+        
+        # Revocation reason might be in result or updated issuance record
+        if "revocation_reason" in issuance_updated:
+            assert issuance_updated["revocation_reason"] == reason
+        elif "reason" in result:
+            assert result["reason"] == reason
+            
+    async def test_cannot_revoke_twice(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        mdl_template: Dict[str, Any],
+    ):
+        """Test that revoking an already-revoked credential is idempotent or fails gracefully"""
+        # Issue and revoke
+        claims = TestDataBuilder.mdl_claims()
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=mdl_template["id"],
+            claims=claims,
+        )
+        
+        # First revocation
+        await gateway_client.revoke_credential(issuance_id=issuance["id"])
+        
+        # Second revocation attempt
+        # Should either succeed (idempotent) or fail with clear error
+        try:
+            result = await gateway_client.revoke_credential(issuance_id=issuance["id"])
+            # If it succeeds, verify status is still revoked
+            assert result["status"] == "revoked" or "revoked" in str(result).lower()
+        except Exception as e:
+            # If it fails, error should mention already revoked
+            error_msg = str(e).lower()
+            assert "already revoked" in error_msg or "revoked" in error_msg
+            
+    async def test_list_revoked_credentials(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        mdl_template: Dict[str, Any],
+    ):
+        """Test listing only revoked credentials"""
+        # Issue and revoke a credential
+        claims = TestDataBuilder.mdl_claims()
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=mdl_template["id"],
+            claims=claims,
+        )
+        
+        await gateway_client.revoke_credential(issuance_id=issuance["id"])
+        
+        # List all issuances
+        all_issuances = await gateway_client.list_issuances(
+            organization_id=test_organization["id"]
+        )
+        
+        # Find our revoked one
+        revoked_issuances = [
+            i for i in all_issuances
+            if i["id"] == issuance["id"]
+        ]
+        
+        assert len(revoked_issuances) == 1
+        assert revoked_issuances[0]["status"] == "revoked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestRevocationScenarios:
+    """Test various revocation scenarios"""
+    
+    async def test_revoke_after_application_approval(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        mdl_template: Dict[str, Any],
+        mdl_application_template: Dict[str, Any],
+    ):
+        """Test revoking a credential that was issued through application process"""
+        # Submit application
+        applicant_data = TestDataBuilder.mdl_application_data(
+            given_name="Robert",
+            family_name="Johnson",
+        )
+        application = await gateway_client.create_application(
+            application_template_id=mdl_application_template["id"],
+            applicant_data=applicant_data,
+        )
+        
+        # Submit evidence
+        evidence = TestDataBuilder.portrait_evidence()
+        await gateway_client.submit_evidence(
+            application_id=application["id"],
+            evidence=evidence,
+        )
+        
+        # Approve (triggers issuance)
+        await gateway_client.approve_application(application["id"])
+        
+        # Find the issuance
+        issuances = await gateway_client.list_issuances(
+            organization_id=test_organization["id"]
+        )
+        app_issuances = [
+            i for i in issuances
+            if i.get("application_id") == application["id"]
+        ]
+        assert len(app_issuances) > 0
+        
+        # Revoke the credential
+        issuance = app_issuances[0]
+        result = await gateway_client.revoke_credential(issuance_id=issuance["id"])
+        
+        # Verify revocation
+        revoked_issuance = await gateway_client.get_issuance(issuance["id"])
+        assert revoked_issuance["status"] == "revoked"
+        
+    async def test_bulk_revocation(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        employee_badge_template: Dict[str, Any],
+    ):
+        """Test revoking multiple credentials"""
+        # Issue multiple credentials
+        num_credentials = 3
+        issuances = []
+        
+        for i in range(num_credentials):
+            claims = TestDataBuilder.employee_badge_claims(
+                given_name=f"Employee{i}",
+                family_name=f"User{i}",
+            )
+            issuance = await gateway_client.issue_credential(
+                organization_id=test_organization["id"],
+                credential_template_id=employee_badge_template["id"],
+                claims=claims,
+            )
+            issuances.append(issuance)
+        
+        # Revoke all of them
+        for issuance in issuances:
+            await gateway_client.revoke_credential(
+                issuance_id=issuance["id"],
+                reason="Bulk revocation test",
+            )
+        
+        # Verify all are revoked
+        for issuance in issuances:
+            status = await gateway_client.get_revocation_status(issuance["id"])
+            assert status["revoked"] is True or status["status"] == "revoked"

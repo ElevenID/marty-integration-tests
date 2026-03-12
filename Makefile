@@ -1,19 +1,25 @@
 # Makefile for Marty Integration Tests
 
-.PHONY: help install test test-fast test-wallet clean start stop restart logs
+.PHONY: help install test test-fast test-wallet conformance conformance-crypto conformance-mdoc clean start stop restart logs
+
+# Path to marty-core sibling repo (override with MARTY_CORE=<path>)
+MARTY_CORE ?= $(realpath $(dir $(firstword $(MAKEFILE_LIST)))../marty-core)
 
 help:
 	@echo "Marty Integration Tests - Available commands:"
 	@echo ""
-	@echo "  make install      - Install test dependencies"
-	@echo "  make start        - Start all services with docker compose"
-	@echo "  make stop         - Stop all services"
-	@echo "  make restart      - Restart all services"
-	@echo "  make test         - Run all integration tests"
-	@echo "  make test-fast    - Run tests with parallel execution"
-	@echo "  make test-wallet  - Run Walt.ID wallet integration tests only"
-	@echo "  make logs         - Show service logs"
-	@echo "  make clean        - Clean up containers and volumes"
+	@echo "  make install           - Install test dependencies"
+	@echo "  make start             - Start all services with docker compose"
+	@echo "  make stop              - Stop all services"
+	@echo "  make restart           - Restart all services"
+	@echo "  make test              - Run all integration tests"
+	@echo "  make test-fast         - Run tests with parallel execution"
+	@echo "  make test-wallet       - Run Walt.ID wallet integration tests only"
+	@echo "  make conformance       - Run OIDF OID4VC conformance tests (expects failures)"
+	@echo "  make conformance-crypto - Run NIST CAVP crypto conformance (marty-core)"
+	@echo "  make conformance-mdoc  - Run ISO 18013-5 mDoc conformance (marty-core)"
+	@echo "  make logs              - Show service logs"
+	@echo "  make clean             - Clean up containers and volumes"
 	@echo ""
 
 install:
@@ -41,6 +47,50 @@ test-wallet: start
 
 test-marty-wallet: start
 	pytest -m marty_wallet -v
+
+conformance:
+	@echo "Running OIDF OID4VC conformance tests through the gateway..."
+	@echo "Set SESSION_ID, GATEWAY_BASE, ORG_ID, CREDENTIAL_TEMPLATE_ID env vars before running."
+	@echo "Some tests WILL FAIL — they expose missing features for OIDF certification."
+	pytest tests/integration/test_oid4vci_issuer_conformance.py \
+		tests/integration/test_oid4vp_verifier_conformance.py \
+		tests/integration/test_siop_v2_conformance.py \
+		-v --no-header 2>/dev/null || true
+	pytest tests/integration/test_oid4vci_issuer_conformance.py \
+		tests/integration/test_oid4vp_verifier_conformance.py \
+		tests/integration/test_siop_v2_conformance.py \
+		-v
+
+# ---------------------------------------------------------------------------
+# Rust conformance suites (run against marty-core without docker)
+# ---------------------------------------------------------------------------
+
+# Phase 1 — NIST CAVP cryptographic primitive conformance
+#   (SHA, HMAC, ECDSA, ECDH, AES-GCM, HKDF, RSA)
+conformance-crypto:
+	@echo "==> Crypto conformance (NIST CAVP + IETF RFCs)"
+	@if [ ! -d "$(MARTY_CORE)" ]; then \
+	    echo "ERROR: marty-core not found at $(MARTY_CORE). Set MARTY_CORE=<path>"; \
+	    exit 1; \
+	fi
+	cd "$(MARTY_CORE)" && cargo test -p marty-crypto \
+	    cavp_sha_hmac cavp_ecdsa cavp_ecdh cavp_aes_gcm rfc5869_hkdf cavp_rsa \
+	    -- --nocapture
+
+# Phase 2 — ISO 18013-5 mDoc + trust-chain conformance
+#   (CBOR, COSE, selective disclosure, session, mdoc structure, MDL verification)
+conformance-mdoc:
+	@echo "==> ISO mDoc conformance (ISO 18013-5)"
+	@if [ ! -d "$(MARTY_CORE)" ]; then \
+	    echo "ERROR: marty-core not found at $(MARTY_CORE). Set MARTY_CORE=<path>"; \
+	    exit 1; \
+	fi
+	cd "$(MARTY_CORE)" && cargo test -p marty-iso18013 \
+	    cbor_conformance cose_conformance selective_disclosure session_conformance mdoc_structure \
+	    -- --nocapture
+	cd "$(MARTY_CORE)" && cargo test -p marty-verification \
+	    mdl_conformance open_badges_conformance \
+	    -- --nocapture
 
 logs:
 	docker compose logs -f

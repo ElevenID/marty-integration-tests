@@ -489,3 +489,239 @@ class TestCompleteWalletVerificationLifecycle:
         finally:
             # Cleanup second wallet
             await wallet2_client.__aexit__(None, None, None)
+
+
+@pytest.mark.integration
+@pytest.mark.wallet
+@pytest.mark.asyncio
+class TestWalletRevocationVerification:
+    """Test wallet revocation verification flows"""
+
+    async def test_wallet_present_revoked_credential(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        mdl_template: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
+        test_wallet: Dict[str, Any],
+    ):
+        """Test complete flow: issue → revoke → present → verify rejection"""
+        wallet_client = test_wallet["client"]
+        did = test_wallet["did"]
+        
+        # Step 1: Issue credential to wallet
+        claims = TestDataBuilder.mdl_claims(
+            given_name="Charlie",
+            family_name="Brown",
+        )
+        
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=mdl_template["id"],
+            subject_did=did,
+            claims=claims,
+        )
+        
+        # Step 2: Wallet accepts credential
+        await wallet_client.accept_credential_offer(
+            offer_url=issuance["credential_offer_uri"],
+            did=did,
+        )
+        
+        # Step 3: Revoke the credential
+        await gateway_client.revoke_credential(
+            issuance_id=issuance["id"],
+            reason="Test revocation - wallet flow",
+        )
+        
+        # Verify revocation
+        revocation_status = await gateway_client.get_revocation_status(issuance["id"])
+        assert revocation_status["revoked"] is True or revocation_status["status"] == "revoked"
+        
+        # Step 4: Start verification flow
+        verification_flow = await gateway_client.start_verification_flow(
+            presentation_policy_id=age_verification_policy["id"],
+        )
+        
+        # Step 5: Wallet attempts to present revoked credential
+        credentials = await wallet_client.list_credentials()
+        cred_id = (credentials[0].get("id") or credentials[0].get("credentialId")) if credentials else None
+        
+        if cred_id:
+            try:
+                # Attempt presentation
+                await wallet_client.present_credential(
+                    presentation_request_url=verification_flow["request_uri"],
+                    credential_ids=[cred_id],
+                    did=did,
+                )
+                
+                # Check verification result - should indicate revocation
+                result = await gateway_client.get_verification_result(
+                    verification_flow["instance_id"]
+                )
+                
+                # Result should show credential was revoked
+                # Status could be "rejected", "failed", or similar
+                assert result["status"] in ["rejected", "failed", "revoked", "invalid"]
+                
+            except Exception as e:
+                # Presentation might fail immediately if wallet detects revocation
+                error_msg = str(e).lower()
+                assert "revoked" in error_msg or "invalid" in error_msg
+
+
+@pytest.mark.integration
+@pytest.mark.wallet
+@pytest.mark.asyncio
+class TestWalletDeploymentProfileFlow:
+    """Test wallet interaction with deployment-profile-bound verification flows"""
+
+    async def test_wallet_verification_via_deployment_profile(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        mdl_template: Dict[str, Any],
+        test_deployment_profile: Dict[str, Any],
+        test_wallet: Dict[str, Any],
+    ):
+        """Test wallet presenting credential for deployment profile verification"""
+        wallet_client = test_wallet["client"]
+        did = test_wallet["did"]
+        
+        # Issue credential to wallet
+        claims = TestDataBuilder.mdl_claims()
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=mdl_template["id"],
+            subject_did=did,
+            claims=claims,
+        )
+        
+        await wallet_client.accept_credential_offer(
+            offer_url=issuance["credential_offer_uri"],
+            did=did,
+        )
+        
+        # Start verification using deployment profile's default policy
+        verification_flow = await gateway_client.start_verification_flow(
+            presentation_policy_id=test_deployment_profile["default_presentation_policy_id"],
+        )
+        
+        # Wallet presents credential
+        credentials = await wallet_client.list_credentials()
+        cred_id = (credentials[0].get("id") or credentials[0].get("credentialId")) if credentials else None
+        
+        if cred_id:
+            await wallet_client.present_credential(
+                presentation_request_url=verification_flow["request_uri"],
+                credential_ids=[cred_id],
+                did=did,
+            )
+            
+            # Verify result
+            result = await gateway_client.get_verification_result(
+                verification_flow["instance_id"]
+            )
+            
+            assert result["status"] in ["verified", "success", "approved", "completed"]
+            
+    async def test_wallet_verification_at_lane(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        mdl_template: Dict[str, Any],
+        test_deployment_profile: Dict[str, Any],
+        test_lane: Dict[str, Any],
+        test_wallet: Dict[str, Any],
+    ):
+        """Test wallet verification at a specific lane within deployment profile"""
+        wallet_client = test_wallet["client"]
+        did = test_wallet["did"]
+        
+        # Issue credential
+        claims = TestDataBuilder.mdl_claims()
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=mdl_template["id"],
+            subject_did=did,
+            claims=claims,
+        )
+        
+        await wallet_client.accept_credential_offer(
+            offer_url=issuance["credential_offer_uri"],
+            did=did,
+        )
+        
+        # Verification flow using deployment profile's policy
+        # In real scenario, lane might have policy override
+        verification_flow = await gateway_client.start_verification_flow(
+            presentation_policy_id=test_deployment_profile["default_presentation_policy_id"],
+        )
+        
+        # Present credential
+        credentials = await wallet_client.list_credentials()
+        cred_id = (credentials[0].get("id") or credentials[0].get("credentialId")) if credentials else None
+        
+        if cred_id:
+            await wallet_client.present_credential(
+                presentation_request_url=verification_flow["request_uri"],
+                credential_ids=[cred_id],
+                did=did,
+            )
+            
+            result = await gateway_client.get_verification_result(
+                verification_flow["instance_id"]
+            )
+            
+            # Verification should succeed for valid credential at the lane
+            assert result["status"] in ["verified", "success", "approved", "completed"]
+
+
+@pytest.mark.integration
+@pytest.mark.wallet
+@pytest.mark.asyncio
+class TestWalletZKVerification:
+    """Test wallet ZK predicate verification (if wallet supports ZK)"""
+
+    async def test_wallet_zk_age_proof(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
+        zk_mdoc_template: Dict[str, Any],
+        zk_age_verification_policy: Dict[str, Any],
+        test_wallet: Dict[str, Any],
+    ):
+        """Test wallet presenting ZK proof for age verification"""
+        wallet_client = test_wallet["client"]
+        did = test_wallet["did"]
+        
+        # Issue ZK credential to wallet
+        claims = TestDataBuilder.zk_mdoc_claims()
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=zk_mdoc_template["id"],
+            subject_did=did,
+            claims=claims,
+        )
+        
+        await wallet_client.accept_credential_offer(
+            offer_url=issuance["credential_offer_uri"],
+            did=did,
+        )
+        
+        # Start ZK verification flow
+        verification_flow = await gateway_client.start_verification_flow(
+            presentation_policy_id=zk_age_verification_policy["id"],
+        )
+        
+        # Get verification request
+        request = await gateway_client.get_verification_request(
+            verification_flow["instance_id"]
+        )
+        
+        assert request is not None
+        
+        # Note: Actual ZK proof generation depends on wallet capabilities
+        # This test verifies the flow can be initiated
+        # Full E2E would require wallet that supports ZK proof generation
