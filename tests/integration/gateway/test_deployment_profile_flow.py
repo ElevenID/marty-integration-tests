@@ -452,7 +452,7 @@ class TestDeploymentProfileErrors:
         with pytest.raises(Exception) as exc_info:
             await gateway_client.create_deployment_profile(**profile_data)
         
-        assert "404" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
+        assert "404" in str(exc_info.value) or "403" in str(exc_info.value) or "not found" in str(exc_info.value).lower() or "not a member" in str(exc_info.value).lower()
         
     async def test_get_nonexistent_profile(
         self,

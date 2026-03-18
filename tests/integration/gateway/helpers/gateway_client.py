@@ -162,6 +162,7 @@ class GatewayClient:
         self,
         name: str,
         display_name: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Create a new organization.
@@ -173,10 +174,12 @@ class GatewayClient:
         Returns:
             Organization object with id, name, created_at, etc.
         """
+        body = {"name": name, "display_name": display_name or name}
+        body.update(kwargs)
         return await self._request(
             "POST",
             "/v1/organizations",
-            json={"name": name, "display_name": display_name or name},
+            json=body,
         )
         
     async def get_organization(self, org_id: str) -> Dict[str, Any]:
@@ -245,8 +248,8 @@ class GatewayClient:
         organization_id: str,
         name: str,
         credential_type: str,
-        compliance_profile: Dict[str, Any],
-        vct: str,
+        compliance_profile: Optional[Dict[str, Any]] = None,
+        vct: str = "",
         supported_formats: Optional[List[str]] = None,
         schema: Optional[Dict] = None,
         claims: Optional[List[Dict]] = None,
@@ -261,6 +264,7 @@ class GatewayClient:
         zk_predicate_claims: Optional[List[str]] = None,
         credential_payload_format: Optional[str] = None,
         wallet_configs: Optional[List[Dict[str, str]]] = None,
+        compliance_profile_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create a credential template (master issuance configuration).
@@ -294,12 +298,16 @@ class GatewayClient:
             "organization_id": organization_id,
             "name": name,
             "credential_type": credential_type,
-            "compliance_profile": compliance_profile,
             "vct": vct,
             "supported_formats": supported_formats or ["sd_jwt_vc"],
             "claims": claims or [],
             "auto_generate_artifacts": auto_generate_artifacts,
         }
+        
+        if compliance_profile is not None:
+            payload["compliance_profile"] = compliance_profile
+        if compliance_profile_id:
+            payload["compliance_profile_id"] = compliance_profile_id
         
         # Add optional fields
         if application_template_id:
@@ -421,6 +429,9 @@ class GatewayClient:
         name: str,
         credential_requirements: List[Dict],
         purpose: Optional[str] = None,
+        prefer_predicates: bool = False,
+        fallback_policy: Optional[str] = None,
+        supported_circuits: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Create a presentation policy.
@@ -430,19 +441,29 @@ class GatewayClient:
             name: Policy name
             credential_requirements: List of credential requirements
             purpose: Purpose of the verification
+            prefer_predicates: Whether to prefer ZK predicate proofs
+            fallback_policy: Optional fallback policy ID
+            supported_circuits: Optional list of supported ZK circuits
             
         Returns:
             Presentation policy object
         """
+        body: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "name": name,
+            "credential_requirements": credential_requirements,
+            "purpose": purpose,
+        }
+        if prefer_predicates:
+            body["prefer_predicates"] = True
+        if fallback_policy:
+            body["fallback_policy"] = fallback_policy
+        if supported_circuits:
+            body["supported_circuits"] = supported_circuits
         return await self._request(
             "POST",
             "/v1/presentation-policies",
-            json={
-                "organization_id": organization_id,
-                "name": name,
-                "credential_requirements": credential_requirements,
-                "purpose": purpose,
-            },
+            json=body,
         )
         
     async def get_presentation_policy(self, policy_id: str) -> Dict[str, Any]:
@@ -796,20 +817,22 @@ class GatewayClient:
         self,
         organization_id: str,
         name: str,
-        flow_type: str,
+        flow_type: Optional[str] = None,
+        type: Optional[str] = None,
         steps: Optional[List[Dict]] = None,
         trust_profile_id: Optional[str] = None,
         credential_template_id: Optional[str] = None,
         presentation_policy_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a flow definition"""
+        ft = flow_type or type or "issuance"
         return await self._request(
             "POST",
             "/v1/flows/definitions",
             json={
                 "organization_id": organization_id,
                 "name": name,
-                "flow_type": flow_type,
+                "flow_type": ft,
                 "steps": steps or [],
                 "trust_profile_id": trust_profile_id,
                 "credential_template_id": credential_template_id,
@@ -820,6 +843,10 @@ class GatewayClient:
     async def get_flow_definition(self, flow_def_id: str) -> Dict[str, Any]:
         """Get flow definition by ID"""
         return await self._request("GET", f"/v1/flows/definitions/{flow_def_id}")
+
+    async def activate_flow_definition(self, flow_def_id: str) -> Dict[str, Any]:
+        """Activate a flow definition"""
+        return await self._request("POST", f"/v1/flows/definitions/{flow_def_id}/activate")
         
     async def list_flow_definitions(
         self,
@@ -941,17 +968,19 @@ class GatewayClient:
     
     async def create_lane(
         self,
-        profile_id: str,
-        name: str,
+        profile_id: Optional[str] = None,
+        name: str = "",
         description: Optional[str] = None,
         location: Optional[str] = None,
         device_type: str = "kiosk",
         metadata: Optional[Dict] = None,
+        deployment_profile_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a lane within a deployment profile."""
+        pid = deployment_profile_id or profile_id
         return await self._request(
             "POST",
-            f"/v1/deployment-profiles/{profile_id}/lanes",
+            f"/v1/deployment-profiles/{pid}/lanes",
             json={
                 "name": name,
                 "description": description,

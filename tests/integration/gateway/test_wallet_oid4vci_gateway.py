@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 import httpx
 import pytest
 
+import _marty_rs
+
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.waltid_wallet_client import WaltIdWalletClient
 
@@ -660,11 +662,19 @@ class TestZKPSDJWTIssuance:
             f"[{label}] Token exchange failed ({token_resp.status_code}): "
             f"{token_resp.text[:400]}"
         )
-        access_token = token_resp.json().get("access_token")
-        assert access_token, f"[{label}] No access_token in: {token_resp.json()}"
+        token_json = token_resp.json()
+        access_token = token_json.get("access_token")
+        assert access_token, f"[{label}] No access_token in: {token_json}"
+        c_nonce = token_json.get("c_nonce", "")
         logger.info("[%s] access_token obtained (len=%d)", label, len(access_token))
 
-        # Step 3 — credential request with desired format (OID4VCI §7.2)
+        # Step 3 — proof of possession (OID4VCI §8.2): build and sign with Rust
+        proof_jwt = _marty_rs.oid4vci_create_proof_jwt(
+            f"{ISSUANCE_SERVICE_URL}/org/{ORG_ID}",
+            c_nonce,
+        )
+
+        # Step 4 — credential request with desired format (OID4VCI §7.2)
         async with httpx.AsyncClient(timeout=20) as http:
             cred_resp = await http.post(
                 f"{ISSUANCE_SERVICE_URL}/v1/issuance/credential",
@@ -672,6 +682,7 @@ class TestZKPSDJWTIssuance:
                 json={
                     "format": requested_format,
                     "credential_configuration_id": cred_config_id,
+                    "proof": {"proof_type": "jwt", "jwt": proof_jwt},
                 },
             )
         assert cred_resp.status_code == 200, (
@@ -680,7 +691,12 @@ class TestZKPSDJWTIssuance:
         )
         # OID4VCI v1 §8.3 returns a "credentials" array; fall back to legacy "credential" scalar
         resp_json = cred_resp.json()
-        raw_doc = (resp_json.get("credentials") or [resp_json.get("credential", "")])[0]
+        # OID4VCI v1 Final: "credentials" is an object array {"format":...,"credential":...}
+        # Legacy / Draft-11: top-level "credential" scalar string
+        first = (resp_json.get("credentials") or [{}])[0]
+        raw_doc = (
+            first.get("credential") if isinstance(first, dict) else first
+        ) or resp_json.get("credential", "")
         assert raw_doc, f"[{label}] No 'credential'/'credentials' field in response: {resp_json}"
         logger.info("[%s] credential received (len=%d)", label, len(raw_doc))
         return raw_doc

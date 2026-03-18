@@ -50,6 +50,22 @@ HOLDER_JWK = {
 }
 
 
+def setup_module(_module=None) -> None:
+    """Auto-acquire SESSION_ID if not set in the environment."""
+    global SESSION_ID
+    if not SESSION_ID:
+        try:
+            import asyncio
+            import sys
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+            from tests.integration.gateway.helpers.auth_helper import AuthHelper
+            SESSION_ID = asyncio.run(AuthHelper().get_session_id())
+            os.environ["SESSION_ID"] = SESSION_ID
+        except Exception as exc:
+            import sys as _sys
+            print(f"  ⚠️  Could not auto-acquire SESSION_ID: {exc}", file=_sys.stderr)
+
+
 # ============================================================================
 # HTTP helper
 # ============================================================================
@@ -128,9 +144,10 @@ R = Results()
 # ============================================================================
 
 def _session_headers() -> dict[str, str]:
-    if not SESSION_ID:
+    sid = SESSION_ID or os.environ.get("SESSION_ID", "")
+    if not sid:
         raise RuntimeError("SESSION_ID env var required for admin gateway calls.")
-    return {"Cookie": f"sessionId={SESSION_ID}"}
+    return {"Cookie": f"sessionId={sid}"}
 
 
 def _build_siop_id_token(

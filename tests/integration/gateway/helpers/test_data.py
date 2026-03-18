@@ -773,6 +773,7 @@ class TestDataBuilder:
         name: Optional[str] = None,
         location: Optional[str] = None,
         device_type: str = "kiosk",
+        organization_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create lane data (logical device grouping)."""
         return {

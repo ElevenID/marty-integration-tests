@@ -39,6 +39,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 import pytest
+import _marty_rs
 from playwright.async_api import (
     BrowserContext,
     ConsoleMessage,
@@ -570,11 +571,12 @@ class TestMartyWalletIssuance:
         claims: dict,
         label: str,
         *,
+        organization_id: str | None = None,
         requested_format: str = "jwt_vc_json",
     ) -> str:
         """Create offer → token exchange → request credential.  Returns raw JWT/SD-JWT."""
         # Step 1 — create offer via authenticated gateway
-        org_id = os.getenv("TEST_ORG_ID", ORG_ID)
+        org_id = organization_id or os.getenv("TEST_ORG_ID", ORG_ID)
         result = await authenticated_gateway_client.issue_credential(
             organization_id=org_id,
             credential_template_id=template_id,
@@ -599,11 +601,19 @@ class TestMartyWalletIssuance:
             f"[{label}] Token exchange failed ({token_resp.status_code}): "
             f"{token_resp.text[:400]}"
         )
-        access_token = token_resp.json().get("access_token")
-        assert access_token, f"[{label}] No access_token in: {token_resp.json()}"
+        token_json = token_resp.json()
+        access_token = token_json.get("access_token")
+        assert access_token, f"[{label}] No access_token in: {token_json}"
+        c_nonce = token_json.get("c_nonce", "")
         logger.info("[%s] access_token obtained (len=%d)", label, len(access_token))
 
-        # Step 3 — credential request with desired format (OID4VCI §7.2)
+        # Step 3 — proof of possession (OID4VCI §8.2): build and sign with Rust
+        proof_jwt = _marty_rs.oid4vci_create_proof_jwt(
+            f"{ISSUANCE_SERVICE_URL}/org/{org_id}",
+            c_nonce,
+        )
+
+        # Step 4 — credential request with desired format (OID4VCI §7.2)
         async with httpx.AsyncClient(timeout=20) as http:
             cred_resp = await http.post(
                 f"{ISSUANCE_SERVICE_URL}/v1/issuance/credential",
@@ -611,6 +621,7 @@ class TestMartyWalletIssuance:
                 json={
                     "format": requested_format,
                     "credential_configuration_id": cred_config_id,
+                    "proof": {"proof_type": "jwt", "jwt": proof_jwt},
                 },
             )
         assert cred_resp.status_code == 200, (
@@ -620,7 +631,12 @@ class TestMartyWalletIssuance:
         # OID4VCI v1 §8.3 returns a "credentials" array; fall back to legacy
         # "credential" scalar field
         resp_json = cred_resp.json()
-        raw_doc = (resp_json.get("credentials") or [resp_json.get("credential", "")])[0]
+        # OID4VCI v1 Final: "credentials" is an object array {"format":...,"credential":...}
+        # Legacy / Draft-11: top-level "credential" scalar string
+        first = (resp_json.get("credentials") or [{}])[0]
+        raw_doc = (
+            first.get("credential") if isinstance(first, dict) else first
+        ) or resp_json.get("credential", "")
         assert raw_doc, (
             f"[{label}] No 'credential'/'credentials' field in response: {resp_json}"
         )
@@ -777,7 +793,7 @@ class TestMartyWalletIssuance:
         raw_jwt = await self._get_credential_via_pre_auth(
             authenticated_gateway_client,
             template_id=jwt_vc_v2_template["id"],
-            cred_config_id="open_badge",
+            cred_config_id="VerifiableId",
             claims={
                 "given_name": "Flutter",
                 "family_name": "WalletTest",
@@ -785,6 +801,7 @@ class TestMartyWalletIssuance:
                 "test_id": uuid.uuid4().hex[:8],
             },
             label=label,
+            organization_id=test_organization["id"],
         )
 
         # Assert JWT structure (mirrors waltid test Steps 5-6)

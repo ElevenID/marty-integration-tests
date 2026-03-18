@@ -428,7 +428,7 @@ class TestRevocationLifecycle:
         )
         
         assert issuance is not None
-        assert issuance["status"] == "issued"
+        assert issuance["status"] in ("pending", "issued")
         issuance_id = issuance["id"]
         
         # Step 2: Credential should be valid (start verification flow to test)

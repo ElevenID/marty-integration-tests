@@ -60,6 +60,20 @@ def _localize_url(url: str) -> str:
     return parsed._replace(scheme=gateway.scheme, netloc=gateway.netloc).geturl()
 
 
+def setup_module(_module=None) -> None:
+    """Auto-acquire SESSION_ID if not set in the environment."""
+    global SESSION_ID
+    if not SESSION_ID:
+        try:
+            import asyncio
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+            from tests.integration.gateway.helpers.auth_helper import AuthHelper
+            SESSION_ID = asyncio.run(AuthHelper().get_session_id())
+            os.environ["SESSION_ID"] = SESSION_ID
+        except Exception as exc:
+            print(f"  ⚠️  Could not auto-acquire SESSION_ID: {exc}", file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # HTTP helpers (stdlib only)
 # ---------------------------------------------------------------------------
@@ -119,7 +133,8 @@ def _session_headers() -> dict[str, str]:
     a valid Keycloak session cookie.  Wallet-facing endpoints (token, credential,
     nonce, offers) are public and need no auth.
     """
-    if not SESSION_ID:
+    sid = SESSION_ID or os.environ.get("SESSION_ID", "")
+    if not sid:
         raise RuntimeError(
             "SESSION_ID env var is required for admin gateway calls.\n"
             "Obtain it with:\n"
@@ -127,7 +142,7 @@ def _session_headers() -> dict[str, str]:
             "from tests.integration.gateway.helpers.auth_helper import AuthHelper; "
             "print(asyncio.run(AuthHelper().get_session_id()))\""
         )
-    return {"Cookie": f"sessionId={SESSION_ID}"}
+    return {"Cookie": f"sessionId={sid}"}
 
 
 def _initiate_issuance(

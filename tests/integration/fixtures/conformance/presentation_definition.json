@@ -1,0 +1,28 @@
+{
+  "id": "pd-conformance-test",
+  "name": "OID4VP Conformance Test",
+  "purpose": "Verify University Degree for conformance testing",
+  "input_descriptors": [
+    {
+      "id": "university_degree",
+      "name": "University Degree Credential",
+      "purpose": "We need your degree credential",
+      "constraints": {
+        "fields": [
+          {
+            "path": [
+              "$.vc.type",
+              "$.type"
+            ],
+            "filter": {
+              "type": "array",
+              "contains": {
+                "const": "UniversityDegreeCredential"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

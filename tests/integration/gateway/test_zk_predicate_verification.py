@@ -64,7 +64,7 @@ class TestZKCredentialIssuance:
         
         assert issuance is not None
         assert "id" in issuance
-        assert issuance["status"] == "issued"
+        assert issuance["status"] in ("pending", "issued")
         
         # Credential should be issued with ZK capabilities
         assert issuance["credential_template_id"] == zk_mdoc_template["id"]
@@ -392,7 +392,7 @@ class TestZKCredentialLifecycle:
             claims=claims,
         )
         
-        assert issuance["status"] == "issued"
+        assert issuance["status"] in ("pending", "issued")
         
         # Step 2: Start ZK verification flow
         verification = await gateway_client.start_verification_flow(

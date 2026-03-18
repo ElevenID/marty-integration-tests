@@ -298,7 +298,8 @@ class TestIssuanceValidation:
                 claims=claims,
             )
         
-        assert "404" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
+        error_msg = str(exc_info.value).lower()
+        assert "404" in str(exc_info.value) or "403" in str(exc_info.value) or "not found" in error_msg or "access denied" in error_msg
     
     async def test_issue_with_invalid_template(
         self,

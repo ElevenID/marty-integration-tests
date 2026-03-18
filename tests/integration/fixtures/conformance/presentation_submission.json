@@ -1,0 +1,16 @@
+{
+  "id": "ps-conformance-test",
+  "definition_id": "pd-conformance-test",
+  "descriptor_map": [
+    {
+      "id": "university_degree",
+      "format": "jwt_vp",
+      "path": "$",
+      "path_nested": {
+        "id": "university_degree",
+        "format": "jwt_vc",
+        "path": "$.vp.verifiableCredential[0]"
+      }
+    }
+  ]
+}
