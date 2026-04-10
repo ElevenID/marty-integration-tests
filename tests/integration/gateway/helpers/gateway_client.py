@@ -133,7 +133,13 @@ class GatewayClient:
                 headers=self._get_headers(),
             )
             response.raise_for_status()
-            return response.json()
+            if response.status_code == 204 or not response.content:
+                return {}
+
+            try:
+                return response.json()
+            except ValueError:
+                return {"text": response.text} if response.text else {}
         except httpx.HTTPStatusError as e:
             error_detail = e.response.text
             raise GatewayClientError(
@@ -189,6 +195,22 @@ class GatewayClient:
     async def list_organizations(self) -> List[Dict[str, Any]]:
         """List all organizations"""
         return await self._request("GET", "/v1/organizations")
+
+    async def update_organization(
+        self,
+        org_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update an organization."""
+        return await self._request(
+            "PATCH",
+            f"/v1/organizations/{org_id}",
+            json=updates,
+        )
+
+    async def delete_organization(self, org_id: str) -> None:
+        """Delete an organization."""
+        await self._request("DELETE", f"/v1/organizations/{org_id}")
         
     # =============================================================================
     # Trust Profiles
@@ -199,6 +221,7 @@ class GatewayClient:
         organization_id: str,
         name: str,
         trusted_issuers: Optional[List[Dict]] = None,
+        trust_sources: Optional[List[Dict]] = None,
         trust_frameworks: Optional[List[str]] = None,
         revocation_check_enabled: bool = True,
     ) -> Dict[str, Any]:
@@ -209,22 +232,26 @@ class GatewayClient:
             organization_id: Organization ID
             name: Trust profile name
             trusted_issuers: List of trusted issuer configurations
+            trust_sources: List of trust source configurations
             trust_frameworks: List of trust framework identifiers
             revocation_check_enabled: Whether to check revocation status
             
         Returns:
             Trust profile object
         """
+        payload = {
+            "organization_id": organization_id,
+            "name": name,
+            "trusted_issuers": trusted_issuers or [],
+            "trust_frameworks": trust_frameworks or [],
+            "revocation_check_enabled": revocation_check_enabled,
+        }
+        if trust_sources is not None:
+            payload["trust_sources"] = trust_sources
         return await self._request(
             "POST",
             "/v1/trust-profiles",
-            json={
-                "organization_id": organization_id,
-                "name": name,
-                "trusted_issuers": trusted_issuers or [],
-                "trust_frameworks": trust_frameworks or [],
-                "revocation_check_enabled": revocation_check_enabled,
-            },
+            json=payload,
         )
         
     async def get_trust_profile(self, profile_id: str) -> Dict[str, Any]:
@@ -238,6 +265,22 @@ class GatewayClient:
             "/v1/trust-profiles",
             params={"organization_id": organization_id},
         )
+
+    async def update_trust_profile(
+        self,
+        profile_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update a trust profile."""
+        return await self._request(
+            "PATCH",
+            f"/v1/trust-profiles/{profile_id}",
+            json=updates,
+        )
+
+    async def delete_trust_profile(self, profile_id: str) -> None:
+        """Delete a trust profile."""
+        await self._request("DELETE", f"/v1/trust-profiles/{profile_id}")
         
     # =============================================================================
     # Credential Templates
@@ -360,6 +403,22 @@ class GatewayClient:
             "/v1/credential-templates",
             params={"organization_id": organization_id},
         )
+
+    async def update_credential_template(
+        self,
+        template_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update a credential template."""
+        return await self._request(
+            "PATCH",
+            f"/v1/credential-templates/{template_id}",
+            json=updates,
+        )
+
+    async def delete_credential_template(self, template_id: str) -> None:
+        """Delete a credential template."""
+        await self._request("DELETE", f"/v1/credential-templates/{template_id}")
     
     # =============================================================================
     # Compliance Profiles
@@ -372,7 +431,7 @@ class GatewayClient:
         compliance_code: Optional[str] = None,
         credential_format: str = "sd_jwt_vc",
         frameworks: Optional[List[str]] = None,
-        trust_profile_constraints: Optional[List[str]] = None,
+        trust_profile_constraints: Optional[Dict[str, Any]] = None,
         system_profile: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -384,24 +443,26 @@ class GatewayClient:
             compliance_code: Compliance code (AAMVA_MDL, ICAO_DTC, EUDI_PID, ENTERPRISE_VC)
             credential_format: Credential format (mso_mdoc, sd_jwt_vc, jwt_vc)
             frameworks: List of regulatory frameworks
-            trust_profile_constraints: List of trust profile IDs that can use this
+            trust_profile_constraints: Trust profile constraint object
             system_profile: Whether this is a system-provided profile
             
         Returns:
             Compliance profile object
         """
+        payload: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "name": name,
+            "compliance_code": compliance_code,
+            "credential_format": credential_format,
+            "frameworks": frameworks or [],
+            "system_profile": system_profile,
+        }
+        if trust_profile_constraints is not None:
+            payload["trust_profile_constraints"] = trust_profile_constraints
         return await self._request(
             "POST",
             "/v1/compliance-profiles",
-            json={
-                "organization_id": organization_id,
-                "name": name,
-                "compliance_code": compliance_code,
-                "credential_format": credential_format,
-                "frameworks": frameworks or [],
-                "trust_profile_constraints": trust_profile_constraints or [],
-                "system_profile": system_profile,
-            },
+            json=payload,
         )
     
     async def get_compliance_profile(self, profile_id: str) -> Dict[str, Any]:
@@ -418,6 +479,22 @@ class GatewayClient:
             "/v1/compliance-profiles",
             params={"organization_id": organization_id},
         )
+
+    async def update_compliance_profile(
+        self,
+        profile_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update a compliance profile."""
+        return await self._request(
+            "PATCH",
+            f"/v1/compliance-profiles/{profile_id}",
+            json=updates,
+        )
+
+    async def delete_compliance_profile(self, profile_id: str) -> None:
+        """Delete a compliance profile."""
+        await self._request("DELETE", f"/v1/compliance-profiles/{profile_id}")
         
     # =============================================================================
     # Presentation Policies
@@ -484,6 +561,22 @@ class GatewayClient:
             "/v1/presentation-policies",
             params={"organization_id": organization_id},
         )
+
+    async def update_presentation_policy(
+        self,
+        policy_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update a presentation policy."""
+        return await self._request(
+            "PATCH",
+            f"/v1/presentation-policies/{policy_id}",
+            json=updates,
+        )
+
+    async def delete_presentation_policy(self, policy_id: str) -> None:
+        """Delete a presentation policy."""
+        await self._request("DELETE", f"/v1/presentation-policies/{policy_id}")
         
     async def evaluate_presentation(
         self,
@@ -670,6 +763,7 @@ class GatewayClient:
         credential_template_id: str,
         claims: Dict[str, Any],
         subject_did: Optional[str] = None,
+        holder_did: Optional[str] = None,
         application_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -680,22 +774,22 @@ class GatewayClient:
             credential_template_id: Template ID
             claims: Credential claims
             subject_did: Optional subject DID
+            holder_did: Optional holder DID (DIDComm v2 push delivery)
             application_id: Optional application ID
             
         Returns:
             Issuance object with credential data
         """
-        return await self._request(
-            "POST",
-            "/v1/issuance",
-            json={
-                "organization_id": organization_id,
-                "credential_template_id": credential_template_id,
-                "claims": claims,
-                "subject_did": subject_did,
-                "application_id": application_id,
-            },
-        )
+        payload: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "credential_template_id": credential_template_id,
+            "claims": claims,
+            "subject_did": subject_did,
+            "application_id": application_id,
+        }
+        if holder_did:
+            payload["holder_did"] = holder_did
+        return await self._request("POST", "/v1/issuance", json=payload)
         
     async def get_issuance(self, issuance_id: str) -> Dict[str, Any]:
         """Get issuance record by ID"""
@@ -711,6 +805,30 @@ class GatewayClient:
             "/v1/issuance",
             params={"organization_id": organization_id},
         )
+
+    async def didcomm_deliver(
+        self,
+        transaction_id: str,
+        holder_did: str,
+        universal_resolver_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Deliver a credential via DIDComm v2 push.
+
+        Args:
+            transaction_id: Issuance transaction ID
+            holder_did: Holder's DID (must have a DIDComm service endpoint)
+            universal_resolver_url: Optional Universal Resolver URL for unknown DID methods
+
+        Returns:
+            DIDComm delivery result with transaction_id, credential_id, status, etc.
+        """
+        payload: Dict[str, Any] = {
+            "transaction_id": transaction_id,
+            "holder_did": holder_did,
+        }
+        if universal_resolver_url:
+            payload["universal_resolver_url"] = universal_resolver_url
+        return await self._request("POST", "/v1/issuance/didcomm/deliver", json=payload)
         
     # =============================================================================
     # Verification Flows (Async Wallet Interaction)
@@ -858,6 +976,22 @@ class GatewayClient:
             "/v1/flows/definitions",
             params={"organization_id": organization_id},
         )
+
+    async def update_flow_definition(
+        self,
+        flow_def_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update a flow definition."""
+        return await self._request(
+            "PATCH",
+            f"/v1/flows/definitions/{flow_def_id}",
+            json=updates,
+        )
+
+    async def delete_flow_definition(self, flow_def_id: str) -> None:
+        """Delete a flow definition."""
+        await self._request("DELETE", f"/v1/flows/definitions/{flow_def_id}")
         
     async def start_flow_instance(
         self,
@@ -897,24 +1031,28 @@ class GatewayClient:
         biometric_required: bool = False,
         audit_all_events: bool = True,
         default_presentation_policy_id: Optional[str] = None,
+        trust_profile_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a deployment profile."""
+        payload = {
+            "organization_id": organization_id,
+            "name": name,
+            "site_id": site_id,
+            "network_mode": network_mode,
+            "key_access_mode": key_access_mode,
+            "ux_config": ux_config or {},
+            "update_policy": update_policy or {},
+            "offline_cache_ttl_hours": offline_cache_ttl_hours,
+            "biometric_required": biometric_required,
+            "audit_all_events": audit_all_events,
+            "default_presentation_policy_id": default_presentation_policy_id,
+        }
+        if trust_profile_id:
+            payload["trust_profile_id"] = trust_profile_id
         return await self._request(
             "POST",
             "/v1/deployment-profiles",
-            json={
-                "organization_id": organization_id,
-                "name": name,
-                "site_id": site_id,
-                "network_mode": network_mode,
-                "key_access_mode": key_access_mode,
-                "ux_config": ux_config or {},
-                "update_policy": update_policy or {},
-                "offline_cache_ttl_hours": offline_cache_ttl_hours,
-                "biometric_required": biometric_required,
-                "audit_all_events": audit_all_events,
-                "default_presentation_policy_id": default_presentation_policy_id,
-            },
+            json=payload,
         )
     
     async def get_deployment_profile(self, profile_id: str) -> Dict[str, Any]:
@@ -1044,6 +1182,79 @@ class GatewayClient:
     # =============================================================================
     # Revocation
     # =============================================================================
+
+    async def create_revocation_profile(
+        self,
+        organization_id: str,
+        name: str,
+        revocation_mechanism: List[str],
+        mechanism_priority: Optional[List[str]] = None,
+        check_mode: str = "ALWAYS",
+        cache_ttl_seconds: Optional[int] = None,
+        offline_grace_seconds: Optional[int] = None,
+        issuer_config: Optional[Dict[str, Any]] = None,
+        status_list_url: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create a revocation profile."""
+        payload: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "name": name,
+            "revocation_mechanism": revocation_mechanism,
+            "mechanism_priority": mechanism_priority or revocation_mechanism,
+            "check_mode": check_mode,
+            "issuer_config": issuer_config or {},
+            "metadata": metadata or {},
+        }
+        if cache_ttl_seconds is not None:
+            payload["cache_ttl_seconds"] = cache_ttl_seconds
+        if offline_grace_seconds is not None:
+            payload["offline_grace_seconds"] = offline_grace_seconds
+        if status_list_url is not None:
+            payload["status_list_url"] = status_list_url
+
+        return await self._request(
+            "POST",
+            "/v1/revocation-profiles",
+            json=payload,
+        )
+
+    async def get_revocation_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Get revocation profile by ID."""
+        return await self._request(
+            "GET",
+            f"/v1/revocation-profiles/{profile_id}",
+        )
+
+    async def list_revocation_profiles(
+        self,
+        organization_id: str,
+    ) -> List[Dict[str, Any]]:
+        """List revocation profiles for an organization."""
+        return await self._request(
+            "GET",
+            "/v1/revocation-profiles",
+            params={"organization_id": organization_id},
+        )
+
+    async def update_revocation_profile(
+        self,
+        profile_id: str,
+        **updates,
+    ) -> Dict[str, Any]:
+        """Update a revocation profile."""
+        return await self._request(
+            "PATCH",
+            f"/v1/revocation-profiles/{profile_id}",
+            json=updates,
+        )
+
+    async def delete_revocation_profile(self, profile_id: str) -> None:
+        """Delete a revocation profile."""
+        await self._request(
+            "DELETE",
+            f"/v1/revocation-profiles/{profile_id}",
+        )
     
     async def revoke_credential(
         self,

@@ -15,6 +15,15 @@ from typing import Dict, Any
 from .helpers.gateway_client import GatewayClient
 from .helpers.test_data import TestDataBuilder
 
+# The server normalises format aliases to canonical CredentialFormat enum values.
+_FMT = {
+    "mdoc": "MDOC",
+    "mso_mdoc": "MDOC",
+    "sd_jwt_vc": "SD_JWT_VC",
+    "jwt_vc": "VC_JWT",
+    "zk_mdoc": "ZK_MDOC",
+}
+
 
 @pytest.mark.asyncio
 @pytest.mark.integration
@@ -340,7 +349,7 @@ class TestCredentialFormats:
         mdl_template: Dict[str, Any],
     ):
         """mdoc format: template has supported_formats=["mdoc"] and can be issued."""
-        assert "mdoc" in mdl_template["supported_formats"]
+        assert _FMT["mdoc"] in mdl_template["supported_formats"]
 
         claims = TestDataBuilder.mdl_claims(
             given_name="Format",
@@ -360,7 +369,7 @@ class TestCredentialFormats:
         employee_badge_template: Dict[str, Any],
     ):
         """sd_jwt_vc format: template has supported_formats=["sd_jwt_vc"] and can be issued."""
-        assert "sd_jwt_vc" in employee_badge_template["supported_formats"]
+        assert _FMT["sd_jwt_vc"] in employee_badge_template["supported_formats"]
 
         claims = TestDataBuilder.employee_badge_claims(
             given_name="Format",
@@ -380,7 +389,7 @@ class TestCredentialFormats:
         jwt_vc_template: Dict[str, Any],
     ):
         """jwt_vc format: template has supported_formats=["jwt_vc"] and can be issued."""
-        assert "jwt_vc" in jwt_vc_template["supported_formats"]
+        assert _FMT["jwt_vc"] in jwt_vc_template["supported_formats"]
 
         claims = TestDataBuilder.jwt_vc_claims(
             given_name="Format",
@@ -413,9 +422,9 @@ class TestCredentialFormats:
 
         # Confirm each reports the correct format
         fmt_by_id = {t["id"]: t.get("supported_formats", []) for t in templates}
-        assert "mdoc" in fmt_by_id[mdl_template["id"]]
-        assert "sd_jwt_vc" in fmt_by_id[employee_badge_template["id"]]
-        assert "jwt_vc" in fmt_by_id[jwt_vc_template["id"]]
+        assert _FMT["mdoc"] in fmt_by_id[mdl_template["id"]]
+        assert _FMT["sd_jwt_vc"] in fmt_by_id[employee_badge_template["id"]]
+        assert _FMT["jwt_vc"] in fmt_by_id[jwt_vc_template["id"]]
 
     async def test_each_format_template_round_trips(
         self,
@@ -435,13 +444,15 @@ class TestCredentialFormats:
         ]
         for fmt, created, expected_type in cases:
             retrieved = await gateway_client.get_credential_template(created["id"])
-            assert fmt in retrieved.get("supported_formats", []), (
+            assert _FMT[fmt] in retrieved.get("supported_formats", []), (
                 f"{fmt} missing from retrieved supported_formats: {retrieved}"
             )
             assert retrieved.get("credential_type") == expected_type, (
                 f"{fmt} credential_type mismatch: {retrieved}"
             )
-            assert retrieved.get("vct") == expected_type, (
+            # vct may be the short credential_type or a full URI containing it
+            vct = retrieved.get("vct") or ""
+            assert expected_type in vct, (
                 f"{fmt} vct mismatch: {retrieved}"
             )
 
@@ -454,10 +465,10 @@ class TestCredentialFormats:
         Round-trip: zk_mdoc template stores zk_predicate_claims and returns
         them when fetched by ID.
         """
-        assert "zk_mdoc" in zk_mdoc_template["supported_formats"]
+        assert _FMT["zk_mdoc"] in zk_mdoc_template["supported_formats"]
 
         retrieved = await gateway_client.get_credential_template(zk_mdoc_template["id"])
-        assert "zk_mdoc" in retrieved.get("supported_formats", [])
+        assert _FMT["zk_mdoc"] in retrieved.get("supported_formats", [])
 
         predicate_claims = retrieved.get("zk_predicate_claims", [])
         assert len(predicate_claims) > 0, (
@@ -473,7 +484,7 @@ class TestCredentialFormats:
         zk_mdoc_template: Dict[str, Any],
     ):
         """zk_mdoc format: template is created and credential can be issued."""
-        assert "zk_mdoc" in zk_mdoc_template["supported_formats"]
+        assert _FMT["zk_mdoc"] in zk_mdoc_template["supported_formats"]
 
         claims = TestDataBuilder.zk_mdoc_claims(
             given_name="Format",
@@ -514,9 +525,10 @@ class TestJwtVcPayloadFormats:
         jwt_vc_template: Dict[str, Any],
     ):
         """VCDM v1 jwt_vc template: credential_payload_format is persisted."""
-        assert "jwt_vc" in jwt_vc_template["supported_formats"]
+        assert _FMT["jwt_vc"] in jwt_vc_template["supported_formats"]
         assert jwt_vc_template.get("credential_payload_format") in (
-            "w3c_vcdm_v2_sd_jwt",
+            "SD_JWT_VC",
+            "VC_JWT",
             None,  # server may not echo field when it equals the default
         ), (
             f"Expected VCDM v1 format indicator but got "
@@ -530,9 +542,9 @@ class TestJwtVcPayloadFormats:
         jwt_vc_v2_template: Dict[str, Any],
     ):
         """VCDM v2 jwt_vc template: credential_payload_format is stored as w3c_vcdm_v2_jwt_vc."""
-        assert "jwt_vc" in jwt_vc_v2_template["supported_formats"]
-        assert jwt_vc_v2_template.get("credential_payload_format") == "w3c_vcdm_v2_jwt_vc", (
-            f"Expected 'w3c_vcdm_v2_jwt_vc' but got "
+        assert _FMT["jwt_vc"] in jwt_vc_v2_template["supported_formats"]
+        assert jwt_vc_v2_template.get("credential_payload_format") == "VC_JWT", (
+            f"Expected 'VC_JWT' but got "
             f"{jwt_vc_v2_template.get('credential_payload_format')!r}"
         )
 

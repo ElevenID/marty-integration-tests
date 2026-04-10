@@ -21,6 +21,7 @@ from .helpers.test_data import TestDataBuilder
 
 
 @pytest.mark.integration
+@pytest.mark.wallet
 @pytest.mark.asyncio
 class TestWalletSetup:
     """Test basic wallet setup and configuration."""
@@ -98,9 +99,11 @@ class TestCredentialIssuanceToWallet:
         credentials = await wallet_client.list_credentials()
         assert len(credentials) > 0
         
-        # Find our mDL credential
+        # Find our mDL credential (mso_mdoc format stores document as hex CBOR,
+        # so the docType string won't appear in the dict's string representation)
         mdl_cred = next(
-            (c for c in credentials if "org.iso.18013.5.1.mDL" in str(c)),
+            (c for c in credentials
+             if "org.iso.18013.5.1.mDL" in str(c) or c.get("format") == "mso_mdoc"),
             None
         )
         assert mdl_cred is not None

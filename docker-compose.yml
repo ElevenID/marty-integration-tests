@@ -1,5 +1,3 @@
-version: '3.8'
-
 # ============================================================================
 # Marty Integration Tests - Service Orchestration
 # ============================================================================
@@ -29,7 +27,7 @@ services:
       POSTGRES_PASSWORD: marty_dev
       POSTGRES_DB: marty_credentials
     ports:
-      - "5432:5432"
+      - "25432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U marty -d marty_credentials"]
       interval: 5s
@@ -42,19 +40,57 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "26379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
     networks:
+      marty-test-network:
+        aliases:
+          - test-redis
+
+  # OpenBao KMS (Transit + PKI secrets engines)
+  openbao:
+    image: openbao/openbao:2.1.0
+    cap_add:
+      - IPC_LOCK
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: dev-root-token
+      BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "28200:8200"
+    command: server -dev
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - marty-test-network
+
+  # Initialize OpenBao Transit + PKI engines with test keys
+  openbao-init:
+    image: openbao/openbao:2.1.0
+    environment:
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+    volumes:
+      - ../Marty/config/openbao/init-transit.sh:/init-transit.sh:ro
+    entrypoint: ["/bin/sh", "/init-transit.sh"]
+    depends_on:
+      openbao:
+        condition: service_healthy
+    restart: "no"
+    networks:
       - marty-test-network
 
   # Database Migrations - runs migrations for all services before they start
   db-migrations:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile.migrations
     container_name: marty-db-migrations
     environment:
@@ -69,31 +105,44 @@ services:
   # Auth Service (port 8001)
   auth-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: auth
     environment:
       - SERVICE_NAME=auth
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://test-redis:6379
       - SERVICE_PORT=8001
+      - AUTH_SERVICE_PORT=8001
+      - KEYCLOAK_REALM=11id
+      - OIDC_ISSUER_URL=http://marty-keycloak:8080/realms/11id
+      - OIDC_REDIRECT_URI=http://localhost:3000/v1/auth/callback
+      - KEYCLOAK_ADMIN_URL=http://marty-keycloak:8080/admin
+      - AUTH_GRPC_PORT=9001
     ports:
-      - "8001:8001"
+      - "28001:8001"
     depends_on:
-      # db-migrations:
-      #   condition: service_completed_successfully
+      db-migrations:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - marty-test-network
+      - marty-infra-network
 
   # Organization Service (port 8002)
   organization-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: organization
@@ -101,20 +150,30 @@ services:
       - SERVICE_NAME=organization
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
       - SERVICE_PORT=8002
+      - ORG_GRPC_PORT=9002
+      - REDIS_URL=redis://redis:6379
     ports:
-      - "8002:8002"
+      - "28002:8002"
     depends_on:
-      # db-migrations:
-      #   condition: service_completed_successfully
+      db-migrations:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - marty-test-network
 
   # Credential Template Service (port 8003)
   credential-template-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: credential_template
@@ -122,20 +181,28 @@ services:
       - SERVICE_NAME=credential_template
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
       - SERVICE_PORT=8003
+      - CT_GRPC_PORT=9003
+      - ORG_GRPC_TARGET=organization-service:9002
     ports:
-      - "8003:8003"
+      - "28003:8003"
     depends_on:
-      # db-migrations:
-      #   condition: service_completed_successfully
+      db-migrations:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - marty-test-network
 
   # Trust Profile Service (port 8004)
   trust-profile-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: trust_profile
@@ -143,44 +210,71 @@ services:
       - SERVICE_NAME=trust_profile
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
       - SERVICE_PORT=8004
+      - ORG_GRPC_TARGET=organization-service:9002
     ports:
-      - "8004:8004"
+      - "28004:8004"
     depends_on:
-      # db-migrations:
-      #   condition: service_completed_successfully
+      db-migrations:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - marty-test-network
 
   # Issuance Service (port 8005)
   issuance-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-credentials/services/Dockerfile
     environment:
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
       - REDIS_URL=redis://redis:6379
       # ISSUER_BASE_URL is used for credential offer URIs that wallets fetch
       # Use gateway Docker DNS name so Walt.id wallet can access it via Docker network
-      - ISSUER_BASE_URL=http://gateway:8000
+      - ISSUER_BASE_URL=https://tls-proxy
+      # OpenBao KMS for BYOK remote signing
+      - OPENBAO_ADDR=http://openbao:8200
+      - OPENBAO_TOKEN=dev-root-token
+      - ISSUANCE_GRPC_PORT=9005
+      - CT_GRPC_TARGET=credential-template-service:9003
+      - ORG_GRPC_TARGET=organization-service:9002
+      - CREDENTIAL_TEMPLATE_SERVICE_URL=http://credential-template-service:8003
+      - REVOCATION_PROFILE_SERVICE_URL=http://revocation-profile-service:8013
+      - ISSUANCE_API_KEY=dev-issuance-api-key
     ports:
-      - "8005:8005"
+      - "28005:8005"
     depends_on:
-      # db-migrations:
-      #   condition: service_completed_successfully
+      db-migrations:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      openbao-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - marty-test-network
 
-  # Verification Service (port 8006) - Temporarily disabled due to build issues
+  # Verification Service (port 8006)
+  # DISABLED: W3C VC signature verification is not yet implemented in
+  # rust_verifier.py (audit C2).  Re-enable once marty-rs provides a working
+  # verify_w3c_vc binding and the Dockerfile builds cleanly.
   # verification-service:
   #   build:
-  #     context: /Volumes/Heart of Gold/Github/work
-  #     dockerfile: /Volumes/Heart of Gold/Github/work/marty-credentials/services/verification/Dockerfile
+  #     context: ..
+  #     dockerfile: marty-credentials/services/verification/Dockerfile
   #   environment:
   #     - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
   #     - REDIS_URL=redis://redis:6379
@@ -198,7 +292,7 @@ services:
   # Compliance Profile Service (port 8008)
   compliance-profile-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: compliance_profile
@@ -206,18 +300,27 @@ services:
       - SERVICE_NAME=compliance_profile
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
       - SERVICE_PORT=8008
+      - ORG_GRPC_TARGET=organization-service:9002
     ports:
-      - "8008:8008"
+      - "28008:8008"
     depends_on:
       postgres:
         condition: service_healthy
+      organization-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - marty-test-network
 
   # Presentation Policy Service (port 8009)
   presentation-policy-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: presentation_policy
@@ -225,20 +328,58 @@ services:
       - SERVICE_NAME=presentation_policy
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
       - SERVICE_PORT=8009
+      - PP_GRPC_PORT=9009
+      - ORG_GRPC_TARGET=organization-service:9002
     ports:
-      - "8009:8009"
+      - "28009:8009"
     depends_on:
-      # db-migrations:
-      #   condition: service_completed_successfully
+      db-migrations:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - marty-test-network
+
+  # Deployment Profile Service (port 8010)
+  deployment-profile-service:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: deployment_profile
+    environment:
+      - SERVICE_NAME=deployment_profile
+      - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
+      - DEPLOYMENT_PROFILE_SERVICE_PORT=8010
+      - ORG_GRPC_TARGET=organization-service:9002
+    ports:
+      - "28010:8010"
+    depends_on:
+      db-migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      organization-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - marty-test-network
 
   # Flow Service (port 8011)
   flow-service:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: flow
@@ -247,22 +388,103 @@ services:
       - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
       - REDIS_URL=redis://redis:6379
       - SERVICE_PORT=8011
+      - FLOW_GRPC_PORT=9011
+      - CT_GRPC_TARGET=credential-template-service:9003
+      - ORG_GRPC_TARGET=organization-service:9002
+      - PP_GRPC_TARGET=presentation-policy-service:9009
+      - PUBLIC_BASE_URL=http://gateway:8000
     ports:
-      - "8011:8011"
+      - "28011:8011"
     depends_on:
-      # db-migrations:
-      #   condition: service_completed_successfully
+      db-migrations:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - marty-test-network
+
+  # Revocation Profile Service (port 8013)
+  revocation-profile-service:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: revocation_profile
+    environment:
+      - SERVICE_NAME=revocation_profile
+      - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
+      - REDIS_URL=redis://redis:6379
+      - REVOCATION_PROFILE_SERVICE_PORT=8013
+      - RP_GRPC_PORT=9013
+      - ORG_GRPC_TARGET=organization-service:9002
+    ports:
+      - "28013:8013"
+    depends_on:
+      db-migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      organization-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8013/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - marty-test-network
+
+  # Billing Service (port 8016)
+  billing-service:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: billing
+    environment:
+      - SERVICE_NAME=billing
+      - DATABASE_URL=postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
+      - BILLING_SERVICE_PORT=8016
+      - ORGANIZATION_SERVICE_URL=http://organization-service:8002
+      - SQUARE_ACCESS_TOKEN=${SQUARE_ACCESS_TOKEN:-}
+      - SQUARE_ENVIRONMENT=${SQUARE_ENVIRONMENT:-sandbox}
+      - SQUARE_LOCATION_ID=${SQUARE_LOCATION_ID:-}
+      - SQUARE_PLAN_STARTER_ID=${SQUARE_PLAN_STARTER_ID:-}
+      - SQUARE_PLAN_PROFESSIONAL_ID=${SQUARE_PLAN_PROFESSIONAL_ID:-}
+      - SQUARE_PLAN_ENTERPRISE_ID=${SQUARE_PLAN_ENTERPRISE_ID:-}
+    ports:
+      - "28016:8016"
+    depends_on:
+      db-migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      organization-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8016/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - marty-test-network
 
   # Gateway (port 8000)
   gateway:
     build:
-      context: /Volumes/Heart of Gold/Github/work
+      context: ..
       dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: gateway
@@ -275,19 +497,41 @@ services:
       - ISSUANCE_SERVICE_URL=http://issuance-service:8005
       - COMPLIANCE_PROFILE_SERVICE_URL=http://compliance-profile-service:8008
       - PRESENTATION_POLICY_SERVICE_URL=http://presentation-policy-service:8009
+      - DEPLOYMENT_PROFILE_SERVICE_URL=http://deployment-profile-service:8010
       - FLOW_SERVICE_URL=http://flow-service:8011
+      - REVOCATION_PROFILE_SERVICE_URL=http://revocation-profile-service:8013
+      - BILLING_SERVICE_URL=http://billing-service:8016
       - GATEWAY_PORT=8000
+      - REDIS_URL=redis://test-redis:6379
+      - AUTH_GRPC_TARGET=auth-service:9001
+      - ORG_GRPC_TARGET=organization-service:9002
+      - ISSUANCE_API_KEY=dev-issuance-api-key
+      - RATE_LIMIT_RPM=0
     ports:
-      - "8000:8000"
+      - "28000:8000"
     depends_on:
-      - auth-service
-      - organization-service
-      - credential-template-service
-      - trust-profile-service
-      - issuance-service
-      - compliance-profile-service
-      - presentation-policy-service
-      - flow-service
+      auth-service:
+        condition: service_healthy
+      organization-service:
+        condition: service_healthy
+      credential-template-service:
+        condition: service_healthy
+      trust-profile-service:
+        condition: service_healthy
+      issuance-service:
+        condition: service_healthy
+      compliance-profile-service:
+        condition: service_healthy
+      presentation-policy-service:
+        condition: service_healthy
+      deployment-profile-service:
+        condition: service_healthy
+      flow-service:
+        condition: service_healthy
+      revocation-profile-service:
+        condition: service_healthy
+      billing-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -295,7 +539,12 @@ services:
       retries: 5
       start_period: 20s
     networks:
-      - marty-test-network
+      marty-test-network:
+        aliases:
+          - test-gateway
+      marty-infra-network:
+        aliases:
+          - test-gateway
 
   # Marty Authenticator Web App (Flutter) - served from local build output
   # Uses the pre-built flutter web output from marty-authenticator/build/web
@@ -313,8 +562,10 @@ services:
   marty-wallet:
     image: nginx:alpine
     container_name: marty-authenticator-web
+    profiles:
+      - interop
     ports:
-      - "9081:80"
+      - "29081:80"
     volumes:
       - ../marty-authenticator/build/web:/usr/share/nginx/html:ro
       - ./config/marty-wallet/nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -329,9 +580,11 @@ services:
 
   # Walt.id Wallet API (Community Stack) - using their official configuration
   waltid-wallet:
-    image: waltid/wallet-api:latest
+    image: waltid/wallet-api:1.0.2501131409
+    profiles:
+      - interop
     ports:
-      - "7001:7001"
+      - "27001:7001"
     env_file:
       - ./config/wallet/.env
     environment:
@@ -355,6 +608,8 @@ services:
   # PostgreSQL database for Walt.id wallet (official Walt.id configuration)
   waltid-postgres:
     image: postgres:15
+    profiles:
+      - interop
     environment:
       - POSTGRES_DB=waltid
       - POSTGRES_USER=waltid
@@ -370,16 +625,147 @@ services:
     networks:
       - marty-test-network
 
+  # =========================================================================
+  # EUDI Reference Implementation Services
+  # =========================================================================
+  #
+  # Official EU Digital Identity Wallet reference components for cross-stack
+  # interoperability testing.  These validate that Marty-issued credentials
+  # are accepted by the EUDI ecosystem and vice-versa.
+  #
+  # Images: https://github.com/orgs/eu-digital-identity-wallet/packages
+
+  # EUDI Wallet Tester — web-based OID4VCI wallet client (Flask/Python)
+  # Acts as an EUDI reference wallet, exercising OID4VCI draft-13 against
+  # Marty's issuance endpoints.
+  eudi-wallet-tester:
+    image: ghcr.io/eu-digital-identity-wallet/eudi-app-web-wallet-tester-py:latest
+    platform: linux/amd64
+    profiles:
+      - interop
+    ports:
+      - "25050:5000"
+    environment:
+      - FLASK_RUN_PORT=5000
+      - service_url=https://eudi-wallet-tester:5000/
+      # serv_url must point to the OID4VCI issuer (the gateway)
+      - serv_url=http://gateway:8000/
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - marty-test-network
+
+  # EUDI Wallet Kit Harness — headless wallet using official EUDI JVM libraries.
+  # Wraps eudi-lib-jvm-openid4vci-kt + eudi-lib-jvm-openid4vp-kt to prove
+  # that Marty's endpoints work with the same SDK the EUDI Reference Wallet uses.
+  eudi-wallet-kit:
+    build:
+      context: ./services/eudi-wallet-harness
+      dockerfile: Dockerfile
+    profiles:
+      - interop
+    ports:
+      - "29090:9090"
+    environment:
+      - PORT=9090
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - marty-test-network
+
+  # TLS termination proxy — the OID4VCI spec and EUDI Wallet Kit require https://
+  # for credential_issuer URLs.  This nginx proxy terminates TLS with a self-signed
+  # cert and forwards to the HTTP gateway.
+  tls-proxy:
+    image: nginx:alpine
+    profiles:
+      - interop
+    volumes:
+      - tls-certs:/etc/nginx/certs:ro
+      - ./services/tls-proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "28443:443"
+    depends_on:
+      tls-cert-gen:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate --spider -q https://localhost:443/ || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - marty-test-network
+
+  # Generate self-signed TLS cert for the TLS proxy
+  tls-cert-gen:
+    image: alpine:3.19
+    profiles:
+      - interop
+    volumes:
+      - tls-certs:/certs
+    command: ["sh", "-c", "apk add --no-cache openssl && openssl req -x509 -newkey rsa:2048 -keyout /certs/server.key -out /certs/server.crt -days 365 -nodes -subj '/CN=tls-proxy' -addext 'subjectAltName=DNS:tls-proxy,DNS:gateway-tls,DNS:localhost'"]
+    restart: "no"
+    networks:
+      - marty-test-network
+
+  # EUDI Verifier Endpoint — official OID4VP v1 verifier (Kotlin/Spring)
+  # Cross-validates Marty-issued credentials against the EU reference verifier.
+  # Note: This is a distroless JVM image (no /bin/sh), so healthcheck is
+  # disabled.  The test suite verifies reachability via TestEUDIVerifierHealth.
+  eudi-verifier:
+    image: ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint:latest
+    platform: linux/amd64
+    profiles:
+      - interop
+    ports:
+      - "28090:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=self-signed
+      - VERIFIER_PUBLICURL=http://eudi-verifier:8080
+      - VERIFIER_RESPONSE_MODE=DirectPost
+      - VERIFIER_REQUESTJWT_EMBED=ByReference
+      - VERIFIER_CLIENTIDPREFIX=pre-registered
+      - VERIFIER_CLIENTMETADATA_VPFORMATS_SDJWTVC_ENABLED=true
+      - VERIFIER_CLIENTMETADATA_VPFORMATS_SDJWTVC_SDJWTALGORITHMS=ES256,EdDSA
+      - VERIFIER_CLIENTMETADATA_VPFORMATS_SDJWTVC_KBJWTALGORITHMS=ES256,EdDSA
+      - VERIFIER_CLIENTMETADATA_VPFORMATS_MSOMDOC_ENABLED=true
+      # Attestation classifications: include standard EUDI types + Marty custom types.
+      # The verifier uses these to determine trust for X.509-based SD-JWT VC validation.
+      - >-
+        VERIFIER_ATTESTATION_CLASSIFICATIONS={"pid":{"vcts":["urn:eudi:pid:1"],"docTypes":["eu.europa.ec.eudi.pid.1"]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":["urn:eudi:ehic:1"],"docTypes":[]},"eaa":[{"useCase":"mDL","vcts":[],"docTypes":["org.iso.18013.5.1.mDL"]},{"useCase":"learningCredential","vcts":["urn:eu.europa.ec.eudi:learning:credential:1"],"docTypes":[]},{"useCase":"martyOpenBadge","vcts":["https://marty.example/credentials/open_badge","https://beta.elevenidllc.com/credentials/open_badge","urn:credential:open_badge"],"docTypes":[]}]}
+      - CORS_ORIGINS=*
+    networks:
+      - marty-test-network
+
   # Integration Test Runner
   integration-tests:
     build:
       context: .
       dockerfile: Dockerfile.integration-tests
+    profiles:
+      - interop
     environment:
-      - GATEWAY_URL=http://gateway:8000
+      - GATEWAY_URL=http://test-gateway:8000
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - KEYCLOAK_LOCAL_URL=http://marty-keycloak:8080
       - WALTID_WALLET_URL=http://waltid-wallet:7001
       - MARTY_WALLET_URL=http://marty-wallet:9081
+      - EUDI_WALLET_TESTER_URL=http://eudi-wallet-tester:5000
+      - EUDI_VERIFIER_URL=http://eudi-verifier:8080
+      - EUDI_WALLET_KIT_URL=http://eudi-wallet-kit:9090
       - RUN_WALLET_TESTS=true
+      - RUN_EUDI_TESTS=true
       - PYTHONUNBUFFERED=1
     depends_on:
       gateway:
@@ -388,8 +774,13 @@ services:
         condition: service_healthy
       marty-wallet:
         condition: service_healthy
+      eudi-wallet-tester:
+        condition: service_healthy
+      eudi-verifier:
+        condition: service_healthy
     networks:
       - marty-test-network
+      - marty-infra-network
     volumes:
       # Mount test code for development (optional - for faster iteration)
       - ./tests:/app/tests:ro
@@ -397,9 +788,13 @@ services:
 networks:
   marty-test-network:
     driver: bridge
+  marty-infra-network:
+    external: true
 
 volumes:
   waltid-wallet-data:
     driver: local
   waltid-postgres-data:
+    driver: local
+  tls-certs:
     driver: local

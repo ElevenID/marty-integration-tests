@@ -39,8 +39,8 @@ class TestCompleteCredentialLifecycle:
         5. Submit evidence
         6. Approve application (triggers issuance)
         7. Verify credential can be used
-        8. TODO: Revoke credential
-        9. TODO: Verify revocation is reflected
+        8. Revoke credential
+        9. Verify revocation is reflected
         """
         # =====================================================================
         # Phase 1: Organization Setup
@@ -183,7 +183,29 @@ class TestCompleteCredentialLifecycle:
         assert request_obj is not None
         
         # =====================================================================
-        # Phase 5: Lifecycle Complete
+        # Phase 5: Revocation
+        # =====================================================================
+        
+        issuance_id = issuance["id"]
+        
+        # Step 12: Revoke the credential
+        revocation_result = await gateway_client.revoke_credential(
+            issuance_id=issuance_id,
+            reason="License suspended - integration test",
+        )
+        assert revocation_result is not None
+        
+        # Step 13: Verify issuance record reflects the revocation
+        revoked_issuance = await gateway_client.get_issuance(issuance_id)
+        assert revoked_issuance["status"] == "revoked"
+        
+        # Step 14: Verify revocation status endpoint confirms it
+        revocation_status = await gateway_client.get_revocation_status(issuance_id)
+        assert revocation_status is not None
+        assert revocation_status.get("revoked") is True or revocation_status.get("status") == "revoked"
+        
+        # =====================================================================
+        # Phase 6: Lifecycle Complete
         # =====================================================================
         
         # Verify all resources are correctly linked
@@ -197,8 +219,9 @@ class TestCompleteCredentialLifecycle:
         retrieved_org = await gateway_client.get_organization(org_id)
         assert retrieved_org["id"] == org_id
         
-        retrieved_issuance = await gateway_client.get_issuance(issuance["id"])
-        assert retrieved_issuance["id"] == issuance["id"]
+        retrieved_issuance = await gateway_client.get_issuance(issuance_id)
+        assert retrieved_issuance["id"] == issuance_id
+        assert retrieved_issuance["status"] == "revoked"
 
 
 @pytest.mark.asyncio
@@ -337,7 +360,7 @@ class TestEmployeeBadgeLifecycle:
         flow_status = await gateway_client.get_verification_result(
             verification_flow["instance_id"]
         )
-        assert flow_status["status"] in ["pending", "waiting", "created", "active", "waiting_user"]
+        assert flow_status["status"] in ["pending", "waiting", "created", "active", "waiting_user", "AWAITING_WALLET"]
 
 
 @pytest.mark.asyncio

@@ -151,13 +151,15 @@ class WaltIdWalletClient:
     async def create_did(
         self,
         method: str = "key",
-        wallet_id: Optional[str] = None
+        wallet_id: Optional[str] = None,
+        key_type: str = "secp256r1",
     ) -> Dict[str, Any]:
         """Create a new DID in the wallet.
 
         Args:
             method: DID method (e.g., "key", "web", "jwk")
             wallet_id: Wallet ID (uses stored wallet_id if not provided)
+            key_type: Cryptographic key type (default "secp256r1" for mDoc compat)
 
         Returns:
             DID creation response including the DID string
@@ -172,7 +174,7 @@ class WaltIdWalletClient:
         # First generate a key
         key_response = await self.client.post(
             f"/wallet-api/wallet/{wallet_id}/keys/generate",
-            json={"backend": "jwk", "keyType": "Ed25519"}
+            json={"backend": "jwk", "keyType": key_type}
         )
         key_response.raise_for_status()
         # Key generation returns plaintext key ID, not JSON

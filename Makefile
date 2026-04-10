@@ -15,6 +15,8 @@ help:
 	@echo "  make test              - Run all integration tests"
 	@echo "  make test-fast         - Run tests with parallel execution"
 	@echo "  make test-wallet       - Run Walt.ID wallet integration tests only"
+	@echo "  make test-interop      - Run OID4VC wallet interoperability tests"
+	@echo "  make test-eudi        - Run EUDI reference wallet/verifier interop tests"
 	@echo "  make conformance       - Run OIDF OID4VC conformance tests (expects failures)"
 	@echo "  make conformance-crypto - Run NIST CAVP crypto conformance (marty-core)"
 	@echo "  make conformance-mdoc  - Run ISO 18013-5 mDoc conformance (marty-core)"
@@ -47,6 +49,15 @@ test-wallet: start
 
 test-marty-wallet: start
 	pytest -m marty_wallet -v
+
+test-interop: start
+	pytest tests/integration/gateway/test_wallet_interop.py -v
+
+test-eudi: start
+	RUN_EUDI_TESTS=true pytest tests/integration/gateway/test_eudi_interop.py -v
+
+test-wallet-kit: start
+	RUN_EUDI_TESTS=true pytest tests/integration/gateway/test_eudi_wallet_kit.py -v
 
 conformance:
 	@echo "Running OIDF OID4VC conformance tests through the gateway..."

@@ -616,15 +616,15 @@ class TestZKPSDJWTIssuance:
           — this works today and confirms the full OID4VCI protocol path.
       (b) SD-JWT format: the credential *should* be vc+sd-jwt when requested
           — currently the server ignores ``format: vc+sd-jwt`` and always
-          returns JWT-VC.  These format assertions are marked xfail and will
-          automatically turn into passes when SD-JWT dispatch is implemented.
+          returns JWT-VC.  The SD-JWT format assertions verify the
+          credential structure when SD-JWT dispatch is active.
 
     Flow:
       1.  Authenticated gateway  →  POST /v1/issuance  →  pre_auth_code
       2.  POST /v1/issuance/token (pre-auth code grant)  →  access_token
       3.  POST /v1/issuance/credential (format: vc+sd-jwt)  →  credential
-      4.  Assert basic credential structure (passes today)
-      5.  Assert SD-JWT format (xfail until server implements format dispatch)
+      4.  Assert basic credential structure
+      5.  Assert SD-JWT format
     """
 
     # Re-usable helper -------------------------------------------------------
@@ -702,24 +702,17 @@ class TestZKPSDJWTIssuance:
         return raw_doc
 
     def _check_sd_jwt_format(self, raw_doc: str, label: str) -> None:
-        """Assert the document is SD-JWT, xfail if the server returned JWT-VC.
-
-        TODO: Remove xfail when the credential endpoint implements format dispatch.
-        See: issuance routes.py ``create_verifiable_credential_wrapper`` call —
-        the ``request.format`` field is currently ignored.
-        """
+        """Assert the document is SD-JWT (vc+sd-jwt format dispatch)."""
         base_jwt = raw_doc.split("~")[0]
         typ = _decode_jwt_header(base_jwt).get("typ", "")
         is_sd_jwt = "sd-jwt" in typ.lower() or "~" in raw_doc
 
-        if not is_sd_jwt:
-            pytest.xfail(
-                f"[{label}] Server returned {typ!r} instead of the requested "
-                f"vc+sd-jwt format.  SD-JWT format dispatch is not yet "
-                f"implemented in the credential endpoint (format param ignored)."
-            )
+        assert is_sd_jwt, (
+            f"[{label}] Expected SD-JWT but server returned typ={typ!r}. "
+            f"Format dispatch should force vc+sd-jwt for SD-JWT templates."
+        )
 
-        # If we get here, SD-JWT was returned — validate structure
+        # SD-JWT was returned — validate structure
         _assert_credential_document(raw_doc, expected_label=f"{label}_format_check")
         logger.info("[%s] ✓ SD-JWT issued (typ=%s)", label, typ)
 
@@ -734,7 +727,7 @@ class TestZKPSDJWTIssuance:
         Open Badge: verify pre-auth code flow end-to-end, then assert SD-JWT.
 
         The pre-auth flow assertions (steps 1-3) pass today.
-        The SD-JWT format assertion is xfail pending server-side implementation.
+        The SD-JWT format assertion validates credential structure.
         """
         label = "open_badge"
         raw_doc = await self._get_credential_via_pre_auth(
@@ -750,7 +743,7 @@ class TestZKPSDJWTIssuance:
         )
         # Base credential structure is valid regardless of format
         _assert_credential_document(raw_doc, expected_label=f"{label}_pre_auth")
-        # SD-JWT format check (xfail until server implements dispatch)
+        # SD-JWT format check
         self._check_sd_jwt_format(raw_doc, label)
 
     @pytest.mark.asyncio
@@ -789,7 +782,7 @@ class TestZKPSDJWTIssuance:
         Each credential type: verify pre-auth code flow, then assert SD-JWT.
 
         The pre-auth flow (token exchange + credential endpoint) passes today.
-        The SD-JWT format assertion is xfail pending server-side implementation.
+        The SD-JWT format assertion validates credential structure.
         """
         claims = {
             "given_name": "ZKP",
@@ -806,5 +799,5 @@ class TestZKPSDJWTIssuance:
         )
         # Base structure is valid regardless of format
         _assert_credential_document(raw_doc, expected_label=f"{label}_pre_auth")
-        # SD-JWT format check (xfail until server implements dispatch)
+        # SD-JWT format check
         self._check_sd_jwt_format(raw_doc, label)

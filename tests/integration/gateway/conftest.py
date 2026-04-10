@@ -4,6 +4,8 @@ Pytest configuration and shared fixtures for Gateway integration tests.
 Provides fixtures for gateway client, test organizations, and common test data.
 """
 
+import asyncio
+import logging
 import os
 from typing import AsyncGenerator, Dict, Any, Optional
 
@@ -12,8 +14,11 @@ import pytest
 
 from .helpers.auth_helper import AuthHelper
 from .helpers.gateway_client import GatewayClient, GatewayClientError
+from .helpers.marty_wallet_client import MartyHeadlessWalletClient
 from .helpers.test_data import TestDataBuilder
 from .helpers.waltid_wallet_client import WaltIdWalletClient
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -29,6 +34,18 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "wallet: mark test as requiring functional Walt.id wallet with network access",
+    )
+    config.addinivalue_line(
+        "markers",
+        "interop: mark test as OID4VC interoperability test (Google/Apple/EUDI wallet profiles)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "inspection: mark test as requiring a live Inspection System service",
+    )
+    config.addinivalue_line(
+        "markers",
+        "eudi: mark test as EUDI reference implementation interop test",
     )
 
 
@@ -64,6 +81,123 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "wallet" in item.keywords:
                 item.add_marker(skip_marker)
+
+    # Check if Inspection System service is reachable
+    is_url = os.getenv("INSPECTION_SYSTEM_URL", "http://localhost:8083")
+    is_available = False
+    try:
+        response = httpx.get(f"{is_url}/health", timeout=2.0)
+        is_available = response.status_code == 200
+    except Exception:
+        pass
+
+    if not is_available:
+        skip_marker = pytest.mark.skip(
+            reason=f"Inspection System not available at {is_url}. "
+            "Start the IS service or set INSPECTION_SYSTEM_URL."
+        )
+        for item in items:
+            if "inspection" in item.keywords:
+                item.add_marker(skip_marker)
+
+
+# =============================================================================
+# Service Readiness
+# =============================================================================
+
+# Services that must be healthy before org-authorization tests can run.
+# These match the service keys returned by GET /health/services.
+_REQUIRED_SERVICES = {
+    "auth",
+    "organizations",
+    "credential-templates",
+    "trust-profiles",
+    "issuance",
+    "compliance-profiles",
+    "presentation-policies",
+    "deployment-profiles",
+    "flows",
+    "revocation-profiles",
+    "billing",
+}
+
+
+# Module-level flag: service readiness has already been verified this process.
+_SERVICES_VERIFIED = {"done": False}
+
+
+@pytest.fixture(scope="session")
+async def all_services_ready() -> None:
+    """Wait for all backend services to be healthy before running tests.
+
+    Polls the gateway's ``/health/services`` endpoint and blocks until every
+    service in ``_REQUIRED_SERVICES`` reports ``healthy``.  Fails after
+    *max_wait* seconds so that CI doesn't hang forever.
+
+    Uses a module-level flag so the check is performed at most once per
+    process, regardless of how pytest-asyncio handles session-scoped
+    fixtures across event loops.
+    """
+    if _SERVICES_VERIFIED["done"]:
+        return
+
+    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8000")
+    max_wait = 120  # seconds
+    poll_interval = 3  # seconds
+    elapsed = 0.0
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while elapsed < max_wait:
+            try:
+                resp = await client.get(f"{gateway_url}/health/services")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    services = data.get("services", {})
+                    unhealthy = {
+                        name
+                        for name in _REQUIRED_SERVICES
+                        if services.get(name, {}).get("status") != "healthy"
+                    }
+                    if not unhealthy:
+                        logger.info(
+                            "All %d required services healthy after %.0fs",
+                            len(_REQUIRED_SERVICES),
+                            elapsed,
+                        )
+                        _SERVICES_VERIFIED["done"] = True
+                        return
+                    logger.debug(
+                        "Waiting for services: %s (%.0fs elapsed)",
+                        ", ".join(sorted(unhealthy)),
+                        elapsed,
+                    )
+            except Exception as exc:
+                logger.debug("health/services probe failed: %s", exc)
+
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+    # Build a useful error message showing which services are still unhealthy.
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{gateway_url}/health/services")
+            services = resp.json().get("services", {})
+            unhealthy = {
+                name: services.get(name, {}).get("status", "missing")
+                for name in _REQUIRED_SERVICES
+                if services.get(name, {}).get("status") != "healthy"
+            }
+            if not unhealthy:
+                # All healthy on the final probe — allow tests to proceed.
+                _SERVICES_VERIFIED["done"] = True
+                return
+    except Exception:
+        unhealthy = {"<gateway unreachable>": "unknown"}
+
+    pytest.fail(
+        f"Backend services not ready after {max_wait}s.  "
+        f"Unhealthy: {unhealthy}"
+    )
 
 
 # =============================================================================
@@ -150,6 +284,10 @@ async def authenticated_gateway_client(
 async def test_organization(gateway_client: GatewayClient) -> Dict[str, Any]:
     """
     Create a unique test organization for each test.
+
+    After creation the org is upgraded to the **enterprise** plan via the
+    organization service's internal API, so that all billing-gated features
+    (deployment profiles, webhooks, audit logs, …) are available in tests.
     
     Returns:
         Organization object with id, name, created_at, etc.
@@ -163,6 +301,25 @@ async def test_organization(gateway_client: GatewayClient) -> Dict[str, Any]:
         name=org_data["name"],
         display_name=org_data["display_name"],
     )
+
+    # Upgrade to enterprise plan via internal org-service API
+    org_service_url = os.getenv(
+        "ORGANIZATION_SERVICE_URL", "http://organization-service:8002"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as internal_client:
+            resp = await internal_client.put(
+                f"{org_service_url}/internal/v1/organizations/{org['id']}/plan",
+                json={"plan_tier": "enterprise"},
+            )
+            if resp.status_code not in (200, 204):
+                logger.warning(
+                    "Failed to set enterprise plan for org %s: %s %s",
+                    org["id"], resp.status_code, resp.text,
+                )
+    except Exception as exc:
+        logger.warning("Failed to upgrade test org plan: %s", exc)
+
     return org
 
 
@@ -277,6 +434,25 @@ async def jwt_vc_v2_template(
 
 
 @pytest.fixture
+async def sd_jwt_mdl_template(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create an mDL-like credential template using SD-JWT format.
+
+    Uses the same driver's license claims as ``mdl_template`` but with
+    ``dc+sd-jwt`` payload format, avoiding the Rust mDoc signing bug
+    that rejects P-256 holder keys.
+    """
+    template_data = TestDataBuilder.sd_jwt_mdl_template(
+        organization_id=test_organization["id"],
+    )
+    template = await gateway_client.create_credential_template(**template_data)
+    return template
+
+
+@pytest.fixture
 async def zk_mdoc_template(
     gateway_client: GatewayClient,
     test_organization: Dict[str, Any],
@@ -343,6 +519,46 @@ async def identity_verification_policy(
     return policy
 
 
+@pytest.fixture
+async def sd_jwt_age_verification_policy(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+    sd_jwt_mdl_template: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Age verification policy linked to the SD-JWT mDL template.
+
+    Used by headless wallet tests (P-256 keys) since the Rust mDoc
+    signing engine does not yet support EC holder keys.
+    """
+    policy_data = TestDataBuilder.presentation_policy_age_verification(
+        organization_id=test_organization["id"],
+        credential_template_id=sd_jwt_mdl_template["id"],
+        min_age=21,
+    )
+    policy = await gateway_client.create_presentation_policy(**policy_data)
+    policy = await gateway_client.activate_presentation_policy(policy["id"])
+    return policy
+
+
+@pytest.fixture
+async def sd_jwt_identity_verification_policy(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+    sd_jwt_mdl_template: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Identity verification policy linked to the SD-JWT mDL template.
+    """
+    policy_data = TestDataBuilder.presentation_policy_identity_verification(
+        organization_id=test_organization["id"],
+        credential_template_id=sd_jwt_mdl_template["id"],
+    )
+    policy = await gateway_client.create_presentation_policy(**policy_data)
+    policy = await gateway_client.activate_presentation_policy(policy["id"])
+    return policy
+
+
 # =============================================================================
 # Application Template Fixtures
 # =============================================================================
@@ -390,6 +606,7 @@ async def test_deployment_profile(
     gateway_client: GatewayClient,
     test_organization: Dict[str, Any],
     age_verification_policy: Dict[str, Any],
+    test_trust_profile: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Create a deployment profile for testing.
@@ -400,6 +617,7 @@ async def test_deployment_profile(
     profile_data = TestDataBuilder.deployment_profile(
         organization_id=test_organization["id"],
         default_presentation_policy_id=age_verification_policy["id"],
+        trust_profile_id=test_trust_profile["id"],
     )
     profile = await gateway_client.create_deployment_profile(**profile_data)
     return profile
@@ -450,6 +668,82 @@ async def zk_age_verification_policy(
 
 
 # =============================================================================
+# DTC / Passport Fixtures
+# =============================================================================
+
+@pytest.fixture
+async def icao_trust_profile(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create an ICAO CSCA/DSC trust profile.
+
+    Returns:
+        Trust profile configured for ICAO PKD trust sources.
+    """
+    data = TestDataBuilder.icao_trust_profile(
+        organization_id=test_organization["id"],
+    )
+    return await gateway_client.create_trust_profile(**data)
+
+
+@pytest.fixture
+async def dtc_template(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create an ICAO DTC credential template.
+
+    Returns:
+        Credential template for Digital Travel Credentials (mDoc format).
+    """
+    template_data = TestDataBuilder.dtc_template(
+        organization_id=test_organization["id"],
+    )
+    return await gateway_client.create_credential_template(**template_data)
+
+
+@pytest.fixture
+async def dtc_verification_policy(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+    dtc_template: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create and activate a DTC presentation policy.
+
+    Requests DG1, DG2, and document_number from the DTC template.
+    """
+    policy_data = TestDataBuilder.presentation_policy_dtc_verification(
+        organization_id=test_organization["id"],
+        credential_template_id=dtc_template["id"],
+    )
+    policy = await gateway_client.create_presentation_policy(**policy_data)
+    policy = await gateway_client.activate_presentation_policy(policy["id"])
+    return policy
+
+
+@pytest.fixture
+async def dtc_identity_only_policy(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+    dtc_template: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create and activate a DTC presentation policy requesting only MRZ identity data.
+    """
+    policy_data = TestDataBuilder.presentation_policy_dtc_identity_only(
+        organization_id=test_organization["id"],
+        credential_template_id=dtc_template["id"],
+    )
+    policy = await gateway_client.create_presentation_policy(**policy_data)
+    policy = await gateway_client.activate_presentation_policy(policy["id"])
+    return policy
+
+
+# =============================================================================
 # Helper Fixtures
 # =============================================================================
 
@@ -489,7 +783,10 @@ async def waltid_wallet_client() -> AsyncGenerator[WaltIdWalletClient, None]:
         # Simple connectivity test - wallet doesn't have a standard health endpoint
         # Just verify we can connect to the base URL
         async with httpx.AsyncClient(timeout=5.0) as test_client:
-            response = await test_client.get(f"{wallet_url}/wallet-api")
+            try:
+                response = await test_client.get(f"{wallet_url}/wallet-api")
+            except (httpx.ConnectError, httpx.TimeoutException, OSError):
+                pytest.skip(f"Walt.id wallet not reachable at {wallet_url}")
             # We expect 404 for base path, which means the server is responding
             if response.status_code not in [200, 404]:
                 pytest.skip(f"Walt.id wallet not available at {wallet_url}")
@@ -586,3 +883,80 @@ async def marty_wallet_url() -> AsyncGenerator[str, None]:
         pytest.skip(f"Marty wallet not available at {wallet_url}: {exc}")
 
     yield wallet_url
+
+
+# =============================================================================
+# Marty Headless Wallet Fixtures (protocol-level, no external wallet service)
+# =============================================================================
+
+@pytest.fixture
+async def marty_headless_wallet_client() -> AsyncGenerator[MartyHeadlessWalletClient, None]:
+    """
+    Provide a headless Marty Authenticator wallet client.
+
+    Unlike ``waltid_wallet_client`` this does NOT require a running wallet
+    server.  It drives the OID4VCI / OID4VP protocol directly using
+    ephemeral P-256 keys, which unblocks mDoc device-auth tests that fail
+    with Walt.id's Ed25519-only DIDs.
+    """
+    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8000")
+    client = MartyHeadlessWalletClient(gateway_url=gateway_url)
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+@pytest.fixture
+async def marty_test_wallet(
+    marty_headless_wallet_client: MartyHeadlessWalletClient,
+) -> Dict[str, Any]:
+    """
+    Create a headless test wallet with a DID, mirroring ``test_wallet``.
+
+    Returns the same dict shape so downstream tests can use either fixture
+    interchangeably::
+
+        {"wallet_id": ..., "did": ..., "client": MartyHeadlessWalletClient}
+    """
+    import uuid
+
+    wallet_name = f"headless-wallet-{uuid.uuid4().hex[:8]}"
+    await marty_headless_wallet_client.create_wallet(wallet_name)
+    did_result = await marty_headless_wallet_client.create_did(method="jwk")
+
+    return {
+        "wallet_id": marty_headless_wallet_client.wallet_id,
+        "did": did_result["did"],
+        "client": marty_headless_wallet_client,
+    }
+
+
+# =============================================================================
+# CLI Client Fixtures (headless UI via subprocess)
+# =============================================================================
+
+@pytest.fixture
+async def cli_client(
+    test_session_id: str,
+) -> AsyncGenerator["MartyCLIClient", None]:
+    """
+    Provide a headless CLI client authenticated via the shared Keycloak session.
+
+    Runs the ``marty`` Node.js CLI as a subprocess with a temporary config
+    directory so tests don't touch the developer's ``~/.marty`` credentials.
+
+    Usage::
+
+        async def test_health(cli_client):
+            result = cli_client.health()
+            assert result.ok
+    """
+    from .helpers.cli_client import MartyCLIClient
+
+    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8000")
+    async with MartyCLIClient(
+        session_id=test_session_id,
+        gateway_url=gateway_url,
+    ) as client:
+        yield client

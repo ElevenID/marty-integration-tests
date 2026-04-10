@@ -29,12 +29,14 @@ class TestDeploymentProfileCRUD:
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
         age_verification_policy: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
     ):
         """Test creating a deployment profile"""
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
             name="Airport Security Gate",
             default_presentation_policy_id=age_verification_policy["id"],
+            trust_profile_id=test_trust_profile["id"],
         )
         
         profile = await gateway_client.create_deployment_profile(**profile_data)
@@ -43,7 +45,7 @@ class TestDeploymentProfileCRUD:
         assert "id" in profile
         assert profile["organization_id"] == test_organization["id"]
         assert profile["name"] == "Airport Security Gate"
-        assert profile["network_mode"] == "online"
+        assert profile["network_mode"].lower() == "online"
         assert profile["default_presentation_policy_id"] == age_verification_policy["id"]
         
     async def test_get_deployment_profile(
@@ -93,19 +95,23 @@ class TestDeploymentProfileCRUD:
         
         assert updated["id"] == profile_id
         assert updated["name"] == "Updated Gate Name"
-        assert updated["network_mode"] == "offline"
+        assert updated["network_mode"].lower() == "offline"
         assert updated["biometric_required"] is True
         
     async def test_delete_deployment_profile(
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
     ):
         """Test deleting a deployment profile"""
         # Create a profile to delete
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
             name="Profile to Delete",
+            trust_profile_id=test_trust_profile["id"],
+            default_presentation_policy_id=age_verification_policy["id"],
         )
         profile = await gateway_client.create_deployment_profile(**profile_data)
         
@@ -142,11 +148,15 @@ class TestDeploymentProfileActivation:
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
     ):
         """Test deployment profile status transitions"""
         # Create profile (should start as draft/inactive)
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
+            trust_profile_id=test_trust_profile["id"],
+            default_presentation_policy_id=age_verification_policy["id"],
         )
         profile = await gateway_client.create_deployment_profile(**profile_data)
         
@@ -354,7 +364,7 @@ class TestDeviceAssignment:
         )
         
         # Lane should reflect device count
-        assert lane.get("device_count", 0) >= len(devices)
+        assert len(lane.get("device_ids", [])) >= len(devices)
 
 
 @pytest.mark.asyncio
@@ -367,11 +377,13 @@ class TestDeploymentProfileWithPolicy:
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
         age_verification_policy: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
     ):
         """Test deployment profile with default presentation policy"""
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
             default_presentation_policy_id=age_verification_policy["id"],
+            trust_profile_id=test_trust_profile["id"],
         )
         
         profile = await gateway_client.create_deployment_profile(**profile_data)
@@ -388,6 +400,7 @@ class TestDeploymentProfileWithPolicy:
         updated = await gateway_client.update_deployment_profile(
             profile_id=test_deployment_profile["id"],
             default_presentation_policy_id=identity_verification_policy["id"],
+            presentation_policy_ids=test_deployment_profile.get("presentation_policy_ids", []) + [identity_verification_policy["id"]],
         )
         
         assert updated["default_presentation_policy_id"] == identity_verification_policy["id"]
@@ -447,6 +460,7 @@ class TestDeploymentProfileErrors:
         """Test creating deployment profile with invalid organization ID"""
         profile_data = TestDataBuilder.deployment_profile(
             organization_id="invalid-org-id-999",
+            trust_profile_id="invalid-trust-profile-id",
         )
         
         with pytest.raises(Exception) as exc_info:
@@ -485,11 +499,15 @@ class TestDeploymentProfileErrors:
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
     ):
         """Test deleting an active profile (should fail or deactivate first)"""
         # Create and activate a profile
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
+            trust_profile_id=test_trust_profile["id"],
+            default_presentation_policy_id=age_verification_policy["id"],
         )
         profile = await gateway_client.create_deployment_profile(**profile_data)
         
@@ -516,27 +534,35 @@ class TestDeploymentProfileConfiguration:
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
     ):
         """Test deployment profile with offline mode configuration"""
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
+            trust_profile_id=test_trust_profile["id"],
+            default_presentation_policy_id=age_verification_policy["id"],
         )
         profile_data["network_mode"] = "offline"
         profile_data["offline_cache_ttl_hours"] = 48
         
         profile = await gateway_client.create_deployment_profile(**profile_data)
         
-        assert profile["network_mode"] == "offline"
+        assert profile["network_mode"].lower() == "offline"
         assert profile["offline_cache_ttl_hours"] == 48
         
     async def test_biometric_configuration(
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
     ):
         """Test deployment profile with biometric requirements"""
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
+            trust_profile_id=test_trust_profile["id"],
+            default_presentation_policy_id=age_verification_policy["id"],
         )
         profile_data["biometric_required"] = True
         
@@ -548,10 +574,14 @@ class TestDeploymentProfileConfiguration:
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
     ):
         """Test deployment profile UX configuration"""
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
+            trust_profile_id=test_trust_profile["id"],
+            default_presentation_policy_id=age_verification_policy["id"],
         )
         profile_data["ux_config"] = {
             "language": "es",
@@ -570,10 +600,14 @@ class TestDeploymentProfileConfiguration:
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
+        test_trust_profile: Dict[str, Any],
+        age_verification_policy: Dict[str, Any],
     ):
         """Test deployment profile audit configuration"""
         profile_data = TestDataBuilder.deployment_profile(
             organization_id=test_organization["id"],
+            trust_profile_id=test_trust_profile["id"],
+            default_presentation_policy_id=age_verification_policy["id"],
         )
         profile_data["audit_all_events"] = True
         

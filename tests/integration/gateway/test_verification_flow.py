@@ -167,7 +167,7 @@ class TestAsyncVerificationFlow:
         assert result is not None
         assert "status" in result
         # Should be pending or waiting
-        assert result["status"] in ["pending", "waiting", "created", "active"]
+        assert result["status"] in ["pending", "waiting", "created", "active", "AWAITING_WALLET"]
 
 
 @pytest.mark.asyncio
@@ -324,5 +324,5 @@ class TestMultipleVerificationFlows:
             identity_flow["instance_id"]
         )
         
-        assert age_result["status"] in ["pending", "waiting", "created", "active"]
-        assert identity_result["status"] in ["pending", "waiting", "created", "active"]
+        assert age_result["status"] in ["pending", "waiting", "created", "active", "AWAITING_WALLET"]
+        assert identity_result["status"] in ["pending", "waiting", "created", "active", "AWAITING_WALLET"]

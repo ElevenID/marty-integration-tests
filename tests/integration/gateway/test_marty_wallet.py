@@ -945,15 +945,13 @@ class TestMartyWalletIssuance:
             label, header.get("typ"), header.get("kid", "")[:60],
         )
 
-        # SD-JWT format check (xfail until server implements format dispatch)
+        # SD-JWT format check (format dispatch implemented in B3)
         typ = header.get("typ", "")
         is_sd_jwt = "sd-jwt" in typ.lower() or "~" in raw_jwt
-        if not is_sd_jwt:
-            pytest.xfail(
-                f"[{label}] Server returned {typ!r} instead of requested vc+sd-jwt. "
-                "SD-JWT format dispatch not yet implemented in the credential endpoint "
-                "(format param is currently ignored)."
-            )
+        assert is_sd_jwt, (
+            f"[{label}] Expected SD-JWT but server returned typ={typ!r}. "
+            "Format dispatch should force vc+sd-jwt for SD-JWT templates."
+        )
 
         # Store SD-JWT in Flutter wallet and verify
         cred_id = f"sd-jwt-{label}-{uuid.uuid4().hex[:8]}"
@@ -1034,15 +1032,13 @@ class TestMartyWalletIssuance:
             label, header.get("typ"), header.get("kid", "")[:60],
         )
 
-        # SD-JWT format check (xfail until server implements format dispatch)
+        # SD-JWT format check (format dispatch implemented in B3)
         typ = header.get("typ", "")
         is_sd_jwt = "sd-jwt" in typ.lower() or "~" in raw_jwt
-        if not is_sd_jwt:
-            pytest.xfail(
-                f"[{label}] Server returned {typ!r} instead of requested vc+sd-jwt. "
-                "SD-JWT format dispatch not yet implemented in the credential endpoint "
-                "(format param is currently ignored)."
-            )
+        assert is_sd_jwt, (
+            f"[{label}] Expected SD-JWT but server returned typ={typ!r}. "
+            "Format dispatch should force vc+sd-jwt for SD-JWT templates."
+        )
 
         # If SD-JWT is returned, store in Flutter wallet
         cred_id = f"sd-jwt-{label}-{uuid.uuid4().hex[:8]}"

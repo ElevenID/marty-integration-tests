@@ -39,7 +39,7 @@ class TestZKCredentialIssuance:
         
         assert template is not None
         assert "id" in template
-        assert template["supported_formats"] == ["zk_mdoc"]
+        assert template["supported_formats"] == ["ZK_MDOC"]
         assert "zk_predicate_claims" in template
         assert "age_over_21" in template["zk_predicate_claims"]
         

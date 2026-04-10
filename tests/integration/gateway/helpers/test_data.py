@@ -51,6 +51,13 @@ class TestDataBuilder:
                     "trust_level": "high",
                 }
             ],
+            "trust_sources": [
+                {
+                    "source_type": "did_registry",
+                    "url": "https://example.com/trust-list",
+                    "name": "Test Trust Source",
+                }
+            ],
             "trust_frameworks": ["eidas", "nist_800_63"],
             "revocation_check_enabled": True,
         }
@@ -73,9 +80,40 @@ class TestDataBuilder:
             "compliance_code": compliance_code,
             "credential_format": credential_format,
             "frameworks": ["aamva", "iso_18013_5"],
-            "trust_profile_constraints": [],
+            "trust_profile_constraints": None,
             "system_profile": False,
         }
+
+    @staticmethod
+    def revocation_profile(
+        organization_id: str,
+        name: Optional[str] = None,
+        revocation_mechanism: Optional[List[str]] = None,
+        check_mode: str = "ALWAYS",
+    ) -> Dict[str, Any]:
+        """Create revocation profile data."""
+        mechanisms = revocation_mechanism or ["STATUS_LIST_2021", "OCSP"]
+        data: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "name": name or f"test-revocation-profile-{str(uuid4())[:8]}",
+            "revocation_mechanism": mechanisms,
+            "mechanism_priority": mechanisms,
+            "check_mode": check_mode,
+            "issuer_config": {
+                "auto_allocate_index": True,
+                "batch_update_interval_seconds": 300,
+                "list_size": 10000,
+            },
+            "status_list_url": "https://example.com/status-lists/default",
+            "metadata": {
+                "source": "gateway-integration-suite",
+            },
+        }
+        if check_mode == "CACHED":
+            data["cache_ttl_seconds"] = 300
+        if check_mode == "OFFLINE_GRACE":
+            data["offline_grace_seconds"] = 900
+        return data
         
     # =============================================================================
     # Credential Template Data
@@ -87,6 +125,7 @@ class TestDataBuilder:
         name: Optional[str] = None,
         application_template_id: Optional[str] = None,
         compliance_profile_id: Optional[str] = None,
+        revocation_profile_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create mobile driver's license (mDL) credential template.
@@ -165,7 +204,62 @@ class TestDataBuilder:
             data["application_template_id"] = application_template_id
         
         return data
-        
+
+    @staticmethod
+    def sd_jwt_mdl_template(
+        organization_id: str,
+        name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create an mDL-like credential template using SD-JWT format.
+
+        Uses the same claim structure as ``mdl_template`` but with the
+        ``dc+sd-jwt`` payload format rather than mso_mdoc.  This avoids
+        the Rust mDoc signing bug that rejects P-256 holder keys and
+        enables headless wallet end-to-end testing.
+        """
+        return {
+            "organization_id": organization_id,
+            "name": name or "Mobile Driver's License (SD-JWT)",
+            "credential_type": "DriversLicense",
+            "vct": "https://credentials.marty.dev/DriversLicense",
+            "supported_formats": ["sd_jwt_vc"],
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "compliance_profile": {
+                "name": "MDL SD-JWT Compliance",
+                "compliance_code": "MDL_SD_JWT",
+                "credential_format": "sd_jwt_vc",
+                "frameworks": ["aamva"],
+            },
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "family_name": {"type": "string"},
+                    "given_name": {"type": "string"},
+                    "birth_date": {"type": "string", "format": "full-date"},
+                    "issue_date": {"type": "string", "format": "full-date"},
+                    "expiry_date": {"type": "string", "format": "full-date"},
+                    "issuing_country": {"type": "string"},
+                    "issuing_authority": {"type": "string"},
+                    "document_number": {"type": "string"},
+                    "driving_privileges": {"type": "array"},
+                    "un_distinguishing_sign": {"type": "string"},
+                    "sex": {"type": "integer"},
+                    "height": {"type": "integer"},
+                    "weight": {"type": "integer"},
+                    "eye_colour": {"type": "string"},
+                    "age_over_18": {"type": "boolean"},
+                    "age_over_21": {"type": "boolean"},
+                },
+                "required": ["family_name", "given_name", "birth_date"],
+            },
+            "claims": [
+                {"name": "family_name", "display_name": "Family Name", "required": True},
+                {"name": "given_name", "display_name": "Given Name", "required": True},
+                {"name": "birth_date", "display_name": "Birth Date", "required": True},
+            ],
+            "auto_generate_artifacts": True,
+        }
+
     @staticmethod
     def employee_badge_template(
         organization_id: str,
@@ -178,7 +272,7 @@ class TestDataBuilder:
             "organization_id": organization_id,
             "name": name or "Employee Badge",
             "credential_type": "EmployeeBadge",
-            "vct": "EmployeeBadge",
+            "vct": "https://credentials.marty.dev/EmployeeBadge",
             "supported_formats": ["sd_jwt_vc"],
             "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
             "wallet_configs": wallet_configs if wallet_configs is not None else [
@@ -227,6 +321,7 @@ class TestDataBuilder:
         name: Optional[str] = None,
         application_template_id: Optional[str] = None,
         wallet_configs: Optional[List[Dict]] = None,
+        revocation_profile_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create a W3C JWT Verifiable Credential template (jwt_vc format) using
@@ -242,7 +337,7 @@ class TestDataBuilder:
             "organization_id": organization_id,
             "name": name or "Verifiable ID",
             "credential_type": "VerifiableId",
-            "vct": "VerifiableId",
+            "vct": "https://credentials.marty.dev/VerifiableId",
             "supported_formats": ["jwt_vc"],
             # Explicit VCDM v1 format so the test is unambiguous even if the
             # server default changes in future.
@@ -279,6 +374,9 @@ class TestDataBuilder:
         if application_template_id:
             data["application_template_id"] = application_template_id
 
+        if revocation_profile_id:
+            data["revocation_profile_id"] = revocation_profile_id
+
         return data
 
     @staticmethod
@@ -301,7 +399,7 @@ class TestDataBuilder:
             "organization_id": organization_id,
             "name": name or "Verifiable ID (VCDM v2)",
             "credential_type": "VerifiableId",
-            "vct": "VerifiableId",
+            "vct": "https://credentials.marty.dev/VerifiableId",
             "supported_formats": ["jwt_vc"],
             "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
             "wallet_configs": wallet_configs if wallet_configs is not None else [
@@ -743,9 +841,10 @@ class TestDataBuilder:
         name: Optional[str] = None,
         site_id: Optional[str] = None,
         default_presentation_policy_id: Optional[str] = None,
+        trust_profile_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create deployment profile data for runtime configuration."""
-        return {
+        data: Dict[str, Any] = {
             "organization_id": organization_id,
             "name": name or f"test-deployment-profile-{str(uuid4())[:8]}",
             "site_id": site_id or f"site-{str(uuid4())[:6]}",
@@ -766,6 +865,9 @@ class TestDataBuilder:
             "audit_all_events": True,
             "default_presentation_policy_id": default_presentation_policy_id,
         }
+        if trust_profile_id:
+            data["trust_profile_id"] = trust_profile_id
+        return data
     
     @staticmethod
     def lane(
@@ -835,3 +937,390 @@ class TestDataBuilder:
                 }
             ],
         }
+
+    # =============================================================================
+    # ICAO DTC / Passport Data
+    # =============================================================================
+
+    @staticmethod
+    def icao_trust_profile(
+        organization_id: str,
+        name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create trust profile for ICAO CSCA/DSC PKI trust chain."""
+        return {
+            "organization_id": organization_id,
+            "name": name or f"icao-trust-profile-{str(uuid4())[:8]}",
+            "trusted_issuers": [
+                {
+                    "issuer_id": "csca:test:001",
+                    "name": "Test Country Signing CA",
+                    "trust_level": "high",
+                }
+            ],
+            "trust_sources": [
+                {
+                    "source_type": "PKD_URL",
+                    "url": "https://pkd.example.com/csca",
+                    "name": "ICAO PKD (Test)",
+                },
+                {
+                    "source_type": "TRUST_LIST",
+                    "url": "https://trust.example.com/icao",
+                    "name": "ICAO Trust List (Test)",
+                },
+            ],
+            "trust_frameworks": ["icao"],
+            "revocation_check_enabled": True,
+        }
+
+    @staticmethod
+    def dtc_compliance_profile(
+        organization_id: str,
+        name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create ICAO DTC compliance profile (MDOC format, com.icao.dtc namespace)."""
+        return {
+            "organization_id": organization_id,
+            "name": name or f"icao-dtc-compliance-{str(uuid4())[:8]}",
+            "compliance_code": "ICAO_DTC",
+            "credential_format": "MDOC",
+            "frameworks": ["icao_doc_9303"],
+            "system_profile": False,
+        }
+
+    @staticmethod
+    def mrz_compliance_profile(
+        organization_id: str,
+        name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create ICAO MRZ compliance profile for TD1/TD2/TD3 documents."""
+        return {
+            "organization_id": organization_id,
+            "name": name or f"icao-mrz-compliance-{str(uuid4())[:8]}",
+            "compliance_code": "ICAO_MRZ",
+            "credential_format": "MDOC",
+            "frameworks": ["icao_doc_9303"],
+            "system_profile": False,
+        }
+
+    @staticmethod
+    def dtc_template(
+        organization_id: str,
+        name: Optional[str] = None,
+        compliance_profile_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create ICAO Digital Travel Credential (DTC) template.
+
+        Uses ``com.icao.dtc`` namespace with required DG1 (MRZ mirror),
+        DG2 (facial biometric), and SOD (Document Security Object) claims
+        per ICAO Doc 9303 Part 13.
+        """
+        data: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "name": name or "Digital Travel Credential",
+            "credential_type": "com.icao.dtc",
+            "vct": "com.icao.dtc",
+            "supported_formats": ["mdoc"],
+            "schema": {
+                "namespaces": {
+                    "com.icao.dtc": {
+                        "data_group_1": {
+                            "type": "object",
+                            "description": "MRZ mirror data",
+                            "required": True,
+                        },
+                        "data_group_2": {
+                            "type": "string",
+                            "format": "base64",
+                            "description": "Facial biometric",
+                            "required": True,
+                        },
+                        "data_group_11": {
+                            "type": "object",
+                            "description": "Additional personal details",
+                            "required": False,
+                        },
+                        "data_group_12": {
+                            "type": "object",
+                            "description": "Optional details",
+                            "required": False,
+                        },
+                        "sod": {
+                            "type": "string",
+                            "format": "base64",
+                            "description": "Document Security Object",
+                            "required": True,
+                        },
+                        "document_number": {
+                            "type": "string",
+                            "required": True,
+                        },
+                        "issuing_authority": {
+                            "type": "string",
+                            "required": True,
+                        },
+                        "expiry_date": {
+                            "type": "string",
+                            "format": "full-date",
+                            "required": True,
+                        },
+                    }
+                }
+            },
+            "claims": [
+                {"name": "data_group_1", "display_name": "MRZ Data (DG1)", "required": True},
+                {"name": "data_group_2", "display_name": "Facial Biometric (DG2)", "required": True},
+                {"name": "sod", "display_name": "Document Security Object", "required": True},
+                {"name": "document_number", "display_name": "Document Number", "required": True},
+                {"name": "issuing_authority", "display_name": "Issuing Authority", "required": True},
+                {"name": "expiry_date", "display_name": "Expiry Date", "required": True},
+            ],
+            "auto_generate_artifacts": True,
+        }
+
+        if compliance_profile_id:
+            data["compliance_profile_id"] = compliance_profile_id
+        else:
+            data["compliance_profile"] = {
+                "name": "ICAO DTC Compliance",
+                "compliance_code": "ICAO_DTC",
+                "credential_format": "MDOC",
+                "frameworks": ["icao_doc_9303"],
+            }
+
+        return data
+
+    @staticmethod
+    def dtc_claims(
+        document_number: Optional[str] = None,
+        issuing_authority: str = "TST",
+        given_name: str = "ERIKA",
+        family_name: str = "MUSTERMANN",
+        birth_date: str = "1964-08-12",
+        nationality: str = "D",
+    ) -> Dict[str, Any]:
+        """Create DTC credential claims with MRZ mirror data and biometric stub."""
+        issue_date = datetime.now()
+        expiry_date = issue_date + timedelta(days=365 * 10)
+        doc_number = document_number or f"P{str(uuid4())[:8].upper()}"
+
+        return {
+            "data_group_1": {
+                "doc_type": "P",
+                "issuing_state": issuing_authority,
+                "surname": family_name,
+                "given_names": given_name,
+                "document_number": doc_number,
+                "nationality": nationality,
+                "birth_date": birth_date,
+                "sex": "F",
+                "expiry_date": expiry_date.strftime("%Y-%m-%d"),
+            },
+            "data_group_2": (
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+                "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            ),
+            "sod": (
+                "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Z3VS5JJcds3xfn/"
+                "placeholder_sod_for_test_only"
+            ),
+            "document_number": doc_number,
+            "issuing_authority": issuing_authority,
+            "expiry_date": expiry_date.strftime("%Y-%m-%d"),
+        }
+
+    @staticmethod
+    def presentation_policy_dtc_verification(
+        organization_id: str,
+        credential_template_id: str,
+        name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create presentation policy for DTC travel document verification.
+
+        Requests MRZ data (DG1), facial biometric (DG2), and document
+        number from a DTC credential.
+        """
+        return {
+            "organization_id": organization_id,
+            "name": name or "DTC Travel Document Verification",
+            "purpose": "Verify traveller identity via Digital Travel Credential",
+            "credential_requirements": [
+                {
+                    "credential_template_id": credential_template_id,
+                    "display_name": "Digital Travel Credential",
+                    "requested_claims": [
+                        {
+                            "claim_name": "data_group_1",
+                            "display_name": "MRZ Data",
+                            "required": True,
+                        },
+                        {
+                            "claim_name": "data_group_2",
+                            "display_name": "Facial Biometric",
+                            "required": True,
+                        },
+                        {
+                            "claim_name": "document_number",
+                            "display_name": "Document Number",
+                            "required": True,
+                        },
+                    ],
+                }
+            ],
+        }
+
+    @staticmethod
+    def presentation_policy_dtc_identity_only(
+        organization_id: str,
+        credential_template_id: str,
+        name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a minimal DTC presentation policy requesting only MRZ identity data.
+
+        Useful for non-biometric verification scenarios.
+        """
+        return {
+            "organization_id": organization_id,
+            "name": name or "DTC Identity Only Verification",
+            "purpose": "Verify traveller identity via DTC MRZ data only",
+            "credential_requirements": [
+                {
+                    "credential_template_id": credential_template_id,
+                    "display_name": "Digital Travel Credential",
+                    "requested_claims": [
+                        {
+                            "claim_name": "data_group_1",
+                            "display_name": "MRZ Data",
+                            "required": True,
+                        },
+                        {
+                            "claim_name": "document_number",
+                            "display_name": "Document Number",
+                            "required": True,
+                        },
+                    ],
+                }
+            ],
+        }
+
+    # =============================================================================
+    # MRZ Test Data
+    # =============================================================================
+
+    @staticmethod
+    def mrz_td3_passport(
+        surname: str = "MUSTERMANN",
+        given_names: str = "ERIKA",
+        passport_number: str = "C01X00T47",
+        nationality: str = "D",
+        birth_date: str = "640812",
+        sex: str = "F",
+        expiry_date: str = "311231",
+        issuing_state: str = "D",
+    ) -> Dict[str, str]:
+        """
+        Create TD3 (passport booklet) MRZ test data (44-char, 2-line format).
+
+        Default values use the ICAO Doc 9303 Erika Mustermann reference specimen.
+        """
+        # Simplified: callers can override lines directly if they need
+        # full check-digit control. These defaults produce structurally
+        # valid MRZ lines (check digits omitted for brevity; the gateway
+        # MRZ service will compute/validate them).
+        line1 = f"P<{issuing_state}{surname}<<{given_names}".ljust(44, "<")
+        line2 = (
+            f"{passport_number}{'<' * (9 - len(passport_number))}"
+            f"0{nationality}{birth_date}0{sex}{expiry_date}0"
+        ).ljust(44, "<")
+        return {
+            "mrz_line_1": line1[:44],
+            "mrz_line_2": line2[:44],
+            "format": "TD3",
+        }
+
+    @staticmethod
+    def mrz_td1_id_card(
+        surname: str = "MUSTERMANN",
+        given_names: str = "ERIKA",
+        document_number: str = "D23X45010",
+        nationality: str = "D",
+        birth_date: str = "640812",
+        sex: str = "F",
+        expiry_date: str = "311231",
+        issuing_state: str = "D",
+    ) -> Dict[str, str]:
+        """
+        Create TD1 (ID card) MRZ test data (30-char, 3-line format).
+        """
+        line1 = f"I<{issuing_state}{document_number}".ljust(30, "<")
+        line2 = f"{birth_date}0{sex}{expiry_date}0{nationality}".ljust(30, "<")
+        line3 = f"{surname}<<{given_names}".ljust(30, "<")
+        return {
+            "mrz_line_1": line1[:30],
+            "mrz_line_2": line2[:30],
+            "mrz_line_3": line3[:30],
+            "format": "TD1",
+        }
+
+    # =============================================================================
+    # Inspection System Data
+    # =============================================================================
+
+    @staticmethod
+    def inspection_request(
+        document_number: Optional[str] = None,
+        inspection_level: str = "basic",
+        mrz_data: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create an inspection request payload for the IS gateway endpoint.
+
+        ``inspection_level`` can be:
+        - ``basic``: Passive Authentication only (SOD + DG hashes)
+        - ``enhanced``: PA + BAC/PACE + Active Authentication
+        - ``forensic``: PA + EAC (Terminal Auth + Chip Auth) + biometrics
+        """
+        return {
+            "document_number": document_number or f"P{str(uuid4())[:8].upper()}",
+            "inspection_level": inspection_level,
+            "mrz_data": mrz_data,
+        }
+
+    @staticmethod
+    def deployment_profile_with_is(
+        organization_id: str,
+        name: Optional[str] = None,
+        default_presentation_policy_id: Optional[str] = None,
+        trust_profile_id: Optional[str] = None,
+        device_type: str = "gate",
+    ) -> Dict[str, Any]:
+        """Create a deployment profile for an Inspection System device (gate/kiosk/handheld)."""
+        data: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "name": name or f"is-deployment-{str(uuid4())[:8]}",
+            "site_id": f"border-{str(uuid4())[:6]}",
+            "network_mode": "online",
+            "key_access_mode": "key_vault",
+            "ux_config": {
+                "language": "en",
+                "signage_text": "Present travel document for inspection",
+                "operator_mode": True,
+                "accessibility": True,
+            },
+            "update_policy": {
+                "auto_update": True,
+                "rollout_percentage": 100,
+            },
+            "offline_cache_ttl_hours": 72,
+            "biometric_required": False,
+            "audit_all_events": True,
+            "default_presentation_policy_id": default_presentation_policy_id,
+            "device_type": device_type,
+        }
+        if trust_profile_id:
+            data["trust_profile_id"] = trust_profile_id
+        return data

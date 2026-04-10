@@ -82,7 +82,7 @@ class AuthHelper:
         host = parsed.netloc  # e.g. "beta.elevenidllc.com" or "keycloak:8080"
 
         is_external_host = self.gateway_external_host in host
-        is_docker_keycloak = host in ("keycloak:8080", "keycloak")
+        is_docker_keycloak = host in ("keycloak:8080", "keycloak", "marty-keycloak:8080", "marty-keycloak")
 
         if not (is_external_host or is_docker_keycloak):
             return url  # Already local or unknown host – leave as-is

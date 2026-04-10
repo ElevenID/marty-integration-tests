@@ -46,11 +46,11 @@ _counter = 0
 # Configuration
 # ---------------------------------------------------------------------------
 
-GATEWAY_BASE = "http://localhost:8000"           # gateway (requires auth for /v1/applicants)
-APPLICANT_BASE = "http://localhost:8006"         # applicant service (direct, for setup)
-ISSUANCE_BASE = "http://localhost:8005"          # issuance service (direct)
-WALLET_BASE = os.environ.get("WALTID_WALLET_URL", "http://localhost:7001")  # walt.id wallet
-ISSUANCE_FROM_CONTAINER = "http://host.docker.internal:8005"
+GATEWAY_BASE = os.environ.get("GATEWAY_BASE", "http://localhost:8000")
+APPLICANT_BASE = os.environ.get("APPLICANT_SERVICE_URL", "http://localhost:8006")
+ISSUANCE_BASE = os.environ.get("ISSUANCE_SERVICE_URL", "http://localhost:8005")
+WALLET_BASE = os.environ.get("WALTID_WALLET_URL", "http://localhost:7001")
+ISSUANCE_FROM_CONTAINER = os.environ.get("ISSUANCE_BASE_FROM_CONTAINERS", "http://host.docker.internal:8005")
 
 ORG_ID = "22222222-2222-2222-2222-222222222222"
 CREDENTIAL_CONFIG_ID = "40000000-0000-0000-0000-000000000003"
