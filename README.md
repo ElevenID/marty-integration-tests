@@ -100,6 +100,21 @@ pytest -m wallet -v
 pytest tests/integration/gateway/test_wallet_verification_flow.py -v
 ```
 
+### UI Contract Tests
+```bash
+# Install browser-test extras once
+pip install -e ".[dev,e2e]"
+python -m playwright install chromium
+
+# Point at a sibling Marty UI checkout if it is not under ../marty-ui/ui
+set MARTY_UI_DIR=..\marty-ui\ui
+
+# Run the post-login org-console browser contracts
+pytest tests/integration/ui/test_post_login_console_contract.py -v
+```
+
+These browser tests live in this repo but drive the real Marty UI from a local checkout. By default the harness looks for a sibling UI tree at `../marty-ui/ui`, starts a Vite dev server if one is not already running, and writes screenshots, videos, and optional GIFs to `reports/ui-contracts/`. GIF generation is automatic when `ffmpeg` is available on `PATH`.
+
 ## Development
 
 ### Adding New Tests
@@ -201,6 +216,15 @@ docker compose exec gateway python services/run_all_migrations.py
 2. Ensure tests pass: `pytest tests/integration/`
 3. Add documentation for new test suites
 4. Follow existing test patterns and fixtures
+
+### UI Contract Harness
+
+The browser contract suite under `tests/integration/ui/` is intended for post-login console coverage that is too cross-cutting for component tests alone.
+
+- Contracts are defined in YAML and executed with Playwright.
+- The harness mocks auth, organization, RBAC, and page data at the browser boundary so flows stay deterministic.
+- Demo artifacts are captured from the same runs used for verification.
+- The suite currently assumes a local Marty UI checkout is available; it is not wired into this repo's GitHub Actions workflow because that workflow does not automatically have the sibling UI repository.
 
 ## License
 

@@ -44,6 +44,7 @@ dev = [
 e2e = [
     "pytest-playwright>=0.4.0",
     "playwright>=1.40.0",
+    "PyYAML>=6.0.1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -62,6 +63,7 @@ markers = [
     "marty_wallet: Marty Authenticator web app integration tests (require RUN_WALLET_TESTS=true)",
     "slow: Slow running tests",
     "conformance: OID4VC conformance tests (OIDF certification prep — expect some failures exposing missing features)",
+    "ui_contract: Browser-driven UI contract tests against a local Marty UI checkout",
 ]
 addopts = [
     "-v",

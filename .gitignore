@@ -31,6 +31,7 @@ env/
 htmlcov/
 .tox/
 .hypothesis/
+reports/ui-contracts/
 
 # IDEs
 .vscode/

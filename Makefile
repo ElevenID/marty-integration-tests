@@ -1,6 +1,6 @@
 # Makefile for Marty Integration Tests
 
-.PHONY: help install test test-fast test-wallet conformance conformance-crypto conformance-mdoc clean start stop restart logs
+.PHONY: help install install-e2e test test-fast test-wallet test-ui-contracts conformance conformance-crypto conformance-mdoc clean start stop restart logs
 
 # Path to marty-core sibling repo (override with MARTY_CORE=<path>)
 MARTY_CORE ?= $(realpath $(dir $(firstword $(MAKEFILE_LIST)))../marty-core)
@@ -9,12 +9,14 @@ help:
 	@echo "Marty Integration Tests - Available commands:"
 	@echo ""
 	@echo "  make install           - Install test dependencies"
+	@echo "  make install-e2e       - Install browser-test dependencies and Chromium"
 	@echo "  make start             - Start all services with docker compose"
 	@echo "  make stop              - Stop all services"
 	@echo "  make restart           - Restart all services"
 	@echo "  make test              - Run all integration tests"
 	@echo "  make test-fast         - Run tests with parallel execution"
 	@echo "  make test-wallet       - Run Walt.ID wallet integration tests only"
+	@echo "  make test-ui-contracts - Run browser UI contract tests against a local Marty UI checkout"
 	@echo "  make test-interop      - Run OID4VC wallet interoperability tests"
 	@echo "  make test-eudi        - Run EUDI reference wallet/verifier interop tests"
 	@echo "  make conformance       - Run OIDF OID4VC conformance tests (expects failures)"
@@ -26,6 +28,10 @@ help:
 
 install:
 	pip install -e ".[dev]"
+
+install-e2e:
+	pip install -e ".[dev,e2e]"
+	python -m playwright install chromium
 
 start:
 	docker compose up -d
@@ -46,6 +52,9 @@ test-fast: start
 
 test-wallet: start
 	pytest -m wallet -v
+
+test-ui-contracts:
+	pytest tests/integration/ui -v
 
 test-marty-wallet: start
 	pytest -m marty_wallet -v

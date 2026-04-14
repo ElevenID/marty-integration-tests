@@ -1,0 +1,83 @@
+feature: post-login-org-console
+scenarios:
+  - name: unauthenticated-redirect
+    persona: anonymous
+    start_path: /console/org
+    expect:
+      path: /v1/auth/login
+      visible_testids:
+        - mock.auth.redirect
+
+  - name: admin-sidebar-navigation
+    persona: org_admin
+    start_path: /console/org
+    expect:
+      path: /console/org
+      visible_testids:
+        - console.dashboard.page
+    steps:
+      - action: click
+        testid: sidebar.nav.org
+      - action: click
+        testid: sidebar.nav.team
+      - assert:
+          path: /console/org/team
+          visible_testids:
+            - org.team.page
+            - org.team.invite.action
+          visible_texts:
+            - alex@example.com
+      - action: click
+        testid: sidebar.nav.notifications
+      - assert:
+          path: /console/org/notifications
+          visible_testids:
+            - org.notifications.page
+          visible_texts:
+            - Credential issued
+      - action: click
+        testid: sidebar.nav.deploy
+      - action: click
+        testid: sidebar.nav.signing-keys
+      - assert:
+          path: /console/org/deploy/signing-keys
+          visible_testids:
+            - deploy.signingKeys.page
+            - deploy.signingKeys.upload.action
+          visible_texts:
+            - Issuer Key
+      - action: click
+        testid: sidebar.nav.audit
+      - assert:
+          path: /console/org/audit
+          visible_testids:
+            - org.audit.page
+            - org.audit.export.action
+          visible_texts:
+            - alex@example.com
+
+  - name: operator-read-only-surfaces
+    persona: org_operator
+    checks:
+      - path: /console/org/team
+        visible_testids:
+          - org.team.page
+        hidden_testids:
+          - org.team.invite.action
+        visible_texts:
+          - alex@example.com
+      - path: /console/org/audit
+        visible_testids:
+          - org.audit.page
+        hidden_testids:
+          - org.audit.export.action
+        visible_texts:
+          - alex@example.com
+      - path: /console/org/deploy/signing-keys
+        visible_testids:
+          - deploy.signingKeys.page
+        disabled_testids:
+          - deploy.signingKeys.settings.action
+          - deploy.signingKeys.upload.action
+        visible_texts:
+          - Issuer Key
