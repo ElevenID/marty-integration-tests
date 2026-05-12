@@ -112,8 +112,10 @@ class TestAsyncVerificationFlow:
         request_obj = await gateway_client.get_verification_request(instance_id)
         
         assert request_obj is not None
-        # Should contain OID4VP request data
-        assert "presentation_definition" in request_obj or "request" in request_obj
+        # Default OID4VP path should use DCQL only.
+        if "request" not in request_obj:
+            assert "dcql_query" in request_obj
+            assert "presentation_definition" not in request_obj
         
     async def test_submit_verification(
         self,

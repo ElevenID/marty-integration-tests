@@ -521,8 +521,19 @@ class OID4VCIWalletClient:
         # 1. Resolve offer
         offer = await self.resolve_offer(offer_uri)
 
+        issuer_path_suffix = None
+        credential_issuer = offer.get("credential_issuer") if isinstance(offer, dict) else None
+        if isinstance(credential_issuer, str) and credential_issuer.strip():
+            issuer_path = urllib.parse.urlparse(credential_issuer).path.rstrip("/")
+            if issuer_path.endswith("/spruce"):
+                issuer_path_suffix = "/spruce"
+            elif issuer_path.endswith("/credential-manager"):
+                issuer_path_suffix = "/credential-manager"
+            elif issuer_path.endswith("/apple-wallet"):
+                issuer_path_suffix = "/apple-wallet"
+
         # 2. Fetch metadata
-        await self.fetch_issuer_metadata(org_id=org_id)
+        await self.fetch_issuer_metadata(org_id=org_id, path_suffix=issuer_path_suffix)
 
         # 3. Get token
         token_data = await self.request_token()

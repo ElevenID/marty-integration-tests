@@ -253,7 +253,7 @@ def _fetch_request_object(instance_id: str) -> dict:
 def _submit_vp_token(
     instance_id: str,
     vp_token: str,
-    presentation_submission: dict,
+    presentation_submission: dict | None = None,
     state: str | None = None,
 ) -> HttpResult:
     """POST /v1/flows/instances/{id}/submit — wallet returns VP token.
@@ -262,8 +262,9 @@ def _submit_vp_token(
     """
     form: dict[str, str] = {
         "vp_token": vp_token,
-        "presentation_submission": json.dumps(presentation_submission),
     }
+    if presentation_submission is not None:
+        form["presentation_submission"] = json.dumps(presentation_submission)
     if state:
         form["state"] = state
     return http(
@@ -273,10 +274,13 @@ def _submit_vp_token(
     )
 
 
-def _build_mock_vp_token(request_obj: dict, holder_did: str = HOLDER_DID) -> tuple[str, dict]:
+def _build_mock_vp_token(
+    request_obj: dict,
+    holder_did: str = HOLDER_DID,
+) -> tuple[str, dict | None]:
     """Build a structurally valid, properly signed VP token (when cryptography is available).
 
-    Returns (vp_token_str, presentation_submission_dict).
+    Returns (vp_token_str, presentation_submission_dict_or_none).
     Uses Ed25519 signing with the module-level holder keypair so the verifier can
     verify the signature by resolving the did:key. Falls back to a dummy signature
     if the cryptography package is unavailable.
@@ -307,19 +311,22 @@ def _build_mock_vp_token(request_obj: dict, holder_did: str = HOLDER_DID) -> tup
         sig = base64.urlsafe_b64encode(b"\x00" * 64).rstrip(b"=").decode()
         vp_token = f"{h}.{p}.{sig}"
 
-    # Minimal presentation_submission
-    presentation_submission = {
-        "id": "ps-1",
-        "definition_id": request_obj.get("presentation_definition", {}).get("id", "pd-1"),
-        "descriptor_map": [
-            {
-                "id": "credential",
-                "format": "jwt_vp",
-                "path": "$",
-                "path_nested": {"id": "credential", "format": "jwt_vc", "path": "$.vp.verifiableCredential[0]"},
-            }
-        ],
-    }
+    # Minimal legacy presentation_submission, only for PE-shaped requests
+    presentation_submission = None
+    pd = request_obj.get("presentation_definition")
+    if pd:
+        presentation_submission = {
+            "id": "ps-1",
+            "definition_id": pd.get("id", "pd-1"),
+            "descriptor_map": [
+                {
+                    "id": "credential",
+                    "format": "jwt_vp",
+                    "path": "$",
+                    "path_nested": {"id": "credential", "format": "jwt_vc", "path": "$.vp.verifiableCredential[0]"},
+                }
+            ],
+        }
     return vp_token, presentation_submission
 
 
@@ -418,6 +425,14 @@ def test_verifier_request_object_required_fields():
         R.ok("verifier_request.credential_query_present")
         if has_dcql:
             R.ok("verifier_request.dcql_query_supported")
+            if has_pd:
+                R.fail(
+                    "verifier_request.default_dcql_only",
+                    "Default OID4VP request should omit presentation_definition; "
+                    "PE is reserved for legacy compat such as compat=lissi.",
+                )
+            else:
+                R.ok("verifier_request.default_dcql_only")
         else:
             R.fail("verifier_request.dcql_query_supported",
                    "OID4VP-1FINAL §6: dcql_query not present (Final spec feature — missing)")
@@ -761,6 +776,10 @@ def test_verifier_fail_on_invalid_presentation_submission():
         R.fail("VPVerifierFailOnInvalidPS.setup", str(e))
         return
 
+    if "presentation_definition" not in req_obj:
+        R.ok("VPVerifierFailOnInvalidPresentationSubmission.not_applicable_for_dcql")
+        return
+
     vp_token, _ = _build_mock_vp_token(req_obj)
     bad_ps = {"this_is": "not_a_valid_presentation_submission"}
     resp = _submit_vp_token(instance_id, vp_token, bad_ps)
@@ -799,11 +818,13 @@ def test_verifier_fail_on_signature_verification():
     bad_sig = base64.urlsafe_b64encode(b"\xff" * 64).rstrip(b"=").decode()
     bad_vp = f"{h}.{p}.{bad_sig}"
 
-    ps = {
-        "id": "ps-bad",
-        "definition_id": req_obj.get("presentation_definition", {}).get("id", "pd"),
-        "descriptor_map": [],
-    }
+    ps = None
+    if "presentation_definition" in req_obj:
+        ps = {
+            "id": "ps-bad",
+            "definition_id": req_obj.get("presentation_definition", {}).get("id", "pd"),
+            "descriptor_map": [],
+        }
     resp = _submit_vp_token(instance_id, bad_vp, ps)
 
     if resp.status == 400:

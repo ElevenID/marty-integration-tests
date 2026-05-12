@@ -46,12 +46,12 @@ class TestDtcVerificationFlow:
         assert "request_uri" in flow or "qr_code_data" in flow
         assert "status" in flow
 
-    async def test_dtc_verification_request_contains_presentation_definition(
+    async def test_dtc_verification_request_contains_credential_query(
         self,
         gateway_client: GatewayClient,
         dtc_verification_policy: Dict[str, Any],
     ):
-        """Verify the OID4VP request includes a presentation definition for DTC."""
+        """Verify the OID4VP request includes a DCQL or legacy PE query for DTC."""
         flow = await gateway_client.start_verification_flow(
             presentation_policy_id=dtc_verification_policy["id"],
         )
@@ -60,7 +60,9 @@ class TestDtcVerificationFlow:
             flow["instance_id"],
         )
         assert request_obj is not None
-        assert "presentation_definition" in request_obj or "request" in request_obj
+        if "request" not in request_obj:
+            assert "dcql_query" in request_obj
+            assert "presentation_definition" not in request_obj
 
     async def test_dtc_verification_with_mock_token_rejected(
         self,

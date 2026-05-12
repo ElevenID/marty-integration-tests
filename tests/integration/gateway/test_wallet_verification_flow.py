@@ -54,17 +54,22 @@ class TestPresentationRequestResolution:
         assert resolved_url is not None
         assert isinstance(resolved_url, str)
         
-        # Parse the URL to extract presentation_definition
+        # Parse the URL to extract the verifier's credential query
         parsed_url = urlparse(resolved_url)
         params = parse_qs(parsed_url.query)
         
-        # Should contain presentation_definition in query parameters
-        assert "presentation_definition" in params, f"presentation_definition not found in resolved URL: {resolved_url}"
-        
-        # The presentation_definition should be valid JSON
+        # Should contain either Presentation Exchange or DCQL query parameters
         import json
-        presentation_def = json.loads(params["presentation_definition"][0])
-        assert "input_descriptors" in presentation_def
+        if "presentation_definition" in params:
+            presentation_def = json.loads(params["presentation_definition"][0])
+            assert "input_descriptors" in presentation_def
+        else:
+            assert "dcql_query" in params, (
+                f"Neither presentation_definition nor dcql_query found in resolved URL: {resolved_url}"
+            )
+            dcql_query = json.loads(params["dcql_query"][0])
+            assert "credentials" in dcql_query
+            assert len(dcql_query["credentials"]) >= 1
 
 
 _WALTID_MDOC_VP_XFAIL = pytest.mark.xfail(

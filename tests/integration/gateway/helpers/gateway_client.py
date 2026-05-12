@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import httpx
@@ -806,6 +807,155 @@ class GatewayClient:
             params={"organization_id": organization_id},
         )
 
+    # =============================================================================
+    # Canvas Integrations
+    # =============================================================================
+
+    async def create_canvas_connector(
+        self,
+        organization_id: str,
+        canvas_account_id: str,
+        credential_template_id: str,
+        display_name: Optional[str] = None,
+        canvas_base_url: Optional[str] = None,
+        lti_client_id: Optional[str] = None,
+        lti_deployment_id: Optional[str] = None,
+        lti_issuer: Optional[str] = None,
+        lti_jwks_url: Optional[str] = None,
+        lti_jwks_json: Optional[Dict[str, Any]] = None,
+        lti_openid_configuration: Optional[Dict[str, Any]] = None,
+        enabled: bool = True,
+    ) -> Dict[str, Any]:
+        """Create a Canvas connector mapping for inbound credential events."""
+        payload: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "canvas_account_id": canvas_account_id,
+            "credential_template_id": credential_template_id,
+            "enabled": enabled,
+        }
+        if display_name is not None:
+            payload["display_name"] = display_name
+        if canvas_base_url is not None:
+            payload["canvas_base_url"] = canvas_base_url
+        if lti_client_id is not None:
+            payload["lti_client_id"] = lti_client_id
+        if lti_deployment_id is not None:
+            payload["lti_deployment_id"] = lti_deployment_id
+        if lti_issuer is not None:
+            payload["lti_issuer"] = lti_issuer
+        if lti_jwks_url is not None:
+            payload["lti_jwks_url"] = lti_jwks_url
+        if lti_jwks_json is not None:
+            payload["lti_jwks_json"] = lti_jwks_json
+        if lti_openid_configuration is not None:
+            payload["lti_openid_configuration"] = lti_openid_configuration
+        return await self._request("POST", "/v1/integrations/canvas/connectors", json=payload)
+
+    async def list_canvas_connectors(self, organization_id: str) -> List[Dict[str, Any]]:
+        """List Canvas connectors for an organization."""
+        return await self._request(
+            "GET",
+            "/v1/integrations/canvas/connectors",
+            params={"organization_id": organization_id},
+        )
+
+    async def get_canvas_connector(self, connector_id: str) -> Dict[str, Any]:
+        """Get a Canvas connector by ID."""
+        return await self._request("GET", f"/v1/integrations/canvas/connectors/{connector_id}")
+
+    async def update_canvas_connector(self, connector_id: str, **updates) -> Dict[str, Any]:
+        """Update a Canvas connector."""
+        return await self._request("PUT", f"/v1/integrations/canvas/connectors/{connector_id}", json=updates)
+
+    async def delete_canvas_connector(self, connector_id: str) -> None:
+        """Delete a Canvas connector."""
+        await self._request("DELETE", f"/v1/integrations/canvas/connectors/{connector_id}")
+
+    async def probe_canvas_connector_sandbox(self, connector_id: str) -> Dict[str, Any]:
+        """Fetch and persist Canvas sandbox metadata for a connector."""
+        return await self._request(
+            "POST",
+            f"/v1/integrations/canvas/connectors/{connector_id}/sandbox-probe",
+        )
+
+    async def refresh_canvas_connector_jwks(self, connector_id: str) -> Dict[str, Any]:
+        """Refresh and persist Canvas JWKS metadata for a connector."""
+        return await self._request(
+            "POST",
+            f"/v1/integrations/canvas/connectors/{connector_id}/jwks-refresh",
+        )
+
+    async def launch_canvas_lti(
+        self,
+        connector_id: str,
+        *,
+        id_token: str,
+        expected_nonce: Optional[str] = None,
+        state: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Submit a public Canvas LTI launch to the gateway."""
+        payload: Dict[str, Any] = {"id_token": id_token}
+        if expected_nonce is not None:
+            payload["expected_nonce"] = expected_nonce
+        if state is not None:
+            payload["state"] = state
+        return await self._request(
+            "POST",
+            f"/v1/integrations/canvas/lti/launch/{connector_id}",
+            json=payload,
+        )
+
+    async def initiate_canvas_lti_login(
+        self,
+        connector_id: str,
+        *,
+        login_hint: str,
+        issuer: Optional[str] = None,
+        target_link_uri: Optional[str] = None,
+        lti_message_hint: Optional[str] = None,
+        client_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Start Canvas LTI OIDC login and return the platform authorization redirect."""
+        payload: Dict[str, Any] = {"login_hint": login_hint}
+        if issuer is not None:
+            payload["iss"] = issuer
+        if target_link_uri is not None:
+            payload["target_link_uri"] = target_link_uri
+        if lti_message_hint is not None:
+            payload["lti_message_hint"] = lti_message_hint
+        if client_id is not None:
+            payload["client_id"] = client_id
+
+        try:
+            response = await self.client.request(
+                "POST",
+                url=f"/v1/integrations/canvas/lti/login/{connector_id}",
+                json=payload,
+                headers=self._get_headers(),
+                follow_redirects=False,
+            )
+            if response.status_code >= 400:
+                response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise GatewayClientError(
+                f"POST /v1/integrations/canvas/lti/login/{connector_id} failed "
+                f"with {e.response.status_code}: {e.response.text}"
+            ) from e
+        except httpx.RequestError as e:
+            raise GatewayClientError(f"Request to Canvas LTI login failed: {e}") from e
+
+        location = response.headers.get("location", "")
+        if not location:
+            raise GatewayClientError("Canvas LTI login did not return a Location header")
+
+        params = parse_qs(urlparse(location).query)
+        return {
+            "authorization_url": location,
+            "state": params.get("state", [""])[0],
+            "nonce": params.get("nonce", [""])[0],
+            "redirect_uri": params.get("redirect_uri", [""])[0],
+        }
+
     async def didcomm_deliver(
         self,
         transaction_id: str,
@@ -1178,6 +1328,103 @@ class GatewayClient:
                 "device_name": device_name,
             },
         )
+
+    # =============================================================================
+    # Signing Keys
+    # =============================================================================
+
+    async def list_signing_keys(
+        self,
+        organization_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List signing keys for an organization scope."""
+        params = {"organization_id": organization_id} if organization_id else None
+        return await self._request("GET", "/v1/signing-keys", params=params)
+
+    async def get_signing_key_config(
+        self,
+        organization_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get signing-key management config for an organization scope."""
+        params = {"organization_id": organization_id} if organization_id else None
+        return await self._request("GET", "/v1/signing-keys/config", params=params)
+
+    async def update_signing_key_config(
+        self,
+        services: List[Dict[str, Any]],
+        default_service_id: Optional[str] = None,
+        organization_id: Optional[str] = None,
+        format_defaults: Optional[Dict[str, str]] = None,
+        type_defaults: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Update signing-key service registry configuration."""
+        payload: Dict[str, Any] = {
+            "services": services,
+            "default_service_id": default_service_id,
+        }
+        if format_defaults is not None:
+            payload["format_defaults"] = format_defaults
+        if type_defaults is not None:
+            payload["type_defaults"] = type_defaults
+
+        params = {"organization_id": organization_id} if organization_id else None
+        return await self._request("PATCH", "/v1/signing-keys/config", json=payload, params=params)
+
+    async def resolve_signing_service(
+        self,
+        organization_id: Optional[str] = None,
+        credential_format: Optional[str] = None,
+        key_purpose: Optional[str] = None,
+        algorithm: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Resolve the best signing service for a format, purpose, and algorithm."""
+        payload: Dict[str, Any] = {}
+        if credential_format is not None:
+            payload["credential_format"] = credential_format
+        if key_purpose is not None:
+            payload["key_purpose"] = key_purpose
+        if algorithm is not None:
+            payload["algorithm"] = algorithm
+
+        params = {"organization_id": organization_id} if organization_id else None
+        return await self._request("POST", "/v1/signing-keys/config/resolve", json=payload, params=params)
+
+    async def list_signing_key_purposes(self) -> Dict[str, Any]:
+        """List valid signing-key purposes and constraints."""
+        return await self._request("GET", "/v1/signing-keys/config/purposes")
+
+    async def list_signing_key_service_capabilities(self) -> Dict[str, Any]:
+        """List static provider capability metadata."""
+        return await self._request("GET", "/v1/signing-keys/config/service-capabilities")
+
+    async def create_issuer_profile(
+        self,
+        *,
+        organization_id: str,
+        name: str,
+        issuer_did: str,
+        signing_service_id: str,
+        signing_key_reference: Optional[str] = None,
+        key_purpose: str = "vc_jwt_issuer",
+        status: str = "active",
+    ) -> Dict[str, Any]:
+        """Create or return an issuer profile bound to a signing service."""
+        payload: Dict[str, Any] = {
+            "name": name,
+            "issuer_did": issuer_did,
+            "signing_service_id": signing_service_id,
+            "key_purpose": key_purpose,
+            "status": status,
+        }
+        if signing_key_reference:
+            payload["signing_key_reference"] = signing_key_reference
+        response = await self._request(
+            "POST",
+            "/v1/signing-keys/issuer-profiles",
+            json=payload,
+            params={"organization_id": organization_id},
+        )
+        return response.get("profile", response)
     
     # =============================================================================
     # Revocation

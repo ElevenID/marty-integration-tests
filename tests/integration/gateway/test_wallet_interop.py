@@ -582,7 +582,7 @@ class TestOID4VPConformance:
         age_verification_policy: Dict[str, Any],
         google_vp_wallet: OID4VPWalletClient,
     ):
-        """Presentation request should contain valid presentation_definition or dcql_query."""
+        """Presentation request should use the default DCQL-only query shape."""
         flow = await gateway_client.start_verification_flow(
             presentation_policy_id=age_verification_policy["id"],
         )
@@ -601,8 +601,11 @@ class TestOID4VPConformance:
         assert request.get("response_type"), "Missing response_type in OID4VP request"
         assert request.get("client_id"), "Missing client_id in OID4VP request"
 
-        # Should have either presentation_definition or dcql_query
         pd_info = google_vp_wallet.validate_presentation_definition(request)
+        assert pd_info["type"] == "dcql", (
+            f"Default request should use dcql_query, got {pd_info['type']}"
+        )
+        assert "presentation_definition" not in request
         logger.info("[OID4VP] Request type: %s", pd_info["type"])
 
 
@@ -775,9 +778,7 @@ class TestGoogleWalletE2E:
     ):
         """OID4VP request from gateway must be parseable by a Google Wallet.
 
-        Google Wallet (Android CredentialManager) supports both
-        presentation_definition and DCQL query formats.
-        This test validates the gateway produces a properly formatted request.
+        The default Marty request should be DCQL-only and still parse correctly.
         """
         # Start verification flow through gateway
         flow = await gateway_client.start_verification_flow(
@@ -798,11 +799,11 @@ class TestGoogleWalletE2E:
             assert request.get("response_type"), "Missing response_type"
             assert request.get("client_id"), "Missing client_id"
 
-            # Google Wallet needs either presentation_definition or dcql_query
             definition_info = vp_wallet.validate_presentation_definition(request)
-            assert definition_info["type"] in ("presentation_definition", "dcql"), (
-                f"Unexpected definition type: {definition_info['type']}"
+            assert definition_info["type"] == "dcql", (
+                f"Default request should use dcql_query, got {definition_info['type']}"
             )
+            assert "presentation_definition" not in request
 
             logger.info(
                 "[Google VP] Request compatible: type=%s, response_mode=%s",
@@ -868,6 +869,8 @@ class TestGoogleWalletE2E:
         try:
             request = await vp_wallet.resolve_presentation_request(request_uri)
             definition_info = vp_wallet.validate_presentation_definition(request)
+            assert definition_info["type"] == "dcql"
+            assert "presentation_definition" not in request
 
             logger.info(
                 "[Google E2E] Issuance → Verification complete: "
@@ -1015,6 +1018,8 @@ class TestAppleWalletE2E:
 
             # Check there is a valid definition
             definition_info = vp_wallet.validate_presentation_definition(request)
+            assert definition_info["type"] == "dcql"
+            assert "presentation_definition" not in request
             logger.info(
                 "[Apple VP] Request type=%s, nonce=%s",
                 definition_info["type"],
@@ -1094,6 +1099,8 @@ class TestCrossWalletInterop:
             try:
                 request = await vp_wallet.resolve_presentation_request(request_uri)
                 definition_info = vp_wallet.validate_presentation_definition(request)
+                assert definition_info["type"] == "dcql"
+                assert "presentation_definition" not in request
                 logger.info(
                     "[CrossWallet/%s] Verification request parsed: type=%s",
                     profile.name,

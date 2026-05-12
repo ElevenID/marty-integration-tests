@@ -41,6 +41,25 @@ from .helpers.test_data import TestDataBuilder
 
 logger = logging.getLogger(__name__)
 
+
+def _presentation_submission_for_request(
+    auth_req: Dict[str, Any],
+    credential_format: str,
+) -> str | None:
+    """Build Presentation Exchange metadata only when the request actually uses PE."""
+    pd = auth_req.get("presentation_definition")
+    if not pd:
+        return None
+
+    descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
+    return json.dumps({
+        "id": str(uuid.uuid4()),
+        "definition_id": pd.get("id", str(uuid.uuid4())),
+        "descriptor_map": [
+            {"id": descriptor_id, "format": credential_format, "path": "$"},
+        ],
+    })
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -263,13 +282,12 @@ class TestDtcWalletAuthorizationRequest:
         logger.info("[DTC VP] Flow started: %s", flow["instance_id"])
 
     @pytest.mark.asyncio
-    async def test_dtc_auth_request_has_presentation_definition(
+    async def test_dtc_auth_request_has_credential_query(
         self,
         authenticated_gateway_client: GatewayClient,
         dtc_vp_policy,
     ):
-        """DTC authorization request includes a presentation_definition
-        with input descriptors for DTC claims."""
+        """DTC authorization request includes a DCQL query by default."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
         )
@@ -278,12 +296,14 @@ class TestDtcWalletAuthorizationRequest:
         )
 
         pd = auth_req.get("presentation_definition")
-        assert pd, "Missing presentation_definition"
-        assert len(pd.get("input_descriptors", [])) >= 1
-
+        dcql = auth_req.get("dcql_query")
+        assert dcql, "Missing dcql_query"
+        assert pd is None, "Default request should omit presentation_definition"
+        assert "credentials" in dcql
+        assert len(dcql["credentials"]) >= 1
         logger.info(
-            "[DTC VP] Presentation definition: descriptors=%d",
-            len(pd["input_descriptors"]),
+            "[DTC VP] DCQL query: credentials=%d",
+            len(dcql["credentials"]),
         )
 
 
@@ -339,16 +359,10 @@ class TestDtcWalletPresentation:
         assert vp_token, "VP token is empty"
         logger.info("[DTC VP] VP token built: length=%d", len(vp_token))
 
-        # Build presentation_submission
-        pd = auth_req.get("presentation_definition", {})
-        descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-        presentation_submission = json.dumps({
-            "id": str(uuid.uuid4()),
-            "definition_id": pd.get("id", str(uuid.uuid4())),
-            "descriptor_map": [
-                {"id": descriptor_id, "format": "mso_mdoc", "path": "$"},
-            ],
-        })
+        presentation_submission = _presentation_submission_for_request(
+            auth_req,
+            "mso_mdoc",
+        )
 
         # Direct-post to Marty's verifier endpoint
         result = await wallet_kit.direct_post_presentation(
@@ -396,15 +410,10 @@ class TestDtcWalletPresentation:
             format="mso_mdoc",
         )
 
-        pd = auth_req.get("presentation_definition", {})
-        descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-        presentation_submission = json.dumps({
-            "id": str(uuid.uuid4()),
-            "definition_id": pd.get("id", str(uuid.uuid4())),
-            "descriptor_map": [
-                {"id": descriptor_id, "format": "mso_mdoc", "path": "$"},
-            ],
-        })
+        presentation_submission = _presentation_submission_for_request(
+            auth_req,
+            "mso_mdoc",
+        )
 
         result = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
@@ -508,15 +517,10 @@ class TestDtcWalletEndToEnd:
         logger.info("[DTC E2E] VP token built: length=%d", len(vp_token))
 
         # 8. Direct-post to verifier
-        pd = auth_req.get("presentation_definition", {})
-        descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-        presentation_submission = json.dumps({
-            "id": str(uuid.uuid4()),
-            "definition_id": pd.get("id", str(uuid.uuid4())),
-            "descriptor_map": [
-                {"id": descriptor_id, "format": "mso_mdoc", "path": "$"},
-            ],
-        })
+        presentation_submission = _presentation_submission_for_request(
+            auth_req,
+            "mso_mdoc",
+        )
 
         post_result = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],

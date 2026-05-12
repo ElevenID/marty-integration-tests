@@ -94,6 +94,29 @@ def _extract_request_uri(openid4vp_uri: str) -> str:
     return request_uris[0]
 
 
+def _presentation_submission_for_request(
+    auth_req: Dict[str, Any],
+    credential_format: str,
+) -> str | None:
+    """Build Presentation Exchange metadata only when the request actually uses PE."""
+    pd = auth_req.get("presentation_definition")
+    if not pd:
+        return None
+
+    descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
+    return json.dumps({
+        "id": str(uuid.uuid4()),
+        "definition_id": pd.get("id", str(uuid.uuid4())),
+        "descriptor_map": [
+            {
+                "id": descriptor_id,
+                "format": credential_format,
+                "path": "$",
+            },
+        ],
+    })
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -433,12 +456,12 @@ class TestOID4VPAuthorizationRequest:
         )
 
     @pytest.mark.asyncio
-    async def test_authorization_request_has_presentation_definition(
+    async def test_authorization_request_has_credential_query(
         self,
         authenticated_gateway_client: GatewayClient,
         vp_age_policy,
     ):
-        """Authorization request includes a presentation_definition with input descriptors."""
+        """Authorization request includes a DCQL query by default."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
         )
@@ -447,19 +470,14 @@ class TestOID4VPAuthorizationRequest:
         )
 
         pd = auth_req.get("presentation_definition")
-        assert pd, "Missing presentation_definition"
-        assert "id" in pd, "presentation_definition missing id"
-        assert "input_descriptors" in pd, "presentation_definition missing input_descriptors"
-        assert len(pd["input_descriptors"]) >= 1, "No input descriptors"
-
-        descriptor = pd["input_descriptors"][0]
-        assert "constraints" in descriptor, "Input descriptor missing constraints"
-        assert "fields" in descriptor["constraints"], "Constraints missing fields"
-
+        dcql = auth_req.get("dcql_query")
+        assert dcql, "Missing dcql_query"
+        assert pd is None, "Default request should omit presentation_definition"
+        assert "credentials" in dcql, "dcql_query missing credentials"
+        assert len(dcql["credentials"]) >= 1, "dcql_query credentials empty"
         logger.info(
-            "[VP] Presentation definition: id=%s, descriptors=%d",
-            pd["id"],
-            len(pd["input_descriptors"]),
+            "[VP] DCQL query: credentials=%d",
+            len(dcql["credentials"]),
         )
 
 
@@ -518,20 +536,10 @@ class TestOID4VPSdJwtPresentation:
 
         logger.info("[VP] VP token built: length=%d", len(vp_token))
 
-        # Build presentation_submission per Presentation Exchange v2
-        pd = auth_req.get("presentation_definition", {})
-        descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-        presentation_submission = json.dumps({
-            "id": str(uuid.uuid4()),
-            "definition_id": pd.get("id", str(uuid.uuid4())),
-            "descriptor_map": [
-                {
-                    "id": descriptor_id,
-                    "format": "dc+sd-jwt",
-                    "path": "$",
-                },
-            ],
-        })
+        presentation_submission = _presentation_submission_for_request(
+            auth_req,
+            "dc+sd-jwt",
+        )
 
         # Direct-post VP token to Marty's submit endpoint (form-encoded)
         result = await wallet_kit.direct_post_presentation(
@@ -581,19 +589,10 @@ class TestOID4VPSdJwtPresentation:
             format="dc+sd-jwt",
         )
 
-        pd = auth_req.get("presentation_definition", {})
-        descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-        presentation_submission = json.dumps({
-            "id": str(uuid.uuid4()),
-            "definition_id": pd.get("id", str(uuid.uuid4())),
-            "descriptor_map": [
-                {
-                    "id": descriptor_id,
-                    "format": "dc+sd-jwt",
-                    "path": "$",
-                },
-            ],
-        })
+        presentation_submission = _presentation_submission_for_request(
+            auth_req,
+            "dc+sd-jwt",
+        )
 
         result = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
@@ -635,15 +634,10 @@ class TestOID4VPSdJwtPresentation:
             nonce=auth_req["nonce"],
         )
 
-        pd = auth_req.get("presentation_definition", {})
-        descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-        presentation_submission = json.dumps({
-            "id": str(uuid.uuid4()),
-            "definition_id": pd.get("id", str(uuid.uuid4())),
-            "descriptor_map": [
-                {"id": descriptor_id, "format": "dc+sd-jwt", "path": "$"},
-            ],
-        })
+        presentation_submission = _presentation_submission_for_request(
+            auth_req,
+            "dc+sd-jwt",
+        )
 
         await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
@@ -747,15 +741,10 @@ class TestMDocPresentation:
             format="mso_mdoc",
         )
 
-        pd = auth_req.get("presentation_definition", {})
-        descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-        presentation_submission = json.dumps({
-            "id": str(uuid.uuid4()),
-            "definition_id": pd.get("id", str(uuid.uuid4())),
-            "descriptor_map": [
-                {"id": descriptor_id, "format": "mso_mdoc", "path": "$"},
-            ],
-        })
+        presentation_submission = _presentation_submission_for_request(
+            auth_req,
+            "mso_mdoc",
+        )
 
         result = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
@@ -874,15 +863,10 @@ class TestEndToEndIssuanceAndPresentation:
         logger.info("[E2E] VP token built: length=%d", len(vp_token))
 
         # 8. Direct-post to verifier
-        pd = auth_req.get("presentation_definition", {})
-        descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-        presentation_submission = json.dumps({
-            "id": str(uuid.uuid4()),
-            "definition_id": pd.get("id", str(uuid.uuid4())),
-            "descriptor_map": [
-                {"id": descriptor_id, "format": "dc+sd-jwt", "path": "$"},
-            ],
-        })
+        presentation_submission = _presentation_submission_for_request(
+            auth_req,
+            "dc+sd-jwt",
+        )
 
         post_result = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
