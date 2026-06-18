@@ -1,0 +1,154 @@
+name: License Compliance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday at 6 AM UTC
+  push:
+    branches: [main, develop]
+    paths:
+      - 'pyproject.toml'
+      - 'LICENSE*'
+      - 'README.md'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'pyproject.toml'
+      - 'LICENSE*'
+      - 'README.md'
+
+jobs:
+  metadata-consistency:
+    name: License Metadata Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tomllib backport
+        run: pip install tomli
+
+      - name: Check license metadata consistency
+        run: |
+          python - <<'EOF'
+          import sys
+          try:
+              import tomllib
+          except ImportError:
+              import tomli as tomllib
+
+          failures = []
+
+          # Read pyproject.toml
+          with open("pyproject.toml", "rb") as f:
+              data = tomllib.load(f)
+
+          project = data.get("project", {})
+          license_val = project.get("license", "")
+          # Handle both string and dict forms
+          if isinstance(license_val, dict):
+              license_val = license_val.get("text", "")
+
+          if not license_val:
+              failures.append("FAIL: pyproject.toml [project].license is missing")
+          else:
+              print(f"OK: pyproject.toml license = {license_val!r}")
+
+          # If Apache-2.0 is claimed, LICENSE-APACHE must exist
+          import os
+          if "Apache" in license_val:
+              if not os.path.exists("LICENSE-APACHE"):
+                  failures.append(
+                      "FAIL: pyproject.toml claims Apache-2.0 but LICENSE-APACHE is missing. "
+                      "Either add LICENSE-APACHE or remove Apache-2.0 from the license declaration."
+                  )
+              else:
+                  print("OK: LICENSE-APACHE present")
+
+          # MIT claim requires a LICENSE or LICENSE-MIT file
+          if "MIT" in license_val:
+              if not (os.path.exists("LICENSE") or os.path.exists("LICENSE-MIT")):
+                  failures.append("FAIL: pyproject.toml claims MIT but LICENSE / LICENSE-MIT is missing")
+              else:
+                  print("OK: MIT license file present")
+
+          # README must have a License section
+          with open("README.md") as f:
+              readme = f.read()
+          if "## License" not in readme:
+              failures.append("FAIL: README.md is missing a ## License section")
+          else:
+              print("OK: README.md has License section")
+
+          for f in failures:
+              print(f)
+          sys.exit(1 if failures else 0)
+          EOF
+
+  security-scanning:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install security tools
+        run: pip install bandit pip-audit
+
+      - name: Run Bandit
+        run: |
+          bandit -r tests/ services/ -f json -o bandit-report.json || true
+          bandit -r tests/ services/ -f txt
+
+      - name: Run pip-audit
+        run: |
+          pip install -e ".[dev]" --dry-run 2>/dev/null || pip install -e . --dry-run 2>/dev/null || true
+          pip-audit --format json --output pip-audit-report.json || true
+          pip-audit
+
+      - name: Upload security results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-results
+          path: |
+            bandit-report.json
+            pip-audit-report.json
+
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install cyclonedx-bom
+        run: pip install cyclonedx-bom
+
+      - name: Install project dependencies
+        run: pip install -e .
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cyclonedx-py environment --of json --output-file sbom.cdx.json
+          cyclonedx-py environment --of xml  --output-file sbom.cdx.xml
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom.cdx.json
+            sbom.cdx.xml

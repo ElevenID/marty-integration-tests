@@ -228,4 +228,4 @@ The browser contract suite under `tests/integration/ui/` is intended for post-lo
 
 ## License
 
-MIT OR Apache-2.0
+MIT

@@ -7,7 +7,7 @@ name = "marty-integration-tests"
 version = "1.0.0"
 description = "Integration test suite for the Marty ecosystem"
 readme = "README.md"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 requires-python = ">=3.11"
 authors = [
     { name = "Adam Burdett" },
@@ -16,7 +16,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
