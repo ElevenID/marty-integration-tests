@@ -373,16 +373,15 @@ class OID4VCIWalletClient:
         token_data = resp.json()
 
         self.access_token = token_data.get("access_token")
-        self.c_nonce = token_data.get("c_nonce")
+        self.c_nonce = None
 
         assert self.access_token, (
             f"Token response missing 'access_token'. Keys: {list(token_data.keys())}"
         )
 
         logger.info(
-            "[%s] Got access token (c_nonce=%s)",
+            "[%s] Got access token; proof nonce must be fetched separately",
             self.profile.name,
-            "yes" if self.c_nonce else "no",
         )
         return token_data
 
@@ -398,7 +397,7 @@ class OID4VCIWalletClient:
         if not nonce_endpoint:
             nonce_endpoint = f"{self.issuer_base_url}/v1/issuance/nonce"
 
-        resp = await self.client.post(nonce_endpoint, content=b"")
+        resp = await self.client.post(nonce_endpoint, json={})
         resp.raise_for_status()
         data = resp.json()
 
@@ -459,10 +458,7 @@ class OID4VCIWalletClient:
                 audience=audience,
                 nonce=self.c_nonce,
             )
-            body["proof"] = {
-                "proof_type": "jwt",
-                "jwt": proof_jwt,
-            }
+            body["proofs"] = {"jwt": [proof_jwt]}
             logger.debug(
                 "[%s] Attached proof JWT (nonce=%s...)",
                 self.profile.name,

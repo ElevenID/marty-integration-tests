@@ -214,8 +214,6 @@ def gen_token_response() -> dict:
         "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.dGVzdA.dGVzdA",
         "token_type": "Bearer",
         "expires_in": 86400,
-        "c_nonce": "tZignsnFbp",
-        "c_nonce_expires_in": 86400,
     }
 
 
@@ -223,7 +221,6 @@ def gen_nonce_response() -> dict:
     """OID4VCI 1.0 Final §7.2 — nonce endpoint response."""
     return {
         "c_nonce": "fGFF7UkhLa",
-        "c_nonce_expires_in": 86400,
     }
 
 
@@ -236,8 +233,6 @@ def gen_credential_response_jwt_vc() -> dict:
             "eyJpc3MiOiJkaWQ6a2V5Ono2TWtpc3N1ZXIiLCJzdWIiOiJkaWQ6a2V5Ono2TWtob2xkZXIiLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvMjAxOC9jcmVkZW50aWFscy92MSJdLCJ0eXBlIjpbIlZlcmlmaWFibGVDcmVkZW50aWFsIiwiVW5pdmVyc2l0eURlZ3JlZUNyZWRlbnRpYWwiXSwiY3JlZGVudGlhbFN1YmplY3QiOnsiZ2l2ZW5fbmFtZSI6IkNvbmZvcm1hbmNlIiwiZmFtaWx5X25hbWUiOiJUZXN0IiwiZGVncmVlIjoiQlNjIENvbXB1dGVyIFNjaWVuY2UifX19."
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         ],
-        "c_nonce": "PAPPf3h9lexTv3VOOU9szD",
-        "c_nonce_expires_in": 86400,
     }
 
 
@@ -250,8 +245,6 @@ def gen_credential_response_sd_jwt() -> dict:
             "eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLmNvbSIsInZjdCI6Imh0dHBzOi8vY3JlZGVudGlhbHMuZXhhbXBsZS5jb20vdW5pdmVyc2l0eV9kZWdyZWUiLCJfc2RfYWxnIjoic2hhLTI1NiIsIl9zZCI6WyJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSJdfQ."
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         ],
-        "c_nonce": "8YE9hloQ620A3T4UODKBwA",
-        "c_nonce_expires_in": 86400,
     }
 
 
@@ -262,8 +255,6 @@ def gen_credential_response_mdoc() -> dict:
     return {
         "format": "mso_mdoc",
         "credentials": [stub_cbor_b64],
-        "c_nonce": "GPoI55Da-9GM6RmdNi9Btg",
-        "c_nonce_expires_in": 86400,
     }
 
 
