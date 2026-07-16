@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -29,11 +30,16 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 # CLI binary — resolved once at import time
-_WORKSPACE_ROOT = Path(__file__).resolve().parents[5]  # .../work/
-_CLI_DIR = Path(
-    os.environ.get("MARTY_CLI_DIR", str(_WORKSPACE_ROOT / "marty-ui" / "cli"))
-)
-_CLI_BIN = _CLI_DIR / "bin" / "marty.js"
+def _cli_binary() -> str:
+    configured = os.getenv("MARTY_CLI_BIN")
+    if configured:
+        return configured
+    discovered = shutil.which("marty")
+    if discovered:
+        return discovered
+    raise RuntimeError(
+        "Marty CLI is not installed. Install @elevenid/marty-cli or set MARTY_CLI_BIN."
+    )
 
 
 class CLIResult:
@@ -168,7 +174,7 @@ class MartyCLIClient:
         json_output:
             If True, appends ``-o json`` to the command.
         """
-        cmd = ["node", str(_CLI_BIN)] + list(args)
+        cmd = [_cli_binary()] + list(args)
         if json_output:
             cmd.extend(["-o", "json"])
 
@@ -181,7 +187,6 @@ class MartyCLIClient:
                 text=True,
                 timeout=timeout,
                 env=self._env(),
-                cwd=str(_CLI_DIR),
             )
         except subprocess.TimeoutExpired as exc:
             return CLIResult(

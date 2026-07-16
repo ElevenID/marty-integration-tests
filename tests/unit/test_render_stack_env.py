@@ -1,0 +1,51 @@
+import importlib.util
+import json
+from pathlib import Path
+
+
+MODULE_PATH = Path(__file__).parents[2] / "scripts" / "render_stack_env.py"
+SPEC = importlib.util.spec_from_file_location("render_stack_env", MODULE_PATH)
+MODULE = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+SPEC.loader.exec_module(MODULE)
+
+
+def manifest():
+    artifacts = [
+        "ghcr.io/elevenid/marty-ui/ui",
+        "ghcr.io/elevenid/marty-ui/services",
+        "ghcr.io/elevenid/marty-ui/migrations",
+        "ghcr.io/elevenid/marty-credentials-issuance",
+    ]
+    return {
+        "schema": "marty.stack/v1",
+        "release": "marty-ui@1.0.0",
+        "components": [
+            {
+                "name": "images",
+                "artifacts": [
+                    {"type": "oci", "uri": uri, "digest": "sha256:" + "a" * 64}
+                    for uri in artifacts
+                ],
+            }
+        ],
+    }
+
+
+def test_maps_required_images_by_immutable_uri():
+    images = MODULE.image_map(manifest())
+    assert images["MARTY_UI_IMAGE"].endswith("@sha256:" + "a" * 64)
+    assert len(images) == 4
+
+
+def test_rejects_commerce_markers(tmp_path):
+    value = manifest()
+    value["components"][0]["name"] = "billing"
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    try:
+        MODULE.load_manifest(path)
+    except ValueError as error:
+        assert "commerce" in str(error)
+    else:
+        raise AssertionError("commerce marker was accepted")

@@ -46,6 +46,7 @@ Thumbs.db
 
 # Docker
 .env
+.env.stack
 *.log
 
 # Local config

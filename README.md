@@ -1,230 +1,95 @@
-# Marty Integration Tests
+# Marty OSS Integration Tests
 
-Comprehensive integration test suite for the Marty credential ecosystem. This repository contains end-to-end tests that verify the interaction between all Marty services.
+This repository verifies the public Marty credential stack using only released, immutable artifacts. It does not check out component source, access private repositories, or require commerce services.
 
-## Architecture
+## What it tests
 
-This repository consolidates integration testing for:
-- **Gateway API** - Main entry point for all credential operations
-- **Organization Service** - Organization and user management
-- **Credential Template Service** - Credential schema management  
-- **Issuance Service** - OpenID4VCI credential issuance
-- **Presentation Policy Service** - Credential verification policies
-- **Flow Service** - OpenID4VP verification flows
-- **Trust Profile Service** - Trust framework configuration
+- Gateway and service health
+- Organization and credential-template operations
+- OpenID4VCI issuance and OpenID4VP presentation
+- Trust, policy, flow, deployment, and revocation behavior
+- Headless-wallet and interoperability flows
+- Browser contracts against the released Marty UI
+- Upgrade and rollback manifest compatibility
+
+Billing, Square, subscription plans, and product-catalog tests live in the private commerce overlay and are intentionally excluded.
 
 ## Prerequisites
 
-- **Docker Desktop** (for running services)
-- **Python 3.11+** (for running tests)
-- **Walt.ID Community Stack** (for wallet integration tests)
+- Docker with Compose v2
+- Python 3.11+
+- An attested `marty.stack/v1` manifest from a `marty-ui` release
+- Optional: the published `@elevenid/marty-cli` package for CLI scenarios
 
-## Quick Start
+## Run the public stack
 
-### 1. Start Services
-
-```bash
-# Start all services and dependencies
-docker compose up -d
-
-# Wait for services to be healthy
-docker compose ps
-```
-
-### 2. Run Tests
+Download `stack-manifest.json` and its signature/attestation from a Marty UI release, verify it, then run:
 
 ```bash
-# Install test dependencies
 pip install -e ".[dev]"
-
-# Run all integration tests
-pytest tests/integration/
-
-# Run specific test suite
-pytest tests/integration/gateway/test_wallet_verification_flow.py -v
-
-# Run with Walt.ID wallet tests
-pytest -m wallet
+make start STACK_MANIFEST=/path/to/stack-manifest.json
+pytest tests/integration/ -v
+make stop
 ```
 
-## Test Structure
+`scripts/render_stack_env.py` rejects commerce markers, mutable image tags, missing digests, duplicate image roles, and unsupported manifest schemas. The generated `.env.stack` contains digest-pinned GHCR and base-image references and is never committed.
 
-```
-tests/
-├── integration/
-│   ├── gateway/              # Gateway API integration tests
-│   │   ├── test_credential_issuance.py
-│   │   ├── test_wallet_verification_flow.py
-│   │   ├── test_credential_templates.py
-│   │   └── helpers/          # Test helpers and clients
-│   │       ├── gateway_client.py
-│   │       ├── waltid_wallet_client.py
-│   │       └── test_data.py
-│   └── fixtures/             # Shared test fixtures
-│       ├── conftest.py
-│       └── wallet_fixtures.py
-```
+To validate upgrade and rollback inputs before running the suite:
 
-## Service Architecture
-
-All services run in Docker containers with the following setup:
-
-- **Database**: PostgreSQL 15 with automatic migrations
-- **Gateway**: Port 8000 (main API entry point)
-- **Walt.ID Wallet**: Port 7001 (for wallet integration tests)
-- **Walt.ID Verifier**: Port 7003 (for verification tests)
-- **Service Network**: `marty-test-network` (Docker bridge network)
-
-## Configuration
-
-Service configuration is managed through:
-- `docker-compose.yml` - Service definitions and networking
-- `config/` - Service-specific configuration files
-- Environment variables (see `.env.example`)
-
-## Running Specific Test Suites
-
-### Credential Issuance Tests
 ```bash
-pytest tests/integration/gateway/test_credential_issuance.py -v
+python scripts/render_stack_env.py \
+  --manifest candidate-stack-manifest.json \
+  --previous-manifest previous-stack-manifest.json
 ```
 
-### Wallet Integration Tests
-```bash
-# Requires Walt.ID services running
-pytest -m wallet -v
-```
+## UI contracts
 
-### Verification Flow Tests
-```bash
-pytest tests/integration/gateway/test_wallet_verification_flow.py -v
-```
+The default Compose stack exposes the released UI at `http://127.0.0.1:23000`. To use another running release artifact, set `MARTY_UI_URL`.
 
-### UI Contract Tests
 ```bash
-# Install browser-test extras once
 pip install -e ".[dev,e2e]"
 python -m playwright install chromium
-
-# Point at a sibling Marty UI checkout if it is not under ../marty-ui/ui
-set MARTY_UI_DIR=..\marty-ui\ui
-
-# Run the post-login org-console browser contracts
 pytest tests/integration/ui/test_post_login_console_contract.py -v
 ```
 
-These browser tests live in this repo but drive the real Marty UI from a local checkout. By default the harness looks for a sibling UI tree at `../marty-ui/ui`, starts a Vite dev server if one is not already running, and writes screenshots, videos, and optional GIFs to `reports/ui-contracts/`. GIF generation is automatic when `ffmpeg` is available on `PATH`.
+Screenshots, videos, and optional GIFs are written to `reports/ui-contracts/`.
 
-## Development
+## CLI tests
 
-### Adding New Tests
-
-1. Create test file in appropriate directory
-2. Use existing fixtures from `conftest.py`
-3. Add test markers (`@pytest.mark.integration`, `@pytest.mark.wallet`)
-4. Follow naming convention: `test_*.py`
-
-### Test Fixtures
-
-Common fixtures available:
-- `gateway_client` - HTTP client for gateway API
-- `test_organization` - Pre-configured test organization
-- `test_wallet` - Walt.ID wallet instance
-- `mdl_template` - mDL credential template
-- `age_verification_policy` - Age verification policy
-
-### Debugging Tests
+Install the released CLI package globally, or point to an equivalent installed executable:
 
 ```bash
-# Run with verbose output and stop on first failure
-pytest -xvs tests/integration/gateway/test_name.py
-
-# Run specific test method
-pytest tests/integration/gateway/test_file.py::TestClass::test_method -v
-
-# Show logs from services
-docker compose logs -f gateway
+npm install --global @elevenid/marty-cli
+export MARTY_CLI_BIN=marty  # optional when already on PATH
+pytest tests/integration/gateway/test_cli_wallet_flows.py -v
 ```
 
-## CI/CD Integration
+The harness creates an isolated temporary config directory and never reads the developer's Marty credentials.
 
-This repository is designed for CI/CD pipelines:
+## Conformance
 
-```yaml
-# Example GitHub Actions workflow
-- name: Run Integration Tests
-  run: |
-    docker compose up -d
-    docker compose exec -T integration-tests pytest tests/integration/
-    docker compose down -v
-```
+Protocol conformance tests in this repository exercise the running public stack. Crate-level cryptographic and mDoc conformance remains in `marty-core`, where it is tested by that component's own CI.
 
-## Walt.ID Integration
-
-Walt.ID wallet integration tests verify:
-- OpenID4VCI credential issuance flows
-- OpenID4VP credential presentation flows  
-- DID creation and management
-- Credential storage and retrieval
-
-### Walt.ID Setup
-
-Walt.ID services are automatically started with `docker compose up`. Configuration:
-- Wallet API: http://localhost:7001
-- Verifier API: http://localhost:7003
-
-See `tests/integration/gateway/helpers/waltid_wallet_client.py` for wallet API client.
-
-## Test Coverage
-
-Run tests with coverage:
 ```bash
-pytest --cov=tests --cov-report=html tests/integration/
-open htmlcov/index.html
+make conformance
 ```
 
-## Troubleshooting
+Some OIDF conformance cases intentionally expose unsupported features and are reported before the strict rerun.
 
-### Services won't start
-```bash
-# Check service logs
-docker compose logs
+## Configuration
 
-# Restart services
-docker compose down -v
-docker compose up -d
-```
+- `docker-compose.yml` defines the public service topology.
+- `config/base-images.json` pins PostgreSQL and Redis by digest.
+- `.env.stack` is generated from the signed stack manifest.
+- Environment-specific non-secret overrides may be supplied by the caller.
 
-### Tests fail to connect
-```bash
-# Verify services are running
-docker compose ps
-
-# Check network connectivity
-docker network inspect marty-test-network
-```
-
-### Database migration issues
-```bash
-# Run migrations manually
-docker compose exec gateway python services/run_all_migrations.py
-```
+Public CI must use standard GitHub-hosted runners and must not receive repository secrets for pull requests from forks.
 
 ## Contributing
 
-1. Write integration tests for new features
-2. Ensure tests pass: `pytest tests/integration/`
-3. Add documentation for new test suites
-4. Follow existing test patterns and fixtures
+Add tests under `tests/integration/`, reuse existing fixtures, and mark optional wallet or interoperability suites with their existing pytest markers. New public tests must remain runnable without private checkouts, commerce services, customer data, or organization credentials.
 
-### UI Contract Harness
-
-The browser contract suite under `tests/integration/ui/` is intended for post-login console coverage that is too cross-cutting for component tests alone.
-
-- Contracts are defined in YAML and executed with Playwright.
-- The harness mocks auth, organization, RBAC, and page data at the browser boundary so flows stay deterministic.
-- Demo artifacts are captured from the same runs used for verification.
-- The suite currently assumes a local Marty UI checkout is available; it is not wired into this repo's GitHub Actions workflow because that workflow does not automatically have the sibling UI repository.
+See `CONTRIBUTING.md`, `SECURITY.md`, and `SUPPORT.md` for project policies.
 
 ## License
 

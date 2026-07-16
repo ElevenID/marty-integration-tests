@@ -17,7 +17,7 @@ directly (no external wallet service required).
 
 Prerequisites:
  - Gateway + all microservices running (``make up``)
- - CLI installed (``cd marty-ui/cli && npm install``)
+ - ``@elevenid/marty-cli`` installed, or ``MARTY_CLI_BIN`` set
 """
 
 import json

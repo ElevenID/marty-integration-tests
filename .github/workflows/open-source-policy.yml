@@ -1,0 +1,23 @@
+name: Open-source policy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ElevenID/.github/.github/actions/open-source-audit@8e3c9bac4b2aa7b1c49494cbf950c53b4ff55f3a
+
+  dependency-review:
+    if: github.event_name == 'pull_request' && github.event.repository.private == false
+    uses: ElevenID/.github/.github/workflows/dependency-review.yml@7ee77c2c23d7fcb414badbb0d0df586987666cfd
+    permissions:
+      contents: read

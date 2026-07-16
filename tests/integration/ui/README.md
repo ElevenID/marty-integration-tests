@@ -1,6 +1,6 @@
 # UI Contract Tests
 
-These tests keep post-login console coverage in `marty-integration-tests` while still driving the real Marty UI in a browser.
+These tests drive the released Marty UI image selected by an attested stack manifest.
 
 ## Scope
 
@@ -13,13 +13,7 @@ These tests keep post-login console coverage in `marty-integration-tests` while 
 
 - Install Python extras: `pip install -e ".[dev,e2e]"`
 - Install Chromium once: `python -m playwright install chromium`
-- Have a local Marty UI checkout available.
-
-The harness looks for the UI in this order:
-
-1. `MARTY_UI_URL` if you already have a dev server running
-2. `MARTY_UI_DIR` if you want the harness to start one for you
-3. a sibling checkout at `../marty-ui/ui`
+- Start the immutable stack with `make start`, or set `MARTY_UI_URL` to a running released UI (default: `http://127.0.0.1:23000`).
 
 ## Run
 

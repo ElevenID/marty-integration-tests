@@ -94,8 +94,7 @@ class TestCredentialIssuanceToWallet:
 
 **Solution**: Start the Gateway service:
 ```bash
-cd marty-ui/services/gateway
-python main.py
+make start STACK_MANIFEST=/path/to/stack-manifest.json
 ```
 
 ### Error: Walt.id wallet not responding

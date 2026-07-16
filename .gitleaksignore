@@ -1,0 +1,16 @@
+﻿# Exact reviewed false positives from the pre-publication full-history audit.
+# Each entry binds one finding to its commit, path, rule, and line; new findings still fail.
+
+5e5e1c90720ed4c0cd581c937ae5db22abd606cb:tests/integration/gateway/test_didcomm_v2_delivery.py:generic-api-key:107
+5e5e1c90720ed4c0cd581c937ae5db22abd606cb:tests/integration/gateway/test_didcomm_v2_delivery.py:generic-api-key:134
+5e5e1c90720ed4c0cd581c937ae5db22abd606cb:tests/integration/gateway/test_didcomm_v2_delivery.py:generic-api-key:52
+5e5e1c90720ed4c0cd581c937ae5db22abd606cb:tests/integration/gateway/test_didcomm_v2_delivery.py:generic-api-key:83
+63fa3751a84a75197878b6705df9d9f5ae6f86b2:tests/integration/test_oid4vci_issuer_conformance.py:generic-api-key:825
+63fa3751a84a75197878b6705df9d9f5ae6f86b2:tests/integration/test_oid4vp_verifier_conformance.py:generic-api-key:70
+63fa3751a84a75197878b6705df9d9f5ae6f86b2:tests/integration/test_siop_v2_conformance.py:generic-api-key:46
+f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/credential_response_jwt_vc.json:jwt:4
+f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/credential_response_sd_jwt.json:jwt:4
+f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/generate_fixtures.py:generic-api-key:214
+f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/token_response.json:generic-api-key:2
+f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/vp_token_jwt.txt:generic-api-key:1
+f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/vp_token_jwt.txt:jwt:1
