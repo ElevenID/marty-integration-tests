@@ -604,7 +604,9 @@ class TestMartyWalletIssuance:
         token_json = token_resp.json()
         access_token = token_json.get("access_token")
         assert access_token, f"[{label}] No access_token in: {token_json}"
-        c_nonce = token_json.get("c_nonce", "")
+        nonce_resp = await client.post(f"{ISSUANCE_SERVICE_URL}/v1/issuance/nonce", json={})
+        nonce_resp.raise_for_status()
+        c_nonce = nonce_resp.json()["c_nonce"]
         logger.info("[%s] access_token obtained (len=%d)", label, len(access_token))
 
         # Step 3 — proof of possession (OID4VCI §8.2): build and sign with Rust

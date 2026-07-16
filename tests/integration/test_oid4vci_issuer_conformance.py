@@ -105,6 +105,7 @@ def http(
     timeout: int = 30,
 ) -> HttpResult:
     hdrs = dict(headers or {})
+    hdrs.setdefault("User-Agent", "Marty-OID4VCI-Conformance/1.0")
     data = None
     if json_body is not None:
         data = json.dumps(json_body).encode()
@@ -190,17 +191,23 @@ def _exchange_token(pre_auth_code: str) -> dict:
     return resp.json()
 
 
-def _call_nonce_endpoint(access_token: str | None = None) -> HttpResult:
+def _call_nonce_endpoint() -> HttpResult:
     """POST /v1/issuance/nonce — OID4VCI 1.0 Final §7.
 
-    Returns a fresh c_nonce. When called with an access_token the server
-    also updates the stored c_nonce for that credential transaction so that
-    the proof JWT will pass nonce validation at the credential endpoint.
+    Returns a fresh c_nonce without requiring an access token.
     """
-    headers = {}
-    if access_token:
-        headers["Authorization"] = f"Bearer {access_token}"
-    return http("POST", f"{GATEWAY_BASE}/v1/issuance/nonce", json_body={}, headers=headers)
+    return http("POST", f"{GATEWAY_BASE}/v1/issuance/nonce", json_body={})
+
+
+def _fresh_nonce() -> str:
+    """Obtain a proof nonce using the OID4VCI Final nonce endpoint."""
+    response = _call_nonce_endpoint()
+    assert response.status == 200, (
+        f"nonce endpoint failed: {response.status} {response.text}"
+    )
+    nonce = response.json().get("c_nonce")
+    assert isinstance(nonce, str) and nonce, "nonce response missing c_nonce"
+    return nonce
 
 
 def _build_proof_jwt(
@@ -515,11 +522,10 @@ def test_token_endpoint_happy_path():
     else:
         R.fail("token_has_expires_in", f"got {tok.get('expires_in')!r}")
 
-    # nonce present (for proof of possession)
-    if tok.get("nonce"):
-        R.ok("token_has_nonce")
+    if "nonce" not in tok and "c_nonce" not in tok:
+        R.ok("token_omits_proof_nonce")
     else:
-        R.fail("token_has_nonce", f"missing nonce")
+        R.fail("token_omits_proof_nonce", "Final token response must not carry a proof nonce")
 
     # content-type should be application/json
     ct = resp.headers.get("Content-Type", resp.headers.get("content-type", ""))
@@ -1192,17 +1198,8 @@ def test_issuer_happy_flow():
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
 
-    # Prefer nonce from nonce endpoint (Final spec), fall back to token response (Draft).
-    # Pass the access_token so the server updates the stored c_nonce for this transaction,
-    # ensuring the proof nonce matches what the server expects at the credential endpoint.
-    nonce_resp = _call_nonce_endpoint(access_token=tok.get("access_token"))
-    if nonce_resp.status == 200:
-        nonce = nonce_resp.json().get("c_nonce", tok.get("nonce", ""))
-        R.ok("VCIIssuerHappyFlow.nonce_from_nonce_endpoint")
-    else:
-        nonce = tok.get("nonce") or tok.get("c_nonce", "")
-        R.fail("VCIIssuerHappyFlow.nonce_from_nonce_endpoint",
-               "OID4VCI-1FINAL §7: nonce endpoint not available, fell back to token response nonce")
+    nonce = _fresh_nonce()
+    R.ok("VCIIssuerHappyFlow.nonce_from_nonce_endpoint")
 
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
     resp = _issue_credential(tok["access_token"], proof, use_v1_proofs=True)
@@ -1235,7 +1232,7 @@ def test_issuer_happy_flow_additional_requests():
     print("\n--- VCIIssuerHappyFlowAdditionalRequests ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
 
     # First request
     proof1 = _build_proof_jwt(ISSUER_BASE_URL, nonce)
@@ -1290,7 +1287,7 @@ def test_issuer_happy_flow_sd_jwt():
 
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
     resp = _issue_credential(tok["access_token"], proof, format=sd_jwt_format)
 
@@ -1347,7 +1344,7 @@ def test_issuer_happy_flow_mso_mdoc():
 
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
     resp = _issue_credential(tok["access_token"], proof, format="mso_mdoc")
 
@@ -1412,7 +1409,7 @@ def test_issuer_fail_on_replay_nonce():
     print("\n--- VCIIssuerFailOnReplayNonce (§7) ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
 
     proof1 = _build_proof_jwt(ISSUER_BASE_URL, nonce)
     resp1 = _issue_credential(tok["access_token"], proof1)
@@ -1445,7 +1442,7 @@ def test_issuer_fail_on_invalid_jwt_proof_signature():
     print("\n--- VCIIssuerFailOnInvalidJwtProofSignature (Appendix F.4) ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
 
     header = {"alg": "EdDSA", "typ": "openid4vci-proof+jwt", "kid": "did:key:z6MkBad#z6MkBad"}
     payload = {"iss": "did:key:z6MkBad", "aud": ISSUER_BASE_URL, "iat": int(time.time()), "nonce": nonce}
@@ -1497,7 +1494,7 @@ def test_issuer_fail_on_unknown_credential_configuration_id():
     print("\n--- VCIIssuerFailOnUnknownCredentialConfigurationId (§8.2) ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
 
     resp = _issue_credential(
@@ -1521,7 +1518,7 @@ def test_issuer_fail_on_unknown_credential_identifier():
     print("\n--- VCIIssuerFailOnUnknownCredentialIdentifier (§8.2) ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
 
     resp = _issue_credential(
@@ -1545,7 +1542,7 @@ def test_issuer_fail_on_access_token_in_query():
     print("\n--- VCIIssuerFailOnRequestWithAccessTokenInQuery (RFC 6750 §2.3) ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
 
     body = {"format": "jwt_vc_json", "proofs": {"jwt": [proof]}}
@@ -1585,7 +1582,7 @@ def test_deferred_credential_endpoint():
 
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
 
     issue_resp = _issue_credential(tok["access_token"], proof)
@@ -1642,7 +1639,7 @@ def test_notification_endpoint_credential_accepted():
 
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
     issue_resp = _issue_credential(tok["access_token"], proof)
     if issue_resp.status != 200:
@@ -1690,7 +1687,7 @@ def test_notification_endpoint_credential_deleted():
 
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
     issue_resp = _issue_credential(tok["access_token"], proof)
     if issue_resp.status != 200:
@@ -1848,7 +1845,7 @@ def test_proof_jwt_typ_header():
     print("\n--- Appendix F.1: Proof JWT typ header ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
 
     # Correct typ — MUST be accepted
     proof_correct = _build_proof_jwt(ISSUER_BASE_URL, nonce, typ="openid4vci-proof+jwt")
@@ -1863,7 +1860,7 @@ def test_proof_jwt_typ_header():
     # Wrong typ — SHOULD be rejected
     tx2 = _initiate_issuance()
     tok2 = _exchange_token(tx2["pre_auth_code"])
-    nonce2 = tok2.get("nonce") or tok2.get("c_nonce", "")
+    nonce2 = _fresh_nonce()
     proof_wrong = _build_proof_jwt(ISSUER_BASE_URL, nonce2, typ="JWT")
     resp_wrong = _issue_credential(tok2["access_token"], proof_wrong)
     if resp_wrong.status == 400:
@@ -1882,7 +1879,7 @@ def test_proof_jwt_aud_validation():
     print("\n--- Appendix F.4: Proof JWT aud validation ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce, bad_aud="https://wrong-issuer.example.com")
     resp = _issue_credential(tok["access_token"], proof)
     if resp.status == 400:
@@ -1901,7 +1898,7 @@ def test_proof_jwt_iat_validation():
     print("\n--- Appendix F.4: Proof JWT iat validation ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    nonce = tok.get("nonce") or tok.get("c_nonce", "")
+    nonce = _fresh_nonce()
     proof = _build_proof_jwt(ISSUER_BASE_URL, nonce, iat_offset=-3600)
     resp = _issue_credential(tok["access_token"], proof)
     if resp.status == 400:

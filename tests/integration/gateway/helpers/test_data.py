@@ -861,7 +861,7 @@ class TestDataBuilder:
                 "rollout_percentage": 100,
             },
             "offline_cache_ttl_hours": 24,
-            "biometric_required": False,
+            "operator_biometric_authentication_required": False,
             "audit_all_events": True,
             "default_presentation_policy_id": default_presentation_policy_id,
         }
@@ -1316,7 +1316,7 @@ class TestDataBuilder:
                 "rollout_percentage": 100,
             },
             "offline_cache_ttl_hours": 72,
-            "biometric_required": False,
+            "operator_biometric_authentication_required": False,
             "audit_all_events": True,
             "default_presentation_policy_id": default_presentation_policy_id,
             "device_type": device_type,

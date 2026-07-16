@@ -1178,7 +1178,7 @@ class GatewayClient:
         ux_config: Optional[Dict] = None,
         update_policy: Optional[Dict] = None,
         offline_cache_ttl_hours: int = 24,
-        biometric_required: bool = False,
+        operator_biometric_authentication_required: bool = False,
         audit_all_events: bool = True,
         default_presentation_policy_id: Optional[str] = None,
         trust_profile_id: Optional[str] = None,
@@ -1193,7 +1193,7 @@ class GatewayClient:
             "ux_config": ux_config or {},
             "update_policy": update_policy or {},
             "offline_cache_ttl_hours": offline_cache_ttl_hours,
-            "biometric_required": biometric_required,
+            "operator_biometric_authentication_required": operator_biometric_authentication_required,
             "audit_all_events": audit_all_events,
             "default_presentation_policy_id": default_presentation_policy_id,
         }

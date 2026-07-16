@@ -90,13 +90,13 @@ class TestDeploymentProfileCRUD:
             profile_id=profile_id,
             name="Updated Gate Name",
             network_mode="offline",
-            biometric_required=True,
+            operator_biometric_authentication_required=True,
         )
         
         assert updated["id"] == profile_id
         assert updated["name"] == "Updated Gate Name"
         assert updated["network_mode"].lower() == "offline"
-        assert updated["biometric_required"] is True
+        assert updated["operator_biometric_authentication_required"] is True
         
     async def test_delete_deployment_profile(
         self,
@@ -564,11 +564,11 @@ class TestDeploymentProfileConfiguration:
             trust_profile_id=test_trust_profile["id"],
             default_presentation_policy_id=age_verification_policy["id"],
         )
-        profile_data["biometric_required"] = True
+        profile_data["operator_biometric_authentication_required"] = True
         
         profile = await gateway_client.create_deployment_profile(**profile_data)
         
-        assert profile["biometric_required"] is True
+        assert profile["operator_biometric_authentication_required"] is True
         
     async def test_ux_configuration(
         self,
