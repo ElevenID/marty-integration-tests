@@ -254,4 +254,5 @@ def delete_wallet(wallet_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7001)
+    # The containerized wallet tests must reach this host-side mock.
+    uvicorn.run(app, host="0.0.0.0", port=7001)  # nosec B104

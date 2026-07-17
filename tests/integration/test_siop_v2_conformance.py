@@ -97,9 +97,11 @@ def http(
     if json_body is not None:
         data = json.dumps(json_body).encode()
         hdrs.setdefault("Content-Type", "application/json")
+    if urllib.parse.urlparse(url).scheme not in {"http", "https"}:
+        raise ValueError("conformance HTTP client only permits http(s) URLs")
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             body = resp.read()
             return HttpResult(resp.status, dict(resp.headers), body)
     except urllib.error.HTTPError as e:
