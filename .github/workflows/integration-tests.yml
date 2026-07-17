@@ -26,10 +26,9 @@ jobs:
         run: |
           pip install -e ".[dev]"
 
-      # The full Docker stack depends on private sibling repositories that are
-      # intentionally not accessible to a repository-scoped pull-request token.
-      # Keep PR validation hermetic; full-stack runs are performed from the
-      # provisioned multi-repository workspace.
+      # Pull-request validation is hermetic and secretless. Full-stack tests
+      # are run by the marty-ui release workflow from its attested manifest and
+      # digest-pinned public artifacts.
       - name: Run hermetic unit tests
         run: pytest tests/unit/ -v --tb=short
 
