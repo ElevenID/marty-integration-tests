@@ -12,9 +12,9 @@ SPEC.loader.exec_module(MODULE)
 
 def manifest():
     artifacts = [
-        "ghcr.io/elevenid/marty-ui/ui",
-        "ghcr.io/elevenid/marty-ui/services",
-        "ghcr.io/elevenid/marty-ui/migrations",
+        "ghcr.io/elevenid/marty-ui-oss/ui",
+        "ghcr.io/elevenid/marty-ui-oss/services",
+        "ghcr.io/elevenid/marty-ui-oss/migrations",
         "ghcr.io/elevenid/marty-credentials-issuance",
     ]
     return {
@@ -36,6 +36,24 @@ def test_maps_required_images_by_immutable_uri():
     images = MODULE.image_map(manifest())
     assert images["MARTY_UI_IMAGE"].endswith("@sha256:" + "a" * 64)
     assert len(images) == 4
+
+
+def test_rejects_ambiguous_repository_names():
+    value = manifest()
+    value["components"][0]["artifacts"].append(
+        {
+            "type": "oci",
+            "uri": "ghcr.io/another-owner/ui",
+            "digest": "sha256:" + "b" * 64,
+        }
+    )
+    try:
+        MODULE.image_map(value)
+    except ValueError as error:
+        assert "repository name ui" in str(error)
+        assert "found 2" in str(error)
+    else:
+        raise AssertionError("ambiguous image role was accepted")
 
 
 def test_rejects_commerce_markers(tmp_path):

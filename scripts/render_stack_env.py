@@ -13,10 +13,10 @@ from pathlib import Path
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
 FORBIDDEN = ("square", "subscription", "billing", "product-catalog", "product_catalog")
 REQUIRED_IMAGES = {
-    "MARTY_UI_IMAGE": "/marty-ui/ui",
-    "MARTY_SERVICES_IMAGE": "/marty-ui/services",
-    "MARTY_MIGRATIONS_IMAGE": "/marty-ui/migrations",
-    "MARTY_ISSUANCE_IMAGE": "/marty-credentials-issuance",
+    "MARTY_UI_IMAGE": "ui",
+    "MARTY_SERVICES_IMAGE": "services",
+    "MARTY_MIGRATIONS_IMAGE": "migrations",
+    "MARTY_ISSUANCE_IMAGE": "marty-credentials-issuance",
 }
 
 
@@ -46,10 +46,17 @@ def image_map(manifest: dict) -> dict[str, str]:
             images.append(f"{uri}@{digest}")
 
     rendered: dict[str, str] = {}
-    for variable, suffix in REQUIRED_IMAGES.items():
-        matches = [image for image in images if image.split("@", 1)[0].endswith(suffix)]
+    for variable, repository in REQUIRED_IMAGES.items():
+        matches = [
+            image
+            for image in images
+            if image.split("@", 1)[0].rstrip("/").rsplit("/", 1)[-1] == repository
+        ]
         if len(matches) != 1:
-            raise ValueError(f"expected exactly one image ending in {suffix}, found {len(matches)}")
+            raise ValueError(
+                f"expected exactly one image with repository name {repository}, "
+                f"found {len(matches)}"
+            )
         rendered[variable] = matches[0]
     return rendered
 
