@@ -114,9 +114,11 @@ def http(
         data = urllib.parse.urlencode(form_body).encode("utf-8")
         req_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
 
+    if urllib.parse.urlparse(url).scheme not in {"http", "https"}:
+        raise ValueError("UI E2E HTTP client only permits http(s) URLs")
     req = urllib.request.Request(url, data=data, headers=req_headers, method=method.upper())
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             return HttpResult(resp.status, dict(resp.headers.items()), resp.read() or b"")
     except urllib.error.HTTPError as e:
         body = e.read() if hasattr(e, "read") else b""

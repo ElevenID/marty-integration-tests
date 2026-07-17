@@ -180,7 +180,8 @@ class TestDidcommDeliveryWithMockAgent:
             def log_message(self, format, *args):
                 pass  # Suppress server logs in test output
 
-        server = HTTPServer(("0.0.0.0", 0), Handler)
+        # Docker reaches this host-side callback via host.docker.internal.
+        server = HTTPServer(("0.0.0.0", 0), Handler)  # nosec B104
         port = server.server_address[1]
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
