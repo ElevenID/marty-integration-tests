@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "marty-integration-tests"
-version = "1.0.2"
+version = "1.0.3"
 description = "Integration test suite for the Marty ecosystem"
 readme = "README.md"
 license = "MIT"
@@ -58,6 +58,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "integration: Integration tests (require services running)",
+    "oss_stack: Artifact-only tests for the public stack release",
     "wallet: Walt.ID wallet integration tests",
     "marty_wallet: Marty Authenticator web app integration tests (require RUN_WALLET_TESTS=true)",
     "slow: Slow running tests",

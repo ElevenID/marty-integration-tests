@@ -56,6 +56,11 @@ services:
       <<: *service-env
       SERVICE_NAME: auth
       SERVICE_PORT: "8001"
+      KEYCLOAK_REALM: oss-ci
+      OIDC_ISSUER_URL: https://oss-ci.invalid/realms/oss-ci
+      OIDC_EXTERNAL_ISSUER_URL: https://oss-ci.invalid/realms/oss-ci
+      UI_BASE_URL: http://ui
+      COOKIE_SECURE: "false"
 
   organization-service:
     <<: *service
