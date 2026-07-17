@@ -7,15 +7,23 @@ on:
   push:
     branches: [main, develop]
     paths:
+      - '.github/workflows/license-compliance.yml'
       - 'pyproject.toml'
+      - '**/requirements*.txt'
       - 'LICENSE*'
       - 'README.md'
+      - 'services/**'
+      - 'tests/**'
   pull_request:
     branches: [main, develop]
     paths:
+      - '.github/workflows/license-compliance.yml'
       - 'pyproject.toml'
+      - '**/requirements*.txt'
       - 'LICENSE*'
       - 'README.md'
+      - 'services/**'
+      - 'tests/**'
 
 jobs:
   metadata-consistency:
@@ -112,9 +120,10 @@ jobs:
 
       - name: Run pip-audit
         run: |
-          pip install -e ".[dev]" --dry-run 2>/dev/null || pip install -e . --dry-run 2>/dev/null || true
-          pip-audit --format json --output pip-audit-report.json || true
-          pip-audit
+          # Audit dependencies declared by this project in an isolated resolver.
+          # Auditing the runner environment also reports pip-audit's own tooling.
+          pip-audit . --format json --output pip-audit-report.json || true
+          pip-audit .
 
       - name: Upload security results
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
