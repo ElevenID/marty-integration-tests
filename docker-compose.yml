@@ -5,7 +5,7 @@ x-service: &service
   image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}
   restart: "no"
   environment: &service-env
-    DATABASE_URL: postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
+    DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
     REDIS_URL: redis://redis:6379
   depends_on:
     migrations:
@@ -19,7 +19,8 @@ services:
     image: ${POSTGRES_IMAGE:?run scripts/render_stack_env.py first}
     environment:
       POSTGRES_USER: marty
-      POSTGRES_PASSWORD: marty_dev
+      # Ephemeral public-CI credential; never used outside this disposable stack.
+      POSTGRES_PASSWORD: marty_oss_ci_2026
       POSTGRES_DB: marty_credentials
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U marty -d marty_credentials"]
@@ -40,7 +41,10 @@ services:
   migrations:
     image: ${MARTY_MIGRATIONS_IMAGE:?run scripts/render_stack_env.py first}
     environment:
-      DATABASE_URL: postgresql://marty:marty_dev@postgres:5432/marty_credentials
+      DATABASE_URL: postgresql://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      MARTY_DB_PASSWORD: marty_oss_ci_2026
+      MARTY_ORG_ADMIN_EMAIL: oss-ci@elevenid.dev
+      PUBLIC_API_URL: https://oss-ci.elevenid.dev
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,9 +81,10 @@ services:
   issuance-service:
     image: ${MARTY_ISSUANCE_IMAGE:?run scripts/render_stack_env.py first}
     environment:
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev@postgres:5432/marty_credentials
+      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
       REDIS_URL: redis://redis:6379
       ISSUER_BASE_URL: http://gateway:8000
+      TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
     depends_on:
       migrations:
         condition: service_completed_successfully
