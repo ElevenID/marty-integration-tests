@@ -94,6 +94,12 @@ services:
       ISSUER_BASE_URL: ${ISSUER_BASE_URL:-http://gateway:8000}
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
+      # Service names in this artifact stack are intentionally explicit. The
+      # issuer validates organization, template, and revocation bindings over
+      # their production gRPC contracts before creating an offer.
+      ORG_GRPC_TARGET: organization-service:9002
+      CT_GRPC_TARGET: credential-template-service:9003
+      RP_GRPC_TARGET: revocation-profile-service:9013
       TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
       # Shared only on the private Compose network so the authenticated gateway
       # can call the issuer's management API. This disposable default is not a
