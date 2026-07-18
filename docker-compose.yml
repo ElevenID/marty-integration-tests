@@ -153,7 +153,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
     depends_on:
       migrations:
-      condition: service_completed_successfully
+        condition: service_completed_successfully
     networks: [marty-oss]
 
   compliance-profile-service:
