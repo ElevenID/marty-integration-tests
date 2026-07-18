@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -75,6 +76,21 @@ def validate_config(path: Path) -> None:
             raise ValueError(f"vci.{field} is required by the official issuer plan")
 
 
+def runner_relative_path(path: Path, runner: Path) -> str:
+    """Return a runner-relative path safe for the suite's positional parser.
+
+    The upstream runner uses ``:`` in its test-plan grammar.  On Windows an
+    absolute drive path therefore looks like a malformed test-plan argument.
+    A relative path works on every platform and keeps the config outside the
+    runner checkout when desired.
+    """
+    resolved_path = path.resolve()
+    resolved_runner = runner.resolve()
+    if resolved_path.is_relative_to(resolved_runner):
+        return str(resolved_path.relative_to(resolved_runner))
+    return os.path.relpath(resolved_path, resolved_runner)
+
+
 def cmd_validate(_args: argparse.Namespace) -> int:
     manifest = load_manifest()
     validate_expected_failures()
@@ -96,15 +112,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     validate_config(config)
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    config_argument = runner_relative_path(config, runner)
     command = [
         sys.executable,
         "scripts/run-test-plan.py",
+        "--no-parallel",
         "--export-dir",
         str(output),
         "--expected-failures-file",
         str((ROOT / "conformance" / "expected-failures.json").resolve()),
         profile["test_plan"],
-        str(config),
+        config_argument,
     ]
     print("Running the official OIDF plan:", profile["test_plan"])
     return subprocess.run(command, cwd=runner, check=False).returncode
