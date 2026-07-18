@@ -102,6 +102,22 @@ services:
     depends_on:
       migrations:
         condition: service_completed_successfully
+      issuance-migrations:
+        condition: service_completed_successfully
+    networks: [marty-oss]
+
+  # The platform migration image owns the shared service schemas, while the
+  # credentials artifact owns its issuance schema and migration history. Keep
+  # both as release artifacts so a clean stack is genuinely deployable.
+  issuance-migrations:
+    image: ${MARTY_ISSUANCE_IMAGE:?run scripts/render_stack_env.py first}
+    command: ["python", "manage_migrations.py", "upgrade"]
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
     networks: [marty-oss]
 
   compliance-profile-service:
