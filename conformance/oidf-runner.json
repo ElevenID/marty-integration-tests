@@ -9,7 +9,7 @@
   "profiles": {
     "oid4vci-issuer": {
       "status": "active",
-      "test_plan": "oid4vci-1_0-issuer-test-plan",
+      "test_plan": "oid4vci-1_0-issuer-test-plan[sender_constrain=dpop][client_auth_type=private_key_jwt][vci_authorization_code_flow_variant=issuer_initiated][credential_format=sd_jwt_vc][authorization_request_type=simple][openid=plain_oauth][fapi_request_method=unsigned][vci_grant_type=pre_authorization_code][vci_credential_encryption=plain][fapi_profile=vci][fapi_response_mode=plain_response]",
       "configuration_example": "conformance/marty-issuer.example.json",
       "target": "Marty's public credential-issuer URL through the gateway"
     },

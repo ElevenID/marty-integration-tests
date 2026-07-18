@@ -34,9 +34,11 @@ python scripts/oidf_conformance.py run \
   --output-dir reports/oidf/issuer
 ```
 
-`run` calls the official `scripts/run-test-plan.py` with the official
-`oid4vci-1_0-issuer-test-plan`; it does not simulate protocol calls or swallow
-test failures. The official suite URL can be supplied with
+`run` calls the official `scripts/run-test-plan.py` with the pinned active
+OID4VCI plan variant; it does not simulate protocol calls or swallow test
+failures. It creates the export directory, disables parallel plan execution
+for reproducible evidence, and passes the configuration relative to the runner
+checkout so Windows drive letters cannot be parsed as test-plan syntax. The official suite URL can be supplied with
 `CONFORMANCE_SERVER` when it is not using its normal local default.
 
 ## Certification later
