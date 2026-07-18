@@ -95,6 +95,10 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
       TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
+      # Shared only on the private Compose network so the authenticated gateway
+      # can call the issuer's management API. This disposable default is not a
+      # deployment credential; production supplies its own secret.
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -146,6 +150,9 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile-service:8004
       ISSUANCE_SERVICE_URL: http://issuance-service:8005
+      # Must match the issuer's internal management key above. It is injected
+      # only after the gateway's normal authentication/authorization checks.
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
       COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile-service:8008
       PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy-service:8009
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile-service:8010
