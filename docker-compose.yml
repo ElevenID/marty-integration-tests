@@ -88,7 +88,12 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
       REDIS_URL: redis://redis:6379
-      ISSUER_BASE_URL: http://gateway:8000
+      # The issuer URL is a public protocol value, not an internal service URL.
+      # Local CI defaults to the Compose gateway; an official conformance run
+      # supplies the externally reachable gateway address.
+      ISSUER_BASE_URL: ${ISSUER_BASE_URL:-http://gateway:8000}
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
       TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
     depends_on:
       migrations:
@@ -151,6 +156,19 @@ services:
   ui:
     image: ${MARTY_UI_IMAGE:?run scripts/render_stack_env.py first}
     ports: ["23000:80"]
+    depends_on: [gateway]
+    networks: [marty-oss]
+
+  # Opt-in TLS boundary used by the official OIDF conformance suite. Production
+  # deployments terminate TLS outside this Compose file; this profile makes the
+  # local certification path exercise the same HTTPS metadata and endpoints.
+  tls-proxy:
+    profiles: [oidf]
+    image: nginx@sha256:679a5fd058f6ca754a561846fe27927e408074431d63556e8fc588fc38be6901
+    ports: ["28443:443"]
+    volumes:
+      - ./services/tls-proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${TLS_CERT_DIR:-./conformance/local-certs}:/etc/nginx/certs:ro
     depends_on: [gateway]
     networks: [marty-oss]
 

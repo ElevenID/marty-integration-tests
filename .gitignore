@@ -50,6 +50,8 @@ Thumbs.db
 .env.stack
 *.log
 .cache/oidf/
+conformance/*.local.json
+conformance/local-certs/
 
 # Local config
 local.env
