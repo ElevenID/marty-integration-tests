@@ -45,6 +45,16 @@ def validate_expected_failures() -> None:
         if not isinstance(entry, dict) or required - entry.keys():
             raise ValueError("each expected failure requires test-id, issue, owner, and expires")
 
+    skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
+    if not isinstance(skips, list):
+        raise ValueError("expected skips must be a JSON list")
+    for entry in skips:
+        required = {"test-name", "configuration-filename", "variant", "reason", "owner", "expires"}
+        if not isinstance(entry, dict) or required - entry.keys():
+            raise ValueError(
+                "each expected skip requires test-name, configuration-filename, variant, reason, owner, and expires"
+            )
+
 
 def git_revision(path: Path) -> str:
     return subprocess.check_output(
@@ -124,6 +134,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         str(output),
         "--expected-failures-file",
         str((ROOT / "conformance" / "expected-failures.json").resolve()),
+        "--expected-skips-file",
+        str((ROOT / "conformance" / "expected-skips.json").resolve()),
         profile["test_plan"],
         config_argument,
     ]

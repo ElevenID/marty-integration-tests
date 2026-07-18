@@ -23,6 +23,10 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert "[credential_format=sd_jwt_vc]" in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
 
 
+def test_documented_optional_signed_metadata_skip_is_valid() -> None:
+    oidf.validate_expected_failures()
+
+
 def test_runner_relative_path_avoids_windows_drive_letter_grammar(tmp_path: Path) -> None:
     runner = tmp_path / "runner"
     runner.mkdir()
