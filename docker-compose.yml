@@ -61,7 +61,9 @@ services:
       DATABASE_URL: postgresql://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
       MARTY_DB_PASSWORD: marty_oss_ci_2026
       MARTY_ORG_ADMIN_EMAIL: oss-ci@elevenid.dev
-      PUBLIC_API_URL: https://oss-ci.elevenid.dev
+      # Seed metadata from the actual public issuer address used by this
+      # deployment, never a stale fixture hostname.
+      PUBLIC_API_URL: ${ISSUER_BASE_URL:-http://gateway:8000}
       # Enables the migration artifact's KMS/DID bootstrap for the disposable
       # test organization; issuance still uses the normal signing boundary.
       REDIS_URL: redis://redis:6379
