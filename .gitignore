@@ -32,6 +32,7 @@ htmlcov/
 .tox/
 .hypothesis/
 reports/ui-contracts/
+reports/oidf/
 
 # IDEs
 .vscode/
@@ -48,6 +49,7 @@ Thumbs.db
 .env
 .env.stack
 *.log
+.cache/oidf/
 
 # Local config
 local.env

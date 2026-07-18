@@ -1,0 +1,27 @@
+name: OIDF runner update check
+
+on:
+  schedule:
+    - cron: "17 5 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oidf-runner-update-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate the pinned official-runner contract
+        run: python scripts/oidf_conformance.py validate
+      - name: Report whether the official runner has a reviewed update
+        run: python scripts/oidf_conformance.py check-update

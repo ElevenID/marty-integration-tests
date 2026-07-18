@@ -1,0 +1,14 @@
+{
+  "description": "Marty OID4VCI issuer — replace only the example values for a disposable production-path deployment",
+  "vci": {
+    "credential_issuer_url": "https://issuer.example.invalid/org/REPLACE_WITH_EPHEMERAL_ORGANIZATION_ID",
+    "authorization_server": "https://issuer.example.invalid",
+    "credential_configuration_id": "REPLACE_WITH_PUBLISHED_CREDENTIAL_CONFIGURATION",
+    "credential_proof_type_hint": "jwt"
+  },
+  "client_attestation": {
+    "key_attestation_jwks": {
+      "keys": []
+    }
+  }
+}

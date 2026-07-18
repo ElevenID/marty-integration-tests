@@ -1,0 +1,27 @@
+{
+  "schema": "elevenid.oidf-conformance-runner/v1",
+  "official_runner": {
+    "repository": "https://gitlab.com/openid/conformance-suite.git",
+    "release": "release-v5.2.0",
+    "commit": "dee9a25160e789f0f80517674693ef7989ab9fa1",
+    "review_cadence": "monthly"
+  },
+  "profiles": {
+    "oid4vci-issuer": {
+      "status": "active",
+      "test_plan": "oid4vci-1_0-issuer-test-plan",
+      "configuration_example": "conformance/marty-issuer.example.json",
+      "target": "Marty's public credential-issuer URL through the gateway"
+    },
+    "oid4vp-verifier": {
+      "status": "planned",
+      "test_plan": "oid4vp-1_0-verifier-test-plan",
+      "target": "Marty's public verifier URL through the gateway",
+      "reason": "The official verifier configuration is enabled only after the production wallet callback adapter is represented in a reviewed configuration."
+    }
+  },
+  "certification": {
+    "enabled": false,
+    "reason": "Certification execution is deferred until funding is approved. It uses this same pinned runner, profile configuration, production image digests, and exported evidence."
+  }
+}
