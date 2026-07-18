@@ -88,7 +88,10 @@ def runner_relative_path(path: Path, runner: Path) -> str:
     resolved_runner = runner.resolve()
     if resolved_path.is_relative_to(resolved_runner):
         return str(resolved_path.relative_to(resolved_runner))
-    return os.path.relpath(resolved_path, resolved_runner)
+    # The upstream plan grammar treats backslashes as separators outside the
+    # configuration-file token.  Normalize the relative path for Windows as
+    # well as POSIX hosts before passing it as a positional argument.
+    return Path(os.path.relpath(resolved_path, resolved_runner)).as_posix()
 
 
 def cmd_validate(_args: argparse.Namespace) -> int:

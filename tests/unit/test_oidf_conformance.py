@@ -34,6 +34,7 @@ def test_runner_relative_path_avoids_windows_drive_letter_grammar(tmp_path: Path
 
     assert Path(result).is_absolute() is False
     assert ":" not in result
+    assert "\\" not in result
 
 
 def test_example_configuration_is_rejected(tmp_path: Path) -> None:
