@@ -18,6 +18,6 @@ jobs:
 
   dependency-review:
     if: github.event_name == 'pull_request' && github.event.repository.private == false
-    uses: ElevenID/.github/.github/workflows/dependency-review.yml@7ee77c2c23d7fcb414badbb0d0df586987666cfd
+    uses: ElevenID/.github/.github/workflows/dependency-review.yml@9b6141e294da5c0f9254cfaa60c8934df95ec68b
     permissions:
       contents: read
