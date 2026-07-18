@@ -8,6 +8,6 @@ permissions:
 
 jobs:
   history-and-secrets:
-    uses: ElevenID/.github/.github/workflows/publication-audit.yml@b56b73aba487ff23b15ac2705df0b5fb02e103d4
+    uses: ElevenID/.github/.github/workflows/publication-audit.yml@9b6141e294da5c0f9254cfaa60c8934df95ec68b
     permissions:
       contents: read
