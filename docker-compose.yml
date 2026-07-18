@@ -15,6 +15,23 @@ x-service: &service
   networks: [marty-oss]
 
 services:
+  # Ephemeral OpenBao transit service for the OSS conformance stack. It exists
+  # only on the private Compose network and supplies the normal remote signing
+  # boundary; it is never exposed as a public endpoint.
+  openbao:
+    image: quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878
+    cap_add: [IPC_LOCK]
+    command: server -dev
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+      BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [marty-oss]
+
   postgres:
     image: ${POSTGRES_IMAGE:?run scripts/render_stack_env.py first}
     environment:
@@ -45,8 +62,17 @@ services:
       MARTY_DB_PASSWORD: marty_oss_ci_2026
       MARTY_ORG_ADMIN_EMAIL: oss-ci@elevenid.dev
       PUBLIC_API_URL: https://oss-ci.elevenid.dev
+      # Enables the migration artifact's KMS/DID bootstrap for the disposable
+      # test organization; issuance still uses the normal signing boundary.
+      REDIS_URL: redis://redis:6379
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      openbao:
         condition: service_healthy
     networks: [marty-oss]
 
@@ -94,7 +120,35 @@ services:
       ISSUER_BASE_URL: ${ISSUER_BASE_URL:-http://gateway:8000}
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
+      # Service names in this artifact stack are intentionally explicit. The
+      # issuer validates organization, template, and revocation bindings over
+      # their production gRPC contracts before creating an offer.
+      ORG_GRPC_TARGET: organization-service:9002
+      CT_GRPC_TARGET: credential-template-service:9003
+      RP_GRPC_TARGET: revocation-profile-service:9013
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
+      # Shared only on the private Compose network so the authenticated gateway
+      # can call the issuer's management API. This disposable default is not a
+      # deployment credential; production supplies its own secret.
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      issuance-migrations:
+        condition: service_completed_successfully
+    networks: [marty-oss]
+
+  # The platform migration image owns the shared service schemas, while the
+  # credentials artifact owns its issuance schema and migration history. Keep
+  # both as release artifacts so a clean stack is genuinely deployable.
+  issuance-migrations:
+    image: ${MARTY_ISSUANCE_IMAGE:?run scripts/render_stack_env.py first}
+    command: ["python", "manage_migrations.py", "upgrade"]
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -146,11 +200,16 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile-service:8004
       ISSUANCE_SERVICE_URL: http://issuance-service:8005
+      # Must match the issuer's internal management key above. It is injected
+      # only after the gateway's normal authentication/authorization checks.
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
       COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile-service:8008
       PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy-service:8009
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile-service:8010
       FLOW_SERVICE_URL: http://flow-service:8011
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
     ports: ["28000:8000"]
 
   ui:

@@ -57,4 +57,8 @@ visible; it never silently switches versions. Review an update by changing both
 the release and full commit in `oidf-runner.json`, then run the active profile
 against the production-path stack before merging. Expected failures are allowed
 only in `expected-failures.json`, with an OIDF test id, issue URL, owner, and
-expiry date; the file is intentionally empty today.
+expiry date. Optional OIDF modules that Marty does not claim to support use
+the separate `expected-skips.json`, which requires a matching test name,
+configuration pattern, rationale, owner, and expiry. The runner fails on a
+new skip, or when an expected skip stops occurring, so neither file is a
+permanent baseline.

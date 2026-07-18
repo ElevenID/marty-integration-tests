@@ -1,0 +1,10 @@
+[
+  {
+    "test-name": "oid4vci-1_0-issuer-metadata-test-signed",
+    "configuration-filename": "*marty-issuer*.json",
+    "variant": "*",
+    "reason": "Marty publishes unsigned Credential Issuer Metadata. OID4VCI permits unsigned metadata; this optional signed-metadata module must remain skipped until a separately approved signed-metadata feature is introduced.",
+    "owner": "ElevenID",
+    "expires": "2027-01-01"
+  }
+]
