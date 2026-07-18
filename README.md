@@ -71,10 +71,14 @@ The harness creates an isolated temporary config directory and never reads the d
 Protocol conformance tests in this repository exercise the running public stack. Crate-level cryptographic and mDoc conformance remains in `marty-core`, where it is tested by that component's own CI.
 
 ```bash
-make conformance
+make conformance-local
 ```
 
-Some OIDF conformance cases intentionally expose unsupported features and are reported before the strict rerun.
+The fast regression suite is strict: a failure fails the command. The actual
+OpenID Foundation runner is pinned separately and runs against the same
+gateway-facing production-path deployment. See
+[conformance/README.md](conformance/README.md) for the official issuer plan,
+evidence handling, certification switch, and monthly runner-update check.
 
 ## Configuration
 

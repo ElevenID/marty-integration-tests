@@ -1,6 +1,6 @@
 # Makefile for Marty Integration Tests
 
-.PHONY: help install install-e2e stack-env test test-fast test-wallet test-ui-contracts conformance clean start stop restart logs
+.PHONY: help install install-e2e stack-env test test-fast test-wallet test-ui-contracts conformance conformance-local conformance-oidf-validate clean start stop restart logs
 
 STACK_MANIFEST ?= stack-manifest.json
 
@@ -19,7 +19,9 @@ help:
 	@echo "  make test-ui-contracts - Run browser UI contracts against MARTY_UI_URL"
 	@echo "  make test-interop      - Run OID4VC wallet interoperability tests"
 	@echo "  make test-eudi         - Run EUDI reference wallet/verifier interop tests"
-	@echo "  make conformance       - Run OIDF OID4VC conformance tests (expects failures)"
+	@echo "  make conformance-local - Run strict Marty OID4VC regression tests through the gateway"
+	@echo "  make conformance-oidf-validate - Validate the pinned official OIDF runner contract"
+	@echo "  make conformance       - Alias for conformance-local; official runs use scripts/oidf_conformance.py"
 	@echo "  make logs              - Show service logs"
 	@echo "  make clean             - Clean up containers and volumes"
 	@echo ""
@@ -70,18 +72,18 @@ test-eudi: start
 test-wallet-kit: start
 	RUN_EUDI_TESTS=true pytest tests/integration/gateway/test_eudi_wallet_kit.py -v
 
-conformance:
-	@echo "Running OIDF OID4VC conformance tests through the gateway..."
+conformance: conformance-local
+
+conformance-local:
+	@echo "Running strict Marty OID4VC regression tests through the public gateway..."
 	@echo "Set SESSION_ID, GATEWAY_BASE, ORG_ID, CREDENTIAL_TEMPLATE_ID env vars before running."
-	@echo "Some tests WILL FAIL - they expose missing features for OIDF certification."
-	pytest tests/integration/test_oid4vci_issuer_conformance.py \
-		tests/integration/test_oid4vp_verifier_conformance.py \
-		tests/integration/test_siop_v2_conformance.py \
-		-v --no-header 2>/dev/null || true
 	pytest tests/integration/test_oid4vci_issuer_conformance.py \
 		tests/integration/test_oid4vp_verifier_conformance.py \
 		tests/integration/test_siop_v2_conformance.py \
 		-v
+
+conformance-oidf-validate:
+	python scripts/oidf_conformance.py validate
 
 logs:
 	docker compose --env-file .env.stack logs -f
