@@ -8,11 +8,20 @@ feedback between official-suite releases.
 ## Safety and target boundary
 
 The target must be a disposable deployment created from an attested
-`marty.stack/v1` manifest. Start it with `make start`; configure the suite with
+`marty.stack/v1` manifest. Start it with `make conformance-stack-start`; configure the suite with
 the gateway-facing issuer or verifier URL. Do not point the suite at an
 individual backend container, production customer data, a private service, or
 commerce functionality. Test organizations, keys, credential templates, and
 wallets are created for each run and discarded afterwards.
+
+When an adapter needs Docker (for example the local issuance and browser
+transport), set `MARTY_CONFORMANCE_DOCKER_CONTEXT` to a Docker context for a
+disposable remote daemon. The adapters reject `default` and `desktop-linux`:
+on this workstation both are merely aliases for the shared Docker Desktop
+daemon and are not a safety boundary. A small VM or an isolated CI runner is
+enough; create an SSH context with `docker context create` and destroy the VM
+after the run. The context is deliberately required instead of falling back to
+the current Docker host.
 
 The exported official-suite results are evidence. They contain test identifiers
 and URLs, so they are retained as a private CI artifact and are not committed.

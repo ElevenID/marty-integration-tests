@@ -11,6 +11,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from docker_context import docker_command
 
 
 def main() -> int:
@@ -23,12 +27,12 @@ def main() -> int:
     if not api_key:
         print("OIDF_ISSUANCE_API_KEY is required for the local Docker transport", file=sys.stderr)
         return 2
-    command = [
-        "docker", "exec", "-i", container, "curl", "-fsS",
+    command = docker_command([
+        "exec", "-i", container, "curl", "-fsS",
         "-H", f"X-API-Key: {api_key}",
         "-H", "Content-Type: application/json",
         "-d", "@-", "http://localhost:8005/v1/issuance/initiate",
-    ]
+    ])
     result = subprocess.run(command, input=payload, capture_output=True, check=False)
     if result.returncode:
         print("Docker issuance transport failed", file=sys.stderr)

@@ -7,8 +7,11 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from docker_context import docker_command
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
 FORBIDDEN = ("square", "subscription", "billing", "product-catalog", "product_catalog")
@@ -91,7 +94,7 @@ def main() -> int:
 
     if args.pull:
         for image in images.values():
-            subprocess.run(["docker", "pull", image], check=True)
+            subprocess.run(docker_command(["pull", image]), check=True)
     print(f"Rendered {len(images)} immutable images to {args.output}.")
     return 0
 
