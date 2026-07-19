@@ -56,6 +56,28 @@ def local_marty_resolve(url: str) -> list[str]:
     return ["--resolve", f"{target.hostname}:{target.port or 443}:{address}"]
 
 
+def local_conformance_resolve(url: str) -> list[str]:
+    """Return a resolver override for the runner's deliberately public URL.
+
+    The official runner is often in a different Compose project from the
+    host-side interaction bridge.  Its HTTPS port is published to the host,
+    but its disposable Docker DNS name is intentionally not.  Allow a local
+    operator to map only the configured conformance origin to that published
+    address.  This does not make either project's private services reachable.
+    """
+    address = os.environ.get("OIDF_CONFORMANCE_RESOLVE_IP", "").strip()
+    origin = os.environ.get("CONFORMANCE_SERVER", "").strip()
+    if not address or not origin:
+        return []
+    target = urlparse(url)
+    public = urlparse(origin)
+    if target.scheme != "https" or (target.hostname, target.port or 443) != (public.hostname, public.port or 443):
+        return []
+    if not target.hostname:
+        return []
+    return ["--resolve", f"{target.hostname}:{target.port or 443}:{address}"]
+
+
 def curl_executable() -> str:
     """Find curl on Windows hosts and Linux runner images alike."""
     value = shutil.which("curl.exe") or shutil.which("curl")
@@ -66,7 +88,7 @@ def curl_executable() -> str:
 
 def request_json(url: str, *, method: str = "GET", body: bytes | None = None,
                  headers: dict[str, str] | None = None, insecure: bool = False) -> tuple[int, Any]:
-    resolver = local_marty_resolve(url)
+    resolver = local_marty_resolve(url) or local_conformance_resolve(url)
     if resolver:
         command = [
             curl_executable(), "--silent", "--show-error", "--request", method,
