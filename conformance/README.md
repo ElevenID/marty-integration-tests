@@ -123,7 +123,8 @@ export CONFORMANCE_SERVER=https://oidf.test.example
 # This checked-in deployment adapter starts a normal authenticated gateway flow.
 export OIDF_VERIFIER_COMMAND="$PWD/scripts/oidf_marty_start_verification.py"
 export OIDF_MARTY_GATEWAY_URL=https://stack.test.example
-export OIDF_MARTY_SESSION_ID="$(read_secret oidf-disposable-session-id)"
+export OIDF_MARTY_OPERATOR_EMAIL=conformance@elevenid.dev
+export OIDF_MARTY_OPERATOR_PASSWORD="$(read_secret oidf-disposable-operator-password)"
 export OIDF_MARTY_PRESENTATION_POLICY_ID="$(read_secret oidf-disposable-policy-id)"
 export OIDF_VERIFIER_REQUEST_METHOD=url_query
 # The OID4VP Final baseline uses the standard redirect_uri client-ID prefix.
@@ -154,7 +155,13 @@ certification-grade run.
 
 The deployment adapter deliberately requires a real gateway session and active
 disposable presentation policy. It rejects HTTP URLs and creates neither an
-authentication bypass nor a synthetic verifier flow. For HAIP, set
+authentication bypass nor a synthetic verifier flow. When
+`OIDF_MARTY_SESSION_ID` is not explicitly supplied, it completes the normal
+public `/v1/auth/login` → Keycloak → `/v1/auth/callback` flow with the
+disposable reviewer and keeps the returned cookie only in the flow-start
+process. Set `OIDF_MARTY_RESOLVE_IP=127.0.0.1` only for a local disposable
+TLS host that is not in DNS; remote and certification targets use normal DNS.
+For HAIP, set
 `OIDF_MARTY_VERIFIER_PROFILE=haip`; the deployment must also provide a
 matching verifier signing certificate and the official trust anchor.
 
