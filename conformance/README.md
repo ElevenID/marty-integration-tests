@@ -136,12 +136,17 @@ export MARTY_CONFORMANCE_PROJECT=marty-conformance-oidf
 export OIDF_CONFORMANCE_PROJECT=oidf-runner
 python scripts/oidf_runner_compose.py \
   --runner /opt/openid-conformance-suite \
+  --prebuilt \
   -- up --detach
 ```
 
 Use the same helper for `down`, `logs`, and `config`. It keeps the runner
 project independent and only sets the external bridge-network name for the
-official runner Compose overlay.
+official runner Compose overlay. `--prebuilt` is the normal reproducible
+choice: it selects the runner's release Compose file and ElevenID's reviewed
+image-digest overrides instead of its upstream mutable `latest` defaults. The
+source Compose option remains available only when developing a locally built
+copy of the exact pinned runner revision.
 
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
