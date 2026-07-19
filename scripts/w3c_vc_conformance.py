@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,16 @@ def npm_command() -> str:
     return "npm.cmd" if os.name == "nt" else "npm"
 
 
+def w3c_test_command() -> list[str]:
+    """Run the upstream POSIX ``npm test`` script faithfully on Windows."""
+    if os.name != "nt":
+        return [npm_command(), "test"]
+    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if not bash.is_file():
+        raise RuntimeError("Git Bash is required to run the upstream W3C npm test script on Windows")
+    return [str(bash), "-lc", "npm test"]
+
+
 def write_evidence(output: Path, manifest: dict, suite: Path, adapter_url: str, result: int) -> None:
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
@@ -111,7 +122,11 @@ def run_suite(suite: Path, adapter_url: str, output: Path, *, install: bool) -> 
         if install_result:
             return install_result
     output.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run([npm_command(), "test"], cwd=suite, check=False).returncode
+    shutil.rmtree(suite / "reports", ignore_errors=True)
+    (suite / "suite.log").unlink(missing_ok=True)
+    result = subprocess.run(w3c_test_command(), cwd=suite, check=False).returncode
+    if result == 0 and not (suite / "reports" / "index.json").is_file():
+        result = 1
     for source in (suite / "reports", suite / "suite.log", suite / "package-lock.json"):
         if source.is_file():
             target = output / source.name

@@ -28,6 +28,12 @@ def test_npm_command_uses_the_windows_launcher_when_needed(monkeypatch) -> None:
     assert w3c.npm_command() == "npm"
 
 
+def test_w3c_test_command_uses_bash_for_upstream_posix_script(monkeypatch) -> None:
+    monkeypatch.setattr(w3c.os, "name", "nt")
+    monkeypatch.setattr(w3c.Path, "is_file", lambda _self: True)
+    assert w3c.w3c_test_command()[-1] == "npm test"
+
+
 def test_w3c_local_config_registers_only_verification_adapters(tmp_path: Path) -> None:
     output = tmp_path / "localConfig.cjs"
     w3c.write_local_config(output, "https://interop.example.test/__test__/vc-api")
