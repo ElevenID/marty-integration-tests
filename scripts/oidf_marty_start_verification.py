@@ -54,7 +54,12 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         "trust_profile_id": os.environ.get("OIDF_MARTY_TRUST_PROFILE_ID") or None,
         "expiry_minutes": int(os.environ.get("OIDF_MARTY_FLOW_EXPIRY_MINUTES", "15")),
         "oid4vp_profile": profile,
-        "request_uri_method": "post" if request_method == "request_uri_signed" else "get",
+        # ``request_uri_signed`` describes the authorization-request
+        # transport to the wallet; it does not select OID4VP's optional POST
+        # request-URI retrieval.  HAIP's signed-request-uri profile fetches
+        # the signed object with GET, and the public request endpoint must be
+        # retrievable before it is handed to the mock wallet.
+        "request_uri_method": "get",
     }
 
 
