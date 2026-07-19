@@ -200,12 +200,19 @@ Point it only at the digest-pinned EUDI containers recorded in
 
 ```bash
 python scripts/eudi_reference_interop.py run \
-  --gateway-url https://stack.test.example \
-  --wallet-tester-url http://eudi-wallet-tester:5050 \
-  --verifier-url http://eudi-verifier:8090 \
-  --wallet-kit-url http://eudi-wallet-kit:9090 \
+  --gateway-url https://marty-oidf.test:8443 \
+  --wallet-tester-url https://marty-oidf.test:25051 \
+  --verifier-url https://marty-oidf.test:28091 \
+  --wallet-kit-url http://localhost:29090 \
   --output-dir reports/eudi-reference
 ```
+
+Start the wallet-kit harness on the same isolated Docker context with
+`docker compose --profile eudi up -d eudi-wallet-harness`. It is a thin test
+facade over the pinned official EUDI Wallet Kit Maven libraries, not a mock
+wallet. The three HTTPS endpoints above are the TLS boundaries from the Marty
+UI OIDF/EUDI Compose profiles; do not use their private container ports from a
+host-side conformance run.
 
 It writes JUnit output, the unredacted local runner log, and `evidence.json`
 with the exact EUDI component digests, coverage matrix, endpoints, Marty
