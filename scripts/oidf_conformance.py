@@ -151,6 +151,7 @@ def write_evidence(
     runner: Path,
     exit_code: int,
     stack_manifest: Path | None,
+    execution_mode: str,
 ) -> None:
     """Write non-secret provenance alongside an official suite export.
 
@@ -163,7 +164,11 @@ def write_evidence(
         raw_stack = json.loads(stack_manifest.read_text(encoding="utf-8"))
         if raw_stack.get("schema") != "marty.stack/v1":
             raise ValueError("stack manifest must use marty.stack/v1")
-        stack = {"path": str(stack_manifest), "sha256": file_sha256(stack_manifest), "release": raw_stack.get("release")}
+        stack = {
+            "path": str(stack_manifest),
+            "sha256": file_sha256(stack_manifest),
+            "release": raw_stack.get("release"),
+        }
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
         for path in sorted(output.rglob("*"))
@@ -173,17 +178,40 @@ def write_evidence(
         "schema": "elevenid.official-interop-evidence/v1",
         "official_runner": manifest["official_runner"],
         "profile": profile_name,
+        "execution_mode": execution_mode,
         "runner": {"path": str(runner), "commit": git_revision(runner)},
         "marty": {"commit": os.environ.get("MARTY_COMMIT", "unrecorded"), "stack_manifest": stack},
         "configuration": {"path": str(config), "sha256": file_sha256(config)},
         "exclusions": {
-            "expected_failures": json.loads((ROOT / "conformance" / "expected-failures.json").read_text(encoding="utf-8")),
+            "expected_failures": json.loads(
+                (ROOT / "conformance" / "expected-failures.json").read_text(encoding="utf-8")
+            ),
             "expected_skips": json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8")),
         },
         "result": {"exit_code": exit_code, "passed": exit_code == 0},
         "artifacts": artifacts,
     }
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def execution_mode(profile_name: str, profile: dict, *, allow_planned: bool, stack_manifest: Path | None) -> str:
+    """Allow an evidence-only run before a verifier profile is activated.
+
+    A planned profile must be runnable to earn activation, but that execution
+    must not turn into an accidental support claim. Requiring both an explicit
+    switch and an attested stack manifest makes the pre-activation run
+    reviewable and keeps ordinary/release invocations strict.
+    """
+    status = profile.get("status")
+    if status == "active":
+        return "active"
+    if status != "planned":
+        raise ValueError(f"profile {profile_name} has unsupported status {status!r}")
+    if not allow_planned:
+        raise ValueError(f"profile {profile_name} is not active: {profile.get('reason', 'no reason recorded')}")
+    if stack_manifest is None:
+        raise ValueError("--stack-manifest is required for an evidence-only planned-profile run")
+    return "pre-activation"
 
 
 def cmd_validate(_args: argparse.Namespace) -> int:
@@ -199,8 +227,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     profile = manifest["profiles"].get(args.profile)
     if profile is None:
         raise ValueError(f"unknown profile: {args.profile}")
-    if profile["status"] != "active":
-        raise ValueError(f"profile {args.profile} is not active: {profile.get('reason', 'no reason recorded')}")
+    mode = execution_mode(
+        args.profile,
+        profile,
+        allow_planned=args.allow_planned_profile,
+        stack_manifest=args.stack_manifest,
+    )
     runner = args.runner.resolve()
     config = args.config.resolve()
     validate_runner(runner, manifest)
@@ -226,7 +258,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print("Running the official OIDF plan:", profile["test_plan"])
     if args.interaction_script is None:
         result = subprocess.run(command, cwd=runner, check=False).returncode
-        write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest)
+        write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode)
         return result
 
     interaction_script = args.interaction_script.resolve()
@@ -288,7 +320,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     for hook in hooks:
         hook_result = hook.wait() or hook_result
     result = runner_result or hook_result
-    write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest)
+    write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode)
     return result
 
 
@@ -317,7 +349,16 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--profile", required=True)
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--output-dir", type=Path, required=True)
-    run.add_argument("--stack-manifest", type=Path, help="attested marty.stack/v1 manifest for the deployment under test")
+    run.add_argument(
+        "--stack-manifest",
+        type=Path,
+        help="attested marty.stack/v1 manifest for the deployment under test",
+    )
+    run.add_argument(
+        "--allow-planned-profile",
+        action="store_true",
+        help="run a planned profile only to produce pre-activation evidence; requires --stack-manifest",
+    )
     run.add_argument("--rerun", help="official runner plan/module selector, for example 1:3")
     run.add_argument(
         "--interaction-script",
