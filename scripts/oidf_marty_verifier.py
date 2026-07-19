@@ -126,6 +126,12 @@ def wait_for_exposed_authorization_endpoint(server: str, test_id: str, *, insecu
     raise RuntimeError(f"OIDF module {test_id} did not expose an authorization endpoint within {timeout} seconds")
 
 
+def module_finished(server: str, test_id: str, *, insecure: bool) -> bool:
+    """Return whether the official runner has already completed this module."""
+    status, info = request_json(urljoin(server, f"api/runner/{test_id}"), insecure=insecure)
+    return status == 200 and isinstance(info, dict) and info.get("status") == "FINISHED"
+
+
 def invoke_flow_command(command: Path, payload: dict[str, Any]) -> str:
     if not command.is_file():
         raise ValueError(f"OIDF verifier command is missing: {command}")
@@ -247,7 +253,17 @@ def main() -> int:
         "request_method": args.request_method,
     })
     request_uri = request_uri_from_authorization_request(authorization_request)
-    call_mock_wallet(endpoint, request_uri, request_method=args.request_method, insecure=args.insecure)
+    try:
+        call_mock_wallet(endpoint, request_uri, request_method=args.request_method, insecure=args.insecure)
+    except RuntimeError:
+        # The runner can finish a module after exposing its endpoint but before
+        # this host-side hook submits a duplicate request.  Accept that race
+        # only after asking the official runner; active-module failures remain
+        # hard errors.
+        if not module_finished(args.server, args.test_id, insecure=args.insecure):
+            raise
+        print(f"OIDF module {args.test_id} finished before duplicate verifier interaction")
+        return 0
     print(f"Submitted real Marty request URI to OIDF module {args.test_id} ({args.test_name})")
     return 0
 
