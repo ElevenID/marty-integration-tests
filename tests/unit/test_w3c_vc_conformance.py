@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -26,3 +27,16 @@ def test_w3c_local_config_registers_only_verification_adapters(tmp_path: Path) -
     assert "/credentials/verify" in config
     assert "/presentations/verify" in config
     assert "issuers:" not in config
+
+
+def test_w3c_evidence_preserves_the_narrow_exclusion(tmp_path: Path, monkeypatch) -> None:
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "result.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(w3c, "revision", lambda _path: "a" * 40)
+    w3c.write_evidence(output, w3c.load_manifest(), suite, "https://marty.test/__test__/vc-api", 1)
+    evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
+    assert evidence["result"] == {"exit_code": 1, "passed": False}
+    assert evidence["exclusions"][0]["capability"] == "JSON-LD Data Integrity eddsa-rdfc-2022"

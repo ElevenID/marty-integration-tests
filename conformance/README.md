@@ -167,6 +167,19 @@ python scripts/w3c_vc_conformance.py write-local-config \
   --output /opt/vc-data-model-2.0-test-suite/localConfig.cjs
 ```
 
+Run the pinned suite itself (using Node 24) only against the disposable HTTPS
+adapter deployment. `--install` is explicit because the upstream suite does
+not publish a lockfile; its generated lock and official reports are copied
+into the evidence directory.
+
+```bash
+python scripts/w3c_vc_conformance.py run \
+  --suite /opt/vc-data-model-2.0-test-suite \
+  --adapter-url https://stack.test.example/__test__/vc-api \
+  --output-dir reports/w3c-vc-v2 \
+  --install
+```
+
 ## Certification later
 
 When certification funding is available, enable the protected certification
