@@ -106,12 +106,26 @@ def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
     if profile_name not in {"oid4vp-verifier", "oid4vp-haip-verifier"}:
         raise ValueError(f"unknown OIDF configuration profile: {profile_name}")
     signing_jwk = data.get("credential", {}).get("signing_jwk")
-    if not isinstance(signing_jwk, dict) or not signing_jwk.get("kty"):
-        raise ValueError("credential.signing_jwk is required by the official verifier plans")
+    if not isinstance(signing_jwk, dict) or not all(
+        isinstance(signing_jwk.get(field), str) and signing_jwk[field]
+        for field in ("kty", "crv", "x", "y", "d")
+    ):
+        raise ValueError(
+            "credential.signing_jwk must contain the complete private EC JWK required by the official verifier plans"
+        )
+    if signing_jwk["kty"] != "EC" or signing_jwk["crv"] != "P-256":
+        raise ValueError("credential.signing_jwk must be an EC P-256 private JWK")
     verifier = data.get("verifier", {})
     _validate_absolute_url(verifier.get("gateway_url"), "verifier.gateway_url")
-    if not verifier.get("profile"):
-        raise ValueError("verifier.profile is required by the official verifier plans")
+    expected_profile = {
+        "oid4vp-verifier": "oid4vp-1.0-final",
+        "oid4vp-haip-verifier": "oid4vp-haip-1.0",
+    }[profile_name]
+    if verifier.get("profile") != expected_profile:
+        raise ValueError(
+            f"verifier.profile must be {expected_profile!r} for {profile_name}; "
+            "a mismatched profile cannot produce authoritative evidence"
+        )
     if profile_name == "oid4vp-haip-verifier":
         anchor = data.get("client", {}).get("request_object_trust_anchor_pem")
         if not isinstance(anchor, str) or not anchor.strip() or "REPLACE_" in anchor:
@@ -234,6 +248,31 @@ def execution_mode(profile_name: str, profile: dict, *, allow_planned: bool, sta
     return "pre-activation"
 
 
+def validate_verifier_interaction_environment(profile_name: str) -> None:
+    """Reject a verifier hook that would drive the wrong official transport.
+
+    The OIDF runner's plan is immutable, but the bridge invokes a deployment
+    command through environment variables.  Checking that small boundary here
+    prevents a pre-activation HAIP run from silently using the plain-verifier
+    URL-query path (or the reverse) and then leaving misleading evidence.
+    """
+    expected = {
+        "oid4vp-verifier": ("standard", "url_query"),
+        "oid4vp-haip-verifier": ("haip", "request_uri_signed"),
+    }.get(profile_name)
+    if expected is None:
+        return
+    expected_profile, expected_method = expected
+    actual_profile = os.environ.get("OIDF_MARTY_VERIFIER_PROFILE", "standard").strip()
+    actual_method = os.environ.get("OIDF_VERIFIER_REQUEST_METHOD", "url_query").strip()
+    if actual_profile != expected_profile or actual_method != expected_method:
+        raise ValueError(
+            f"{profile_name} requires OIDF_MARTY_VERIFIER_PROFILE={expected_profile!r} "
+            f"and OIDF_VERIFIER_REQUEST_METHOD={expected_method!r}; got "
+            f"{actual_profile!r} and {actual_method!r}"
+        )
+
+
 def cmd_validate(_args: argparse.Namespace) -> int:
     manifest = load_manifest()
     validate_expected_failures()
@@ -257,6 +296,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     config = args.config.resolve()
     validate_runner(runner, manifest)
     validate_config(config, args.profile)
+    if args.interaction_script is not None:
+        validate_verifier_interaction_environment(args.profile)
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     expected_skips = applicable_expected_skips(config)

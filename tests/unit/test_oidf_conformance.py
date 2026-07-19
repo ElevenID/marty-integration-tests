@@ -119,7 +119,44 @@ def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    with pytest.raises(ValueError, match="complete private EC JWK"):
+        oidf.validate_config(config, "oid4vp-verifier")
+
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {
+                    "signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}
+                },
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-1.0-final",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     oidf.validate_config(config, "oid4vp-verifier")
+
+
+def test_verifier_configuration_profile_must_match_the_official_plan(tmp_path: Path) -> None:
+    config = tmp_path / "verifier.json"
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {
+                    "signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}
+                },
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-haip-1.0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="mismatched profile"):
+        oidf.validate_config(config, "oid4vp-verifier")
 
 
 def test_evidence_records_non_secret_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,7 +185,7 @@ def test_haip_requires_a_runner_trust_anchor(tmp_path: Path) -> None:
     config.write_text(
         json.dumps(
             {
-                "credential": {"signing_jwk": {"kty": "EC"}},
+                "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},
                 "verifier": {
                     "gateway_url": "https://conformance.example.test",
                     "profile": "oid4vp-haip-1.0",
@@ -177,6 +214,20 @@ def test_active_profile_does_not_need_pre_activation_switch() -> None:
     profile = oidf.load_manifest()["profiles"]["oid4vci-issuer"]
 
     assert oidf.execution_mode("oid4vci-issuer", profile, allow_planned=False, stack_manifest=None) == "active"
+
+
+def test_verifier_interaction_environment_matches_the_official_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "standard")
+    monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "url_query")
+    oidf.validate_verifier_interaction_environment("oid4vp-verifier")
+
+    monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
+    monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "request_uri_signed")
+    oidf.validate_verifier_interaction_environment("oid4vp-haip-verifier")
+
+    monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "url_query")
+    with pytest.raises(ValueError, match="request_uri_signed"):
+        oidf.validate_verifier_interaction_environment("oid4vp-haip-verifier")
 
 
 def test_tls_proxy_uses_only_oidf_approved_tls12_ciphers() -> None:
