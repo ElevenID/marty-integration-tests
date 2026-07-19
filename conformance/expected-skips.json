@@ -30,5 +30,17 @@
     "reason": "Marty's active issuer profile does not advertise credential encryption. Enable this negative module only with reviewed encryption support and interoperability coverage.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
+  },
+  {
+    "test-name": "oid4vp-1final-verifier-request-uri-method-post",
+    "configuration-filename": "*marty-verifier-haip*.json",
+    "variant": {
+      "client_id_prefix": "x509_hash",
+      "request_method": "request_uri_signed",
+      "vp_profile": "haip"
+    },
+    "reason": "The official HAIP plan fixes request_method=request_uri_signed. This module exclusively tests POST request-URI retrieval, which is mutually exclusive with that required signed request-URI transport; it remains an explicitly inapplicable upstream-module skip, not a verifier failure exemption.",
+    "owner": "ElevenID",
+    "expires": "2027-01-01"
   }
 ]
