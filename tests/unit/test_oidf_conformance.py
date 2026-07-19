@@ -45,6 +45,21 @@ def test_optional_encryption_skip_is_documented_narrowly() -> None:
     assert encryption["expires"] == "2027-01-01"
 
 
+def test_haip_post_retrieval_module_is_scoped_to_the_required_signed_transport() -> None:
+    skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
+    request_uri_post = next(
+        item
+        for item in skips
+        if item["test-name"] == "oid4vp-1final-verifier-request-uri-method-post"
+    )
+    assert request_uri_post["configuration-filename"] == "*marty-verifier-haip*.json"
+    assert request_uri_post["variant"] == {
+        "client_id_prefix": "x509_hash",
+        "request_method": "request_uri_signed",
+        "vp_profile": "haip",
+    }
+
+
 def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:
     payload = json.loads((ROOT / "conformance" / "marty-issuer.offer-request.example.json").read_text(encoding="utf-8"))
     assert payload["claims"]["email"].endswith("@example.test")
