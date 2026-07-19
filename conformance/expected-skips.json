@@ -24,5 +24,15 @@
     "reason": "OID4VCI 1.0 §4.1.1 requires a pre-authorized code to be short lived and single-use. This runner module redeems one offer with two wallets, so it is only applicable to Marty’s authorization-code profile; multi-wallet issuance must not weaken replay protection in the pre-authorized-code profile.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
+  },
+  {
+    "test-name": "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature",
+    "configuration-filename": "*marty-issuer*.json",
+    "variant": {
+      "credential_format": "sd_jwt_vc"
+    },
+    "reason": "Marty's active SD-JWT VC configuration requires a JWT proof but does not advertise key_attestations_required. Key attestation is an optional OID4VCI Appendix D.1 capability, so this negative test is inapplicable until that capability is explicitly introduced and tested.",
+    "owner": "ElevenID",
+    "expires": "2027-01-01"
   }
 ]
