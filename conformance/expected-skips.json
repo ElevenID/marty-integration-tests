@@ -34,5 +34,15 @@
     "reason": "Marty's active SD-JWT VC configuration requires a JWT proof but does not advertise key_attestations_required. Key attestation is an optional OID4VCI Appendix D.1 capability, so this negative test is inapplicable until that capability is explicitly introduced and tested.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
+  },
+  {
+    "test-name": "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm",
+    "configuration-filename": "*marty-issuer*.json",
+    "variant": {
+      "vci_credential_encryption": "plain"
+    },
+    "reason": "Marty's active issuer profile does not advertise credential encryption. OID4VCI makes encrypted credential responses optional; enable this negative module only with an explicitly reviewed encryption capability and interoperability coverage.",
+    "owner": "ElevenID",
+    "expires": "2027-01-01"
   }
 ]
