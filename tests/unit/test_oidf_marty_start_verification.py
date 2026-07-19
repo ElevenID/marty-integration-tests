@@ -25,7 +25,7 @@ def test_flow_body_uses_real_flow_contract(monkeypatch: pytest.MonkeyPatch) -> N
         "trust_profile_id": "trust-1",
         "expiry_minutes": 15,
         "oid4vp_profile": "haip",
-        "request_uri_method": "post",
+        "request_uri_method": "get",
     }
 
 
