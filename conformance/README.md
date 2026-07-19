@@ -105,7 +105,11 @@ presentation to Marty's actual public callback and determines the result.
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
 export CONFORMANCE_SERVER=https://oidf.test.example
-export OIDF_VERIFIER_COMMAND=/secure/work/start-marty-verification.py
+# This checked-in deployment adapter starts a normal authenticated gateway flow.
+export OIDF_VERIFIER_COMMAND="$PWD/scripts/oidf_marty_start_verification.py"
+export OIDF_MARTY_GATEWAY_URL=https://stack.test.example
+export OIDF_MARTY_SESSION_ID="$(read_secret oidf-disposable-session-id)"
+export OIDF_MARTY_PRESENTATION_POLICY_ID="$(read_secret oidf-disposable-policy-id)"
 export OIDF_VERIFIER_REQUEST_METHOD=url_query
 # The OID4VP Final baseline uses the standard redirect_uri client-ID prefix.
 export OID4VP_CLIENT_ID_PREFIX=redirect_uri
@@ -123,6 +127,12 @@ per-request encryption key, and encrypted `direct_post.jwt` handling. Its
 configuration additionally supplies the official runner's request-object trust
 anchor. No HAIP profile may be marked active merely because a local test
 adapter can execute it.
+
+The deployment adapter deliberately requires a real gateway session and active
+disposable presentation policy. It rejects HTTP URLs and creates neither an
+authentication bypass nor a synthetic verifier flow. For HAIP, set
+`OIDF_MARTY_VERIFIER_PROFILE=haip`; the deployment must also provide a
+matching verifier signing certificate and the official trust anchor.
 
 ## W3C VC Data Model v2
 
