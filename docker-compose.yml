@@ -233,6 +233,23 @@ services:
     depends_on: [gateway]
     networks: [marty-oss]
 
+  # Thin, disposable HTTP facade around the official EUDI Wallet Kit JVM
+  # libraries. It exists only in the EUDI conformance profile; the tests use
+  # it to drive Marty through the same library family as the reference wallet.
+  eudi-wallet-harness:
+    profiles: [eudi]
+    build:
+      context: ./services/eudi-wallet-harness
+    ports: ["${EUDI_WALLET_KIT_HOST_PORT:-29090}:9090"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks: [marty-oss]
+    restart: "no"
+
 networks:
   marty-oss:
     driver: bridge
