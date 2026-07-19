@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import ssl
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -33,7 +34,12 @@ def request_json(url: str, *, method: str = "GET", body: bytes | None = None,
     try:
         with urlopen(request, timeout=15, context=context) as response:  # nosec B310: operator-supplied endpoint
             raw = response.read().decode("utf-8")
-            return response.status, json.loads(raw) if raw else None
+            if not raw:
+                return response.status, None
+            try:
+                return response.status, json.loads(raw)
+            except json.JSONDecodeError:
+                return response.status, raw
     except HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         try:
@@ -74,6 +80,30 @@ def credential_offer_uri(issuance_url: str, api_key: str, payload: dict[str, Any
     return uri
 
 
+def command_credential_offer(command: Path, payload: dict[str, Any]) -> str:
+    """Run a deployment-owned issuance transport without exposing its network."""
+    if not command.is_file():
+        raise ValueError(f"issuance command is missing: {command}")
+    completed = subprocess.run(
+        [sys.executable, str(command.resolve())],
+        input=json.dumps(payload).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"issuance command failed with exit code {completed.returncode}: {detail[:200]}")
+    try:
+        response = json.loads(completed.stdout.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"issuance command did not return JSON: {detail[:200]}") from exc
+    uri = response.get("credential_offer_uri") if isinstance(response, dict) else None
+    if not isinstance(uri, str) or not uri:
+        raise RuntimeError("issuance command response has no credential_offer_uri")
+    return uri
+
+
 def deliver_offer(server: str, test_id: str, offer_uri: str, tx_code: str, *, insecure: bool) -> None:
     marker = "credential_offer="
     if marker not in offer_uri:
@@ -95,6 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--server", required=True)
     parser.add_argument("--issuance-url", default=os.environ.get("OIDF_ISSUANCE_URL"))
     parser.add_argument("--api-key", default=os.environ.get("OIDF_ISSUANCE_API_KEY"))
+    parser.add_argument("--issuance-command", type=Path, default=os.environ.get("OIDF_ISSUANCE_COMMAND"))
     parser.add_argument("--request", type=Path, default=Path(os.environ.get("OIDF_ISSUANCE_REQUEST", DEFAULT_REQUEST)))
     parser.add_argument("--tx-code", default=os.environ.get("OIDF_TX_CODE", "000000"))
     parser.add_argument("--timeout", type=int, default=120)
@@ -104,8 +135,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if not args.issuance_url or not args.api_key:
-        raise ValueError("OIDF_ISSUANCE_URL and OIDF_ISSUANCE_API_KEY are required")
+    if args.issuance_command is None and (not args.issuance_url or not args.api_key):
+        raise ValueError("OIDF_ISSUANCE_URL and OIDF_ISSUANCE_API_KEY, or OIDF_ISSUANCE_COMMAND, are required")
     if not args.server:
         raise ValueError("CONFORMANCE_SERVER must be set")
     if not args.request.is_file():
@@ -116,7 +147,11 @@ def main() -> int:
     payload = json.loads(args.request.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("issuance request must be a JSON object")
-    offer_uri = credential_offer_uri(args.issuance_url, args.api_key, payload, insecure=args.insecure)
+    offer_uri = (
+        command_credential_offer(args.issuance_command, payload)
+        if args.issuance_command is not None
+        else credential_offer_uri(args.issuance_url, args.api_key, payload, insecure=args.insecure)
+    )
     deliver_offer(args.server, args.test_id, offer_uri, args.tx_code, insecure=args.insecure)
     print(f"Delivered Marty credential offer to OIDF module {args.test_id} ({args.test_name})")
     return 0

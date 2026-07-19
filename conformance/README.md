@@ -70,6 +70,15 @@ request when template identifiers differ. The adapter accepts TLS normally;
 Do not put the issuance URL, API key, or generated offers in repository files,
 logs, or exported evidence.
 
+For the local Docker stack, where the issuance management port is deliberately
+not published to the host, set
+`OIDF_ISSUANCE_COMMAND=scripts/oidf_docker_issuance.py` instead of the HTTP
+variables. That adapter invokes the service inside its disposable container;
+the container's API key never leaves it. The command-adapter contract is
+simple: receive one JSON issuance request on standard input and emit the JSON
+issuance response on standard output. It allows a protected certification
+environment to use its own approved transport without changing the runner.
+
 ## Certification later
 
 When certification funding is available, enable the protected certification
