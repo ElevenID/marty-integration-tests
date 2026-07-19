@@ -1,0 +1,18 @@
+{
+  "credential": {
+    "signing_jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "REPLACE_WITH_OIDF_TEST_SIGNING_KEY_X",
+      "y": "REPLACE_WITH_OIDF_TEST_SIGNING_KEY_Y",
+      "d": "REPLACE_WITH_OIDF_TEST_SIGNING_KEY_D"
+    }
+  },
+  "client": {
+    "request_object_trust_anchor_pem": "REPLACE_WITH_OIDF_TRUST_ANCHOR_PEM"
+  },
+  "verifier": {
+    "gateway_url": "https://REPLACE_WITH_MARTY_GATEWAY",
+    "profile": "oid4vp-haip-1.0"
+  }
+}

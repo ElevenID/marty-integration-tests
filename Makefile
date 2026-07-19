@@ -1,6 +1,6 @@
 # Makefile for Marty Integration Tests
 
-.PHONY: help install install-e2e stack-env test test-fast test-wallet test-ui-contracts conformance conformance-local conformance-oidf-validate clean start stop restart logs
+.PHONY: help install install-e2e stack-env test test-fast test-wallet test-ui-contracts conformance conformance-local conformance-oidf-validate conformance-stack-start conformance-stack-stop clean start stop restart logs
 
 STACK_MANIFEST ?= stack-manifest.json
 
@@ -21,6 +21,8 @@ help:
 	@echo "  make test-eudi         - Run EUDI reference wallet/verifier interop tests"
 	@echo "  make conformance-local - Run strict Marty OID4VC regression tests through the gateway"
 	@echo "  make conformance-oidf-validate - Validate the pinned official OIDF runner contract"
+	@echo "  make conformance-stack-start - Start a disposable conformance stack on an isolated Docker context"
+	@echo "  make conformance-stack-stop  - Stop that isolated conformance stack"
 	@echo "  make conformance       - Alias for conformance-local; official runs use scripts/oidf_conformance.py"
 	@echo "  make logs              - Show service logs"
 	@echo "  make clean             - Clean up containers and volumes"
@@ -84,6 +86,13 @@ conformance-local:
 
 conformance-oidf-validate:
 	python scripts/oidf_conformance.py validate
+
+conformance-stack-start: stack-env
+	python scripts/conformance_compose.py -- --env-file .env.stack up -d
+
+conformance-stack-stop:
+	@test -f .env.stack || { echo "ERROR: .env.stack is missing; run make stack-env first"; exit 1; }
+	python scripts/conformance_compose.py -- --env-file .env.stack down -v
 
 logs:
 	docker compose --env-file .env.stack logs -f

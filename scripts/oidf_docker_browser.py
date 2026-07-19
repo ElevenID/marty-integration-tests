@@ -17,10 +17,13 @@ import ssl
 import subprocess
 import sys
 import time
-from urllib.parse import urlencode, urljoin
+from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
+sys.path.insert(0, str(Path(__file__).parent))
+from docker_context import docker_command
 
 TARGET_TEST = "oid4vci-1_0-issuer-happy-flow-multiple-clients"
 
@@ -39,7 +42,7 @@ def request_json(url: str, *, method: str = "GET", body: bytes | None = None) ->
 def docker_curl(args: list[str]) -> str:
     container = os.environ.get("OIDF_CONFORMANCE_CONTAINER", "oidf-conformance-suite-release-v520-server-1")
     completed = subprocess.run(
-        ["docker", "exec", container, "curl", "-ksS", *args],
+        docker_command(["exec", container, "curl", "-ksS", *args]),
         capture_output=True,
         text=True,
         check=False,

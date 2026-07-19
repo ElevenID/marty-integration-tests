@@ -21,6 +21,13 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert manifest["official_runner"]["repository"].startswith("https://gitlab.com/openid/")
     assert manifest["profiles"]["oid4vci-issuer"]["status"] == "active"
     assert "[credential_format=sd_jwt_vc]" in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
+    verifier = manifest["profiles"]["oid4vp-verifier"]
+    assert verifier["configuration_example"] == "conformance/marty-verifier.example.json"
+    assert "oid4vp-1final-verifier-test-plan" in verifier["test_plan"]
+    assert "[request_method=url_query]" in verifier["test_plan"]
+    haip = manifest["profiles"]["oid4vp-haip-verifier"]
+    assert "oid4vp-1final-verifier-haip-test-plan" in haip["test_plan"]
+    assert "[response_mode=direct_post.jwt]" in haip["test_plan"]
 
 
 def test_documented_optional_signed_metadata_skip_is_valid() -> None:
@@ -77,6 +84,61 @@ def test_real_gateway_configuration_is_accepted(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     oidf.validate_config(config)
+
+
+def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
+    config = tmp_path / "verifier.json"
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256"}},
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-1.0-final",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    oidf.validate_config(config, "oid4vp-verifier")
+
+
+def test_evidence_records_non_secret_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    (runner / ".git").mkdir()
+    config = tmp_path / "config.json"
+    config.write_text('{"credential":{"signing_jwk":{"d":"private"}}}', encoding="utf-8")
+    output = tmp_path / "report"
+    output.mkdir()
+    (output / "official-result.json").write_text('{"result":"pass"}', encoding="utf-8")
+    stack = tmp_path / "stack.json"
+    stack.write_text('{"schema":"marty.stack/v1","release":"marty-ui@1.0.0"}', encoding="utf-8")
+    monkeypatch.setattr(oidf, "git_revision", lambda _path: "a" * 40)
+    oidf.write_evidence(output, oidf.load_manifest(), "oid4vp-verifier", config, runner, 0, stack)
+    evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
+    assert evidence["result"] == {"exit_code": 0, "passed": True}
+    assert evidence["marty"]["stack_manifest"]["release"] == "marty-ui@1.0.0"
+    assert evidence["configuration"]["sha256"].startswith("sha256:")
+    assert "private" not in (output / "evidence.json").read_text(encoding="utf-8")
+
+
+def test_haip_requires_a_runner_trust_anchor(tmp_path: Path) -> None:
+    config = tmp_path / "verifier.json"
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {"signing_jwk": {"kty": "EC"}},
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-haip-1.0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="request_object_trust_anchor_pem"):
+        oidf.validate_config(config, "oid4vp-haip-verifier")
 
 
 def test_tls_proxy_uses_only_oidf_approved_tls12_ciphers() -> None:

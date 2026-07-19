@@ -1,0 +1,27 @@
+{
+  "schema": "elevenid.official-vc-suite/v1",
+  "official_suite": {
+    "repository": "https://github.com/w3c/vc-data-model-2.0-test-suite.git",
+    "commit": "1db599924e6601555933550e0e65925a6abbd0a8",
+    "branch": "main",
+    "review_cadence": "monthly"
+  },
+  "adapter": {
+    "path": "/__test__/vc-api",
+    "enable_environment": "W3C_VC_TEST_ADAPTER=1",
+    "policy_environment": "W3C_VC_TEST_POLICY_ID",
+    "target": "Marty gateway -> presentation-policy evaluator"
+  },
+  "supported": {
+    "serializations": ["jwt_vc_json", "sd_jwt_vc", "mso_mdoc"],
+    "verification_path": "Marty presentation-policy evaluator"
+  },
+  "exclusions": [
+    {
+      "capability": "JSON-LD Data Integrity eddsa-rdfc-2022",
+      "reason": "Marty does not implement JSON-LD Data Integrity proof verification; the adapter returns unsupported_serialization instead of claiming verification.",
+      "owner": "identity-platform",
+      "review_date": "2026-10-01"
+    }
+  ]
+}

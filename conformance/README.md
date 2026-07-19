@@ -8,11 +8,20 @@ feedback between official-suite releases.
 ## Safety and target boundary
 
 The target must be a disposable deployment created from an attested
-`marty.stack/v1` manifest. Start it with `make start`; configure the suite with
+`marty.stack/v1` manifest. Start it with `make conformance-stack-start`; configure the suite with
 the gateway-facing issuer or verifier URL. Do not point the suite at an
 individual backend container, production customer data, a private service, or
 commerce functionality. Test organizations, keys, credential templates, and
 wallets are created for each run and discarded afterwards.
+
+When an adapter needs Docker (for example the local issuance and browser
+transport), set `MARTY_CONFORMANCE_DOCKER_CONTEXT` to a Docker context for a
+disposable remote daemon. The adapters reject `default` and `desktop-linux`:
+on this workstation both are merely aliases for the shared Docker Desktop
+daemon and are not a safety boundary. A small VM or an isolated CI runner is
+enough; create an SSH context with `docker context create` and destroy the VM
+after the run. The context is deliberately required instead of falling back to
+the current Docker host.
 
 The exported official-suite results are evidence. They contain test identifiers
 and URLs, so they are retained as a private CI artifact and are not committed.
@@ -31,6 +40,7 @@ python scripts/oidf_conformance.py run \
   --runner /opt/openid-conformance-suite \
   --profile oid4vci-issuer \
   --config /secure/work/marty-issuer.json \
+  --stack-manifest /secure/work/stack-manifest.json \
   --output-dir reports/oidf/issuer
 ```
 
@@ -79,7 +89,129 @@ simple: receive one JSON issuance request on standard input and emit the JSON
 issuance response on standard output. It allows a protected certification
 environment to use its own approved transport without changing the runner.
 
+## OID4VP verifier and HAIP readiness
+
+The verifier profiles are intentionally not active until they pass. Their
+adapters are already versioned here so that no one needs to create a hidden
+test wallet or a verification bypass. The command named by
+`OIDF_VERIFIER_COMMAND` receives this JSON on standard input:
+
+```json
+{
+  "test_id": "official-module-id",
+  "test_name": "oid4vp-1final-verifier-happy-flow",
+  "authorization_endpoint": "https://oidf.test.example/test/.../authorize",
+  "request_method": "url_query"
+}
+```
+
+It must start a normal, authenticated `POST /v1/flows/verify` gateway flow
+using the disposable organization and policy, then write JSON containing its
+ordinary `authorization_request` (`openid4vp://...?request_uri=...`) or the
+HTTPS `request_uri`. The adapter fetches Marty's signed request object and
+delivers it to the official mock wallet. The suite then posts its generated
+presentation to Marty's actual public callback and determines the result.
+
+```bash
+cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
+export CONFORMANCE_SERVER=https://oidf.test.example
+# This checked-in deployment adapter starts a normal authenticated gateway flow.
+export OIDF_VERIFIER_COMMAND="$PWD/scripts/oidf_marty_start_verification.py"
+export OIDF_MARTY_GATEWAY_URL=https://stack.test.example
+export OIDF_MARTY_SESSION_ID="$(read_secret oidf-disposable-session-id)"
+export OIDF_MARTY_PRESENTATION_POLICY_ID="$(read_secret oidf-disposable-policy-id)"
+export OIDF_VERIFIER_REQUEST_METHOD=url_query
+# The OID4VP Final baseline uses the standard redirect_uri client-ID prefix.
+export OID4VP_CLIENT_ID_PREFIX=redirect_uri
+python scripts/oidf_conformance.py run \
+  --runner /opt/openid-conformance-suite \
+  --profile oid4vp-verifier \
+  --config /secure/work/marty-verifier.json \
+  --stack-manifest /secure/work/stack-manifest.json \
+  --output-dir reports/oidf/verifier \
+  --interaction-script scripts/oidf_marty_verifier.py
+```
+
+The HAIP profile uses the same command contract but is enabled only after
+Marty produces signed `request_uri` requests with `x509_hash`, a fresh
+per-request encryption key, and encrypted `direct_post.jwt` handling. Its
+configuration additionally supplies the official runner's request-object trust
+anchor. No HAIP profile may be marked active merely because a local test
+adapter can execute it.
+
+Every runner export now includes `evidence.json`. It records the immutable
+official-runner commit, stack-manifest digest and release, Marty commit when
+provided as `MARTY_COMMIT`, configuration digest (never its secret contents),
+allowlisted exclusions, exit status, and SHA-256 digests of the exported
+official result files. Pass `--stack-manifest` for every release or
+certification-grade run.
+
+The deployment adapter deliberately requires a real gateway session and active
+disposable presentation policy. It rejects HTTP URLs and creates neither an
+authentication bypass nor a synthetic verifier flow. For HAIP, set
+`OIDF_MARTY_VERIFIER_PROFILE=haip`; the deployment must also provide a
+matching verifier signing certificate and the official trust anchor.
+
+## W3C VC Data Model v2
+
+`w3c-vc-data-model-v2.json` pins the official W3C test-suite revision and
+records the present proof-format boundary. A disposable stack enables the
+adapter only with `W3C_VC_TEST_ADAPTER=1` and assigns an active fixture policy
+through `W3C_VC_TEST_POLICY_ID`. The adapter has VC-API-shaped
+`/credentials/verify` and `/presentations/verify` endpoints, but forwards
+supported serialized credentials to the normal Marty presentation-policy
+evaluator. It never uses the inline evaluator because that endpoint is for
+ad-hoc policy simulation rather than an interoperability assertion.
+
+The current W3C Data Integrity `eddsa-rdfc-2022` suite is explicitly excluded
+in the manifest: Marty does not implement that proof suite yet. The adapter
+returns a clear unsupported-serialization error instead of a false success.
+Review the named exclusion on its date; add the official suite’s Data
+Integrity modules only with real proof verification.
+
+```bash
+python scripts/w3c_vc_conformance.py validate
+python scripts/w3c_vc_conformance.py write-local-config \
+  --adapter-url https://stack.test.example/__test__/vc-api \
+  --output /opt/vc-data-model-2.0-test-suite/localConfig.cjs
+```
+
+Run the pinned suite itself (using Node 24) only against the disposable HTTPS
+adapter deployment. `--install` is explicit because the upstream suite does
+not publish a lockfile; its generated lock and official reports are copied
+into the evidence directory.
+
+```bash
+python scripts/w3c_vc_conformance.py run \
+  --suite /opt/vc-data-model-2.0-test-suite \
+  --adapter-url https://stack.test.example/__test__/vc-api \
+  --output-dir reports/w3c-vc-v2 \
+  --install
+```
+
 ## Certification later
+
+## EUDI reference interoperability
+
+The EUDI harness runs the existing real-client issuance, presentation, mdoc,
+SD-JWT, invalid-request, and replay tests with the gate enabled explicitly.
+Point it only at the digest-pinned EUDI containers recorded in
+`eudi-reference-interop.json` and the disposable HTTPS Marty deployment.
+
+```bash
+python scripts/eudi_reference_interop.py run \
+  --gateway-url https://stack.test.example \
+  --wallet-tester-url http://eudi-wallet-tester:5050 \
+  --verifier-url http://eudi-verifier:8090 \
+  --wallet-kit-url http://eudi-wallet-kit:9090 \
+  --output-dir reports/eudi-reference
+```
+
+It writes JUnit output, the unredacted local runner log, and `evidence.json`
+with the exact EUDI component digests, coverage matrix, endpoints, Marty
+commit, exit status, and result-file digests. The wallet-kit harness must use
+the Maven coordinate pinned in the same manifest; do not replace it with a
+moving upstream release.
 
 When certification funding is available, enable the protected certification
 environment and run the same command against the registered test deployment.
