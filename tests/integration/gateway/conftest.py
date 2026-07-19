@@ -247,6 +247,14 @@ async def test_session_id() -> str:
     may re-enter session-scoped async fixtures in separate event loops).
     """
     if _SESSION_CACHE["session_id"] is None:
+        # Official conformance runners may obtain this value through the
+        # public gateway's OIDC redirect flow before starting pytest.  It is
+        # still an ordinary gateway session, not an internal service token or
+        # a test-only authentication bypass.
+        public_session = os.getenv("MARTY_TEST_SESSION_ID", "").strip()
+        if public_session:
+            _SESSION_CACHE["session_id"] = public_session
+            return _SESSION_CACHE["session_id"]
         helper = AuthHelper()
         _SESSION_CACHE["session_id"] = await helper.get_session_id()
     return _SESSION_CACHE["session_id"]  # type: ignore[return-value]

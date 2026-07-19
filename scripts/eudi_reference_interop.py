@@ -83,6 +83,37 @@ def write_evidence(output: Path, manifest: dict, endpoints: dict[str, str], resu
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def public_gateway_session(environment: dict[str, str]) -> str:
+    """Obtain a normal public OIDC session for the disposable EUDI run.
+
+    The EUDI runner must not authenticate through a private Docker address or
+    invent a session cookie.  Reuse the production-shaped OIDF helper, which
+    follows the gateway's published Keycloak redirects and returns only the
+    gateway-issued session ID.
+    """
+    existing = environment.get("MARTY_TEST_SESSION_ID", "").strip()
+    if existing:
+        return existing
+    command = Path(
+        environment.get("EUDI_MARTY_PUBLIC_LOGIN_COMMAND", "")
+        or ROOT / "scripts" / "oidf_marty_public_login.py"
+    )
+    if not command.is_file():
+        raise ValueError("EUDI public login helper is missing")
+    completed = subprocess.run(
+        [sys.executable, str(command)],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    session = completed.stdout.strip()
+    if completed.returncode or not session or "\n" in session:
+        detail = completed.stderr.strip()
+        raise ValueError(f"EUDI public OIDC login failed: {detail[:300]}")
+    return session
+
+
 def run(args: argparse.Namespace) -> int:
     manifest = load_manifest()
     endpoints = {
@@ -101,9 +132,11 @@ def run(args: argparse.Namespace) -> int:
         "EUDI_VERIFIER_URL": endpoints["verifier"],
         "EUDI_WALLET_KIT_URL": endpoints["wallet_kit"],
     })
+    environment["MARTY_TEST_SESSION_ID"] = public_gateway_session(environment)
     command = [
         sys.executable, "-m", "pytest", "-q", "--junitxml", str(output / "junit.xml"),
         "tests/integration/gateway/test_eudi_interop.py",
+        "tests/integration/gateway/test_eudi_wallet_kit.py",
         "tests/integration/gateway/test_eudi_wallet_kit_vp.py",
         "tests/integration/gateway/test_eudi_wallet_kit_dtc.py",
     ]
