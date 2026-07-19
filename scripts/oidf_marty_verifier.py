@@ -21,6 +21,7 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import ssl
 import subprocess
 import sys
@@ -32,8 +33,65 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
+def local_marty_resolve(url: str) -> list[str]:
+    """Return a narrow curl resolver override for a disposable public URL.
+
+    The official runner and its mock wallet remain on their own Compose
+    network.  A local operator may run this interaction bridge on the host,
+    however, where the disposable Marty hostname only exists on the runner
+    bridge.  Resolve *only* the configured public Marty origin to its local
+    address while preserving the hostname for HTTPS and Host-header checks.
+    No service name or private Marty network is exposed.
+    """
+    address = os.environ.get("OIDF_MARTY_RESOLVE_IP", "").strip()
+    origin = os.environ.get("OIDF_MARTY_GATEWAY_URL", "").strip()
+    if not address or not origin:
+        return []
+    target = urlparse(url)
+    public = urlparse(origin)
+    if target.scheme != "https" or (target.hostname, target.port or 443) != (public.hostname, public.port or 443):
+        return []
+    if not target.hostname:
+        return []
+    return ["--resolve", f"{target.hostname}:{target.port or 443}:{address}"]
+
+
+def curl_executable() -> str:
+    """Find curl on Windows hosts and Linux runner images alike."""
+    value = shutil.which("curl.exe") or shutil.which("curl")
+    if not value:
+        raise RuntimeError("curl is required for a local OIDF_MARTY_RESOLVE_IP bridge")
+    return value
+
+
 def request_json(url: str, *, method: str = "GET", body: bytes | None = None,
                  headers: dict[str, str] | None = None, insecure: bool = False) -> tuple[int, Any]:
+    resolver = local_marty_resolve(url)
+    if resolver:
+        command = [
+            curl_executable(), "--silent", "--show-error", "--request", method,
+            "--connect-timeout", "10", "--max-time", "30", *resolver,
+        ]
+        if insecure:
+            command.append("--insecure")
+        for name, value in (headers or {}).items():
+            command.extend(["--header", f"{name}: {value}"])
+        if body is not None:
+            command.extend(["--data-binary", "@-"])
+        command.extend(["--write-out", "\\n%{http_code}", url])
+        completed = subprocess.run(command, input=body, capture_output=True, check=False)
+        if completed.returncode:
+            detail = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"request to public Marty URL failed: {detail[:300]}")
+        raw, separator, status_text = completed.stdout.decode("utf-8", errors="replace").rpartition("\n")
+        if not separator or not status_text.isdigit():
+            raise RuntimeError("public Marty URL returned no HTTP status")
+        status = int(status_text)
+        try:
+            return status, json.loads(raw) if raw else None
+        except json.JSONDecodeError:
+            return status, raw
+
     request = Request(url, data=body, headers=headers or {}, method=method)
     context = ssl._create_unverified_context() if insecure else None  # nosec B323: explicit local-only option
     try:
