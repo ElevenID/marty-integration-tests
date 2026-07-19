@@ -123,6 +123,8 @@ def main() -> int:
                 implicit = latest_implicit_submission(args.server, args.test_id)
                 if implicit:
                     break
+                if module_is_terminal(args.server, args.test_id):
+                    return 0
                 time.sleep(0.25)
             if not implicit:
                 raise RuntimeError("OIDF callback did not create an implicit submission URL")
