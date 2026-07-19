@@ -61,6 +61,12 @@ def latest_implicit_submission(server: str, test_id: str) -> str | None:
     return None
 
 
+def module_is_terminal(server: str, test_id: str) -> bool:
+    """Avoid treating a finished official module as a browser-adapter error."""
+    _, info = request_json(urljoin(server, f"api/info/{test_id}"))
+    return isinstance(info, dict) and info.get("status") in {"FINISHED", "INTERRUPTED"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--test-id", required=True)
@@ -86,6 +92,8 @@ def main() -> int:
         urls = browser.get("urls", []) if isinstance(browser, dict) else []
         pending = [url for url in urls if isinstance(url, str) and url not in visited]
         if not pending:
+            if module_is_terminal(args.server, args.test_id):
+                return 0
             time.sleep(0.5)
             continue
         for url in pending:
