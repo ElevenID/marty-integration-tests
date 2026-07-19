@@ -3,7 +3,7 @@
     "test-name": "oid4vci-1_0-issuer-metadata-test-signed",
     "configuration-filename": "*marty-issuer*.json",
     "variant": "*",
-    "reason": "Marty publishes unsigned Credential Issuer Metadata. OID4VCI permits unsigned metadata; this optional signed-metadata module must remain skipped until a separately approved signed-metadata feature is introduced.",
+    "reason": "Marty publishes unsigned Credential Issuer Metadata. OID4VCI permits unsigned metadata; this optional signed-metadata module remains skipped until a separately approved signed-metadata feature is introduced.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
   },
@@ -11,37 +11,23 @@
     "test-name": "oid4vci-1_0-issuer-batch-issuance",
     "configuration-filename": "*marty-issuer*.json",
     "variant": "*",
-    "reason": "Marty does not advertise batch_credential_issuance. OID4VCI permits issuers to support only single-credential issuance; enable this module only with an explicitly reviewed batch issuance capability.",
-    "owner": "ElevenID",
-    "expires": "2027-01-01"
-  },
-  {
-    "test-name": "oid4vci-1_0-issuer-happy-flow-multiple-clients",
-    "configuration-filename": "*marty-issuer*.json",
-    "variant": {
-      "vci_grant_type": "pre_authorization_code"
-    },
-    "reason": "OID4VCI 1.0 §4.1.1 requires a pre-authorized code to be short lived and single-use. This runner module redeems one offer with two wallets, so it is only applicable to Marty’s authorization-code profile; multi-wallet issuance must not weaken replay protection in the pre-authorized-code profile.",
+    "reason": "Marty does not advertise batch_credential_issuance. OID4VCI permits single-credential issuance; enable this module only with a reviewed batch issuance capability.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
   },
   {
     "test-name": "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature",
     "configuration-filename": "*marty-issuer*.json",
-    "variant": {
-      "credential_format": "sd_jwt_vc"
-    },
-    "reason": "Marty's active SD-JWT VC configuration requires a JWT proof but does not advertise key_attestations_required. Key attestation is an optional OID4VCI Appendix D.1 capability, so this negative test is inapplicable until that capability is explicitly introduced and tested.",
+    "variant": {"credential_format": "sd_jwt_vc"},
+    "reason": "Marty's active SD-JWT VC configuration requires a JWT proof but does not advertise key_attestations_required. Key attestation is optional until that capability is introduced and tested.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
   },
   {
     "test-name": "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm",
     "configuration-filename": "*marty-issuer*.json",
-    "variant": {
-      "vci_credential_encryption": "plain"
-    },
-    "reason": "Marty's active issuer profile does not advertise credential encryption. OID4VCI makes encrypted credential responses optional; enable this negative module only with an explicitly reviewed encryption capability and interoperability coverage.",
+    "variant": {"vci_credential_encryption": "plain"},
+    "reason": "Marty's active issuer profile does not advertise credential encryption. Enable this negative module only with reviewed encryption support and interoperability coverage.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
   }
