@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import json
 import os
-import ssl
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+
+# The deployment helpers are deliberately standalone scripts rather than an
+# installed package. Make their directory importable too when this module is
+# loaded by the unit suite through ``importlib``.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+from oidf_marty_public_login import authenticated_json_request
 
 
 def required_env(name: str) -> str:
@@ -52,18 +58,20 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def start_flow(gateway_url: str, session_id: str, body: dict[str, Any], *, insecure: bool) -> dict[str, Any]:
-    request = Request(
-        f"{gateway_url}/v1/flows/verify",
-        data=json.dumps(body).encode("utf-8"),
+def start_flow(gateway_url: str, session_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Start through the same public gateway helper used for OIDC login.
+
+    The shared helper honors ``OIDF_MARTY_RESOLVE_IP`` for a disposable local
+    TLS hostname without replacing the published URL with a Docker service
+    address. Remote and certification deployments simply use DNS.
+    """
+    data = authenticated_json_request(
+        gateway_url,
+        session_id,
+        "/v1/flows/verify",
         method="POST",
-        headers={"Accept": "application/json", "Content-Type": "application/json", "Cookie": f"sessionId={session_id}"},
+        json_body=body,
     )
-    context = ssl._create_unverified_context() if insecure else None  # nosec B323: disposable local TLS only
-    with urlopen(request, timeout=30, context=context) as response:  # nosec B310: configured disposable gateway
-        if response.status != 200:
-            raise RuntimeError(f"Marty verifier flow returned HTTP {response.status}")
-        data = json.loads(response.read().decode("utf-8"))
     if not isinstance(data, dict):
         raise RuntimeError("Marty verifier flow response is not a JSON object")
     return data
@@ -102,7 +110,6 @@ def main() -> int:
         gateway,
         gateway_session_id(),
         flow_body(payload),
-        insecure=os.environ.get("OIDF_INSECURE_TLS") == "1",
     )
     value = result.get("authorization_request") or result.get("request_uri")
     if not isinstance(value, str) or not value:
