@@ -1,50 +1,73 @@
 #!/usr/bin/env python3
-"""Guard Docker commands used by disposable interoperability runs.
+"""Scope Docker interoperability helpers to explicit Compose projects.
 
-Docker contexts are names, not isolation boundaries: two local contexts can
-point at the same Docker Desktop daemon.  Official conformance execution must
-therefore use an explicitly selected remote daemon, normally a short-lived VM
-or an isolated CI runner.  This module rejects local named pipes so adapters
-cannot accidentally inspect or modify a developer or production-like stack.
+A Docker context is only a connection endpoint; it does not provide isolation.
+The safety boundary used here is the Compose project label on every container.
+This works on a shared local engine and on a remote engine without letting an
+adapter exec into a similarly named container owned by another stack.
 """
 
 from __future__ import annotations
 
-import json
 import os
+import re
 import subprocess
 from collections.abc import Sequence
 
 CONTEXT_ENV = "MARTY_CONFORMANCE_DOCKER_CONTEXT"
+PROJECT_ENV = "MARTY_CONFORMANCE_PROJECT"
+OIDF_PROJECT_ENV = "OIDF_CONFORMANCE_PROJECT"
+PROJECT = re.compile(r"^[a-z0-9][a-z0-9_-]{1,62}$")
 
 
-def isolated_context_name() -> str:
-    """Return the explicitly selected, non-local Docker context."""
+def docker_command(arguments: Sequence[str]) -> list[str]:
+    """Build a Docker command for the selected context, or the current one."""
+    command = ["docker"]
     context = os.environ.get(CONTEXT_ENV, "").strip()
-    if not context:
-        raise ValueError(
-            f"{CONTEXT_ENV} is required; use an isolated remote Docker daemon, not Docker Desktop"
+    if context:
+        inspected = subprocess.run(
+            ["docker", "context", "inspect", context],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    if context in {"default", "desktop-linux"}:
-        raise ValueError(f"{CONTEXT_ENV}={context!r} is a local Docker Desktop context and is not isolated")
+        if inspected.returncode:
+            raise ValueError(f"Docker context {context!r} cannot be inspected")
+        command.extend(["--context", context])
+    return [*command, *arguments]
 
-    result = subprocess.run(
-        ["docker", "context", "inspect", context, "--format", "{{json .Endpoints.docker.Host}}"],
+
+def project_name(environment: str = PROJECT_ENV) -> str:
+    project = os.environ.get(environment, "").strip()
+    if not project:
+        raise ValueError(f"{environment} is required")
+    if not PROJECT.fullmatch(project):
+        raise ValueError(f"{environment} contains an invalid Compose project name")
+    if environment == PROJECT_ENV and not project.startswith("marty-conformance-"):
+        raise ValueError(f"{PROJECT_ENV} must start with marty-conformance-")
+    return project
+
+
+def require_project_container(container: str, environment: str = PROJECT_ENV) -> None:
+    """Prove a Docker exec target belongs to the expected Compose project."""
+    expected = project_name(environment)
+    inspected = subprocess.run(
+        docker_command(
+            [
+                "inspect",
+                "--format",
+                '{{ index .Config.Labels "com.docker.compose.project" }}',
+                container,
+            ]
+        ),
         capture_output=True,
         text=True,
         check=False,
     )
-    if result.returncode:
-        raise ValueError(f"Docker context {context!r} cannot be inspected")
-    try:
-        host = json.loads(result.stdout.strip())
-    except json.JSONDecodeError as error:
-        raise ValueError(f"Docker context {context!r} returned an invalid endpoint") from error
-    if not isinstance(host, str) or host.startswith(("npipe://", "unix://")):
-        raise ValueError(f"Docker context {context!r} points to a local daemon and is not isolated")
-    return context
-
-
-def docker_command(arguments: Sequence[str]) -> list[str]:
-    """Build a Docker command pinned to the verified isolated context."""
-    return ["docker", "--context", isolated_context_name(), *arguments]
+    if inspected.returncode:
+        raise ValueError(f"container {container!r} cannot be inspected")
+    actual = inspected.stdout.strip()
+    if actual != expected:
+        raise ValueError(
+            f"container {container!r} belongs to Compose project {actual!r}, expected {expected!r}"
+        )

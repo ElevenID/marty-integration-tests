@@ -1,4 +1,4 @@
-"""Tests for the disposable-Docker isolation boundary."""
+"""Tests for the Compose-project Docker isolation boundary."""
 
 from __future__ import annotations
 
@@ -16,35 +16,48 @@ context = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(context)
 
 
-def test_requires_explicit_context(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_current_local_context_is_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(context.CONTEXT_ENV, raising=False)
-    with pytest.raises(ValueError, match="is required"):
-        context.isolated_context_name()
+    assert context.docker_command(["ps"]) == ["docker", "ps"]
 
 
-@pytest.mark.parametrize("name", ["default", "desktop-linux"])
-def test_rejects_local_context_names(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
-    monkeypatch.setenv(context.CONTEXT_ENV, name)
-    with pytest.raises(ValueError, match="not isolated"):
-        context.isolated_context_name()
-
-
-def test_rejects_local_named_pipe_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(context.CONTEXT_ENV, "shared")
-    monkeypatch.setattr(
-        context.subprocess,
-        "run",
-        lambda *args, **_kwargs: subprocess.CompletedProcess(args[0], 0, '"npipe:////./pipe/docker_engine"', ""),
-    )
-    with pytest.raises(ValueError, match="local daemon"):
-        context.isolated_context_name()
-
-
-def test_builds_command_for_remote_context(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_optional_remote_context_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(context.CONTEXT_ENV, "conformance-vm")
     monkeypatch.setattr(
         context.subprocess,
         "run",
-        lambda *args, **_kwargs: subprocess.CompletedProcess(args[0], 0, '"ssh://runner@example.test"', ""),
+        lambda *args, **_kwargs: subprocess.CompletedProcess(args[0], 0, "[]", ""),
     )
     assert context.docker_command(["ps"]) == ["docker", "--context", "conformance-vm", "ps"]
+
+
+def test_marty_project_must_be_explicit_and_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(context.PROJECT_ENV, raising=False)
+    with pytest.raises(ValueError, match="is required"):
+        context.project_name()
+    monkeypatch.setenv(context.PROJECT_ENV, "production")
+    with pytest.raises(ValueError, match="must start"):
+        context.project_name()
+    monkeypatch.setenv(context.PROJECT_ENV, "marty-conformance-run1")
+    assert context.project_name() == "marty-conformance-run1"
+
+
+def test_exec_target_must_belong_to_expected_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(context.PROJECT_ENV, "marty-conformance-run1")
+    monkeypatch.setattr(
+        context.subprocess,
+        "run",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(args[0], 0, "marty-conformance-run1\n", ""),
+    )
+    context.require_project_container("marty-conformance-run1-issuance-1")
+
+
+def test_exec_target_rejects_foreign_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(context.PROJECT_ENV, "marty-conformance-run1")
+    monkeypatch.setattr(
+        context.subprocess,
+        "run",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(args[0], 0, "elevenid-beta\n", ""),
+    )
+    with pytest.raises(ValueError, match="belongs to Compose project"):
+        context.require_project_container("marty-issuance")
