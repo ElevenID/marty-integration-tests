@@ -15,9 +15,17 @@
     },
     "oid4vp-verifier": {
       "status": "planned",
-      "test_plan": "oid4vp-1_0-verifier-test-plan",
+      "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=sd_jwt_vc][response_mode=direct_post][request_method=url_query][client_id_prefix=redirect_uri]",
+      "configuration_example": "conformance/marty-verifier.example.json",
       "target": "Marty's public verifier URL through the gateway",
-      "reason": "The official verifier configuration is enabled only after the production wallet callback adapter is represented in a reviewed configuration."
+      "reason": "Enable only after the production-like flow-start command and the official runner adapter pass every module."
+    },
+    "oid4vp-haip-verifier": {
+      "status": "planned",
+      "test_plan": "oid4vp-1final-verifier-haip-test-plan[credential_format=sd_jwt_vc][response_mode=direct_post.jwt]",
+      "configuration_example": "conformance/marty-verifier-haip.example.json",
+      "target": "Marty's public verifier URL through the gateway",
+      "reason": "Enable only after signed request URIs, x509_hash, per-request encryption keys, and encrypted direct_post.jwt are implemented and verified."
     }
   },
   "certification": {

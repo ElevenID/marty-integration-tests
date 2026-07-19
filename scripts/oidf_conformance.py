@@ -72,18 +72,48 @@ def validate_runner(path: Path, manifest: dict) -> None:
         raise ValueError(f"OIDF runner is {actual}; expected pinned {expected}")
 
 
-def validate_config(path: Path) -> None:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    vci = data.get("vci", {})
-    issuer = vci.get("credential_issuer_url", "")
-    parsed = urlparse(issuer)
+def _validate_absolute_url(value: object, field: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be an absolute http(s) URL")
+    parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("vci.credential_issuer_url must be an absolute http(s) gateway URL")
-    if "example.invalid" in parsed.netloc or "REPLACE_" in issuer:
+        raise ValueError(f"{field} must be an absolute http(s) URL")
+    if "example.invalid" in parsed.netloc or "REPLACE_" in value:
         raise ValueError("OIDF configuration still contains example values")
-    for field in ("authorization_server", "credential_configuration_id"):
-        if not vci.get(field):
-            raise ValueError(f"vci.{field} is required by the official issuer plan")
+
+
+def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
+    """Validate only the profile-specific, non-secret runner configuration.
+
+    OIDF verifier tests create their own wallet response.  Marty is started by
+    the deployment-owned interaction command, so this file deliberately
+    contains neither gateway credentials nor a test bypass.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("OIDF configuration must be a JSON object")
+    if profile_name == "oid4vci-issuer":
+        vci = data.get("vci", {})
+        issuer = vci.get("credential_issuer_url", "")
+        _validate_absolute_url(issuer, "vci.credential_issuer_url")
+        for field in ("authorization_server", "credential_configuration_id"):
+            if not vci.get(field):
+                raise ValueError(f"vci.{field} is required by the official issuer plan")
+        return
+
+    if profile_name not in {"oid4vp-verifier", "oid4vp-haip-verifier"}:
+        raise ValueError(f"unknown OIDF configuration profile: {profile_name}")
+    signing_jwk = data.get("credential", {}).get("signing_jwk")
+    if not isinstance(signing_jwk, dict) or not signing_jwk.get("kty"):
+        raise ValueError("credential.signing_jwk is required by the official verifier plans")
+    verifier = data.get("verifier", {})
+    _validate_absolute_url(verifier.get("gateway_url"), "verifier.gateway_url")
+    if not verifier.get("profile"):
+        raise ValueError("verifier.profile is required by the official verifier plans")
+    if profile_name == "oid4vp-haip-verifier":
+        anchor = data.get("client", {}).get("request_object_trust_anchor_pem")
+        if not isinstance(anchor, str) or not anchor.strip() or "REPLACE_" in anchor:
+            raise ValueError("client.request_object_trust_anchor_pem is required by the HAIP verifier plan")
 
 
 def runner_relative_path(path: Path, runner: Path) -> str:
@@ -122,7 +152,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     runner = args.runner.resolve()
     config = args.config.resolve()
     validate_runner(runner, manifest)
-    validate_config(config)
+    validate_config(config, args.profile)
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     config_argument = runner_relative_path(config, runner)

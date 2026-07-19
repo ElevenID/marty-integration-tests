@@ -21,6 +21,13 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert manifest["official_runner"]["repository"].startswith("https://gitlab.com/openid/")
     assert manifest["profiles"]["oid4vci-issuer"]["status"] == "active"
     assert "[credential_format=sd_jwt_vc]" in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
+    verifier = manifest["profiles"]["oid4vp-verifier"]
+    assert verifier["configuration_example"] == "conformance/marty-verifier.example.json"
+    assert "oid4vp-1final-verifier-test-plan" in verifier["test_plan"]
+    assert "[request_method=url_query]" in verifier["test_plan"]
+    haip = manifest["profiles"]["oid4vp-haip-verifier"]
+    assert "oid4vp-1final-verifier-haip-test-plan" in haip["test_plan"]
+    assert "[response_mode=direct_post.jwt]" in haip["test_plan"]
 
 
 def test_documented_optional_signed_metadata_skip_is_valid() -> None:
@@ -77,6 +84,41 @@ def test_real_gateway_configuration_is_accepted(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     oidf.validate_config(config)
+
+
+def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
+    config = tmp_path / "verifier.json"
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256"}},
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-1.0-final",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    oidf.validate_config(config, "oid4vp-verifier")
+
+
+def test_haip_requires_a_runner_trust_anchor(tmp_path: Path) -> None:
+    config = tmp_path / "verifier.json"
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {"signing_jwk": {"kty": "EC"}},
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-haip-1.0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="request_object_trust_anchor_pem"):
+        oidf.validate_config(config, "oid4vp-haip-verifier")
 
 
 def test_tls_proxy_uses_only_oidf_approved_tls12_ciphers() -> None:
