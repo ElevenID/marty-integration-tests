@@ -370,8 +370,7 @@ class TestMartyCredentialEUDIVerification:
             nonce=uuid.uuid4().hex,
         )
         request_uri = txn.get("request_uri")
-        if not request_uri:
-            pytest.skip("EUDI verifier did not return request_uri")
+        assert request_uri, f"EUDI verifier did not return request_uri: {txn}"
 
         # Fetch the authorization request JWT directly from the verifier
         auth_request = await eudi_verifier.get_request_object(request_uri)

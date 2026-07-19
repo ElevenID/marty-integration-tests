@@ -27,5 +27,11 @@ def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
     endpoints = {"gateway": "https://marty.test", "wallet_tester": "http://wallet:5050", "verifier": "http://verifier:8090", "wallet_kit": "http://kit:9090"}
     eudi.write_evidence(output, eudi.load_manifest(), endpoints, 0)
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
-    assert evidence["result"]["passed"] is True
+    assert evidence["result"] == {"exit_code": 0, "passed": True, "skipped": 0}
     assert evidence["components"]["wallet_tester"]["image"].startswith("ghcr.io/")
+
+
+def test_eudi_junit_skip_count_is_visible(tmp_path: Path) -> None:
+    report = tmp_path / "junit.xml"
+    report.write_text('<testsuites><testsuite tests="2" skipped="1"/></testsuites>', encoding="utf-8")
+    assert eudi.junit_skip_count(report) == 1

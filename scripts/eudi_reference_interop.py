@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ElementTree
 from hashlib import sha256
 from pathlib import Path
 
@@ -57,7 +58,14 @@ def file_sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
-def write_evidence(output: Path, manifest: dict, endpoints: dict[str, str], result: int) -> None:
+def junit_skip_count(path: Path) -> int:
+    if not path.is_file():
+        raise ValueError("EUDI runner did not produce JUnit output")
+    root = ElementTree.parse(path).getroot()
+    return sum(int(node.attrib.get("skipped", "0")) for node in root.iter() if node.tag == "testsuite")
+
+
+def write_evidence(output: Path, manifest: dict, endpoints: dict[str, str], result: int, skipped: int = 0) -> None:
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
         for path in sorted(output.rglob("*"))
@@ -69,7 +77,7 @@ def write_evidence(output: Path, manifest: dict, endpoints: dict[str, str], resu
         "coverage": manifest["coverage"],
         "marty": {"commit": os.environ.get("MARTY_COMMIT", "unrecorded")},
         "endpoints": endpoints,
-        "result": {"exit_code": result, "passed": result == 0},
+        "result": {"exit_code": result, "passed": result == 0, "skipped": skipped},
         "artifacts": artifacts,
     }
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -100,9 +108,21 @@ def run(args: argparse.Namespace) -> int:
         "tests/integration/gateway/test_eudi_wallet_kit_dtc.py",
     ]
     completed = subprocess.run(command, cwd=ROOT, env=environment, text=True, capture_output=True, check=False)
-    (output / "runner.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
-    write_evidence(output, manifest, endpoints, completed.returncode)
-    return completed.returncode
+    result = completed.returncode
+    skipped = 0
+    detail = completed.stdout + completed.stderr
+    if result == 0:
+        try:
+            skipped = junit_skip_count(output / "junit.xml")
+        except (ElementTree.ParseError, ValueError) as exc:
+            result = 1
+            detail += f"\nEUDI evidence failure: {exc}\n"
+        if skipped:
+            result = 1
+            detail += f"\nEUDI evidence failure: {skipped} test(s) were skipped.\n"
+    (output / "runner.log").write_text(detail, encoding="utf-8")
+    write_evidence(output, manifest, endpoints, result, skipped)
+    return result
 
 
 def main() -> int:
