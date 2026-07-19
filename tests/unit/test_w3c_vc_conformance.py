@@ -28,10 +28,14 @@ def test_npm_command_uses_the_windows_launcher_when_needed(monkeypatch) -> None:
     assert w3c.npm_command() == "npm"
 
 
-def test_w3c_test_command_uses_bash_for_upstream_posix_script(monkeypatch) -> None:
-    monkeypatch.setattr(w3c.os, "name", "nt")
-    monkeypatch.setattr(w3c.Path, "is_file", lambda _self: True)
-    assert w3c.w3c_test_command()[-1] == "npm test"
+def test_w3c_test_command_uses_absolute_reporter_paths(tmp_path: Path, monkeypatch) -> None:
+    mocha = tmp_path / "node_modules" / "mocha" / "bin" / "mocha.js"
+    mocha.parent.mkdir(parents=True)
+    mocha.write_text("", encoding="utf-8")
+    monkeypatch.setattr(w3c.shutil, "which", lambda _name: "node")
+    command = w3c.w3c_test_command(tmp_path)
+    assert command[0] == "node"
+    assert (tmp_path / "reports").as_posix() in command[command.index("--reporter-options") + 1]
 
 
 def test_w3c_local_config_registers_only_verification_adapters(tmp_path: Path) -> None:
@@ -41,6 +45,14 @@ def test_w3c_local_config_registers_only_verification_adapters(tmp_path: Path) -
     assert "/credentials/verify" in config
     assert "/presentations/verify" in config
     assert "issuers:" not in config
+
+
+def test_w3c_report_requires_an_executed_matrix_case(tmp_path: Path) -> None:
+    report = tmp_path / "index.json"
+    report.write_text(json.dumps({"matrices": [{"rows": [], "columns": []}]}), encoding="utf-8")
+    assert not w3c.report_has_executed_cases(report)
+    report.write_text(json.dumps({"matrices": [{"rows": [{"title": "case"}], "columns": ["ElevenID"]}]}), encoding="utf-8")
+    assert w3c.report_has_executed_cases(report)
 
 
 def test_w3c_evidence_preserves_the_narrow_exclusion(tmp_path: Path, monkeypatch) -> None:

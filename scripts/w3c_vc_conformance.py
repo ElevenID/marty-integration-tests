@@ -56,8 +56,8 @@ def write_local_config(path: Path, adapter_base_url: str) -> None:
         "  settings: { enableInteropTests: false, testAllImplementations: false },\n"
         "  implementations: [{\n"
         "    name: 'ElevenID', implementation: 'Marty VC API test adapter',\n"
-        f"    verifiers: [{{ id: 'marty-vc-verifier', endpoint: '{base}/credentials/verify', tags: ['vc2.0'] }}],\n"
-        f"    vpVerifiers: [{{ id: 'marty-vp-verifier', endpoint: '{base}/presentations/verify', tags: ['vc2.0'] }}]\n"
+        f"    verifiers: [{{ id: 'marty-vc-verifier', endpoint: '{base}/credentials/verify', tags: ['vc2.0'], supports: {{ vc: ['2.0'] }} }}],\n"
+        f"    vpVerifiers: [{{ id: 'marty-vp-verifier', endpoint: '{base}/presentations/verify', tags: ['vc2.0'], supports: {{ vc: ['2.0'] }} }}]\n"
         "  }]\n};\n",
         encoding="utf-8",
     )
@@ -76,14 +76,38 @@ def npm_command() -> str:
     return "npm.cmd" if os.name == "nt" else "npm"
 
 
-def w3c_test_command() -> list[str]:
-    """Run the upstream POSIX ``npm test`` script faithfully on Windows."""
-    if os.name != "nt":
-        return [npm_command(), "test"]
-    bash = Path(r"C:\Program Files\Git\bin\bash.exe")
-    if not bash.is_file():
-        raise RuntimeError("Git Bash is required to run the upstream W3C npm test script on Windows")
-    return [str(bash), "-lc", "npm test"]
+def w3c_test_command(suite: Path) -> list[str]:
+    """Return the upstream Mocha command with absolute reporter paths."""
+    mocha = suite / "node_modules" / "mocha" / "bin" / "mocha.js"
+    if not mocha.is_file():
+        raise RuntimeError("W3C suite dependencies are missing the Mocha entry point")
+    node = shutil.which("node.exe") or shutil.which("node")
+    if not node:
+        raise RuntimeError("Node is required to run the W3C suite")
+    options = (
+        f"abstract={(suite / 'abstract.hbs').as_posix()},reportDir={(suite / 'reports').as_posix()},"
+        f"respec={(suite / 'respecConfig.json').as_posix()},suiteLog={(suite / 'suite.log').as_posix()},"
+        f"templateData={(suite / 'reports' / 'index.json').as_posix()},title=VC v2.0 Interoperability Report"
+    )
+    return [node, str(mocha), "tests/", "--reporter", "@digitalbazaar/mocha-w3c-interop-reporter", "--reporter-options", options, "--timeout", "15000", "--preserve-symlinks"]
+
+
+def report_has_executed_cases(path: Path) -> bool:
+    """Return whether the W3C reporter recorded at least one matrix case.
+
+    The upstream runner exits successfully when no implementation matches its
+    issuer-led selectors.  That is a useful discovery state, but it is not an
+    interoperability pass and must fail this harness.
+    """
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return any(
+        matrix.get("rows") and matrix.get("columns")
+        for matrix in report.get("matrices", [])
+        if isinstance(matrix, dict)
+    )
 
 
 def write_evidence(output: Path, manifest: dict, suite: Path, adapter_url: str, result: int) -> None:
@@ -123,9 +147,12 @@ def run_suite(suite: Path, adapter_url: str, output: Path, *, install: bool) -> 
             return install_result
     output.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(suite / "reports", ignore_errors=True)
+    (suite / "reports").mkdir(parents=True, exist_ok=True)
     (suite / "suite.log").unlink(missing_ok=True)
-    result = subprocess.run(w3c_test_command(), cwd=suite, check=False).returncode
-    if result == 0 and not (suite / "reports" / "index.json").is_file():
+    result = subprocess.run(w3c_test_command(suite), cwd=suite, check=False).returncode
+    report = suite / "reports" / "index.json"
+    if result == 0 and not report_has_executed_cases(report):
+        print("W3C VC suite produced no executed matrix cases; refusing to report a pass.", file=sys.stderr)
         result = 1
     for source in (suite / "reports", suite / "suite.log", suite / "package-lock.json"):
         if source.is_file():

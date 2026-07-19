@@ -8,3 +8,5 @@ services:
     environment:
       W3C_VC_TEST_ADAPTER: "1"
       W3C_VC_TEST_POLICY_ID: ${W3C_VC_TEST_POLICY_ID:?set the disposable active presentation policy ID}
+      W3C_VC_TEST_ORGANIZATION_ID: ${W3C_VC_TEST_ORGANIZATION_ID:?set the disposable organization ID}
+      W3C_VC_TEST_TEMPLATE_ID: ${W3C_VC_TEST_TEMPLATE_ID:?set the disposable credential template ID}
