@@ -31,6 +31,7 @@ python scripts/oidf_conformance.py run \
   --runner /opt/openid-conformance-suite \
   --profile oid4vci-issuer \
   --config /secure/work/marty-issuer.json \
+  --stack-manifest /secure/work/stack-manifest.json \
   --output-dir reports/oidf/issuer
 ```
 
@@ -117,6 +118,7 @@ python scripts/oidf_conformance.py run \
   --runner /opt/openid-conformance-suite \
   --profile oid4vp-verifier \
   --config /secure/work/marty-verifier.json \
+  --stack-manifest /secure/work/stack-manifest.json \
   --output-dir reports/oidf/verifier \
   --interaction-script scripts/oidf_marty_verifier.py
 ```
@@ -127,6 +129,13 @@ per-request encryption key, and encrypted `direct_post.jwt` handling. Its
 configuration additionally supplies the official runner's request-object trust
 anchor. No HAIP profile may be marked active merely because a local test
 adapter can execute it.
+
+Every runner export now includes `evidence.json`. It records the immutable
+official-runner commit, stack-manifest digest and release, Marty commit when
+provided as `MARTY_COMMIT`, configuration digest (never its secret contents),
+allowlisted exclusions, exit status, and SHA-256 digests of the exported
+official result files. Pass `--stack-manifest` for every release or
+certification-grade run.
 
 The deployment adapter deliberately requires a real gateway session and active
 disposable presentation policy. It rejects HTTP URLs and creates neither an

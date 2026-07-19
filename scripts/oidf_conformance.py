@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import urllib.request
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -134,6 +135,57 @@ def runner_relative_path(path: Path, runner: Path) -> str:
     return Path(os.path.relpath(resolved_path, resolved_runner)).as_posix()
 
 
+def file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def write_evidence(
+    output: Path,
+    manifest: dict,
+    profile_name: str,
+    config: Path,
+    runner: Path,
+    exit_code: int,
+    stack_manifest: Path | None,
+) -> None:
+    """Write non-secret provenance alongside an official suite export.
+
+    Configurations can contain private signing keys, so evidence records their
+    digest and path only. Result files are listed by digest after the official
+    runner exits; this makes later review independent of mutable runner state.
+    """
+    stack: dict[str, object] | None = None
+    if stack_manifest is not None:
+        raw_stack = json.loads(stack_manifest.read_text(encoding="utf-8"))
+        if raw_stack.get("schema") != "marty.stack/v1":
+            raise ValueError("stack manifest must use marty.stack/v1")
+        stack = {"path": str(stack_manifest), "sha256": file_sha256(stack_manifest), "release": raw_stack.get("release")}
+    artifacts = [
+        {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
+        for path in sorted(output.rglob("*"))
+        if path.is_file() and path.name != "evidence.json"
+    ]
+    evidence = {
+        "schema": "elevenid.official-interop-evidence/v1",
+        "official_runner": manifest["official_runner"],
+        "profile": profile_name,
+        "runner": {"path": str(runner), "commit": git_revision(runner)},
+        "marty": {"commit": os.environ.get("MARTY_COMMIT", "unrecorded"), "stack_manifest": stack},
+        "configuration": {"path": str(config), "sha256": file_sha256(config)},
+        "exclusions": {
+            "expected_failures": json.loads((ROOT / "conformance" / "expected-failures.json").read_text(encoding="utf-8")),
+            "expected_skips": json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8")),
+        },
+        "result": {"exit_code": exit_code, "passed": exit_code == 0},
+        "artifacts": artifacts,
+    }
+    (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def cmd_validate(_args: argparse.Namespace) -> int:
     manifest = load_manifest()
     validate_expected_failures()
@@ -173,7 +225,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         command[3:3] = ["--rerun", args.rerun]
     print("Running the official OIDF plan:", profile["test_plan"])
     if args.interaction_script is None:
-        return subprocess.run(command, cwd=runner, check=False).returncode
+        result = subprocess.run(command, cwd=runner, check=False).returncode
+        write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest)
+        return result
 
     interaction_script = args.interaction_script.resolve()
     if not interaction_script.is_file():
@@ -233,7 +287,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     hook_result = 0
     for hook in hooks:
         hook_result = hook.wait() or hook_result
-    return runner_result or hook_result
+    result = runner_result or hook_result
+    write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest)
+    return result
 
 
 def cmd_check_update(_args: argparse.Namespace) -> int:
@@ -261,6 +317,7 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--profile", required=True)
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--output-dir", type=Path, required=True)
+    run.add_argument("--stack-manifest", type=Path, help="attested marty.stack/v1 manifest for the deployment under test")
     run.add_argument("--rerun", help="official runner plan/module selector, for example 1:3")
     run.add_argument(
         "--interaction-script",

@@ -103,6 +103,26 @@ def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
     oidf.validate_config(config, "oid4vp-verifier")
 
 
+def test_evidence_records_non_secret_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    (runner / ".git").mkdir()
+    config = tmp_path / "config.json"
+    config.write_text('{"credential":{"signing_jwk":{"d":"private"}}}', encoding="utf-8")
+    output = tmp_path / "report"
+    output.mkdir()
+    (output / "official-result.json").write_text('{"result":"pass"}', encoding="utf-8")
+    stack = tmp_path / "stack.json"
+    stack.write_text('{"schema":"marty.stack/v1","release":"marty-ui@1.0.0"}', encoding="utf-8")
+    monkeypatch.setattr(oidf, "git_revision", lambda _path: "a" * 40)
+    oidf.write_evidence(output, oidf.load_manifest(), "oid4vp-verifier", config, runner, 0, stack)
+    evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
+    assert evidence["result"] == {"exit_code": 0, "passed": True}
+    assert evidence["marty"]["stack_manifest"]["release"] == "marty-ui@1.0.0"
+    assert evidence["configuration"]["sha256"].startswith("sha256:")
+    assert "private" not in (output / "evidence.json").read_text(encoding="utf-8")
+
+
 def test_haip_requires_a_runner_trust_anchor(tmp_path: Path) -> None:
     config = tmp_path / "verifier.json"
     config.write_text(
