@@ -105,6 +105,12 @@ test wallet or a verification bypass. The command named by
 }
 ```
 
+Run a planned verifier profile only with `--allow-planned-profile` and an
+attested `--stack-manifest`. This produces evidence marked
+`execution_mode: pre-activation`; it does not advertise support or change the
+profile status. Change the profile to `active` only after the exported official
+result passes every applicable module and its review is merged.
+
 It must start a normal, authenticated `POST /v1/flows/verify` gateway flow
 using the disposable organization and policy, then write JSON containing its
 ordinary `authorization_request` (`openid4vp://...?request_uri=...`) or the
@@ -128,6 +134,7 @@ python scripts/oidf_conformance.py run \
   --profile oid4vp-verifier \
   --config /secure/work/marty-verifier.json \
   --stack-manifest /secure/work/stack-manifest.json \
+  --allow-planned-profile \
   --output-dir reports/oidf/verifier \
   --interaction-script scripts/oidf_marty_verifier.py
 ```

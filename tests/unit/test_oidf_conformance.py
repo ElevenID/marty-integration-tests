@@ -36,7 +36,11 @@ def test_documented_optional_signed_metadata_skip_is_valid() -> None:
 
 def test_optional_encryption_skip_is_documented_narrowly() -> None:
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
-    encryption = next(item for item in skips if item["test-name"] == "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm")
+    encryption = next(
+        item
+        for item in skips
+        if item["test-name"] == "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm"
+    )
     assert encryption["variant"] == {"vci_credential_encryption": "plain"}
     assert encryption["expires"] == "2027-01-01"
 
@@ -115,9 +119,10 @@ def test_evidence_records_non_secret_provenance(tmp_path: Path, monkeypatch: pyt
     stack = tmp_path / "stack.json"
     stack.write_text('{"schema":"marty.stack/v1","release":"marty-ui@1.0.0"}', encoding="utf-8")
     monkeypatch.setattr(oidf, "git_revision", lambda _path: "a" * 40)
-    oidf.write_evidence(output, oidf.load_manifest(), "oid4vp-verifier", config, runner, 0, stack)
+    oidf.write_evidence(output, oidf.load_manifest(), "oid4vp-verifier", config, runner, 0, stack, "pre-activation")
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["result"] == {"exit_code": 0, "passed": True}
+    assert evidence["execution_mode"] == "pre-activation"
     assert evidence["marty"]["stack_manifest"]["release"] == "marty-ui@1.0.0"
     assert evidence["configuration"]["sha256"].startswith("sha256:")
     assert "private" not in (output / "evidence.json").read_text(encoding="utf-8")
@@ -139,6 +144,24 @@ def test_haip_requires_a_runner_trust_anchor(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="request_object_trust_anchor_pem"):
         oidf.validate_config(config, "oid4vp-haip-verifier")
+
+
+def test_planned_verifier_requires_explicit_attested_pre_activation_run(tmp_path: Path) -> None:
+    profile = oidf.load_manifest()["profiles"]["oid4vp-verifier"]
+    stack = tmp_path / "stack.json"
+    stack.write_text('{"schema":"marty.stack/v1"}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not active"):
+        oidf.execution_mode("oid4vp-verifier", profile, allow_planned=False, stack_manifest=stack)
+    with pytest.raises(ValueError, match="stack-manifest"):
+        oidf.execution_mode("oid4vp-verifier", profile, allow_planned=True, stack_manifest=None)
+    assert oidf.execution_mode("oid4vp-verifier", profile, allow_planned=True, stack_manifest=stack) == "pre-activation"
+
+
+def test_active_profile_does_not_need_pre_activation_switch() -> None:
+    profile = oidf.load_manifest()["profiles"]["oid4vci-issuer"]
+
+    assert oidf.execution_mode("oid4vci-issuer", profile, allow_planned=False, stack_manifest=None) == "active"
 
 
 def test_tls_proxy_uses_only_oidf_approved_tls12_ciphers() -> None:
