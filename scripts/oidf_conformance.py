@@ -139,6 +139,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         profile["test_plan"],
         config_argument,
     ]
+    if args.rerun:
+        command[3:3] = ["--rerun", args.rerun]
     print("Running the official OIDF plan:", profile["test_plan"])
     if args.interaction_script is None:
         return subprocess.run(command, cwd=runner, check=False).returncode
@@ -155,7 +157,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     current_module = ""
     hooks: list[subprocess.Popen[str]] = []
     process = subprocess.Popen(
-        command,
+        # ``run-test-plan.py`` is a Python program.  Its output becomes a pipe
+        # here, so force unbuffered mode; otherwise a waiting official module
+        # can deadlock before the interaction hook sees its ID.
+        [command[0], "-u", *command[1:]],
         cwd=runner,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -215,6 +220,7 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--profile", required=True)
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--output-dir", type=Path, required=True)
+    run.add_argument("--rerun", help="official runner plan/module selector, for example 1:3")
     run.add_argument(
         "--interaction-script",
         type=Path,
