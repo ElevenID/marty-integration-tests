@@ -1,0 +1,10 @@
+# Disposable W3C VC Data Model v2 adapter overlay.
+#
+# Apply this only with the isolated conformance Compose project.  The adapter
+# is absent from ordinary deployments and requires a fixture policy ID.
+services:
+  gateway:
+    image: marty-w3c-vc-adapter:local
+    environment:
+      W3C_VC_TEST_ADAPTER: "1"
+      W3C_VC_TEST_POLICY_ID: ${W3C_VC_TEST_POLICY_ID:?set the disposable active presentation policy ID}

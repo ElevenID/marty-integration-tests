@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 
@@ -18,6 +19,13 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
     assert manifest["official_suite"]["repository"].startswith("https://github.com/w3c/")
     assert manifest["adapter"]["path"] == "/__test__/vc-api"
     assert manifest["exclusions"][0]["review_date"]
+
+
+def test_npm_command_uses_the_windows_launcher_when_needed(monkeypatch) -> None:
+    monkeypatch.setattr(w3c.os, "name", "nt")
+    assert w3c.npm_command() == "npm.cmd"
+    monkeypatch.setattr(w3c.os, "name", "posix")
+    assert w3c.npm_command() == "npm"
 
 
 def test_w3c_local_config_registers_only_verification_adapters(tmp_path: Path) -> None:

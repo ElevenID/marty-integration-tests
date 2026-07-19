@@ -70,6 +70,11 @@ def file_sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def npm_command() -> str:
+    """Return the executable npm launcher on the current platform."""
+    return "npm.cmd" if os.name == "nt" else "npm"
+
+
 def write_evidence(output: Path, manifest: dict, suite: Path, adapter_url: str, result: int) -> None:
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
@@ -99,14 +104,14 @@ def run_suite(suite: Path, adapter_url: str, output: Path, *, install: bool) -> 
     validate_checkout(suite, manifest)
     write_local_config(suite / "localConfig.cjs", adapter_url)
     if install:
-        install_result = subprocess.run(["npm", "install", "--package-lock-only", "--ignore-scripts"], cwd=suite, check=False).returncode
+        install_result = subprocess.run([npm_command(), "install", "--package-lock-only", "--ignore-scripts"], cwd=suite, check=False).returncode
         if install_result:
             return install_result
-        install_result = subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=suite, check=False).returncode
+        install_result = subprocess.run([npm_command(), "ci", "--ignore-scripts"], cwd=suite, check=False).returncode
         if install_result:
             return install_result
     output.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(["npm", "test"], cwd=suite, check=False).returncode
+    result = subprocess.run([npm_command(), "test"], cwd=suite, check=False).returncode
     for source in (suite / "reports", suite / "suite.log", suite / "package-lock.json"):
         if source.is_file():
             target = output / source.name
