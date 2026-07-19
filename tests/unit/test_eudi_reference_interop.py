@@ -31,6 +31,28 @@ def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
     assert evidence["components"]["wallet_tester"]["image"].startswith("ghcr.io/")
 
 
+def test_eudi_stack_manifest_records_immutable_marty_images(tmp_path: Path) -> None:
+    manifest = tmp_path / "stack-manifest.json"
+    manifest.write_text(
+        json.dumps({
+            "schema": "marty.stack/v1",
+            "release": "marty-ui@1.0.0",
+            "components": [{
+                "name": "marty",
+                "artifacts": [{
+                    "type": "oci",
+                    "uri": "ghcr.io/elevenid/marty",
+                    "digest": "sha256:" + "a" * 64,
+                }],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    metadata = eudi.stack_manifest_metadata(manifest)
+    assert metadata["release"] == "marty-ui@1.0.0"
+    assert metadata["images"][0]["digest"] == "sha256:" + "a" * 64
+
+
 def test_eudi_junit_skip_count_is_visible(tmp_path: Path) -> None:
     report = tmp_path / "junit.xml"
     report.write_text('<testsuites><testsuite tests="2" skipped="1"/></testsuites>', encoding="utf-8")

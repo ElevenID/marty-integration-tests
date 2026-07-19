@@ -248,6 +248,7 @@ python scripts/eudi_reference_interop.py run \
   --wallet-tester-url https://marty-oidf.test:25051 \
   --verifier-url https://marty-oidf.test:28091 \
   --wallet-kit-url http://localhost:29090 \
+  --stack-manifest path/to/stack-manifest.json \
   --output-dir reports/eudi-reference
 ```
 
@@ -261,7 +262,7 @@ from a host-side conformance run.
 
 It writes JUnit output, the unredacted local runner log, and `evidence.json`
 with the exact EUDI component digests, coverage matrix, endpoints, Marty
-commit, exit status, and result-file digests. The wallet-kit harness must use
+commit, attested stack-manifest and image digests, exit status, and result-file digests. The wallet-kit harness must use
 the Maven coordinate pinned in the same manifest; do not replace it with a
 moving upstream release.
 

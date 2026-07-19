@@ -65,7 +65,35 @@ def junit_skip_count(path: Path) -> int:
     return sum(int(node.attrib.get("skipped", "0")) for node in root.iter() if node.tag == "testsuite")
 
 
-def write_evidence(output: Path, manifest: dict, endpoints: dict[str, str], result: int, skipped: int = 0) -> None:
+def stack_manifest_metadata(path: Path) -> dict:
+    """Return immutable Marty deployment provenance for a conformance run."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if raw.get("schema") != "marty.stack/v1":
+        raise ValueError("stack manifest must use marty.stack/v1")
+    images: list[dict[str, str]] = []
+    for component in raw.get("components", []):
+        if not isinstance(component, dict):
+            continue
+        for artifact in component.get("artifacts", []):
+            if not isinstance(artifact, dict) or artifact.get("type") != "oci":
+                continue
+            uri, digest = artifact.get("uri"), artifact.get("digest")
+            if not isinstance(uri, str) or not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise ValueError("every OCI artifact in the stack manifest must have a sha256 digest")
+            images.append({"component": str(component.get("name", "unknown")), "uri": uri, "digest": digest})
+    if not images:
+        raise ValueError("stack manifest contains no immutable OCI artifacts")
+    return {"path": str(path), "sha256": file_sha256(path), "release": raw.get("release"), "images": images}
+
+
+def write_evidence(
+    output: Path,
+    manifest: dict,
+    endpoints: dict[str, str],
+    result: int,
+    skipped: int = 0,
+    stack_manifest: Path | None = None,
+) -> None:
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
         for path in sorted(output.rglob("*"))
@@ -75,7 +103,10 @@ def write_evidence(output: Path, manifest: dict, endpoints: dict[str, str], resu
         "schema": "elevenid.official-interop-evidence/v1",
         "components": manifest["components"],
         "coverage": manifest["coverage"],
-        "marty": {"commit": os.environ.get("MARTY_COMMIT", "unrecorded")},
+        "marty": {
+            "commit": os.environ.get("MARTY_COMMIT", "unrecorded"),
+            "stack_manifest": stack_manifest_metadata(stack_manifest) if stack_manifest else None,
+        },
         "endpoints": endpoints,
         "result": {"exit_code": result, "passed": result == 0, "skipped": skipped},
         "artifacts": artifacts,
@@ -124,6 +155,10 @@ def run(args: argparse.Namespace) -> int:
     }
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    stack_manifest = args.stack_manifest.resolve()
+    # Validate before any external calls so an evidence run cannot silently use
+    # mutable image tags or an unrelated deployment.
+    stack_manifest_metadata(stack_manifest)
     environment = os.environ.copy()
     environment.update({
         "RUN_EUDI_TESTS": "true",
@@ -154,7 +189,7 @@ def run(args: argparse.Namespace) -> int:
             result = 1
             detail += f"\nEUDI evidence failure: {skipped} test(s) were skipped.\n"
     (output / "runner.log").write_text(detail, encoding="utf-8")
-    write_evidence(output, manifest, endpoints, result, skipped)
+    write_evidence(output, manifest, endpoints, result, skipped, stack_manifest)
     return result
 
 
@@ -168,6 +203,12 @@ def main() -> int:
     run_parser.add_argument("--verifier-url", required=True)
     run_parser.add_argument("--wallet-kit-url", required=True)
     run_parser.add_argument("--output-dir", type=Path, required=True)
+    run_parser.add_argument(
+        "--stack-manifest",
+        type=Path,
+        required=True,
+        help="attested marty.stack/v1 manifest for the deployment under test",
+    )
     args = parser.parse_args()
     if args.command == "validate":
         manifest = load_manifest()
