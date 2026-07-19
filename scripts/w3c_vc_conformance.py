@@ -56,9 +56,13 @@ def write_local_config(path: Path, adapter_base_url: str) -> None:
         "  settings: { enableInteropTests: false, testAllImplementations: false },\n"
         "  implementations: [{\n"
         "    name: 'ElevenID', implementation: 'Marty VC API test adapter',\n"
-        f"    issuers: [{{ id: '{base}/issuer', endpoint: '{base}/credentials/issue', tags: ['vc2.0'], supports: {{ vc: ['2.0'], proof: ['JOSE'] }} }}],\n"
-        f"    verifiers: [{{ id: 'marty-vc-verifier', endpoint: '{base}/credentials/verify', tags: ['vc2.0'], supports: {{ vc: ['2.0'] }} }}],\n"
-        f"    vpVerifiers: [{{ id: 'marty-vp-verifier', endpoint: '{base}/presentations/verify', tags: ['vc2.0'], supports: {{ vc: ['2.0'] }} }}]\n"
+        # Marty issues and verifies JWT VCs as the VC Data Model v2 JOSE
+        # enveloping-proof representation.  The official runner uses this
+        # capability tag to inspect the nested JWT payload rather than
+        # assuming an embedded JSON-LD Data Integrity proof.
+        f"    issuers: [{{ id: '{base}/issuer', endpoint: '{base}/credentials/issue', tags: ['vc2.0', 'EnvelopingProof'], supports: {{ vc: ['2.0'], proof: ['JOSE'] }} }}],\n"
+        f"    verifiers: [{{ id: 'marty-vc-verifier', endpoint: '{base}/credentials/verify', tags: ['vc2.0', 'EnvelopingProof'], supports: {{ vc: ['2.0'] }} }}],\n"
+        f"    vpVerifiers: [{{ id: 'marty-vp-verifier', endpoint: '{base}/presentations/verify', tags: ['vc2.0', 'EnvelopingProof'], supports: {{ vc: ['2.0'] }} }}]\n"
         "  }]\n};\n",
         encoding="utf-8",
     )
