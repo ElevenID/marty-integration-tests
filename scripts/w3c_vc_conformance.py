@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -55,8 +56,8 @@ def write_local_config(path: Path, adapter_base_url: str) -> None:
         "  settings: { enableInteropTests: false, testAllImplementations: false },\n"
         "  implementations: [{\n"
         "    name: 'ElevenID', implementation: 'Marty VC API test adapter',\n"
-        f"    verifiers: [{{ id: 'marty-vc-verifier', endpoint: '{base}/credentials/verify', tags: ['vc2.0'] }}],\n"
-        f"    vpVerifiers: [{{ id: 'marty-vp-verifier', endpoint: '{base}/presentations/verify', tags: ['vc2.0'] }}]\n"
+        f"    verifiers: [{{ id: 'marty-vc-verifier', endpoint: '{base}/credentials/verify', tags: ['vc2.0'], supports: {{ vc: ['2.0'] }} }}],\n"
+        f"    vpVerifiers: [{{ id: 'marty-vp-verifier', endpoint: '{base}/presentations/verify', tags: ['vc2.0'], supports: {{ vc: ['2.0'] }} }}]\n"
         "  }]\n};\n",
         encoding="utf-8",
     )
@@ -68,6 +69,45 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return f"sha256:{digest.hexdigest()}"
+
+
+def npm_command() -> str:
+    """Return the executable npm launcher on the current platform."""
+    return "npm.cmd" if os.name == "nt" else "npm"
+
+
+def w3c_test_command(suite: Path) -> list[str]:
+    """Return the upstream Mocha command with absolute reporter paths."""
+    mocha = suite / "node_modules" / "mocha" / "bin" / "mocha.js"
+    if not mocha.is_file():
+        raise RuntimeError("W3C suite dependencies are missing the Mocha entry point")
+    node = shutil.which("node.exe") or shutil.which("node")
+    if not node:
+        raise RuntimeError("Node is required to run the W3C suite")
+    options = (
+        f"abstract={(suite / 'abstract.hbs').as_posix()},reportDir={(suite / 'reports').as_posix()},"
+        f"respec={(suite / 'respecConfig.json').as_posix()},suiteLog={(suite / 'suite.log').as_posix()},"
+        f"templateData={(suite / 'reports' / 'index.json').as_posix()},title=VC v2.0 Interoperability Report"
+    )
+    return [node, str(mocha), "tests/", "--reporter", "@digitalbazaar/mocha-w3c-interop-reporter", "--reporter-options", options, "--timeout", "15000", "--preserve-symlinks"]
+
+
+def report_has_executed_cases(path: Path) -> bool:
+    """Return whether the W3C reporter recorded at least one matrix case.
+
+    The upstream runner exits successfully when no implementation matches its
+    issuer-led selectors.  That is a useful discovery state, but it is not an
+    interoperability pass and must fail this harness.
+    """
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return any(
+        matrix.get("rows") and matrix.get("columns")
+        for matrix in report.get("matrices", [])
+        if isinstance(matrix, dict)
+    )
 
 
 def write_evidence(output: Path, manifest: dict, suite: Path, adapter_url: str, result: int) -> None:
@@ -99,14 +139,21 @@ def run_suite(suite: Path, adapter_url: str, output: Path, *, install: bool) -> 
     validate_checkout(suite, manifest)
     write_local_config(suite / "localConfig.cjs", adapter_url)
     if install:
-        install_result = subprocess.run(["npm", "install", "--package-lock-only", "--ignore-scripts"], cwd=suite, check=False).returncode
+        install_result = subprocess.run([npm_command(), "install", "--package-lock-only", "--ignore-scripts"], cwd=suite, check=False).returncode
         if install_result:
             return install_result
-        install_result = subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=suite, check=False).returncode
+        install_result = subprocess.run([npm_command(), "ci", "--ignore-scripts"], cwd=suite, check=False).returncode
         if install_result:
             return install_result
     output.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(["npm", "test"], cwd=suite, check=False).returncode
+    shutil.rmtree(suite / "reports", ignore_errors=True)
+    (suite / "reports").mkdir(parents=True, exist_ok=True)
+    (suite / "suite.log").unlink(missing_ok=True)
+    result = subprocess.run(w3c_test_command(suite), cwd=suite, check=False).returncode
+    report = suite / "reports" / "index.json"
+    if result == 0 and not report_has_executed_cases(report):
+        print("W3C VC suite produced no executed matrix cases; refusing to report a pass.", file=sys.stderr)
+        result = 1
     for source in (suite / "reports", suite / "suite.log", suite / "package-lock.json"):
         if source.is_file():
             target = output / source.name
