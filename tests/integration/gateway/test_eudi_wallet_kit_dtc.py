@@ -101,15 +101,73 @@ async def dtc_test_org(authenticated_gateway_client: GatewayClient):
 
 
 @pytest.fixture
+async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_test_org):
+    """Create the separately managed mDoc resources required by the public API."""
+    compliance = await authenticated_gateway_client.create_compliance_profile(
+        organization_id=dtc_test_org["id"],
+        name="EUDI DTC mDoc",
+        compliance_code="ICAO_DTC",
+        credential_format="mso_mdoc",
+        frameworks=["icao_doc_9303"],
+    )
+    service = None
+    resolution_error: Exception | None = None
+    for organization_id in (dtc_test_org["id"], None):
+        try:
+            resolved = await authenticated_gateway_client.resolve_signing_service(
+                organization_id=organization_id,
+                credential_format="mso_mdoc",
+                key_purpose="mdoc_dsc",
+                algorithm="ES256",
+            )
+            candidate = resolved.get("service")
+            if isinstance(candidate, dict) and candidate.get("id"):
+                service = candidate
+                break
+        except Exception as exc:  # Capability absence is surfaced by the public API.
+            resolution_error = exc
+    if not isinstance(service, dict) or not service.get("id"):
+        raise RuntimeError(f"No mDoc document signer is available: {resolution_error}")
+    domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
+    domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
+    issuer = await authenticated_gateway_client.create_issuer_profile(
+        organization_id=dtc_test_org["id"],
+        name="EUDI DTC document signer",
+        issuer_did=f"did:web:{domain.replace('/', ':')}:orgs:{dtc_test_org['id']}",
+        signing_service_id=str(service["id"]),
+        signing_key_reference=str(service.get("key_reference") or "") or None,
+        key_purpose="mdoc_dsc",
+        status="active",
+    )
+    revocation = await authenticated_gateway_client.create_revocation_profile(
+        organization_id=dtc_test_org["id"],
+        name="EUDI DTC status list",
+        revocation_mechanism=["STATUS_LIST_2021"],
+    )
+    revocation = await authenticated_gateway_client.activate_revocation_profile(revocation["id"])
+    return {
+        "compliance_profile_id": compliance["id"],
+        "issuer_profile_id": issuer["id"],
+        "revocation_profile_id": revocation["id"],
+    }
+
+
+@pytest.fixture
 async def dtc_mdoc_template(
     authenticated_gateway_client: GatewayClient,
     dtc_test_org,
+    dtc_mdoc_resources,
 ):
     """Create an ICAO DTC credential template (mDoc format, com.icao.dtc namespace)."""
     template_data = TestDataBuilder.dtc_template(
         organization_id=dtc_test_org["id"],
         name=f"DTC Wallet Test ({uuid.uuid4().hex[:6]})",
+        compliance_profile_id=dtc_mdoc_resources["compliance_profile_id"],
     )
+    template_data.update({
+        "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
+        "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
+    })
     return await authenticated_gateway_client.create_credential_template(**template_data)
 
 
@@ -237,6 +295,7 @@ class TestDtcWalletIssuance:
         authenticated_gateway_client: GatewayClient,
         wallet_kit: EUDIWalletKitClient,
         dtc_test_org,
+        dtc_mdoc_resources,
         dtc_mdoc_template,
     ):
         """Issue a DTC with different holder data and verify wallet receives it."""
@@ -447,13 +506,19 @@ class TestDtcWalletEndToEnd:
         authenticated_gateway_client: GatewayClient,
         wallet_kit: EUDIWalletKitClient,
         dtc_test_org,
+        dtc_mdoc_resources,
     ):
         """Full DTC lifecycle: create template → issue → wallet receive → present → verify."""
         # 1. Create DTC template
         template_data = TestDataBuilder.dtc_template(
             organization_id=dtc_test_org["id"],
             name=f"DTC E2E ({uuid.uuid4().hex[:6]})",
+            compliance_profile_id=dtc_mdoc_resources["compliance_profile_id"],
         )
+        template_data.update({
+            "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
+            "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
+        })
         template = await authenticated_gateway_client.create_credential_template(
             **template_data
         )
