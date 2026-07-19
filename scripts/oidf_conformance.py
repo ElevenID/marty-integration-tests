@@ -148,6 +148,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     interaction_script = args.interaction_script.resolve()
     if not interaction_script.is_file():
         raise ValueError(f"OIDF interaction script is missing: {interaction_script}")
+    browser_interaction_script = args.browser_interaction_script.resolve() if args.browser_interaction_script else None
+    if browser_interaction_script is not None and not browser_interaction_script.is_file():
+        raise ValueError(f"OIDF browser interaction script is missing: {browser_interaction_script}")
 
     # The official runner prints a module ID immediately after creating it and
     # then waits for the issuer interaction.  Keep the runner unmodified while
@@ -187,6 +190,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                 os.environ.get("CONFORMANCE_SERVER", ""),
             ]
             hooks.append(subprocess.Popen(hook_command, cwd=ROOT))
+            if browser_interaction_script is not None:
+                hooks.append(subprocess.Popen(
+                    [
+                        sys.executable, str(browser_interaction_script), "--test-id", match.group(1),
+                        "--test-name", current_module, "--server", os.environ.get("CONFORMANCE_SERVER", ""),
+                    ],
+                    cwd=ROOT,
+                ))
 
     runner_result = process.wait()
     hook_result = 0
@@ -225,6 +236,11 @@ def parse_args() -> argparse.Namespace:
         "--interaction-script",
         type=Path,
         help="implementation-owned script invoked for each official test module",
+    )
+    run.add_argument(
+        "--browser-interaction-script",
+        type=Path,
+        help="local browser adapter invoked for each official test module",
     )
     commands.add_parser("check-update")
     return parser.parse_args()
