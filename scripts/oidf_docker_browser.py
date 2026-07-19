@@ -23,7 +23,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).parent))
-from docker_context import docker_command
+from docker_context import OIDF_PROJECT_ENV, docker_command, require_project_container
 
 TARGET_TEST = "oid4vci-1_0-issuer-happy-flow-multiple-clients"
 
@@ -41,6 +41,7 @@ def request_json(url: str, *, method: str = "GET", body: bytes | None = None) ->
 
 def docker_curl(args: list[str]) -> str:
     container = os.environ.get("OIDF_CONFORMANCE_CONTAINER", "oidf-conformance-suite-release-v520-server-1")
+    require_project_container(container, OIDF_PROJECT_ENV)
     completed = subprocess.run(
         docker_command(["exec", container, "curl", "-ksS", *args]),
         capture_output=True,

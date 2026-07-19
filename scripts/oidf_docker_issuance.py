@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from docker_context import docker_command
+from docker_context import docker_command, require_project_container
 
 
 def main() -> int:
@@ -27,6 +27,7 @@ def main() -> int:
     if not api_key:
         print("OIDF_ISSUANCE_API_KEY is required for the local Docker transport", file=sys.stderr)
         return 2
+    require_project_container(container)
     command = docker_command([
         "exec", "-i", container, "curl", "-fsS",
         "-H", f"X-API-Key: {api_key}",
