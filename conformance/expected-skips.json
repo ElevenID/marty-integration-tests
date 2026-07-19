@@ -6,5 +6,13 @@
     "reason": "Marty publishes unsigned Credential Issuer Metadata. OID4VCI permits unsigned metadata; this optional signed-metadata module must remain skipped until a separately approved signed-metadata feature is introduced.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
+  },
+  {
+    "test-name": "oid4vci-1_0-issuer-batch-issuance",
+    "configuration-filename": "*marty-issuer*.json",
+    "variant": "*",
+    "reason": "Marty does not advertise batch_credential_issuance. OID4VCI permits issuers to support only single-credential issuance; enable this module only with an explicitly reviewed batch issuance capability.",
+    "owner": "ElevenID",
+    "expires": "2027-01-01"
   }
 ]

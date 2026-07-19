@@ -64,3 +64,12 @@ def test_real_gateway_configuration_is_accepted(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     oidf.validate_config(config)
+
+
+def test_tls_proxy_uses_only_oidf_approved_tls12_ciphers() -> None:
+    config = (ROOT / "services" / "tls-proxy" / "nginx.conf").read_text(encoding="utf-8")
+
+    assert "ssl_protocols TLSv1.2 TLSv1.3;" in config
+    assert "ECDHE-RSA-AES128-GCM-SHA256" in config
+    assert "AES_128_CBC" not in config
+    assert "ECDHE-RSA-AES128-SHA" not in config
