@@ -27,3 +27,16 @@ def test_local_resolver_is_limited_to_the_configured_public_marty_origin(
     ]
     assert oidf_verifier.local_marty_resolve("https://localhost.emobix.co.uk:8443/test") == []
     assert oidf_verifier.local_marty_resolve("http://marty-oidf.local:28443/v1/request") == []
+
+
+def test_conformance_resolver_is_limited_to_the_published_runner_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CONFORMANCE_SERVER", "https://localhost.emobix.co.uk:8443")
+    monkeypatch.setenv("OIDF_CONFORMANCE_RESOLVE_IP", "127.0.0.1")
+
+    assert oidf_verifier.local_conformance_resolve("https://localhost.emobix.co.uk:8443/api/runner/test") == [
+        "--resolve", "localhost.emobix.co.uk:8443:127.0.0.1"
+    ]
+    assert oidf_verifier.local_conformance_resolve("https://marty-oidf.local:28443/v1/request") == []
+    assert oidf_verifier.local_conformance_resolve("http://localhost.emobix.co.uk:8443/api/runner/test") == []
