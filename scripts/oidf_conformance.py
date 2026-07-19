@@ -170,7 +170,7 @@ def write_evidence(
     exit_code: int,
     stack_manifest: Path | None,
     execution_mode: str,
-    expected_skips: list[dict],
+    expected_skips: list[dict] | None = None,
 ) -> None:
     """Write non-secret provenance alongside an official suite export.
 
@@ -193,6 +193,7 @@ def write_evidence(
         for path in sorted(output.rglob("*"))
         if path.is_file() and path.name != "evidence.json"
     ]
+    effective_skips = expected_skips if expected_skips is not None else applicable_expected_skips(config)
     evidence = {
         "schema": "elevenid.official-interop-evidence/v1",
         "official_runner": manifest["official_runner"],
@@ -205,7 +206,7 @@ def write_evidence(
             "expected_failures": json.loads(
                 (ROOT / "conformance" / "expected-failures.json").read_text(encoding="utf-8")
             ),
-            "expected_skips": expected_skips,
+            "expected_skips": effective_skips,
         },
         "result": {"exit_code": exit_code, "passed": exit_code == 0},
         "artifacts": artifacts,
