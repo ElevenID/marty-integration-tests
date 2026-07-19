@@ -1,0 +1,10 @@
+{
+  "organization_id": "00000000-0000-0000-0000-000000000001",
+  "credential_template_id": "50000000-0000-0000-0000-000000000050",
+  "claims": {
+    "given_name": "Conformance",
+    "family_name": "Test",
+    "email": "conformance@example.test",
+    "employee_id": "oidf-conformance"
+  }
+}

@@ -140,7 +140,54 @@ def cmd_run(args: argparse.Namespace) -> int:
         config_argument,
     ]
     print("Running the official OIDF plan:", profile["test_plan"])
-    return subprocess.run(command, cwd=runner, check=False).returncode
+    if args.interaction_script is None:
+        return subprocess.run(command, cwd=runner, check=False).returncode
+
+    interaction_script = args.interaction_script.resolve()
+    if not interaction_script.is_file():
+        raise ValueError(f"OIDF interaction script is missing: {interaction_script}")
+
+    # The official runner prints a module ID immediately after creating it and
+    # then waits for the issuer interaction.  Keep the runner unmodified while
+    # allowing an implementation-owned script to drive that interaction.  The
+    # hook receives only public test metadata through arguments; credentials
+    # remain environment variables owned by the invoking environment.
+    current_module = ""
+    hooks: list[subprocess.Popen[str]] = []
+    process = subprocess.Popen(
+        command,
+        cwd=runner,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert process.stdout is not None
+    for line in process.stdout:
+        print(line, end="")
+        match = re.search(r"Running test module: (.+)", line)
+        if match:
+            current_module = match.group(1).strip()
+            continue
+        match = re.search(r"Created test module, new id: ([A-Za-z0-9]+)", line)
+        if match:
+            hook_command = [
+                sys.executable,
+                str(interaction_script),
+                "--test-id",
+                match.group(1),
+                "--test-name",
+                current_module,
+                "--server",
+                os.environ.get("CONFORMANCE_SERVER", ""),
+            ]
+            hooks.append(subprocess.Popen(hook_command, cwd=ROOT))
+
+    runner_result = process.wait()
+    hook_result = 0
+    for hook in hooks:
+        hook_result = hook.wait() or hook_result
+    return runner_result or hook_result
 
 
 def cmd_check_update(_args: argparse.Namespace) -> int:
@@ -168,6 +215,11 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--profile", required=True)
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--output-dir", type=Path, required=True)
+    run.add_argument(
+        "--interaction-script",
+        type=Path,
+        help="implementation-owned script invoked for each official test module",
+    )
     commands.add_parser("check-update")
     return parser.parse_args()
 

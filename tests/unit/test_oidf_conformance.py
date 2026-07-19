@@ -27,6 +27,19 @@ def test_documented_optional_signed_metadata_skip_is_valid() -> None:
     oidf.validate_expected_failures()
 
 
+def test_optional_encryption_skip_is_documented_narrowly() -> None:
+    skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
+    encryption = next(item for item in skips if item["test-name"] == "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm")
+    assert encryption["variant"] == {"vci_credential_encryption": "plain"}
+    assert encryption["expires"] == "2027-01-01"
+
+
+def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:
+    payload = json.loads((ROOT / "conformance" / "marty-issuer.offer-request.example.json").read_text(encoding="utf-8"))
+    assert payload["claims"]["email"].endswith("@example.test")
+    assert "credential_offer" not in payload
+
+
 def test_runner_relative_path_avoids_windows_drive_letter_grammar(tmp_path: Path) -> None:
     runner = tmp_path / "runner"
     runner.mkdir()
