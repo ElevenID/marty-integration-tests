@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 import os
 import ssl
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -67,12 +69,41 @@ def start_flow(gateway_url: str, session_id: str, body: dict[str, Any], *, insec
     return data
 
 
+def gateway_session_id() -> str:
+    """Use an existing session only when an operator deliberately supplies one.
+
+    Disposable official runs normally leave ``OIDF_MARTY_SESSION_ID`` unset.
+    In that case complete the public Keycloak redirect flow and keep the
+    resulting cookie in this process only. This prevents an internal service
+    login or a synthetic session from becoming part of verifier evidence.
+    """
+    existing = os.environ.get("OIDF_MARTY_SESSION_ID", "").strip()
+    if existing:
+        return existing
+    command = Path(
+        os.environ.get("OIDF_MARTY_PUBLIC_LOGIN_COMMAND", "") or Path(__file__).with_name("oidf_marty_public_login.py")
+    )
+    completed = subprocess.run([sys.executable, str(command)], capture_output=True, text=True, check=False)
+    if completed.returncode:
+        detail = completed.stderr.strip()
+        raise RuntimeError(f"OIDF public login command failed: {detail[:400]}")
+    session_id = completed.stdout.strip()
+    if not session_id or "\n" in session_id:
+        raise RuntimeError("OIDF public login command did not return one session ID")
+    return session_id
+
+
 def main() -> int:
     payload = json.load(sys.stdin)
     if not isinstance(payload, dict):
         raise ValueError("OIDF flow input must be a JSON object")
     gateway = https_url(required_env("OIDF_MARTY_GATEWAY_URL"), "OIDF_MARTY_GATEWAY_URL")
-    result = start_flow(gateway, required_env("OIDF_MARTY_SESSION_ID"), flow_body(payload), insecure=os.environ.get("OIDF_INSECURE_TLS") == "1")
+    result = start_flow(
+        gateway,
+        gateway_session_id(),
+        flow_body(payload),
+        insecure=os.environ.get("OIDF_INSECURE_TLS") == "1",
+    )
     value = result.get("authorization_request") or result.get("request_uri")
     if not isinstance(value, str) or not value:
         raise RuntimeError("Marty flow response has no authorization_request or request_uri")
