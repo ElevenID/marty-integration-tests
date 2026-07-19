@@ -18,11 +18,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "conformance" / "oidf-runner-bridge.compose.yml"
+PREBUILT_OVERLAY = ROOT / "conformance" / "oidf-runner-prebuilt.compose.yml"
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--runner", type=Path, required=True, help="pinned official runner checkout")
+    result.add_argument(
+        "--prebuilt",
+        action="store_true",
+        help="use the upstream prebuilt Compose file with ElevenID's immutable image overrides",
+    )
     result.add_argument("--project", default=os.environ.get("OIDF_CONFORMANCE_PROJECT", "oidf-runner"))
     result.add_argument(
         "--marty-project",
@@ -41,15 +47,19 @@ def main(argv: list[str] | None = None) -> int:
         args.arguments = args.arguments[1:]
     if not args.arguments:
         raise SystemExit("pass a docker compose command, for example: -- up --detach")
-    compose = args.runner.resolve() / "docker-compose.yml"
+    compose_name = "docker-compose-prebuilt.yml" if args.prebuilt else "docker-compose.yml"
+    compose = args.runner.resolve() / compose_name
     if not compose.is_file():
         raise SystemExit(f"official runner Compose file is missing: {compose}")
 
     environment = os.environ.copy()
     environment["OIDF_MARTY_BRIDGE_NETWORK"] = f"{args.marty_project}_oidf-runner"
+    overlays = ["--file", str(OVERLAY)]
+    if args.prebuilt:
+        overlays = ["--file", str(PREBUILT_OVERLAY), *overlays]
     command = [
         "docker", "compose", "--project-name", args.project,
-        "--file", str(compose), "--file", str(OVERLAY), *args.arguments,
+        "--file", str(compose), *overlays, *args.arguments,
     ]
     return subprocess.run(command, check=False, env=environment).returncode
 
