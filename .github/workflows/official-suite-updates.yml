@@ -1,0 +1,51 @@
+name: Official interoperability suite updates
+
+on:
+  schedule:
+    - cron: "31 5 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: official-suite-updates
+  cancel-in-progress: false
+
+jobs:
+  review-upstream-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Detect upstream drift
+        id: drift
+        run: |
+          if python scripts/official_suite_updates.py --write; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            status=$?
+            if [ "$status" -ne 3 ]; then exit "$status"; fi
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Open review PR
+        if: steps.drift.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="automation/official-suite-updates-$(date -u +%Y%m%d)"
+          git config user.name "elevenid-automation[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add conformance/upstream-review.json
+          git commit -m "chore: review official suite upstream updates"
+          git push --force-with-lease origin "$branch"
+          gh pr create --draft --base main --head "$branch" \
+            --title "chore: review official interoperability suite updates" \
+            --body "Upstream drift was detected. Review the recorded revisions, update immutable pins and image digests intentionally, then run the affected official suites before merging."
