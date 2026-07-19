@@ -8,6 +8,7 @@ The helper owns only the reproducibility boundary. The OpenID Foundation's
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -143,6 +144,23 @@ def file_sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def applicable_expected_skips(config: Path) -> list[dict]:
+    """Return only skip declarations that can apply to this configuration.
+
+    The upstream runner treats every entry in its expected-skips file as a
+    promise that a matching skip will occur. Passing issuer-only declarations
+    to a verifier plan therefore makes an otherwise clean verifier run fail.
+    Preserve the centrally reviewed declarations, but give the runner the
+    configuration-scoped subset it can actually observe.
+    """
+    entries = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
+    return [
+        entry
+        for entry in entries
+        if fnmatch.fnmatchcase(config.name, str(entry["configuration-filename"]))
+    ]
+
+
 def write_evidence(
     output: Path,
     manifest: dict,
@@ -152,6 +170,7 @@ def write_evidence(
     exit_code: int,
     stack_manifest: Path | None,
     execution_mode: str,
+    expected_skips: list[dict],
 ) -> None:
     """Write non-secret provenance alongside an official suite export.
 
@@ -186,7 +205,7 @@ def write_evidence(
             "expected_failures": json.loads(
                 (ROOT / "conformance" / "expected-failures.json").read_text(encoding="utf-8")
             ),
-            "expected_skips": json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8")),
+            "expected_skips": expected_skips,
         },
         "result": {"exit_code": exit_code, "passed": exit_code == 0},
         "artifacts": artifacts,
@@ -239,6 +258,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     validate_config(config, args.profile)
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    expected_skips = applicable_expected_skips(config)
+    effective_expected_skips = output / "expected-skips-effective.json"
+    effective_expected_skips.write_text(
+        json.dumps(expected_skips, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     config_argument = runner_relative_path(config, runner)
     command = [
         sys.executable,
@@ -249,7 +274,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "--expected-failures-file",
         str((ROOT / "conformance" / "expected-failures.json").resolve()),
         "--expected-skips-file",
-        str((ROOT / "conformance" / "expected-skips.json").resolve()),
+        str(effective_expected_skips),
         profile["test_plan"],
         config_argument,
     ]
@@ -258,7 +283,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print("Running the official OIDF plan:", profile["test_plan"])
     if args.interaction_script is None:
         result = subprocess.run(command, cwd=runner, check=False).returncode
-        write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode)
+        write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
         return result
 
     interaction_script = args.interaction_script.resolve()
@@ -320,7 +345,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     for hook in hooks:
         hook_result = hook.wait() or hook_result
     result = runner_result or hook_result
-    write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode)
+    write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
     return result
 
 
