@@ -302,6 +302,7 @@ class GatewayClient:
         revocation_profile_id: Optional[str] = None,
         issuer_key_id: Optional[str] = None,
         issuer_key_algorithm: Optional[str] = None,
+        issuer_profile_id: Optional[str] = None,
         issuer_certificate_chain_pem: Optional[str] = None,
         issuer_did: Optional[str] = None,
         auto_generate_artifacts: bool = True,
@@ -364,6 +365,8 @@ class GatewayClient:
             payload["issuer_key_id"] = issuer_key_id
         if issuer_key_algorithm:
             payload["issuer_key_algorithm"] = issuer_key_algorithm
+        if issuer_profile_id:
+            payload["issuer_profile_id"] = issuer_profile_id
         if issuer_certificate_chain_pem:
             payload["issuer_certificate_chain_pem"] = issuer_certificate_chain_pem
         if issuer_did:
@@ -1471,6 +1474,13 @@ class GatewayClient:
         return await self._request(
             "GET",
             f"/v1/revocation-profiles/{profile_id}",
+        )
+
+    async def activate_revocation_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Activate a revocation profile before binding it to issuance."""
+        return await self._request(
+            "POST",
+            f"/v1/revocation-profiles/{profile_id}/activate",
         )
 
     async def list_revocation_profiles(

@@ -41,7 +41,7 @@ import uuid
 import pytest
 
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
-from .helpers.gateway_client import GatewayClient
+from .helpers.gateway_client import GatewayClient, GatewayClientError
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ TEST_CLAIMS = {
     "family_name": "Interop",
     "date_of_birth": "1990-01-01",
 }
+VCT_ORIGIN = os.getenv("EUDI_TEST_VCT_ORIGIN", "https://marty-oidf2.local:29543").rstrip("/")
 
 # ---------------------------------------------------------------------------
 # Skip unless EUDI tests are explicitly enabled
@@ -93,23 +94,97 @@ async def eudi_test_org(authenticated_gateway_client: GatewayClient):
 
 
 @pytest.fixture
+async def eudi_sd_jwt_compliance_profile(
+    authenticated_gateway_client: GatewayClient,
+    eudi_test_org,
+):
+    """Create the separately managed profile required by current Marty APIs."""
+    return await authenticated_gateway_client.create_compliance_profile(
+        organization_id=eudi_test_org["id"],
+        name="EUDI Wallet Kit SD-JWT",
+        compliance_code="EUDI_PID",
+        credential_format="sd_jwt_vc",
+        frameworks=["eudi"],
+    )
+
+
+@pytest.fixture
+async def eudi_sd_jwt_issuer_profile(
+    authenticated_gateway_client: GatewayClient,
+    eudi_test_org,
+):
+    """Provision the normal KMS-backed issuer identity required for issuance."""
+    service = None
+    resolve_error: Exception | None = None
+    for organization_id in (eudi_test_org["id"], None):
+        try:
+            resolved = await authenticated_gateway_client.resolve_signing_service(
+                organization_id=organization_id,
+                credential_format="dc+sd-jwt",
+                key_purpose="vc_jwt_issuer",
+                algorithm="ES256",
+            )
+            candidate = resolved.get("service")
+            if isinstance(candidate, dict) and candidate.get("id"):
+                service = candidate
+                break
+        except GatewayClientError as exc:
+            resolve_error = exc
+    if not isinstance(service, dict) or not service.get("id"):
+        raise GatewayClientError(
+            "No signing service is available for EUDI SD-JWT issuance: "
+            f"{resolve_error}"
+        )
+    domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local").replace("https://", "").replace("http://", "").strip("/")
+    issuer_did = f"did:web:{domain.replace('/', ':')}:orgs:{eudi_test_org['id']}"
+    return await authenticated_gateway_client.create_issuer_profile(
+        organization_id=eudi_test_org["id"],
+        name="EUDI Wallet Kit Issuer",
+        issuer_did=issuer_did,
+        signing_service_id=str(service["id"]),
+        signing_key_reference=str(service.get("key_reference") or "") or None,
+        key_purpose="vc_jwt_issuer",
+        status="active",
+    )
+
+
+@pytest.fixture
+async def eudi_revocation_profile(
+    authenticated_gateway_client: GatewayClient,
+    eudi_test_org,
+):
+    """Bind each test credential to the normal status-list revocation path."""
+    profile = await authenticated_gateway_client.create_revocation_profile(
+        organization_id=eudi_test_org["id"],
+        name="EUDI Wallet Kit Status List",
+        revocation_mechanism=["STATUS_LIST_2021"],
+    )
+    return await authenticated_gateway_client.activate_revocation_profile(profile["id"])
+
+
+@pytest.fixture
 async def open_badge_template(
     authenticated_gateway_client: GatewayClient,
     eudi_test_org,
+    eudi_sd_jwt_compliance_profile,
+    eudi_sd_jwt_issuer_profile,
+    eudi_revocation_profile,
 ):
     """Create an open_badge credential template dynamically."""
     return await authenticated_gateway_client.create_credential_template(
         organization_id=eudi_test_org["id"],
         name="EUDI WK Open Badge",
         credential_type="OpenBadge",
-        vct="https://marty.example/credentials/OpenBadge",
+        vct=f"{VCT_ORIGIN}/credentials/OpenBadge",
         supported_formats=["sd_jwt_vc"],
         claims=[
             {"name": "given_name", "type": "string", "display_name": "Given Name"},
             {"name": "family_name", "type": "string", "display_name": "Family Name"},
             {"name": "date_of_birth", "type": "string", "display_name": "Date of Birth"},
         ],
-        compliance_profile={"name": "test", "type": "none", "compliance_code": "CUSTOM"},
+        compliance_profile_id=eudi_sd_jwt_compliance_profile["id"],
+        issuer_profile_id=eudi_sd_jwt_issuer_profile["id"],
+        revocation_profile_id=eudi_revocation_profile["id"],
     )
 
 
@@ -117,20 +192,25 @@ async def open_badge_template(
 async def passport_template(
     authenticated_gateway_client: GatewayClient,
     eudi_test_org,
+    eudi_sd_jwt_compliance_profile,
+    eudi_sd_jwt_issuer_profile,
+    eudi_revocation_profile,
 ):
     """Create a passport credential template dynamically."""
     return await authenticated_gateway_client.create_credential_template(
         organization_id=eudi_test_org["id"],
         name="EUDI WK Passport",
         credential_type="Passport",
-        vct="https://marty.example/credentials/Passport",
+        vct=f"{VCT_ORIGIN}/credentials/Passport",
         supported_formats=["sd_jwt_vc"],
         claims=[
             {"name": "given_name", "type": "string", "display_name": "Given Name"},
             {"name": "family_name", "type": "string", "display_name": "Family Name"},
             {"name": "date_of_birth", "type": "string", "display_name": "Date of Birth"},
         ],
-        compliance_profile={"name": "test", "type": "none", "compliance_code": "CUSTOM"},
+        compliance_profile_id=eudi_sd_jwt_compliance_profile["id"],
+        issuer_profile_id=eudi_sd_jwt_issuer_profile["id"],
+        revocation_profile_id=eudi_revocation_profile["id"],
     )
 
 
