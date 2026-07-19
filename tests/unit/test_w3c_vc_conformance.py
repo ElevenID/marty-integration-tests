@@ -38,13 +38,14 @@ def test_w3c_test_command_uses_absolute_reporter_paths(tmp_path: Path, monkeypat
     assert (tmp_path / "reports").as_posix() in command[command.index("--reporter-options") + 1]
 
 
-def test_w3c_local_config_registers_only_verification_adapters(tmp_path: Path) -> None:
+def test_w3c_local_config_registers_the_real_issuer_and_verifiers(tmp_path: Path) -> None:
     output = tmp_path / "localConfig.cjs"
     w3c.write_local_config(output, "https://interop.example.test/__test__/vc-api")
     config = output.read_text(encoding="utf-8")
+    assert "/credentials/issue" in config
     assert "/credentials/verify" in config
     assert "/presentations/verify" in config
-    assert "issuers:" not in config
+    assert "issuers:" in config
 
 
 def test_w3c_report_requires_an_executed_matrix_case(tmp_path: Path) -> None:
