@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -17,3 +18,14 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "@sha256:" in manifest["components"]["wallet_tester"]["image"]
     assert "@sha256:" in manifest["components"]["verifier_endpoint"]["image"]
     assert "replayed_response" in manifest["coverage"]["negative"]
+
+
+def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
+    output = tmp_path / "report"
+    output.mkdir()
+    (output / "junit.xml").write_text("<testsuites/>", encoding="utf-8")
+    endpoints = {"gateway": "https://marty.test", "wallet_tester": "http://wallet:5050", "verifier": "http://verifier:8090", "wallet_kit": "http://kit:9090"}
+    eudi.write_evidence(output, eudi.load_manifest(), endpoints, 0)
+    evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
+    assert evidence["result"]["passed"] is True
+    assert evidence["components"]["wallet_tester"]["image"].startswith("ghcr.io/")

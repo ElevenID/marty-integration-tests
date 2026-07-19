@@ -182,6 +182,28 @@ python scripts/w3c_vc_conformance.py run \
 
 ## Certification later
 
+## EUDI reference interoperability
+
+The EUDI harness runs the existing real-client issuance, presentation, mdoc,
+SD-JWT, invalid-request, and replay tests with the gate enabled explicitly.
+Point it only at the digest-pinned EUDI containers recorded in
+`eudi-reference-interop.json` and the disposable HTTPS Marty deployment.
+
+```bash
+python scripts/eudi_reference_interop.py run \
+  --gateway-url https://stack.test.example \
+  --wallet-tester-url http://eudi-wallet-tester:5050 \
+  --verifier-url http://eudi-verifier:8090 \
+  --wallet-kit-url http://eudi-wallet-kit:9090 \
+  --output-dir reports/eudi-reference
+```
+
+It writes JUnit output, the unredacted local runner log, and `evidence.json`
+with the exact EUDI component digests, coverage matrix, endpoints, Marty
+commit, exit status, and result-file digests. The wallet-kit harness must use
+the Maven coordinate pinned in the same manifest; do not replace it with a
+moving upstream release.
+
 When certification funding is available, enable the protected certification
 environment and run the same command against the registered test deployment.
 Attach the pinned runner revision, stack manifest, image digests, sanitized
