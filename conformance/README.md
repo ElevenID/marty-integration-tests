@@ -117,6 +117,32 @@ HTTPS `request_uri`. The adapter fetches Marty's signed request object and
 delivers it to the official mock wallet. The suite then posts its generated
 presentation to Marty's actual public callback and determines the result.
 
+### Separate runner Compose project
+
+The official runner and Marty intentionally run as independent Compose
+projects. Marty exposes only its TLS proxy on the external,
+project-scoped `${MARTY_CONFORMANCE_PROJECT}_oidf-runner` bridge; its private
+`marty-network` is never shared. The runner retains its default network for
+MongoDB and runner-internal traffic, while only its `server` service also
+joins that narrow bridge. This allows the official mock wallet to use Marty's
+public HTTPS callback without a manual `docker network connect` or a broad
+cross-stack network.
+
+Start the pinned runner through the versioned overlay after the Marty OIDF
+profile has created the bridge:
+
+```bash
+export MARTY_CONFORMANCE_PROJECT=marty-conformance-oidf
+export OIDF_CONFORMANCE_PROJECT=oidf-runner
+python scripts/oidf_runner_compose.py \
+  --runner /opt/openid-conformance-suite \
+  -- up --detach
+```
+
+Use the same helper for `down`, `logs`, and `config`. It keeps the runner
+project independent and only sets the external bridge-network name for the
+official runner Compose overlay.
+
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
 export CONFORMANCE_SERVER=https://oidf.test.example
