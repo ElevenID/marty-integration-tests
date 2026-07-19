@@ -251,12 +251,13 @@ python scripts/eudi_reference_interop.py run \
   --output-dir reports/eudi-reference
 ```
 
-Start the wallet-kit harness on the same isolated Docker context with
-`docker compose --profile eudi up -d eudi-wallet-harness`. It is a thin test
-facade over the pinned official EUDI Wallet Kit Maven libraries, not a mock
-wallet. The three HTTPS endpoints above are the TLS boundaries from the Marty
-UI OIDF/EUDI Compose profiles; do not use their private container ports from a
-host-side conformance run.
+Run the reference wallet tester and verifier as a separate Compose project
+with `conformance/eudi-reference.compose.yml`. It joins only Marty's
+`oidf-runner` TLS-proxy bridge; it cannot access Marty's internal Compose
+network. The wallet-kit harness is likewise a thin facade over the pinned
+official EUDI Wallet Kit Maven libraries, not a mock wallet. The three HTTPS
+endpoints above are the TLS boundaries; do not use private container ports
+from a host-side conformance run.
 
 It writes JUnit output, the unredacted local runner log, and `evidence.json`
 with the exact EUDI component digests, coverage matrix, endpoints, Marty

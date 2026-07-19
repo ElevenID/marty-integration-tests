@@ -138,10 +138,104 @@ async def vp_test_org(authenticated_gateway_client: GatewayClient):
     return org
 
 
+async def _issuer_profile(
+    client: GatewayClient,
+    organization_id: str,
+    *,
+    credential_format: str,
+    key_purpose: str,
+    algorithm: str,
+    name: str,
+) -> Dict[str, Any]:
+    """Create an issuer profile backed by Marty's configured signing service."""
+    service = None
+    resolution_error: Exception | None = None
+    for candidate_organization_id in (organization_id, None):
+        try:
+            resolved = await client.resolve_signing_service(
+                organization_id=candidate_organization_id,
+                credential_format=credential_format,
+                key_purpose=key_purpose,
+                algorithm=algorithm,
+            )
+            candidate = resolved.get("service")
+            if isinstance(candidate, dict) and candidate.get("id"):
+                service = candidate
+                break
+        except Exception as exc:  # API reports an unavailable capability as 4xx.
+            resolution_error = exc
+    if not isinstance(service, dict) or not service.get("id"):
+        raise RuntimeError(
+            f"No signing service for {credential_format}/{key_purpose}: {resolution_error}"
+        )
+    domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
+    domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
+    return await client.create_issuer_profile(
+        organization_id=organization_id,
+        name=name,
+        issuer_did=f"did:web:{domain.replace('/', ':')}:orgs:{organization_id}",
+        signing_service_id=str(service["id"]),
+        signing_key_reference=str(service.get("key_reference") or "") or None,
+        key_purpose=key_purpose,
+        status="active",
+    )
+
+
+@pytest.fixture
+async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_test_org):
+    """Provision the current API resources for an SD-JWT test template."""
+    compliance = await authenticated_gateway_client.create_compliance_profile(
+        organization_id=vp_test_org["id"],
+        name="EUDI VP SD-JWT",
+        compliance_code="EUDI_PID",
+        credential_format="sd_jwt_vc",
+        frameworks=["eudi"],
+    )
+    issuer = await _issuer_profile(
+        authenticated_gateway_client, vp_test_org["id"], credential_format="dc+sd-jwt",
+        key_purpose="vc_jwt_issuer", algorithm="ES256", name="EUDI VP SD-JWT issuer",
+    )
+    revocation = await authenticated_gateway_client.create_revocation_profile(
+        organization_id=vp_test_org["id"], name="EUDI VP status list",
+        revocation_mechanism=["STATUS_LIST_2021"],
+    )
+    return {
+        "compliance_profile_id": compliance["id"],
+        "issuer_profile_id": issuer["id"],
+        "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))["id"],
+    }
+
+
+@pytest.fixture
+async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test_org):
+    """Provision the mDoc-specific profile and document signer used in production."""
+    compliance = await authenticated_gateway_client.create_compliance_profile(
+        organization_id=vp_test_org["id"],
+        name="EUDI VP mDoc",
+        compliance_code="AAMVA_MDL",
+        credential_format="mso_mdoc",
+        frameworks=["aamva", "iso_18013_5"],
+    )
+    issuer = await _issuer_profile(
+        authenticated_gateway_client, vp_test_org["id"], credential_format="mso_mdoc",
+        key_purpose="mdoc_dsc", algorithm="ES256", name="EUDI VP mDoc document signer",
+    )
+    revocation = await authenticated_gateway_client.create_revocation_profile(
+        organization_id=vp_test_org["id"], name="EUDI VP mDoc status list",
+        revocation_mechanism=["STATUS_LIST_2021"],
+    )
+    return {
+        "compliance_profile_id": compliance["id"],
+        "issuer_profile_id": issuer["id"],
+        "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))["id"],
+    }
+
+
 @pytest.fixture
 async def sd_jwt_dl_template(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
+    vp_sd_jwt_resources,
 ):
     """SD-JWT driver's license template for VP testing."""
     return await authenticated_gateway_client.create_credential_template(
@@ -157,11 +251,7 @@ async def sd_jwt_dl_template(
             {"name": "age_over_18", "type": "boolean", "display_name": "Age Over 18"},
             {"name": "age_over_21", "type": "boolean", "display_name": "Age Over 21"},
         ],
-        compliance_profile={
-            "name": "test",
-            "type": "none",
-            "compliance_code": "CUSTOM",
-        },
+        **vp_sd_jwt_resources,
     )
 
 
@@ -169,6 +259,7 @@ async def sd_jwt_dl_template(
 async def mdl_mdoc_template(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
+    vp_mdoc_resources,
 ):
     """mDL mDoc template for mDoc/mDL VP testing."""
     return await authenticated_gateway_client.create_credential_template(
@@ -200,12 +291,7 @@ async def mdl_mdoc_template(
             {"name": "family_name", "display_name": "Family Name", "required": True},
             {"name": "birth_date", "display_name": "Birth Date", "required": True},
         ],
-        compliance_profile={
-            "name": "mDL mDoc",
-            "compliance_code": "AAMVA_MDL",
-            "credential_format": "mdoc",
-            "frameworks": ["aamva", "iso_18013_5"],
-        },
+        **vp_mdoc_resources,
     )
 
 
@@ -782,6 +868,7 @@ class TestEndToEndIssuanceAndPresentation:
         authenticated_gateway_client: GatewayClient,
         wallet_kit: EUDIWalletKitClient,
         vp_test_org,
+        vp_sd_jwt_resources,
     ):
         """Full SD-JWT lifecycle: create template → issue → present → verify."""
         # 1. Create credential template
@@ -796,7 +883,7 @@ class TestEndToEndIssuanceAndPresentation:
                 {"name": "family_name", "type": "string", "display_name": "Family Name"},
                 {"name": "birth_date", "type": "string", "display_name": "Birth Date"},
             ],
-            compliance_profile={"name": "test", "type": "none", "compliance_code": "CUSTOM"},
+            **vp_sd_jwt_resources,
         )
         logger.info("[E2E] Template created: %s", template["id"])
 
