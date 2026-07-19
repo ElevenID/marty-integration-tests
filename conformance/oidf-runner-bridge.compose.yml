@@ -1,0 +1,22 @@
+# Overlay for the pinned OpenID Foundation Conformance Suite Compose project.
+#
+# Invoke it in addition to the upstream docker-compose.yml, for example:
+#
+#   docker compose --project-name oidf-runner \
+#     --file /opt/openid-conformance-suite/docker-compose.yml \
+#     --file conformance/oidf-runner-bridge.compose.yml up -d
+#
+# OIDF_MARTY_BRIDGE_NETWORK is created by Marty's OIDF Compose profile.  The
+# official runner retains its default Compose network for MongoDB and all
+# runner-internal services.  Only its HTTP server joins Marty's narrow bridge,
+# where it can reach the public TLS proxy by its public hostname.
+services:
+  server:
+    networks:
+      default: {}
+      marty_oidf_bridge: {}
+
+networks:
+  marty_oidf_bridge:
+    name: ${OIDF_MARTY_BRIDGE_NETWORK:?set to <MARTY_CONFORMANCE_PROJECT>_oidf-runner}
+    external: true
