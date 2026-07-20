@@ -13,6 +13,7 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load official suite Compose lifecycle")
 lifecycle = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lifecycle)
+haip = importlib.import_module("haip_test_certificates")
 
 
 def marty_checkout(tmp_path: Path) -> Path:
@@ -41,6 +42,12 @@ def action(command: list[str]) -> str:
     raise AssertionError(f"no Compose action in {command}")
 
 
+def haip_material(tmp_path: Path, name: str) -> Path:
+    output = tmp_path / name
+    haip.generate_material(output, gateway_url="https://verifier.example:8443")
+    return output
+
+
 def test_projects_are_unique_and_scoped() -> None:
     assert lifecycle.project_names("123-1") == {
         "marty": "marty-conformance-123-1",
@@ -64,6 +71,39 @@ def test_selected_context_is_forwarded_to_marty(
     environment = lifecycle.child_environment()
     assert calls == [["info"]]
     assert environment["DOCKER_CONTEXT"] == "conformance-vm"
+
+
+def test_generated_haip_material_is_wired_to_marty(tmp_path: Path) -> None:
+    material = haip_material(tmp_path, "generated")
+    environment: dict[str, str] = {}
+    lifecycle.configure_haip_environment(environment, material)
+    assert environment["VERIFIER_SIGNING_KEY_PEM"] == (material / haip.KEY_FILE).read_text(encoding="ascii")
+    assert environment["VERIFIER_X509_CERT_PEM"] == (material / haip.CERTIFICATE_FILE).read_text(encoding="ascii")
+
+
+def test_external_haip_pem_pair_takes_precedence(tmp_path: Path) -> None:
+    generated = haip_material(tmp_path, "generated")
+    external = haip_material(tmp_path, "external")
+    signing_key = (external / haip.KEY_FILE).read_text(encoding="ascii")
+    certificate = (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii")
+    environment = {
+        "VERIFIER_SIGNING_KEY_PEM": signing_key,
+        "VERIFIER_X509_CERT_PEM": certificate,
+    }
+    lifecycle.configure_haip_environment(environment, generated)
+    assert environment == {
+        "VERIFIER_SIGNING_KEY_PEM": signing_key,
+        "VERIFIER_X509_CERT_PEM": certificate,
+    }
+
+
+def test_haip_rejects_a_partial_external_pair(tmp_path: Path) -> None:
+    material = haip_material(tmp_path, "generated")
+    environment = {
+        "VERIFIER_SIGNING_KEY_PEM": (material / haip.KEY_FILE).read_text(encoding="ascii"),
+    }
+    with pytest.raises(ValueError, match="set both"):
+        lifecycle.configure_haip_environment(environment, material)
 
 
 def test_failed_up_unwinds_only_started_projects_in_reverse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

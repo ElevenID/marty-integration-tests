@@ -4,6 +4,10 @@
 # This overlay is deliberately separate so its image digests can be updated in
 # the same reviewed change as conformance/oidf-runner.json.
 services:
+  # The upstream service is named mongodb and otherwise resolves the mutable
+  # mongo:6.0.13 platform tag at pull time.
+  mongodb:
+    image: mongo@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
   server:
     image: registry.gitlab.com/openid/conformance-suite@sha256:6aa426aa1554f787b4a6259a556d2e33c18f2efc6a48cc5e1818b1818ac79485
   nginx:

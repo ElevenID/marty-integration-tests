@@ -52,6 +52,7 @@ Thumbs.db
 .cache/oidf/
 conformance/*.local.json
 conformance/local-certs/
+conformance/haip-material/
 
 # Local config
 local.env
