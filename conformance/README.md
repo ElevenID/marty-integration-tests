@@ -148,6 +148,24 @@ image-digest overrides instead of its upstream mutable `latest` defaults. The
 source Compose option remains available only when developing a locally built
 copy of the exact pinned runner revision.
 
+### Separate EUDI reference Compose project
+
+The pinned EUDI wallet tester, verifier endpoint, and wallet-kit harness also
+run in their own Compose project. Start them only after the Marty OIDF profile
+has created the scoped TLS bridge:
+
+```bash
+python scripts/eudi_reference_compose.py \
+  --marty-project marty-conformance-oidf \
+  --project eudi-reference-oidf \
+  -- up --detach
+```
+
+The helper verifies that `${MARTY_CONFORMANCE_PROJECT}_oidf-runner` already
+exists, then supplies it as the only Marty-facing network. It never attaches
+the EUDI project to `marty-network`; use the same helper with `down`, `logs`,
+or `config` for the matching project lifecycle.
+
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
 export CONFORMANCE_SERVER=https://oidf.test.example
