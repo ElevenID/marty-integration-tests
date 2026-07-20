@@ -26,6 +26,18 @@ MANIFEST = ROOT / "conformance" / "eudi-reference-interop.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_IMAGE = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 OCI_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+:[a-zA-Z0-9._-]+@sha256:[0-9a-f]{64}$")
+EUDI_HAIP_EVIDENCE_ID = "eudi.oid4vp.haip.resolve-dispatch.v1"
+EUDI_HOLDER_BINDING_EVIDENCE_ID = "eudi.sd-jwt.missing-holder-binding-key.v1"
+REQUIRED_EVIDENCE_CLAIMS = {
+    EUDI_HAIP_EVIDENCE_ID: frozenset(
+        {
+            "presentation:sd_jwt_vc",
+            "request_object_trust:signed_jar_x509_hash_pkix",
+            "response_mode:direct_post.jwt",
+        }
+    ),
+    EUDI_HOLDER_BINDING_EVIDENCE_ID: frozenset({"negative:missing_holder_binding_key"}),
+}
 
 
 def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
@@ -81,6 +93,13 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         raise ValueError(
             "EUDI negative coverage contains planned-only claims: " + ", ".join(sorted(unsupported_negative_claims))
         )
+    required_evidence = data.get("required_evidence")
+    if not isinstance(required_evidence, dict) or set(required_evidence) != set(REQUIRED_EVIDENCE_CLAIMS):
+        raise ValueError("EUDI manifest must declare the complete stable evidence contract")
+    for evidence_id, expected_claims in REQUIRED_EVIDENCE_CLAIMS.items():
+        record = required_evidence.get(evidence_id)
+        if not isinstance(record, dict) or set(record.get("claims", [])) != set(expected_claims):
+            raise ValueError(f"EUDI evidence {evidence_id} must bind its exact coverage claims")
     limitations = data.get("limitations", {})
     if not {"mso_mdoc_presentation", "oid4vp_negative_vectors"} <= set(limitations):
         raise ValueError("EUDI manifest must record current presentation limitations")
@@ -106,6 +125,54 @@ def junit_skip_count(path: Path) -> int:
         raise ValueError("EUDI runner did not produce JUnit output")
     root = ElementTree.parse(path).getroot()
     return sum(int(node.attrib.get("skipped", "0")) for node in root.iter() if node.tag == "testsuite")
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def junit_required_evidence(
+    path: Path,
+    required_ids: set[str],
+) -> dict[str, dict[str, str]]:
+    """Require each stable evidence ID to occur exactly once and pass."""
+    if not path.is_file():
+        raise ValueError("EUDI runner did not produce JUnit output")
+    root = ElementTree.parse(path).getroot()
+    observed: dict[str, dict[str, str]] = {}
+    for testcase in root.iter():
+        if _xml_local_name(testcase.tag) != "testcase":
+            continue
+        evidence_ids = [
+            str(node.attrib.get("value", ""))
+            for node in testcase.iter()
+            if _xml_local_name(node.tag) == "property" and node.attrib.get("name") == "evidence_id"
+        ]
+        if not evidence_ids:
+            continue
+        if len(evidence_ids) != 1 or not evidence_ids[0]:
+            raise ValueError("an EUDI JUnit testcase emitted an ambiguous evidence_id")
+        evidence_id = evidence_ids[0]
+        if evidence_id not in required_ids:
+            raise ValueError(f"EUDI JUnit contains undeclared evidence_id {evidence_id}")
+        if evidence_id in observed:
+            raise ValueError(f"EUDI JUnit contains duplicate evidence_id {evidence_id}")
+        outcomes = [
+            _xml_local_name(node.tag)
+            for node in testcase
+            if _xml_local_name(node.tag) in {"failure", "error", "skipped"}
+        ]
+        if outcomes:
+            raise ValueError(f"EUDI evidence {evidence_id} did not pass: {', '.join(outcomes)}")
+        observed[evidence_id] = {
+            "status": "passed",
+            "classname": testcase.attrib.get("classname", ""),
+            "testcase": testcase.attrib.get("name", ""),
+        }
+    missing = required_ids - set(observed)
+    if missing:
+        raise ValueError("EUDI JUnit is missing required evidence_id values: " + ", ".join(sorted(missing)))
+    return {evidence_id: observed[evidence_id] for evidence_id in sorted(observed)}
 
 
 def stack_manifest_metadata(path: Path) -> dict:
@@ -166,7 +233,15 @@ def write_evidence(
     skipped: int = 0,
     stack_manifest: Path | None = None,
     request_object_trust: dict[str, object] | None = None,
+    observed_evidence: dict[str, dict[str, str]] | None = None,
 ) -> None:
+    observed_evidence = observed_evidence or {}
+    required_ids = set(manifest["required_evidence"])
+    if result == 0 and (
+        set(observed_evidence) != required_ids
+        or any(record.get("status") != "passed" for record in observed_evidence.values())
+    ):
+        raise ValueError("passing EUDI evidence requires every stable evidence assertion")
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
         for path in sorted(output.rglob("*"))
@@ -176,6 +251,8 @@ def write_evidence(
         "schema": "elevenid.official-interop-evidence/v1",
         "components": manifest["components"],
         "coverage": manifest["coverage"],
+        "required_evidence": manifest["required_evidence"],
+        "observed_evidence": observed_evidence,
         "compatibility_only": manifest.get("compatibility_only", {}),
         "planned_coverage": manifest.get("planned_coverage", {}),
         "limitations": manifest.get("limitations", {}),
@@ -291,16 +368,21 @@ def run(args: argparse.Namespace) -> int:
     completed = subprocess.run(command, cwd=ROOT, env=environment, text=True, capture_output=True, check=False)
     result = completed.returncode
     skipped = 0
+    observed_evidence: dict[str, dict[str, str]] = {}
     detail = completed.stdout + completed.stderr
-    if result == 0:
-        try:
-            skipped = junit_skip_count(output / "junit.xml")
-        except (ElementTree.ParseError, ValueError) as exc:
-            result = 1
-            detail += f"\nEUDI evidence failure: {exc}\n"
-        if skipped:
-            result = 1
-            detail += f"\nEUDI evidence failure: {skipped} test(s) were skipped.\n"
+    try:
+        junit_path = output / "junit.xml"
+        skipped = junit_skip_count(junit_path)
+        observed_evidence = junit_required_evidence(
+            junit_path,
+            set(manifest["required_evidence"]),
+        )
+    except (ElementTree.ParseError, ValueError) as exc:
+        result = 1
+        detail += f"\nEUDI evidence failure: {exc}\n"
+    if skipped:
+        result = 1
+        detail += f"\nEUDI evidence failure: {skipped} test(s) were skipped.\n"
     (output / "runner.log").write_text(detail, encoding="utf-8")
     write_evidence(
         output,
@@ -310,6 +392,7 @@ def run(args: argparse.Namespace) -> int:
         skipped,
         stack_manifest,
         request_object_trust,
+        observed_evidence,
     )
     return result
 

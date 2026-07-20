@@ -23,6 +23,7 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert manifest["coverage"]["request_object_trust"] == ["signed_jar_x509_hash_pkix"]
     assert manifest["coverage"]["response_mode"] == ["direct_post.jwt"]
     assert manifest["coverage"]["negative"] == ["missing_holder_binding_key"]
+    assert set(manifest["required_evidence"]) == set(eudi.REQUIRED_EVIDENCE_CLAIMS)
     assert manifest["compatibility_only"]["presentation"] == ["mso_mdoc"]
     assert "replayed_response" in manifest["planned_coverage"]["negative"]
     assert manifest["limitations"]["mso_mdoc_presentation"]["status"] == "not_officially_exercised"
@@ -68,6 +69,10 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "ECKeyGenerator" not in presentation_source
     assert "holderKeyFor(credentialCompact)" in presentation_source
     assert "EncryptionMethod.A256GCM" in presentation_source
+    official_tests = (ROOT / "tests" / "integration" / "gateway" / "test_eudi_wallet_kit_vp.py").read_text(
+        encoding="utf-8"
+    )
+    assert all(evidence_id in official_tests for evidence_id in eudi.REQUIRED_EVIDENCE_CLAIMS)
 
 
 def test_eudi_manifest_cannot_claim_presentation_without_haip_trust_evidence(tmp_path: Path) -> None:
@@ -90,10 +95,21 @@ def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
         "verifier": "http://verifier:8090",
         "wallet_kit": "http://kit:9090",
     }
-    eudi.write_evidence(output, eudi.load_manifest(), endpoints, 0)
+    observed = {
+        evidence_id: {"status": "passed", "classname": "suite", "testcase": evidence_id}
+        for evidence_id in eudi.REQUIRED_EVIDENCE_CLAIMS
+    }
+    eudi.write_evidence(
+        output,
+        eudi.load_manifest(),
+        endpoints,
+        0,
+        observed_evidence=observed,
+    )
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["result"] == {"exit_code": 0, "passed": True, "skipped": 0}
     assert evidence["components"]["wallet_tester"]["image"].startswith("ghcr.io/")
+    assert evidence["observed_evidence"] == observed
 
 
 def test_eudi_stack_manifest_records_immutable_marty_images(tmp_path: Path) -> None:
@@ -128,6 +144,96 @@ def test_eudi_junit_skip_count_is_visible(tmp_path: Path) -> None:
     report = tmp_path / "junit.xml"
     report.write_text('<testsuites><testsuite tests="2" skipped="1"/></testsuites>', encoding="utf-8")
     assert eudi.junit_skip_count(report) == 1
+
+
+def _junit_document(cases: list[tuple[str | None, str | None]]) -> str:
+    rendered: list[str] = []
+    for index, (evidence_id, outcome) in enumerate(cases):
+        properties = (
+            f'<properties><property name="evidence_id" value="{evidence_id}"/></properties>'
+            if evidence_id is not None
+            else ""
+        )
+        result = f"<{outcome}/>" if outcome is not None else ""
+        rendered.append(f'<testcase classname="eudi" name="case-{index}">{properties}{result}</testcase>')
+    return "<testsuites><testsuite>" + "".join(rendered) + "</testsuite></testsuites>"
+
+
+def _passing_evidence_cases() -> list[tuple[str, None]]:
+    return [(evidence_id, None) for evidence_id in eudi.REQUIRED_EVIDENCE_CLAIMS]
+
+
+def test_eudi_junit_requires_each_stable_evidence_id_exactly_once(tmp_path: Path) -> None:
+    report = tmp_path / "junit.xml"
+    report.write_text(_junit_document(_passing_evidence_cases()), encoding="utf-8")
+
+    observed = eudi.junit_required_evidence(
+        report,
+        set(eudi.REQUIRED_EVIDENCE_CLAIMS),
+    )
+
+    assert set(observed) == set(eudi.REQUIRED_EVIDENCE_CLAIMS)
+    assert all(record["status"] == "passed" for record in observed.values())
+
+
+@pytest.mark.parametrize(
+    ("cases", "message"),
+    [
+        ([], "missing required evidence_id"),
+        (
+            [("eudi.renamed.v1", None), *_passing_evidence_cases()],
+            "undeclared evidence_id",
+        ),
+        (
+            [*_passing_evidence_cases(), (eudi.EUDI_HAIP_EVIDENCE_ID, None)],
+            "duplicate evidence_id",
+        ),
+        (
+            [
+                (eudi.EUDI_HAIP_EVIDENCE_ID, "failure"),
+                (eudi.EUDI_HOLDER_BINDING_EVIDENCE_ID, None),
+            ],
+            "did not pass: failure",
+        ),
+        (
+            [
+                (eudi.EUDI_HAIP_EVIDENCE_ID, "error"),
+                (eudi.EUDI_HOLDER_BINDING_EVIDENCE_ID, None),
+            ],
+            "did not pass: error",
+        ),
+        (
+            [
+                (eudi.EUDI_HAIP_EVIDENCE_ID, "skipped"),
+                (eudi.EUDI_HOLDER_BINDING_EVIDENCE_ID, None),
+            ],
+            "did not pass: skipped",
+        ),
+    ],
+)
+def test_eudi_junit_rejects_missing_renamed_duplicate_or_nonpassing_evidence(
+    tmp_path: Path,
+    cases: list[tuple[str | None, str | None]],
+    message: str,
+) -> None:
+    report = tmp_path / "junit.xml"
+    report.write_text(_junit_document(cases), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        eudi.junit_required_evidence(
+            report,
+            set(eudi.REQUIRED_EVIDENCE_CLAIMS),
+        )
+
+
+def test_eudi_writer_cannot_publish_a_green_summary_without_sentinels(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "report"
+    output.mkdir()
+
+    with pytest.raises(ValueError, match="every stable evidence assertion"):
+        eudi.write_evidence(output, eudi.load_manifest(), {}, 0)
 
 
 def test_eudi_haip_evidence_binds_a_request_root_separate_from_tls(tmp_path: Path) -> None:

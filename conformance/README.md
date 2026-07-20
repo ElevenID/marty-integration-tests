@@ -488,6 +488,13 @@ from the disposable TLS CA. The official EUDI OID4VP library must resolve an
 encrypted `direct_post.jwt` response; a default/DID-only flow does not satisfy
 the lane's recorded presentation coverage.
 
+The public summary is also bound to stable, versioned JUnit evidence IDs for
+the official HAIP resolve/dispatch path and the missing-holder-binding-key
+negative path. The runner rejects a missing, renamed, duplicated, failed,
+errored, or skipped sentinel, and a passing `evidence.json` cannot be written
+unless both required assertions appear exactly once and pass. This prevents a
+suite refactor from silently deleting the tests behind a published claim.
+
 The stack pin records immutable `marty-ui` release `v1.1.3` as `ready`, with
 the independently downloaded `stack-manifest.json` SHA-256 recorded in
 `stack-under-test.json`. Execution hard-fails if the released asset, its
