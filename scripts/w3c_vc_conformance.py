@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "w3c-vc-data-model-v2.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def load_manifest(path: Path = MANIFEST) -> dict:
@@ -76,6 +77,27 @@ def file_sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def stack_manifest_metadata(path: Path) -> dict:
+    """Validate and record the immutable deployment tested by the W3C suite."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if raw.get("schema") != "marty.stack/v1":
+        raise ValueError("stack manifest must use marty.stack/v1")
+    images: list[dict[str, str]] = []
+    for component in raw.get("components", []):
+        if not isinstance(component, dict):
+            continue
+        for artifact in component.get("artifacts", []):
+            if not isinstance(artifact, dict) or artifact.get("type") != "oci":
+                continue
+            uri, digest = artifact.get("uri"), artifact.get("digest")
+            if not isinstance(uri, str) or not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+                raise ValueError("every OCI stack artifact must have an immutable sha256 digest")
+            images.append({"component": str(component.get("name", "unknown")), "uri": uri, "digest": digest})
+    if not images:
+        raise ValueError("stack manifest contains no immutable OCI artifacts")
+    return {"path": str(path), "sha256": file_sha256(path), "release": raw.get("release"), "images": images}
+
+
 def npm_command() -> str:
     """Return the executable npm launcher on the current platform."""
     return "npm.cmd" if os.name == "nt" else "npm"
@@ -115,7 +137,14 @@ def report_has_executed_cases(path: Path) -> bool:
     )
 
 
-def write_evidence(output: Path, manifest: dict, suite: Path, adapter_url: str, result: int) -> None:
+def write_evidence(
+    output: Path,
+    manifest: dict,
+    suite: Path,
+    adapter_url: str,
+    result: int,
+    stack_manifest: Path,
+) -> None:
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
         for path in sorted(output.rglob("*"))
@@ -125,7 +154,11 @@ def write_evidence(output: Path, manifest: dict, suite: Path, adapter_url: str, 
         "schema": "elevenid.official-interop-evidence/v1",
         "official_suite": manifest["official_suite"],
         "suite_checkout": {"path": str(suite), "commit": revision(suite)},
-        "marty": {"commit": os.environ.get("MARTY_COMMIT", "unrecorded"), "adapter_url": adapter_url},
+        "marty": {
+            "commit": os.environ.get("MARTY_COMMIT", "unrecorded"),
+            "adapter_url": adapter_url,
+            "stack_manifest": stack_manifest_metadata(stack_manifest),
+        },
         "exclusions": manifest["exclusions"],
         "result": {"exit_code": result, "passed": result == 0},
         "artifacts": artifacts,
@@ -133,7 +166,7 @@ def write_evidence(output: Path, manifest: dict, suite: Path, adapter_url: str, 
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def run_suite(suite: Path, adapter_url: str, output: Path, *, install: bool) -> int:
+def run_suite(suite: Path, adapter_url: str, output: Path, stack_manifest: Path, *, install: bool) -> int:
     """Run the official W3C test command against the real test-only adapter.
 
     The upstream checkout is pinned before invoking its own ``npm test``
@@ -142,6 +175,7 @@ def run_suite(suite: Path, adapter_url: str, output: Path, *, install: bool) -> 
     """
     manifest = load_manifest()
     validate_checkout(suite, manifest)
+    stack_manifest_metadata(stack_manifest)
     write_local_config(suite / "localConfig.cjs", adapter_url)
     if install:
         install_result = subprocess.run([npm_command(), "install", "--package-lock-only", "--ignore-scripts"], cwd=suite, check=False).returncode
@@ -169,7 +203,7 @@ def run_suite(suite: Path, adapter_url: str, output: Path, *, install: bool) -> 
                     target = output / "reports" / path.relative_to(source)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(path.read_bytes())
-    write_evidence(output, manifest, suite, adapter_url, result)
+    write_evidence(output, manifest, suite, adapter_url, result, stack_manifest)
     return result
 
 
@@ -184,6 +218,12 @@ def main() -> int:
     execute.add_argument("--suite", type=Path, required=True)
     execute.add_argument("--adapter-url", required=True)
     execute.add_argument("--output-dir", type=Path, required=True)
+    execute.add_argument(
+        "--stack-manifest",
+        type=Path,
+        required=True,
+        help="attested marty.stack/v1 manifest for the deployment under test",
+    )
     execute.add_argument("--install", action="store_true", help="generate the upstream lockfile and install its dependencies")
     args = parser.parse_args()
     manifest = load_manifest()
@@ -191,7 +231,13 @@ def main() -> int:
         print(f"W3C VC v2 suite manifest is valid: {manifest['official_suite']['commit']}")
         return 0
     if args.command == "run":
-        return run_suite(args.suite.resolve(), args.adapter_url, args.output_dir.resolve(), install=args.install)
+        return run_suite(
+            args.suite.resolve(),
+            args.adapter_url,
+            args.output_dir.resolve(),
+            args.stack_manifest.resolve(),
+            install=args.install,
+        )
     write_local_config(args.output, args.adapter_url)
     return 0
 

@@ -56,14 +56,31 @@ def test_w3c_report_requires_an_executed_matrix_case(tmp_path: Path) -> None:
     assert w3c.report_has_executed_cases(report)
 
 
-def test_w3c_evidence_preserves_the_narrow_exclusion(tmp_path: Path, monkeypatch) -> None:
+def test_w3c_evidence_preserves_the_narrow_exclusion_and_immutable_stack(tmp_path: Path, monkeypatch) -> None:
     suite = tmp_path / "suite"
     suite.mkdir()
     output = tmp_path / "output"
     output.mkdir()
     (output / "result.json").write_text("{}", encoding="utf-8")
+    stack = tmp_path / "stack-manifest.json"
+    stack.write_text(
+        json.dumps({
+            "schema": "marty.stack/v1",
+            "release": "marty-ui@1.0.0",
+            "components": [{
+                "name": "marty-ui",
+                "artifacts": [{
+                    "type": "oci",
+                    "uri": "ghcr.io/elevenid/marty-ui-oss/services",
+                    "digest": "sha256:" + "a" * 64,
+                }],
+            }],
+        }),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(w3c, "revision", lambda _path: "a" * 40)
-    w3c.write_evidence(output, w3c.load_manifest(), suite, "https://marty.test/__test__/vc-api", 1)
+    w3c.write_evidence(output, w3c.load_manifest(), suite, "https://marty.test/__test__/vc-api", 1, stack)
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["result"] == {"exit_code": 1, "passed": False}
     assert evidence["exclusions"][0]["capability"] == "JSON-LD Data Integrity eddsa-rdfc-2022"
+    assert evidence["marty"]["stack_manifest"]["images"][0]["digest"] == "sha256:" + "a" * 64

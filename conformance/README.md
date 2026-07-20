@@ -247,9 +247,14 @@ into the evidence directory.
 python scripts/w3c_vc_conformance.py run \
   --suite /opt/vc-data-model-2.0-test-suite \
   --adapter-url https://stack.test.example/__test__/vc-api \
+  --stack-manifest /secure/work/stack-manifest.json \
   --output-dir reports/w3c-vc-v2 \
   --install
 ```
+
+`--stack-manifest` is mandatory for an execution. The helper rejects a manifest
+without digest-pinned OCI artifacts and records the release, manifest hash, and
+tested image digests in `evidence.json`.
 
 ## Certification later
 
