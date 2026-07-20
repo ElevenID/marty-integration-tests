@@ -144,9 +144,11 @@ Use the same helper for `down`, `logs`, and `config`. It keeps the runner
 project independent and only sets the external bridge-network name for the
 official runner Compose overlay. `--prebuilt` is the normal reproducible
 choice: it selects the runner's release Compose file and ElevenID's reviewed
-image-digest overrides instead of its upstream mutable `latest` defaults. The
-source Compose option remains available only when developing a locally built
-copy of the exact pinned runner revision.
+image-digest overrides instead of its upstream mutable defaults. The overlay
+pins the exact `server`, `nginx`, and upstream `mongodb` service images,
+including the MongoDB image that upstream otherwise selects as `mongo:6.0.13`.
+The source Compose option remains available only when developing a locally
+built copy of the exact pinned runner revision.
 
 ### Separate EUDI reference Compose project
 
@@ -198,6 +200,49 @@ Add `--haip` only when the disposable verifier signing key and matching
 certificate are present in `VERIFIER_SIGNING_KEY_PEM` and
 `VERIFIER_X509_CERT_PEM`. Certification later can supply externally issued
 material without changing the lifecycle or production protocol path.
+
+For local and CI HAIP runs, generate new material for every run. The helper
+creates a P-256 disposable root, a matching P-256 verifier leaf and signing
+key, and a separate P-256 credential-signing JWK for the official mock wallet.
+It writes a ready `marty-verifier-haip.json`, embeds the root as the official
+runner's request-object trust anchor, and stores the leaf-first certificate
+bundle that Marty uses for its `x509_hash` and `x5c` request object. The root
+is omitted from Marty's JOSE `x5c` header by the production verifier code and
+is trusted independently by the official runner.
+
+```bash
+python scripts/haip_test_certificates.py \
+  --output-dir /secure/work/haip-run1 \
+  --gateway-url https://marty-oidf.test:8443
+
+python scripts/official_suite_compose.py up \
+  --run-id run1 \
+  --marty-ui ../marty-ui \
+  --oidf-runner /opt/openid-conformance-suite \
+  --oidf --haip --haip-material /secure/work/haip-run1
+
+python scripts/oidf_conformance.py run \
+  --runner /opt/openid-conformance-suite \
+  --profile oid4vp-haip-verifier \
+  --config /secure/work/haip-run1/marty-verifier-haip.json \
+  --stack-manifest /secure/work/stack-manifest.json \
+  --allow-planned-profile \
+  --output-dir reports/oidf/haip \
+  --interaction-script scripts/oidf_marty_verifier.py
+```
+
+The default certificate lifetime is 24 hours and is capped at seven days.
+Private files are created owner-readable/writable, existing material is never
+overwritten, and standard output contains only paths, public certificate
+fingerprints, validity, and configuration digests. Do not commit the generated
+directory or upload it as an artifact.
+
+For a financed certification run, provide both externally managed
+`VERIFIER_SIGNING_KEY_PEM` and `VERIFIER_X509_CERT_PEM` values and an approved
+HAIP configuration containing the issuer's trust anchor. Those environment
+values take precedence even if `--haip-material` is present, so the same
+Compose path exercises the real verifier implementation. A partial external
+pair is rejected before any container starts.
 
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json

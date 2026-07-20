@@ -98,6 +98,7 @@ def test_prebuilt_runner_images_are_pinned_by_digest() -> None:
     overlay = (ROOT / "conformance" / "oidf-runner-prebuilt.compose.yml").read_text(encoding="utf-8")
     assert "registry.gitlab.com/openid/conformance-suite@sha256:" in overlay
     assert "registry.gitlab.com/openid/conformance-suite/nginx@sha256:" in overlay
+    assert "mongo@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070" in overlay
     assert ":latest" not in overlay
 
 
