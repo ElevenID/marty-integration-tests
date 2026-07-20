@@ -23,6 +23,11 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
     assert w3c.SRI_SHA512.fullmatch(manifest["official_suite"]["npm_integrity"])
     assert w3c.DIGEST.fullmatch(manifest["official_suite"]["package_lock_sha256"])
     assert manifest["adapter"]["path"] == "/__test__/vc-api"
+    assert set(manifest["evidence"]["required_capabilities"]) == {
+        "issuer",
+        "vc_verifier",
+        "vp_verifier",
+    }
     assert manifest["exclusions"][0]["review_date"]
 
 
@@ -92,14 +97,72 @@ def test_w3c_local_config_registers_the_real_issuer_and_verifiers(tmp_path: Path
     assert "issuers:" in config
 
 
-def test_w3c_report_requires_an_executed_matrix_case(tmp_path: Path) -> None:
-    report = tmp_path / "index.json"
-    report.write_text(json.dumps({"matrices": [{"rows": [], "columns": []}]}), encoding="utf-8")
-    assert not w3c.report_has_executed_cases(report)
-    report.write_text(
-        json.dumps({"matrices": [{"rows": [{"title": "case"}], "columns": ["ElevenID"]}]}), encoding="utf-8"
+def capability_row(
+    manifest: dict[str, object],
+    capability: str,
+    *,
+    state: str = "passed",
+    column: str = "ElevenID",
+) -> dict[str, object]:
+    evidence = manifest["evidence"]
+    assert isinstance(evidence, dict)
+    requirements = evidence["required_capabilities"]
+    assert isinstance(requirements, dict)
+    markers = requirements[capability]
+    assert isinstance(markers, list)
+    return {
+        "id": f"{markers[0]} in the conforming documents it processes.",
+        "cells": [{"state": state, "cell": {"columnId": column}}],
+    }
+
+
+def capability_report(rows: list[dict[str, object]]) -> dict[str, object]:
+    return {"matrices": [{"columns": ["ElevenID"], "rows": rows}]}
+
+
+def test_w3c_report_requires_passed_issuer_vc_verifier_and_vp_verifier_rows() -> None:
+    manifest = w3c.load_manifest()
+    rows = [capability_row(manifest, capability) for capability in ("issuer", "vc_verifier", "vp_verifier")]
+    rows.append(
+        {
+            "id": "An unrelated official suite row may be added without changing a total-count gate.",
+            "cells": [{"state": "passed", "cell": {"columnId": "ElevenID"}}],
+        }
     )
-    assert w3c.report_has_executed_cases(report)
+
+    assert w3c.executed_capabilities_from_report(capability_report(rows), manifest) == {
+        "issuer",
+        "vc_verifier",
+        "vp_verifier",
+    }
+
+
+@pytest.mark.parametrize("missing", ["issuer", "vc_verifier", "vp_verifier"])
+def test_w3c_report_rejects_each_missing_required_capability(missing: str) -> None:
+    manifest = w3c.load_manifest()
+    rows = [
+        capability_row(manifest, capability)
+        for capability in ("issuer", "vc_verifier", "vp_verifier")
+        if capability != missing
+    ]
+
+    executed = w3c.executed_capabilities_from_report(capability_report(rows), manifest)
+
+    assert missing not in executed
+    assert w3c.REQUIRED_EVIDENCE_CAPABILITIES - executed == {missing}
+
+
+def test_w3c_report_does_not_count_failed_pending_or_other_implementation_rows() -> None:
+    manifest = w3c.load_manifest()
+    report = capability_report(
+        [
+            capability_row(manifest, "issuer", state="failed"),
+            capability_row(manifest, "vc_verifier", state="pending"),
+            capability_row(manifest, "vp_verifier", column="Another implementation"),
+        ]
+    )
+
+    assert w3c.executed_capabilities_from_report(report, manifest) == set()
 
 
 def test_w3c_evidence_preserves_the_narrow_exclusion_and_immutable_stack(
@@ -133,8 +196,14 @@ def test_w3c_evidence_preserves_the_narrow_exclusion_and_immutable_stack(
         encoding="utf-8",
     )
     monkeypatch.setattr(w3c, "revision", lambda _path: "a" * 40)
-    w3c.write_evidence(output, w3c.load_manifest(), suite, "https://marty.test/__test__/vc-api", 1, stack)
+    # Even a zero process exit is not a pass without all three role sentinels.
+    w3c.write_evidence(output, w3c.load_manifest(), suite, "https://marty.test/__test__/vc-api", 0, stack)
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
-    assert evidence["result"] == {"exit_code": 1, "passed": False}
+    assert evidence["result"] == {
+        "exit_code": 0,
+        "passed": False,
+        "required_capabilities": ["issuer", "vc_verifier", "vp_verifier"],
+        "executed_capabilities": [],
+    }
     assert evidence["exclusions"][0]["capability"] == "JSON-LD Data Integrity eddsa-rdfc-2022"
     assert evidence["marty"]["stack_manifest"]["images"][0]["digest"] == "sha256:" + "a" * 64

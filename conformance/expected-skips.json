@@ -42,17 +42,5 @@
     "reason": "Marty's production verifier flow currently supports GET retrieval for request_uri objects. This upstream module exercises request_uri_method=post and remains narrowly skipped until POST retrieval is implemented and selected by the production flow.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
-  },
-  {
-    "test-name": "oid4vp-1final-verifier-request-uri-method-post",
-    "configuration-filename": "*marty-verifier-haip*.json",
-    "variant": {
-      "client_id_prefix": "x509_hash",
-      "request_method": "request_uri_signed",
-      "vp_profile": "haip"
-    },
-    "reason": "Signed request_uri transport and POST retrieval are compatible, but Marty's production HAIP verifier flow currently selects request_uri_method=get. This upstream POST-retrieval module remains narrowly skipped until POST retrieval is implemented and selected by the production flow.",
-    "owner": "ElevenID",
-    "expires": "2027-01-01"
   }
 ]

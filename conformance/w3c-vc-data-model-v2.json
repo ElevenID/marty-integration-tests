@@ -21,6 +21,20 @@
     "serializations": ["jwt_vc_json", "sd_jwt_vc", "mso_mdoc"],
     "verification_path": "Marty presentation-policy evaluator"
   },
+  "evidence": {
+    "implementation_column": "ElevenID",
+    "required_capabilities": {
+      "issuer": [
+        "A conforming issuer implementation MUST include all required properties"
+      ],
+      "vc_verifier": [
+        "A conforming verifier implementation MUST perform verification"
+      ],
+      "vp_verifier": [
+        "Verifiable presentations MUST include a @context property"
+      ]
+    }
+  },
   "exclusions": [
     {
       "capability": "JSON-LD Data Integrity eddsa-rdfc-2022",

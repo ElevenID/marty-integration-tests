@@ -14,7 +14,6 @@ import os
 import re
 import subprocess
 import sys
-import urllib.request
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
@@ -63,9 +62,7 @@ def validate_expected_failures() -> None:
 
 
 def git_revision(path: Path) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
-    ).strip()
+    return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
 
 
 def validate_runner(path: Path, manifest: dict) -> None:
@@ -111,8 +108,7 @@ def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
         raise ValueError(f"unknown OIDF configuration profile: {profile_name}")
     signing_jwk = data.get("credential", {}).get("signing_jwk")
     if not isinstance(signing_jwk, dict) or not all(
-        isinstance(signing_jwk.get(field), str) and signing_jwk[field]
-        for field in ("kty", "crv", "x", "y", "d")
+        isinstance(signing_jwk.get(field), str) and signing_jwk[field] for field in ("kty", "crv", "x", "y", "d")
     ):
         raise ValueError(
             "credential.signing_jwk must contain the complete private EC JWK required by the official verifier plans"
@@ -172,11 +168,7 @@ def applicable_expected_skips(config: Path) -> list[dict]:
     configuration-scoped subset it can actually observe.
     """
     entries = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
-    return [
-        entry
-        for entry in entries
-        if fnmatch.fnmatchcase(config.name, str(entry["configuration-filename"]))
-    ]
+    return [entry for entry in entries if fnmatch.fnmatchcase(config.name, str(entry["configuration-filename"]))]
 
 
 def write_evidence(
@@ -388,13 +380,21 @@ def cmd_run(args: argparse.Namespace) -> int:
             ]
             hooks.append(subprocess.Popen(hook_command, cwd=ROOT))
             if browser_interaction_script is not None:
-                hooks.append(subprocess.Popen(
-                    [
-                        sys.executable, str(browser_interaction_script), "--test-id", match.group(1),
-                        "--test-name", current_module, "--server", os.environ.get("CONFORMANCE_SERVER", ""),
-                    ],
-                    cwd=ROOT,
-                ))
+                hooks.append(
+                    subprocess.Popen(
+                        [
+                            sys.executable,
+                            str(browser_interaction_script),
+                            "--test-id",
+                            match.group(1),
+                            "--test-name",
+                            current_module,
+                            "--server",
+                            os.environ.get("CONFORMANCE_SERVER", ""),
+                        ],
+                        cwd=ROOT,
+                    )
+                )
 
     runner_result = process.wait()
     hook_result = 0
@@ -403,22 +403,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     result = runner_result or hook_result
     write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
     return result
-
-
-def cmd_check_update(_args: argparse.Namespace) -> int:
-    manifest = load_manifest()
-    request = urllib.request.Request(
-        "https://gitlab.com/api/v4/projects/openid%2Fconformance-suite/releases/permalink/latest",
-        headers={"Accept": "application/json", "User-Agent": "ElevenID-OIDF-Conformance"},
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:  # nosec B310: fixed HTTPS URL
-        latest = json.load(response)
-    latest_tag = latest.get("tag_name", "")
-    if not latest_tag.startswith("release-v"):
-        raise ValueError("OIDF latest release response has no release tag")
-    pinned = manifest["official_runner"]["release"]
-    print(f"Pinned OIDF runner: {pinned}; latest official release: {latest_tag}")
-    return 0 if latest_tag == pinned else 3
 
 
 def parse_args() -> argparse.Namespace:
@@ -451,7 +435,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="local browser adapter invoked for each official test module",
     )
-    commands.add_parser("check-update")
     return parser.parse_args()
 
 
@@ -461,7 +444,7 @@ def main() -> int:
         return cmd_validate(args)
     if args.command == "run":
         return cmd_run(args)
-    return cmd_check_update(args)
+    raise ValueError(f"unsupported OIDF conformance command: {args.command}")
 
 
 if __name__ == "__main__":

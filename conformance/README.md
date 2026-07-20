@@ -342,12 +342,28 @@ python scripts/oidf_conformance.py run \
   --interaction-script scripts/oidf_marty_verifier.py
 ```
 
+The standard verifier plan asks the official wallet to receive a URL-query
+authorization request. Marty production emits a signed `request_uri` instead,
+so this lane fetches that normal signed JAR over public TLS and adapts its
+claims into the official runner's URL-query input. Authentication, policy
+selection, request generation, and callback processing all use production
+paths, but the front-channel transport is adapted and must not be represented
+as transport-identical URL-query evidence.
+
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
 per-request encryption key, and encrypted `direct_post.jwt` handling. Its
 configuration additionally supplies the official runner's request-object trust
 anchor. No HAIP profile may be marked active merely because a local test
 adapter can execute it.
+
+For `oid4vp-1final-verifier-request-uri-method-post` only, the flow-start
+adapter selects production `request_uri_method=post`. The interaction bridge
+forwards that original outer parameter and does not pre-fetch the POST-only
+URI. The official mock wallet creates `wallet_nonce`, POSTs it to Marty's
+ordinary public request endpoint, and verifies the returned signed JAR carries
+the same nonce. Other signed-request modules keep GET retrieval, and the
+standard URL-query plan is not forced into this behavior.
 
 The EUDI wallet harness receives that request-object root through the read-only
 file named by `EUDI_OID4VP_TRUST_ANCHOR_FILE` and validates Marty's JAR `x5c`
@@ -429,7 +445,23 @@ python scripts/w3c_vc_conformance.py run \
 without digest-pinned OCI artifacts and records the release, manifest hash, and
 tested image digests in `evidence.json`.
 
+A zero exit code is accepted only when the official report contains passed
+ElevenID matrix rows proving all three configured capabilities: issuer, VC
+verifier, and VP verifier. The reviewed row markers live with the suite pin;
+there is deliberately no fixed total-case count, so upstream may add tests
+without weakening or spuriously breaking this evidence guard.
+
 ## Certification later
+
+At the pinned OIDF `release-v5.2.0`, the official source labels both the
+OID4VP Final verifier plan and the HAIP verifier plan as alpha tests that are
+not currently part of the certification program. Passing them is valuable
+official-runner interoperability evidence, but it is not an OIDF certificate.
+When financing permits, externally managed certificate material and a
+registered test deployment can exercise these same production paths. A formal
+certificate can be pursued only after OIDF makes the applicable program
+available; review and adopt newer runner releases through the monthly updater
+when that status changes.
 
 ## Manual production-path interoperability workflow
 
@@ -452,9 +484,9 @@ the independently downloaded `stack-manifest.json` SHA-256 recorded in
 `stack-under-test.json`. Execution hard-fails if the released asset, its
 attestation, or any digest-pinned component differs from that reviewed pin. A
 monthly execution schedule is intentionally deferred until all four manual
-lanes pass. The
-existing monthly upstream-review workflow may propose new suite revisions,
-but it never changes a runner pin or dependency lock automatically.
+lanes pass. The single monthly `official-suite-updates.yml` workflow creates
+or refreshes one draft review PR when any official suite has moved. It never
+changes a runner pin or dependency lock automatically and never merges.
 
 ## EUDI reference interoperability
 
@@ -509,16 +541,19 @@ Attach the pinned runner revision, stack manifest, image digests, sanitized
 configuration, exported result JSON, logs, and the commit under test. There is
 no second certification-only implementation to drift from daily testing.
 
-## Updating the runner
+## Updating official suites
 
-`python scripts/oidf_conformance.py check-update` compares the pinned release
-with the latest official GitLab release. The monthly workflow makes an update
-visible; it never silently switches versions. Review an update by changing both
-the release and full commit in `oidf-runner.json`, then run the active profile
-against the production-path stack before merging. Expected failures are allowed
-only in `expected-failures.json`, with an OIDF test id, issue URL, owner, and
-expiry date. Optional OIDF modules that Marty does not claim to support use
-the separate `expected-skips.json`, which requires a matching test name,
+The monthly `official-suite-updates.yml` workflow checks OIDF, W3C, and every
+pinned EUDI source through `scripts/official_suite_updates.py`. When it finds
+drift, it creates or refreshes the stable
+`automation/official-suite-updates` draft PR with the observed release and
+commit revisions. It never silently switches versions, changes immutable
+pins, or merges. For OIDF, review an update by changing both the release and
+full commit in `oidf-runner.json`, then run the affected profile against the
+production-path stack before merging. Expected failures are allowed only in
+`expected-failures.json`, with an OIDF test id, issue URL, owner, and expiry
+date. Optional OIDF modules that Marty does not claim to support use the
+separate `expected-skips.json`, which requires a matching test name,
 configuration pattern, rationale, owner, and expiry. The runner fails on a
 new skip, or when an expected skip stops occurring, so neither file is a
 permanent baseline.

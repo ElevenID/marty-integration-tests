@@ -190,16 +190,46 @@ def invoke_flow_command(command: Path, payload: dict[str, Any]) -> str:
     return value
 
 
-def request_uri_from_authorization_request(value: str) -> str:
+def authorization_request_parameters(value: str) -> tuple[str, dict[str, str]]:
+    """Return the request URI and its security-relevant outer parameters.
+
+    ``request_uri_method`` is an authorization-URL parameter, not a JAR
+    claim.  Keeping it alongside ``client_id`` lets the official wallet
+    exercise POST retrieval itself and send its own ``wallet_nonce`` to the
+    unchanged Marty production endpoint.  Duplicate outer parameters are
+    rejected instead of choosing an attacker-controlled first value.
+    """
     parsed = urlparse(value)
     if parsed.scheme in {"http", "https"}:
         request_uri = value
+        outer: dict[str, str] = {}
     else:
-        request_uri = (parse_qs(parsed.query).get("request_uri") or [""])[0]
+        query = parse_qs(parsed.query, keep_blank_values=True)
+
+        def one_parameter(name: str, *, required: bool = False) -> str | None:
+            values = query.get(name, [])
+            if len(values) > 1:
+                raise ValueError(f"Marty authorization request contains duplicate {name}")
+            value = values[0] if values else None
+            if required and not value:
+                raise ValueError(f"Marty authorization request has no {name}")
+            if value == "":
+                raise ValueError(f"Marty authorization request has an empty {name}")
+            return value
+
+        request_uri = one_parameter("request_uri", required=True) or ""
+        outer = {}
+        for name in ("client_id", "request_uri_method"):
+            parameter = one_parameter(name)
+            if parameter is not None:
+                outer[name] = parameter
+        method = outer.get("request_uri_method")
+        if method not in {None, "get", "post"}:
+            raise ValueError("Marty authorization request has an unsupported request_uri_method")
     parsed_request_uri = urlparse(request_uri)
     if parsed_request_uri.scheme != "https" or not parsed_request_uri.netloc:
         raise ValueError("Marty must return an externally reachable HTTPS request_uri")
-    return request_uri
+    return request_uri, outer
 
 
 def decode_request_object(request_uri: str, *, insecure: bool) -> dict[str, Any]:
@@ -245,28 +275,40 @@ def call_mock_wallet(
     request_method: str,
     conformance_insecure: bool,
     marty_insecure: bool = False,
+    outer_parameters: dict[str, str] | None = None,
 ) -> None:
     # The released Marty endpoint must use the generated CA like production.
     # Only the isolated upstream runner's fixed local certificate may use its
     # explicitly named local-runner exception.
-    claims = decode_request_object(request_uri, insecure=marty_insecure)
+    outer = outer_parameters or {}
     if request_method == "url_query":
+        # This is the explicitly documented standard-profile transport
+        # adaptation.  Outer signed-request parameters must not leak into it.
+        claims = decode_request_object(request_uri, insecure=marty_insecure)
         url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(query_parameters(claims))
         status, _ = request_json(url, insecure=conformance_insecure)
     elif request_method == "request_uri_signed":
-        client_id = claims.get("client_id")
-        if not isinstance(client_id, str) or not client_id:
-            raise RuntimeError("signed request object has no client_id")
-        url = (
-            endpoint
-            + ("&" if "?" in endpoint else "?")
-            + urlencode(
-                {
-                    "client_id": client_id,
-                    "request_uri": request_uri,
-                }
-            )
-        )
+        retrieval_method = outer.get("request_uri_method")
+        outer_client_id = outer.get("client_id")
+        if retrieval_method == "post":
+            # Do not pre-fetch a POST-only request URI with GET.  The official
+            # mock wallet creates wallet_nonce, POSTs it to Marty, and verifies
+            # that the returned signed JAR carries the same nonce.
+            if not outer_client_id:
+                raise RuntimeError("POST request_uri authorization request has no outer client_id")
+            client_id = outer_client_id
+        else:
+            claims = decode_request_object(request_uri, insecure=marty_insecure)
+            signed_client_id = claims.get("client_id")
+            if not isinstance(signed_client_id, str) or not signed_client_id:
+                raise RuntimeError("signed request object has no client_id")
+            if outer_client_id and outer_client_id != signed_client_id:
+                raise RuntimeError("outer client_id does not match signed request object client_id")
+            client_id = outer_client_id or signed_client_id
+        parameters = {"client_id": client_id, "request_uri": request_uri}
+        if retrieval_method is not None:
+            parameters["request_uri_method"] = retrieval_method
+        url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(parameters)
         status, _ = request_json(url, insecure=conformance_insecure)
     else:
         raise ValueError("OIDF_VERIFIER_REQUEST_METHOD must be url_query or request_uri_signed")
@@ -314,7 +356,7 @@ def main() -> int:
             "request_method": args.request_method,
         },
     )
-    request_uri = request_uri_from_authorization_request(authorization_request)
+    request_uri, outer_parameters = authorization_request_parameters(authorization_request)
     try:
         call_mock_wallet(
             endpoint,
@@ -322,6 +364,7 @@ def main() -> int:
             request_method=args.request_method,
             conformance_insecure=conformance_insecure,
             marty_insecure=args.insecure,
+            outer_parameters=outer_parameters,
         )
     except RuntimeError:
         # The runner can finish a module after exposing its endpoint but before

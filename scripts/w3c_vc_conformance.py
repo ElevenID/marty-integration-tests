@@ -23,6 +23,7 @@ MANIFEST = ROOT / "conformance" / "w3c-vc-data-model-v2.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SRI_SHA512 = re.compile(r"^sha512-[A-Za-z0-9+/]+={0,2}$")
+REQUIRED_EVIDENCE_CAPABILITIES = frozenset({"issuer", "vc_verifier", "vp_verifier"})
 
 
 def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
@@ -47,6 +48,21 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         raise ValueError("W3C VC suite must pin the npm tarball SHA-512 integrity")
     if not DIGEST.fullmatch(suite.get("package_lock_sha256", "")):
         raise ValueError("W3C VC suite must pin the generated package-lock digest")
+    evidence = data.get("evidence")
+    if not isinstance(evidence, dict):
+        raise ValueError("W3C VC suite must define evidence requirements")
+    if not isinstance(evidence.get("implementation_column"), str) or not evidence["implementation_column"]:
+        raise ValueError("W3C VC evidence must name its implementation column")
+    requirements = evidence.get("required_capabilities")
+    if not isinstance(requirements, dict) or set(requirements) != REQUIRED_EVIDENCE_CAPABILITIES:
+        raise ValueError("W3C VC evidence must require issuer, vc_verifier, and vp_verifier")
+    for capability, markers in requirements.items():
+        if (
+            not isinstance(markers, list)
+            or not markers
+            or not all(isinstance(marker, str) and marker for marker in markers)
+        ):
+            raise ValueError(f"W3C VC evidence capability {capability} must have non-empty row markers")
     for exclusion in data.get("exclusions", []):
         if not {"capability", "reason", "owner", "review_date"} <= exclusion.keys():
             raise ValueError("every W3C exclusion needs capability, reason, owner, and review_date")
@@ -219,22 +235,54 @@ def w3c_test_command(suite: Path) -> list[str]:
     ]
 
 
-def report_has_executed_cases(path: Path) -> bool:
-    """Return whether the W3C reporter recorded at least one matrix case.
+def executed_capabilities_from_report(report: object, manifest: dict[str, Any]) -> set[str]:
+    """Return Marty roles proven by passed official normative matrix rows.
 
-    The upstream runner exits successfully when no implementation matches its
-    issuer-led selectors.  That is a useful discovery state, but it is not an
-    interoperability pass and must fail this harness.
+    The required row fragments live beside the immutable suite pin so an
+    upstream wording change is reviewed with that pin.  No total case count is
+    fixed: the official suite may add cases without weakening this role guard.
     """
+    if not isinstance(report, dict):
+        return set()
+    evidence = manifest["evidence"]
+    implementation = evidence["implementation_column"]
+    requirements = evidence["required_capabilities"]
+    executed: set[str] = set()
+    matrices = report.get("matrices")
+    if not isinstance(matrices, list):
+        return executed
+    for matrix in matrices:
+        if not isinstance(matrix, dict) or not isinstance(matrix.get("rows"), list):
+            continue
+        for row in matrix["rows"]:
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                continue
+            cells = row.get("cells")
+            if not isinstance(cells, list):
+                continue
+            passed = any(
+                isinstance(cell, dict)
+                and cell.get("state") == "passed"
+                and isinstance(cell.get("cell"), dict)
+                and cell["cell"].get("columnId") == implementation
+                for cell in cells
+            )
+            if not passed:
+                continue
+            row_id = row["id"].casefold()
+            for capability, markers in requirements.items():
+                if any(marker.casefold() in row_id for marker in markers):
+                    executed.add(capability)
+    return executed
+
+
+def report_executed_capabilities(path: Path, manifest: dict[str, Any]) -> set[str]:
+    """Load a W3C report and return its role-complete execution evidence."""
     try:
         report = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
-    return any(
-        matrix.get("rows") and matrix.get("columns")
-        for matrix in report.get("matrices", [])
-        if isinstance(matrix, dict)
-    )
+        return set()
+    return executed_capabilities_from_report(report, manifest)
 
 
 def write_evidence(
@@ -245,6 +293,7 @@ def write_evidence(
     result: int,
     stack_manifest: Path,
 ) -> None:
+    executed_capabilities = report_executed_capabilities(output / "reports" / "index.json", manifest)
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
         for path in sorted(output.rglob("*"))
@@ -260,7 +309,12 @@ def write_evidence(
             "stack_manifest": stack_manifest_metadata(stack_manifest),
         },
         "exclusions": manifest["exclusions"],
-        "result": {"exit_code": result, "passed": result == 0},
+        "result": {
+            "exit_code": result,
+            "passed": result == 0 and executed_capabilities >= REQUIRED_EVIDENCE_CAPABILITIES,
+            "required_capabilities": sorted(REQUIRED_EVIDENCE_CAPABILITIES),
+            "executed_capabilities": sorted(executed_capabilities),
+        },
         "artifacts": artifacts,
     }
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -288,8 +342,11 @@ def run_suite(suite: Path, adapter_url: str, output: Path, stack_manifest: Path,
     (suite / "suite.log").unlink(missing_ok=True)
     result = subprocess.run(w3c_test_command(suite), cwd=suite, check=False).returncode
     report = suite / "reports" / "index.json"
-    if result == 0 and not report_has_executed_cases(report):
-        print("W3C VC suite produced no executed matrix cases; refusing to report a pass.", file=sys.stderr)
+    executed_capabilities = report_executed_capabilities(report, manifest)
+    missing_capabilities = REQUIRED_EVIDENCE_CAPABILITIES - executed_capabilities
+    if result == 0 and missing_capabilities:
+        missing = ", ".join(sorted(missing_capabilities))
+        print(f"W3C VC suite did not prove required Marty capabilities: {missing}.", file=sys.stderr)
         result = 1
     for source in (suite / "reports", suite / "suite.log", suite / "package-lock.json"):
         if source.is_file():

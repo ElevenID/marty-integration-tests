@@ -16,17 +16,51 @@ oidf_start = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(oidf_start)
 
 
-def test_flow_body_uses_real_flow_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flow_body_selects_post_only_for_the_official_signed_post_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
     monkeypatch.setenv("OIDF_MARTY_TRUST_PROFILE_ID", "trust-1")
     monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
-    assert oidf_start.flow_body({"test_id": "module-1", "request_method": "request_uri_signed"}) == {
+    payload = {
+        "test_id": "module-1",
+        "test_name": "oid4vp-1final-verifier-request-uri-method-post",
+        "request_method": "request_uri_signed",
+    }
+    assert oidf_start.flow_body(payload) == {
         "presentation_policy_id": "policy-1",
         "trust_profile_id": "trust-1",
         "expiry_minutes": 15,
         "oid4vp_profile": "haip",
-        "request_uri_method": "get",
+        "request_uri_method": "post",
     }
+
+
+@pytest.mark.parametrize(
+    ("test_name", "request_method"),
+    [
+        ("oid4vp-1final-verifier-request-uri-method-post", "url_query"),
+        ("oid4vp-1final-verifier-request-uri-method-post-suffix", "request_uri_signed"),
+        ("oid4vp-1final-verifier-happy-flow", "request_uri_signed"),
+    ],
+)
+def test_flow_body_does_not_force_other_transports_to_post(
+    monkeypatch: pytest.MonkeyPatch,
+    test_name: str,
+    request_method: str,
+) -> None:
+    monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
+    monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
+
+    body = oidf_start.flow_body({"test_id": "module-1", "test_name": test_name, "request_method": request_method})
+
+    assert body["request_uri_method"] == "get"
+
+
+def test_flow_body_requires_the_official_module_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
+    with pytest.raises(ValueError, match="test_name"):
+        oidf_start.flow_body({"test_id": "module-1", "request_method": "request_uri_signed"})
 
 
 def test_start_flow_sends_authenticated_gateway_request(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,9 +71,7 @@ def test_start_flow_sends_authenticated_gateway_request(monkeypatch: pytest.Monk
         return {"authorization_request": "openid4vp://authorize?request_uri=https://marty.test/request"}
 
     monkeypatch.setattr(oidf_start, "authenticated_json_request", fake_request)
-    result = oidf_start.start_flow(
-        "https://marty.test", "session-1", {"presentation_policy_id": "policy-1"}
-    )
+    result = oidf_start.start_flow("https://marty.test", "session-1", {"presentation_policy_id": "policy-1"})
     assert result["authorization_request"].startswith("openid4vp://")
     assert captured == {
         "origin": "https://marty.test",

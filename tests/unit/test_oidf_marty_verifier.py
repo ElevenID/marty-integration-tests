@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 
@@ -67,3 +68,104 @@ def test_mock_wallet_tls_exception_never_disables_marty_tls(monkeypatch: pytest.
     )
     assert calls[0] == ("https://marty.example/request.jwt", False)
     assert calls[1][1] is True
+
+
+def test_authorization_request_preserves_signed_transport_outer_parameters() -> None:
+    request_uri = "https://marty.example/request.jwt"
+    authorization_request = "openid4vp://authorize?" + urlencode(
+        {
+            "client_id": "x509_hash:abc",
+            "request_uri": request_uri,
+            "request_uri_method": "post",
+        }
+    )
+
+    assert oidf_verifier.authorization_request_parameters(authorization_request) == (
+        request_uri,
+        {"client_id": "x509_hash:abc", "request_uri_method": "post"},
+    )
+
+
+def test_authorization_request_rejects_duplicate_security_parameters() -> None:
+    value = (
+        "openid4vp://authorize?client_id=first&client_id=second&request_uri=https%3A%2F%2Fmarty.example%2Frequest.jwt"
+    )
+    with pytest.raises(ValueError, match="duplicate client_id"):
+        oidf_verifier.authorization_request_parameters(value)
+
+
+def test_signed_post_forwards_outer_method_and_leaves_wallet_nonce_to_official_wallet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def request(url: str, **_kwargs: object) -> tuple[int, object]:
+        calls.append(url)
+        return 200, {}
+
+    monkeypatch.setattr(oidf_verifier, "request_json", request)
+    monkeypatch.setattr(
+        oidf_verifier,
+        "decode_request_object",
+        lambda *_args, **_kwargs: pytest.fail("POST-only request_uri must not be fetched with GET"),
+    )
+
+    oidf_verifier.call_mock_wallet(
+        "https://runner.example/authorize",
+        "https://marty.example/request.jwt",
+        request_method="request_uri_signed",
+        conformance_insecure=False,
+        outer_parameters={"client_id": "x509_hash:abc", "request_uri_method": "post"},
+    )
+
+    query = parse_qs(urlparse(calls[0]).query)
+    assert query == {
+        "client_id": ["x509_hash:abc"],
+        "request_uri": ["https://marty.example/request.jwt"],
+        "request_uri_method": ["post"],
+    }
+    assert "wallet_nonce" not in query
+
+
+def test_signed_get_rejects_outer_and_signed_client_id_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        oidf_verifier,
+        "decode_request_object",
+        lambda *_args, **_kwargs: {"client_id": "signed-client"},
+    )
+    with pytest.raises(RuntimeError, match="does not match"):
+        oidf_verifier.call_mock_wallet(
+            "https://runner.example/authorize",
+            "https://marty.example/request.jwt",
+            request_method="request_uri_signed",
+            conformance_insecure=False,
+            outer_parameters={"client_id": "outer-client"},
+        )
+
+
+def test_standard_url_query_does_not_inherit_signed_transport_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        oidf_verifier,
+        "decode_request_object",
+        lambda *_args, **_kwargs: {"client_id": "signed-client", "nonce": "nonce-1"},
+    )
+
+    def request(url: str, **_kwargs: object) -> tuple[int, object]:
+        calls.append(url)
+        return 200, {}
+
+    monkeypatch.setattr(oidf_verifier, "request_json", request)
+    oidf_verifier.call_mock_wallet(
+        "https://runner.example/authorize",
+        "https://marty.example/request.jwt",
+        request_method="url_query",
+        conformance_insecure=False,
+        outer_parameters={"client_id": "outer-client", "request_uri_method": "post"},
+    )
+
+    query = parse_qs(urlparse(calls[0]).query)
+    assert query == {"client_id": ["signed-client"], "nonce": ["nonce-1"]}
+    assert "request_uri_method" not in query

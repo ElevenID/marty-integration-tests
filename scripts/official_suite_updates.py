@@ -30,6 +30,25 @@ def git_head(repository: str, ref: str = "HEAD") -> str:
     return sha
 
 
+def git_tag_commit(repository: str, tag: str) -> str:
+    """Resolve a release tag to the commit it identifies.
+
+    Annotated tags report both the tag object and its peeled commit.  Prefer
+    the peeled value and fall back to the direct value for lightweight tags.
+    """
+    ref = f"refs/tags/{tag}"
+    output = subprocess.check_output(["git", "ls-remote", repository, ref, f"{ref}^{{}}"], text=True)
+    candidates: dict[str, str] = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) == 2:
+            candidates[fields[1]] = fields[0]
+    sha = candidates.get(f"{ref}^{{}}") or candidates.get(ref, "")
+    if len(sha) != 40:
+        raise RuntimeError(f"no full commit SHA returned for {repository} {tag}")
+    return sha
+
+
 def latest_oidf_release() -> str:
     request = urllib.request.Request(
         "https://gitlab.com/api/v4/projects/openid%2Fconformance-suite/releases/permalink/latest",
@@ -59,10 +78,13 @@ def observe() -> dict:
     oidf = load_json("conformance/oidf-runner.json")["official_runner"]
     w3c = load_json("conformance/w3c-vc-data-model-v2.json")["official_suite"]
     eudi = load_json("conformance/eudi-reference-interop.json")["components"]
+    latest_oidf = latest_oidf_release()
     upstreams = {
         "oidf": {
             "pinned_release": oidf["release"],
-            "latest_release": latest_oidf_release(),
+            "latest_release": latest_oidf,
+            "pinned_commit": oidf["commit"],
+            "latest_commit": git_tag_commit(oidf["repository"], latest_oidf),
         },
         "w3c_vc_data_model_v2": {
             "pinned_commit": w3c["commit"],
