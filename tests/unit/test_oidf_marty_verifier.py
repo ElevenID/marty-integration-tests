@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -169,3 +170,112 @@ def test_standard_url_query_does_not_inherit_signed_transport_parameters(
     query = parse_qs(urlparse(calls[0]).query)
     assert query == {"client_id": ["signed-client"], "nonce": ["nonce-1"]}
     assert "request_uri_method" not in query
+
+
+def configure_main(
+    monkeypatch: pytest.MonkeyPatch,
+    authorization_request: str,
+) -> None:
+    monkeypatch.setattr(
+        oidf_verifier,
+        "parse_args",
+        lambda: oidf_verifier.argparse.Namespace(
+            server="https://runner.example/",
+            flow_command=Path("flow-command.py"),
+            request_method="request_uri_signed",
+            timeout=10,
+            insecure=False,
+            conformance_insecure=False,
+            test_id="module-id",
+            test_name="oid4vp-1final-verifier-happy-flow",
+        ),
+    )
+    monkeypatch.setattr(
+        oidf_verifier,
+        "wait_for_exposed_authorization_endpoint",
+        lambda *_args, **_kwargs: "https://runner.example/authorize",
+    )
+    monkeypatch.setattr(
+        oidf_verifier,
+        "invoke_flow_command",
+        lambda *_args, **_kwargs: authorization_request,
+    )
+
+
+def failed_request(message: str) -> Callable[..., tuple[int, object]]:
+    def request(*_args: object, **_kwargs: object) -> tuple[int, object]:
+        raise RuntimeError(message)
+
+    return request
+
+
+def test_finished_module_cannot_suppress_client_id_binding_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    configure_main(
+        monkeypatch,
+        "openid4vp://authorize?client_id=outer-client&request_uri=https%3A%2F%2Fmarty.example%2Frequest.jwt",
+    )
+    monkeypatch.setattr(
+        oidf_verifier,
+        "decode_request_object",
+        lambda *_args, **_kwargs: {"client_id": "different-signed-client"},
+    )
+    monkeypatch.setattr(
+        oidf_verifier,
+        "module_finished",
+        lambda *_args, **_kwargs: pytest.fail("validation failures must not consult finished state"),
+    )
+
+    with pytest.raises(RuntimeError, match="does not match"):
+        oidf_verifier.main()
+
+
+def test_finished_module_cannot_suppress_missing_post_client_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    configure_main(
+        monkeypatch,
+        "openid4vp://authorize?request_uri=https%3A%2F%2Fmarty.example%2Frequest.jwt&request_uri_method=post",
+    )
+    monkeypatch.setattr(
+        oidf_verifier,
+        "module_finished",
+        lambda *_args, **_kwargs: pytest.fail("validation failures must not consult finished state"),
+    )
+
+    with pytest.raises(RuntimeError, match="no outer client_id"):
+        oidf_verifier.main()
+
+
+def test_finished_before_official_wallet_submission_transport_race_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_main(
+        monkeypatch,
+        "openid4vp://authorize?client_id=x509_hash%3Aabc&"
+        "request_uri=https%3A%2F%2Fmarty.example%2Frequest.jwt&request_uri_method=post",
+    )
+    monkeypatch.setattr(
+        oidf_verifier,
+        "request_json",
+        failed_request("runner closed its endpoint"),
+    )
+    monkeypatch.setattr(oidf_verifier, "module_finished", lambda *_args, **_kwargs: True)
+
+    assert oidf_verifier.main() == 0
+
+
+def test_active_module_official_wallet_submission_failure_remains_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_main(
+        monkeypatch,
+        "openid4vp://authorize?client_id=x509_hash%3Aabc&"
+        "request_uri=https%3A%2F%2Fmarty.example%2Frequest.jwt&request_uri_method=post",
+    )
+    monkeypatch.setattr(
+        oidf_verifier,
+        "request_json",
+        failed_request("runner unavailable"),
+    )
+    monkeypatch.setattr(oidf_verifier, "module_finished", lambda *_args, **_kwargs: False)
+
+    with pytest.raises(oidf_verifier.OfficialWalletSubmissionError, match="runner unavailable"):
+        oidf_verifier.main()

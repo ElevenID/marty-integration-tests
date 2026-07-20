@@ -33,6 +33,15 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
+class OfficialWalletSubmissionError(RuntimeError):
+    """The final request to the official wallet could not be submitted.
+
+    Only this narrow error can be reconciled with a module that finished
+    between endpoint discovery and submission. Request-object validation,
+    client binding, and Marty transport failures remain hard errors.
+    """
+
+
 def local_marty_resolve(url: str) -> list[str]:
     """Return a narrow curl resolver override for a disposable public URL.
 
@@ -268,6 +277,16 @@ def query_parameters(claims: dict[str, Any]) -> dict[str, str]:
     return params
 
 
+def submit_to_official_wallet(url: str, *, insecure: bool) -> None:
+    """Submit the prepared request, preserving a narrow race error type."""
+    try:
+        status, _ = request_json(url, insecure=insecure)
+    except RuntimeError as exc:
+        raise OfficialWalletSubmissionError(f"OIDF mock wallet submission failed: {exc}") from exc
+    if status not in {200, 302, 303}:
+        raise OfficialWalletSubmissionError(f"OIDF mock wallet authorization endpoint returned HTTP {status}")
+
+
 def call_mock_wallet(
     endpoint: str,
     request_uri: str,
@@ -286,7 +305,6 @@ def call_mock_wallet(
         # adaptation.  Outer signed-request parameters must not leak into it.
         claims = decode_request_object(request_uri, insecure=marty_insecure)
         url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(query_parameters(claims))
-        status, _ = request_json(url, insecure=conformance_insecure)
     elif request_method == "request_uri_signed":
         retrieval_method = outer.get("request_uri_method")
         outer_client_id = outer.get("client_id")
@@ -309,11 +327,9 @@ def call_mock_wallet(
         if retrieval_method is not None:
             parameters["request_uri_method"] = retrieval_method
         url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(parameters)
-        status, _ = request_json(url, insecure=conformance_insecure)
     else:
         raise ValueError("OIDF_VERIFIER_REQUEST_METHOD must be url_query or request_uri_signed")
-    if status not in {200, 302, 303}:
-        raise RuntimeError(f"OIDF mock wallet authorization endpoint returned HTTP {status}")
+    submit_to_official_wallet(url, insecure=conformance_insecure)
 
 
 def parse_args() -> argparse.Namespace:
@@ -366,7 +382,7 @@ def main() -> int:
             marty_insecure=args.insecure,
             outer_parameters=outer_parameters,
         )
-    except RuntimeError:
+    except OfficialWalletSubmissionError:
         # The runner can finish a module after exposing its endpoint but before
         # this host-side hook submits a duplicate request.  Accept that race
         # only after asking the official runner; active-module failures remain
