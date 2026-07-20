@@ -316,10 +316,13 @@ python scripts/w3c_vc_conformance.py write-local-config \
   --output /opt/vc-data-model-2.0-test-suite/localConfig.cjs
 ```
 
-Run the pinned suite itself (using Node 24) only against the disposable HTTPS
-adapter deployment. `--install` is explicit because the upstream suite does
-not publish a lockfile; its generated lock and official reports are copied
-into the evidence directory.
+Run the pinned suite itself (using Node 24 and the exact npm version in the
+manifest) only against the disposable HTTPS adapter deployment. `--install`
+is explicit because the upstream suite does not publish a lockfile. The helper
+recreates that lock, rejects it unless its SHA-256 matches the reviewed
+manifest value, and copies it with the official reports into the private
+evidence directory. A suite update therefore changes its commit, npm version
+when necessary, and reviewed lock digest together.
 
 ```bash
 python scripts/w3c_vc_conformance.py run \
@@ -335,6 +338,31 @@ without digest-pinned OCI artifacts and records the release, manifest hash, and
 tested image digests in `evidence.json`.
 
 ## Certification later
+
+## Manual production-path interoperability workflow
+
+Run **Official interoperability** from the Actions tab to execute one lane or
+all four lanes. The workflow downloads the reviewed `marty-ui` release
+manifest named in `stack-under-test.json`, checks its independent SHA-256 and
+GitHub attestation, verifies each OCI attestation, and checks out the exact
+Marty commit recorded by that release. A tag override is accepted only when
+its reviewed manifest SHA-256 is supplied in the same dispatch.
+
+Each lane owns separate Compose projects and disposable TLS, truststore,
+keystore, operator credentials, fixtures, and output directories. OID4VP Final
+and HAIP retain their `planned` profile status while this pre-activation
+evidence is collected. The workflow uploads only the sanitized summary;
+private configuration, generated keys, cookies, raw logs, and unredacted
+official reports remain job-local and expire with the runner.
+
+The stack pin explicitly records `v1.1.0` as `awaiting_release` with no
+placeholder digest. Publish and review that signed `marty-ui` stack release,
+then change the state to `ready` and record the exact downloaded manifest
+SHA-256 in `stack-under-test.json`. Execution hard-fails while the pin is
+awaiting release. A monthly execution schedule is intentionally deferred until
+all four manual lanes pass. The
+existing monthly upstream-review workflow may propose new suite revisions,
+but it never changes a runner pin or dependency lock automatically.
 
 ## EUDI reference interoperability
 

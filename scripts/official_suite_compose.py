@@ -83,6 +83,17 @@ def child_environment(*, require_haip: bool = False, haip_material: Path | None 
     return environment
 
 
+def configure_project_environment(environment: dict[str, str], projects: dict[str, str]) -> None:
+    """Keep Compose interpolation and CLI project selection identical."""
+    environment.update(
+        {
+            "MARTY_CONFORMANCE_PROJECT": projects["marty"],
+            "OIDF_CONFORMANCE_PROJECT": projects["oidf"],
+            "EUDI_CONFORMANCE_PROJECT": projects["eudi"],
+        }
+    )
+
+
 def run(command: list[str], environment: dict[str, str]) -> int:
     print("+", subprocess.list2cmdline(command), flush=True)
     return subprocess.run(command, check=False, env=environment).returncode
@@ -185,6 +196,7 @@ def execute(args: argparse.Namespace) -> int:
 
     projects = project_names(args.run_id)
     environment = child_environment(require_haip=args.haip, haip_material=args.haip_material)
+    configure_project_environment(environment, projects)
     selected = components(args, projects, args.command)
     if args.command != "up":
         first_failure = 0

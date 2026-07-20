@@ -1,0 +1,200 @@
+name: Official interoperability
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Official suite lane to run
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - oid4vp-final
+          - haip
+          - w3c-v2
+          - eudi
+      stack_release_tag:
+        description: Optional reviewed stack tag override (requires its SHA-256)
+        type: string
+        required: false
+      stack_manifest_sha256:
+        description: Optional sha256:<digest> for the overridden stack manifest
+        type: string
+        required: false
+
+# A monthly trigger is intentionally withheld until all four lanes pass this
+# manual workflow against a newly released production-path stack.
+
+permissions:
+  contents: read
+  packages: read
+  attestations: read
+
+concurrency:
+  group: official-interoperability-${{ github.ref }}-${{ inputs.lane }}
+  cancel-in-progress: false
+
+jobs:
+  run-lane:
+    name: ${{ matrix.lane }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJSON(inputs.lane == 'all' && '["oid4vp-final","haip","w3c-v2","eudi"]' || format('["{0}"]', inputs.lane)) }}
+    env:
+      PYTHONUNBUFFERED: "1"
+      OFFICIAL_SUITE_RUN_ID: ${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout integration harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install harness
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Resolve and attest released stack
+        id: stack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_RELEASE_TAG: ${{ inputs.stack_release_tag }}
+          STACK_MANIFEST_SHA256: ${{ inputs.stack_manifest_sha256 }}
+        shell: bash
+        run: |
+          stack_args=(
+            --pin conformance/stack-under-test.json
+            --release-tag "$STACK_RELEASE_TAG"
+            --manifest-sha256 "$STACK_MANIFEST_SHA256"
+            --output-dir work/stack
+            --metadata-output work/stack/stack-metadata.json
+          )
+          python scripts/official_stack_release.py materialize "${stack_args[@]}"
+          python -c "import json, os; value=json.load(open('work/stack/stack-metadata.json', encoding='utf-8'))['marty_commit']; open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8').write(f'marty_commit={value}\n')"
+
+      - name: Verify and pull attested stack images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          while IFS=$'\t' read -r repository reference; do
+            gh attestation verify "oci://$reference" --repo "$repository"
+            docker pull "$reference"
+          done < <(jq -r '.images[] | [.repository, .reference] | @tsv' work/stack/stack-metadata.json)
+          python scripts/render_stack_env.py --manifest work/stack/stack-manifest.json --output work/stack/.env.stack
+
+      - name: Checkout released Marty deployment adapter
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: ElevenID/marty-ui
+          ref: ${{ steps.stack.outputs.marty_commit }}
+          path: work/marty-ui
+          persist-credentials: false
+
+      - name: Checkout exact OIDF runner
+        if: matrix.lane == 'oid4vp-final' || matrix.lane == 'haip'
+        run: python scripts/official_suite_checkout.py --suite oidf --output work/oidf-runner
+
+      - name: Checkout exact W3C suite
+        if: matrix.lane == 'w3c-v2'
+        run: python scripts/official_suite_checkout.py --suite w3c --output work/w3c-suite
+
+      - name: Set up Node 24 for W3C suite
+        if: matrix.lane == 'w3c-v2'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
+
+      - name: Pin reviewed npm runtime
+        if: matrix.lane == 'w3c-v2'
+        run: npm install --global npm@11.11.0
+
+      - name: Generate disposable TLS and EUDI material
+        run: |
+          python scripts/eudi_test_material.py generate --output work/material --marty-port 18443
+          python scripts/eudi_test_material.py validate --material work/material
+          python -c "import json; from urllib.parse import urlsplit; data=json.load(open('work/material/report.json', encoding='utf-8')); hosts=sorted({urlsplit(value).hostname for value in data['urls'].values()} | {'localhost.emobix.co.uk'}); print('127.0.0.1 ' + ' '.join(host for host in hosts if host and host != 'localhost'))" | sudo tee -a /etc/hosts
+
+      - name: Generate disposable verifier material
+        if: matrix.lane == 'oid4vp-final' || matrix.lane == 'haip'
+        run: |
+          python -c "import json, subprocess, sys; data=json.load(open('work/material/environment.json', encoding='utf-8')); subprocess.run([sys.executable, 'scripts/haip_test_certificates.py', '--output-dir', 'work/haip-material', '--gateway-url', data['environment']['OIDF_PUBLIC_BASE_URL']], check=True)"
+
+      - name: Generate disposable operator credentials
+        shell: bash
+        run: |
+          admin_password="$(openssl rand -hex 32)"
+          reviewer_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$admin_password"
+          echo "::add-mask::$reviewer_password"
+          echo "MARTY_CONFORMANCE_ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"
+          echo "MARTY_CONFORMANCE_REVIEWER_PASSWORD=$reviewer_password" >> "$GITHUB_ENV"
+
+      - name: Run official lane
+        id: lane
+        shell: bash
+        run: |
+          set +e
+          lane_args=(
+            --lane "${{ matrix.lane }}"
+            --run-id "$OFFICIAL_SUITE_RUN_ID"
+            --marty-ui work/marty-ui
+            --stack-manifest work/stack/stack-manifest.json
+            --stack-metadata work/stack/stack-metadata.json
+            --stack-env work/stack/.env.stack
+            --material work/material
+            --haip-material work/haip-material
+            --oidf-runner work/oidf-runner
+            --w3c-suite work/w3c-suite
+            --output-dir work/evidence
+          )
+          python scripts/official_interoperability_lane.py "${lane_args[@]}"
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Build public-safe evidence
+        if: always()
+        env:
+          LANE_EXIT_CODE: ${{ steps.lane.outputs.exit_code || '99' }}
+        shell: bash
+        run: |
+          sanitize_args=(
+            --input work/evidence/raw
+            --output "work/sanitized/${{ matrix.lane }}"
+            --lane "${{ matrix.lane }}"
+            --harness-commit "${{ github.sha }}"
+            --exit-code "$LANE_EXIT_CODE"
+            --stack-metadata work/stack/stack-metadata.json
+            --material-report work/material/report.json
+          )
+          python scripts/sanitize_official_evidence.py "${sanitize_args[@]}"
+
+      - name: Upload sanitized evidence
+        if: always() && hashFiles(format('work/sanitized/{0}/summary.json', matrix.lane)) != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: official-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/sanitized/${{ matrix.lane }}/summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce lane result
+        if: always()
+        env:
+          LANE_EXIT_CODE: ${{ steps.lane.outputs.exit_code }}
+        shell: bash
+        run: |
+          if [[ -z "$LANE_EXIT_CODE" ]]; then
+            echo "Official lane did not reach its dispatcher." >&2
+            exit 1
+          fi
+          exit "$LANE_EXIT_CODE"

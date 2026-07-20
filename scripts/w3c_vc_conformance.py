@@ -4,15 +4,14 @@
 from __future__ import annotations
 
 import argparse
-from hashlib import sha256
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+from hashlib import sha256
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "w3c-vc-data-model-v2.json"
@@ -29,6 +28,12 @@ def load_manifest(path: Path = MANIFEST) -> dict:
         raise ValueError("W3C VC suite must use the official repository")
     if not SHA.fullmatch(suite.get("commit", "")):
         raise ValueError("W3C VC suite commit must be a full lowercase SHA")
+    if suite.get("node") != "24":
+        raise ValueError("W3C VC suite must run on Node 24")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", suite.get("npm", "")):
+        raise ValueError("W3C VC suite must pin an exact npm version")
+    if not DIGEST.fullmatch(suite.get("package_lock_sha256", "")):
+        raise ValueError("W3C VC suite must pin the generated package-lock digest")
     for exclusion in data.get("exclusions", []):
         if not {"capability", "reason", "owner", "review_date"} <= exclusion.keys():
             raise ValueError("every W3C exclusion needs capability, reason, owner, and review_date")
@@ -61,9 +66,15 @@ def write_local_config(path: Path, adapter_base_url: str) -> None:
         # enveloping-proof representation.  The official runner uses this
         # capability tag to inspect the nested JWT payload rather than
         # assuming an embedded JSON-LD Data Integrity proof.
-        f"    issuers: [{{ id: '{base}/issuer', endpoint: '{base}/credentials/issue', tags: ['vc2.0', 'EnvelopingProof'], supports: {{ vc: ['2.0'], proof: ['JOSE'] }} }}],\n"
-        f"    verifiers: [{{ id: 'marty-vc-verifier', endpoint: '{base}/credentials/verify', tags: ['vc2.0', 'EnvelopingProof'], supports: {{ vc: ['2.0'] }} }}],\n"
-        f"    vpVerifiers: [{{ id: 'marty-vp-verifier', endpoint: '{base}/presentations/verify', tags: ['vc2.0', 'EnvelopingProof'], supports: {{ vc: ['2.0'] }} }}]\n"
+        f"    issuers: [{{ id: '{base}/issuer',\n"
+        f"      endpoint: '{base}/credentials/issue', tags: ['vc2.0', 'EnvelopingProof'],\n"
+        "      supports: { vc: ['2.0'], proof: ['JOSE'] } }],\n"
+        "    verifiers: [{ id: 'marty-vc-verifier',\n"
+        f"      endpoint: '{base}/credentials/verify', tags: ['vc2.0', 'EnvelopingProof'],\n"
+        "      supports: { vc: ['2.0'] } }],\n"
+        "    vpVerifiers: [{ id: 'marty-vp-verifier',\n"
+        f"      endpoint: '{base}/presentations/verify', tags: ['vc2.0', 'EnvelopingProof'],\n"
+        "      supports: { vc: ['2.0'] } }]\n"
         "  }]\n};\n",
         encoding="utf-8",
     )
@@ -103,6 +114,36 @@ def npm_command() -> str:
     return "npm.cmd" if os.name == "nt" else "npm"
 
 
+def npm_version() -> str:
+    return subprocess.check_output([npm_command(), "--version"], text=True).strip()
+
+
+def install_dependencies(suite: Path, manifest: dict) -> int:
+    """Install only the dependency graph reviewed for the pinned suite commit."""
+    expected_version = manifest["official_suite"]["npm"]
+    actual_version = npm_version()
+    if actual_version != expected_version:
+        raise ValueError(f"W3C suite requires npm {expected_version}; found {actual_version}")
+    lock = suite / "package-lock.json"
+    lock.unlink(missing_ok=True)
+    result = subprocess.run(
+        [npm_command(), "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+        cwd=suite,
+        check=False,
+    ).returncode
+    if result:
+        return result
+    actual_digest = file_sha256(lock)
+    expected_digest = manifest["official_suite"]["package_lock_sha256"]
+    if actual_digest != expected_digest:
+        raise ValueError(f"generated W3C package lock is {actual_digest}; expected {expected_digest}")
+    return subprocess.run(
+        [npm_command(), "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+        cwd=suite,
+        check=False,
+    ).returncode
+
+
 def w3c_test_command(suite: Path) -> list[str]:
     """Return the upstream Mocha command with absolute reporter paths."""
     mocha = suite / "node_modules" / "mocha" / "bin" / "mocha.js"
@@ -116,7 +157,18 @@ def w3c_test_command(suite: Path) -> list[str]:
         f"respec={(suite / 'respecConfig.json').as_posix()},suiteLog={(suite / 'suite.log').as_posix()},"
         f"templateData={(suite / 'reports' / 'index.json').as_posix()},title=VC v2.0 Interoperability Report"
     )
-    return [node, str(mocha), "tests/", "--reporter", "@digitalbazaar/mocha-w3c-interop-reporter", "--reporter-options", options, "--timeout", "15000", "--preserve-symlinks"]
+    return [
+        node,
+        str(mocha),
+        "tests/",
+        "--reporter",
+        "@digitalbazaar/mocha-w3c-interop-reporter",
+        "--reporter-options",
+        options,
+        "--timeout",
+        "15000",
+        "--preserve-symlinks",
+    ]
 
 
 def report_has_executed_cases(path: Path) -> bool:
@@ -171,17 +223,15 @@ def run_suite(suite: Path, adapter_url: str, output: Path, stack_manifest: Path,
 
     The upstream checkout is pinned before invoking its own ``npm test``
     command. Install is explicit because the upstream suite has no lockfile;
-    any generated package lock is included in the result artifact set.
+    the generated package lock must match the reviewed digest and is included
+    in the result artifact set.
     """
     manifest = load_manifest()
     validate_checkout(suite, manifest)
     stack_manifest_metadata(stack_manifest)
     write_local_config(suite / "localConfig.cjs", adapter_url)
     if install:
-        install_result = subprocess.run([npm_command(), "install", "--package-lock-only", "--ignore-scripts"], cwd=suite, check=False).returncode
-        if install_result:
-            return install_result
-        install_result = subprocess.run([npm_command(), "ci", "--ignore-scripts"], cwd=suite, check=False).returncode
+        install_result = install_dependencies(suite, manifest)
         if install_result:
             return install_result
     output.mkdir(parents=True, exist_ok=True)
@@ -224,7 +274,9 @@ def main() -> int:
         required=True,
         help="attested marty.stack/v1 manifest for the deployment under test",
     )
-    execute.add_argument("--install", action="store_true", help="generate the upstream lockfile and install its dependencies")
+    execute.add_argument(
+        "--install", action="store_true", help="generate the upstream lockfile and install its dependencies"
+    )
     args = parser.parse_args()
     manifest = load_manifest()
     if args.command == "validate":
