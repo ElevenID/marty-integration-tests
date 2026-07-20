@@ -53,6 +53,7 @@ Thumbs.db
 conformance/*.local.json
 conformance/local-certs/
 conformance/haip-material/
+conformance/eudi-material/
 
 # Local config
 local.env

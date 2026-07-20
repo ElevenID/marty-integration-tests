@@ -17,6 +17,8 @@ def test_eudi_wallet_harness_is_opt_in_and_reachable_from_runner() -> None:
 def test_eudi_conformance_uses_tls_public_services() -> None:
     guide = (ROOT / "conformance" / "README.md").read_text(encoding="utf-8")
 
-    assert "--wallet-tester-url https://marty-oidf.test:25051" in guide
-    assert "--verifier-url https://marty-oidf.test:28091" in guide
-    assert "--wallet-kit-url http://localhost:29090" in guide
+    assert "eudi_reference_interop.py run" in guide
+    assert '--eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID"' in guide
+    assert "loads the generated CA, exact endpoints" in guide
+    assert "Explicit endpoint" in guide
+    assert "must exactly match" in guide

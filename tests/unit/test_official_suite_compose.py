@@ -73,6 +73,189 @@ def test_selected_context_is_forwarded_to_marty(
     assert environment["DOCKER_CONTEXT"] == "conformance-vm"
 
 
+def test_generated_eudi_material_is_rejected_for_a_remote_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(lifecycle.CONTEXT_ENV, "conformance-vm")
+    monkeypatch.setattr(
+        lifecycle,
+        "merged_material_environment",
+        lambda *_args: ("generated", {lifecycle.CONTEXT_ENV: "conformance-vm"}),
+    )
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: False)
+
+    with pytest.raises(ValueError, match="remote Docker context"):
+        lifecycle.child_environment(eudi_material=tmp_path)
+
+
+def test_external_eudi_material_can_use_a_validated_remote_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setenv(lifecycle.CONTEXT_ENV, "conformance-vm")
+    monkeypatch.setattr(
+        lifecycle,
+        "merged_material_environment",
+        lambda *_args: ("external", {lifecycle.CONTEXT_ENV: "conformance-vm"}),
+    )
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: False)
+    monkeypatch.setattr(lifecycle, "validate_environment_contract", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        lifecycle,
+        "docker_command",
+        lambda arguments: calls.append(arguments) or ["docker", "--context", "conformance-vm", *arguments],
+    )
+
+    environment = lifecycle.child_environment(eudi_material=tmp_path)
+    assert calls == [["info"]]
+    assert environment["DOCKER_CONTEXT"] == "conformance-vm"
+
+
+def test_non_start_commands_do_not_require_live_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing = tmp_path / "deleted-material"
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+    environment = lifecycle.child_environment(
+        require_eudi=True,
+        eudi_material=missing,
+        validate_eudi=False,
+    )
+
+    assert environment["OIDF_TLS_CERT_DIR"] == str(missing.resolve())
+    assert environment["EUDI_VERIFIER_KEYSTORE_PASSWORD"] == "unused-cleanup-value"
+
+
+def test_remote_external_mode_requires_explicit_daemon_bind_roots(tmp_path: Path) -> None:
+    ui = marty_checkout(tmp_path)
+    oidf = tmp_path / "oidf-runner"
+    args = lifecycle.parser().parse_args(
+        [
+            "up",
+            "--run-id",
+            "run1",
+            "--marty-ui",
+            str(ui),
+            "--oidf-runner",
+            str(oidf),
+            "--oidf",
+            "--eudi",
+        ]
+    )
+    environment = {
+        lifecycle.REMOTE_UI_ROOT: str(ui.resolve()),
+        lifecycle.REMOTE_OIDF_ROOT: str(oidf.resolve()),
+        lifecycle.REMOTE_EUDI_CONFIG_ROOT: "/srv/elevenid/eudi-config",
+        "OIDF_TLS_CERT_DIR": "/srv/elevenid/certificates",
+        "EUDI_VERIFIER_KEYSTORE_FILE": "/srv/elevenid/certificates/keystore.jks",
+    }
+
+    lifecycle.validate_remote_bind_contract(args, environment)
+    environment.pop(lifecycle.REMOTE_EUDI_CONFIG_ROOT)
+    with pytest.raises(ValueError, match=lifecycle.REMOTE_EUDI_CONFIG_ROOT):
+        lifecycle.validate_remote_bind_contract(args, environment)
+
+
+def test_eudi_readiness_failure_unwinds_all_started_projects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(lifecycle, "child_environment", lambda **_kwargs: {})
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+    monkeypatch.setattr(
+        lifecycle,
+        "run",
+        lambda command, _environment: calls.append((component(command), action(command))) or 0,
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "wait_for_eudi_readiness",
+        lambda _environment: (_ for _ in ()).throw(ValueError("not ready")),
+    )
+
+    with pytest.raises(ValueError, match="not ready"):
+        lifecycle.main(
+            [
+                "up",
+                "--run-id",
+                "run1",
+                "--marty-ui",
+                str(marty_checkout(tmp_path)),
+                "--eudi",
+            ]
+        )
+
+    assert calls == [("marty", "up"), ("eudi", "up"), ("eudi", "down"), ("marty", "down")]
+
+
+def test_eudi_readiness_probes_every_public_path_with_generated_ca(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ca_file = tmp_path / "root-ca.pem"
+    ca_file.write_text("fixture", encoding="ascii")
+    requested: list[str] = []
+    options: dict[str, object] = {}
+
+    class Response:
+        status_code = 200
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            options.update(kwargs)
+
+        def __enter__(self) -> Client:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get(self, url: str) -> Response:
+            requested.append(url)
+            return Response()
+
+    monkeypatch.setattr(lifecycle.httpx, "Client", Client)
+    lifecycle.wait_for_eudi_readiness(
+        {
+            "EUDI_READINESS_TIMEOUT_SECONDS": "5",
+            "EUDI_TEST_CA_FILE": str(ca_file),
+            "OIDF_PUBLIC_BASE_URL": "https://marty.test:8443",
+            "EUDI_WALLET_TESTER_PUBLIC_URL": "https://wallet.test:25051",
+            "EUDI_VERIFIER_PUBLIC_URL": "https://verifier.test:28091",
+            "EUDI_WALLET_KIT_URL": "http://127.0.0.1:29090",
+            "EUDI_WALLET_KIT_HOST_PORT": "29090",
+        }
+    )
+
+    assert options["verify"] == str(ca_file)
+    assert requested == [
+        "https://marty.test:8443/.well-known/openid-configuration",
+        "https://wallet.test:25051/",
+        "https://verifier.test:28091/swagger-ui",
+        "http://127.0.0.1:29090/health",
+    ]
+
+
+def test_eudi_material_requires_the_eudi_project(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="requires --eudi"):
+        lifecycle.main(
+            [
+                "ps",
+                "--run-id",
+                "run1",
+                "--marty-ui",
+                str(marty_checkout(tmp_path)),
+                "--w3c",
+                "--eudi-material",
+                str(tmp_path / "material"),
+            ]
+        )
+
+
 def test_generated_haip_material_is_wired_to_marty(tmp_path: Path) -> None:
     material = haip_material(tmp_path, "generated")
     environment: dict[str, str] = {}
@@ -109,6 +292,7 @@ def test_haip_rejects_a_partial_external_pair(tmp_path: Path) -> None:
 def test_failed_up_unwinds_only_started_projects_in_reverse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(lifecycle, "child_environment", dict)
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
 
     def fake_run(command: list[str], _environment: dict[str, str]) -> int:
         call = (component(command), action(command))
@@ -141,6 +325,7 @@ def test_failed_up_unwinds_only_started_projects_in_reverse(tmp_path: Path, monk
 def test_down_always_runs_eudi_oidf_then_marty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(lifecycle, "child_environment", dict)
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
     monkeypatch.setattr(
         lifecycle,
         "run",

@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import json
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -12,7 +12,10 @@ import sys
 import xml.etree.ElementTree as ElementTree
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
+sys.path.insert(0, str(Path(__file__).parent))
+from eudi_test_material import merged_material_environment, validate_environment
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "eudi-reference-interop.json"
@@ -20,8 +23,10 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_IMAGE = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 
 
-def load_manifest(path: Path = MANIFEST) -> dict:
+def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("EUDI interop manifest must be a JSON object")
     if data.get("schema") != "elevenid.eudi-reference-interop/v1":
         raise ValueError("unsupported EUDI interop manifest schema")
     components = data.get("components", {})
@@ -78,7 +83,11 @@ def stack_manifest_metadata(path: Path) -> dict:
             if not isinstance(artifact, dict) or artifact.get("type") != "oci":
                 continue
             uri, digest = artifact.get("uri"), artifact.get("digest")
-            if not isinstance(uri, str) or not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            if (
+                not isinstance(uri, str)
+                or not isinstance(digest, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+            ):
                 raise ValueError("every OCI artifact in the stack manifest must have a sha256 digest")
             images.append({"component": str(component.get("name", "unknown")), "uri": uri, "digest": digest})
     if not images:
@@ -126,8 +135,7 @@ def public_gateway_session(environment: dict[str, str]) -> str:
     if existing:
         return existing
     command = Path(
-        environment.get("EUDI_MARTY_PUBLIC_LOGIN_COMMAND", "")
-        or ROOT / "scripts" / "oidf_marty_public_login.py"
+        environment.get("EUDI_MARTY_PUBLIC_LOGIN_COMMAND", "") or ROOT / "scripts" / "oidf_marty_public_login.py"
     )
     if not command.is_file():
         raise ValueError("EUDI public login helper is missing")
@@ -145,31 +153,67 @@ def public_gateway_session(environment: dict[str, str]) -> str:
     return session
 
 
+def run_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, str]]:
+    """Load the same generated trust and endpoint contract used by Compose."""
+    environment = os.environ.copy()
+    material_values: dict[str, str] = {}
+    if args.eudi_material is not None:
+        _mode, environment = merged_material_environment(args.eudi_material.resolve(), environment)
+        validate_environment(environment, validate_java=False)
+        material_values = {
+            "gateway": environment["OIDF_PUBLIC_BASE_URL"],
+            "wallet_tester": environment["EUDI_WALLET_TESTER_PUBLIC_URL"],
+            "verifier": environment["EUDI_VERIFIER_PUBLIC_URL"],
+            "wallet_kit": environment.get("EUDI_WALLET_KIT_URL", ""),
+        }
+    if environment.get("OIDF_INSECURE_TLS", "").strip().lower() in {"1", "true", "yes"}:
+        raise ValueError("OIDF_INSECURE_TLS is prohibited for EUDI interoperability evidence")
+    explicit = {
+        "gateway": args.gateway_url,
+        "wallet_tester": args.wallet_tester_url,
+        "verifier": args.verifier_url,
+        "wallet_kit": args.wallet_kit_url,
+    }
+    endpoints: dict[str, str] = {}
+    for name, value in explicit.items():
+        selected = value or material_values.get(name, "")
+        if not selected:
+            raise ValueError(f"{name.replace('_', ' ')} URL is required without --eudi-material")
+        endpoint = absolute_url(selected, f"{name.replace('_', ' ')} URL")
+        material_endpoint = material_values.get(name, "")
+        if value and material_endpoint and endpoint != absolute_url(material_endpoint, f"material {name} URL"):
+            raise ValueError(f"{name.replace('_', ' ')} URL must match --eudi-material")
+        endpoints[name] = endpoint
+    environment.update(
+        {
+            "RUN_EUDI_TESTS": "true",
+            "GATEWAY_URL": endpoints["gateway"],
+            "OIDF_MARTY_GATEWAY_URL": endpoints["gateway"],
+            "EUDI_WALLET_TESTER_URL": endpoints["wallet_tester"],
+            "EUDI_VERIFIER_URL": endpoints["verifier"],
+            "EUDI_WALLET_KIT_URL": endpoints["wallet_kit"],
+        }
+    )
+    return environment, endpoints
+
+
 def run(args: argparse.Namespace) -> int:
     manifest = load_manifest()
-    endpoints = {
-        "gateway": absolute_url(args.gateway_url, "gateway URL"),
-        "wallet_tester": absolute_url(args.wallet_tester_url, "wallet tester URL"),
-        "verifier": absolute_url(args.verifier_url, "verifier URL"),
-        "wallet_kit": absolute_url(args.wallet_kit_url, "wallet kit URL"),
-    }
+    environment, endpoints = run_environment(args)
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     stack_manifest = args.stack_manifest.resolve()
     # Validate before any external calls so an evidence run cannot silently use
     # mutable image tags or an unrelated deployment.
     stack_manifest_metadata(stack_manifest)
-    environment = os.environ.copy()
-    environment.update({
-        "RUN_EUDI_TESTS": "true",
-        "GATEWAY_URL": endpoints["gateway"],
-        "EUDI_WALLET_TESTER_URL": endpoints["wallet_tester"],
-        "EUDI_VERIFIER_URL": endpoints["verifier"],
-        "EUDI_WALLET_KIT_URL": endpoints["wallet_kit"],
-    })
     environment["MARTY_TEST_SESSION_ID"] = public_gateway_session(environment)
     command = [
-        sys.executable, "-m", "pytest", "-q", "--junitxml", str(output / "junit.xml"),
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "--junitxml",
+        str(output / "junit.xml"),
         "tests/integration/gateway/test_eudi_interop.py",
         "tests/integration/gateway/test_eudi_wallet_kit.py",
         "tests/integration/gateway/test_eudi_wallet_kit_vp.py",
@@ -198,10 +242,11 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("validate")
     run_parser = sub.add_parser("run")
-    run_parser.add_argument("--gateway-url", required=True)
-    run_parser.add_argument("--wallet-tester-url", required=True)
-    run_parser.add_argument("--verifier-url", required=True)
-    run_parser.add_argument("--wallet-kit-url", required=True)
+    run_parser.add_argument("--eudi-material", type=Path, help="generated trust and endpoint environment")
+    run_parser.add_argument("--gateway-url")
+    run_parser.add_argument("--wallet-tester-url")
+    run_parser.add_argument("--verifier-url")
+    run_parser.add_argument("--wallet-kit-url")
     run_parser.add_argument("--output-dir", type=Path, required=True)
     run_parser.add_argument(
         "--stack-manifest",

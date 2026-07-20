@@ -29,21 +29,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.security.MessageDigest
-import java.security.cert.X509Certificate
 import java.util.*
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 
 object WalletPresentationService {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    /** Trust-all manager for test environments with self-signed certs. */
-    private val trustAllManager = object : X509TrustManager {
-        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-    }
 
     private fun createHttpClient(): HttpClient = HttpClient(Java) {
         install(ContentNegotiation) {
@@ -52,15 +41,6 @@ object WalletPresentationService {
         install(Logging) {
             logger = Logger.DEFAULT
             level = LogLevel.INFO
-        }
-        engine {
-            config {
-                sslContext(
-                    SSLContext.getInstance("TLS").apply {
-                        init(null, arrayOf<TrustManager>(trustAllManager), java.security.SecureRandom())
-                    }
-                )
-            }
         }
     }
 

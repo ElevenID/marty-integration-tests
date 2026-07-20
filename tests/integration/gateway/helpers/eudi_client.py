@@ -25,17 +25,19 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
+from urllib.parse import urlsplit
 
+import httpx
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-from cryptography.hazmat.primitives import hashes
-import httpx
 
 logger = logging.getLogger(__name__)
 
 
 # ── Helper functions ──
+
 
 def _b64url_encode(data: bytes) -> str:
     """Base64url encode without padding."""
@@ -75,9 +77,7 @@ def build_kb_jwt(
     Header: {"typ": "kb+jwt", "alg": "ES256"}
     Payload: {"aud": <verifier>, "nonce": <nonce>, "iat": <now>, "sd_hash": <hash>}
     """
-    sd_hash = _b64url_encode(
-        hashlib.sha256(sd_jwt_without_kb.encode("ascii")).digest()
-    )
+    sd_hash = _b64url_encode(hashlib.sha256(sd_jwt_without_kb.encode("ascii")).digest())
     header = {"typ": "kb+jwt", "alg": "ES256"}
     payload = {
         "aud": audience,
@@ -107,16 +107,39 @@ class EUDIVerifierClient:
     API docs: http://<host>:8080/swagger-ui
     """
 
-    def __init__(self, base_url: Optional[str] = None):
-        self.base_url = (
-            base_url
-            or os.getenv("EUDI_VERIFIER_URL", "http://localhost:8090")
-        ).rstrip("/")
+    def __init__(self, base_url: str | None = None) -> None:
+        self.base_url = (base_url or os.getenv("EUDI_VERIFIER_URL", "http://localhost:8090")).rstrip("/")
+        self._verifier_origin = self._absolute_origin(self.base_url, "base_url")
         self.client = httpx.AsyncClient(
-            base_url=self.base_url, timeout=60.0, follow_redirects=True,
+            base_url=self.base_url,
+            timeout=60.0,
+            follow_redirects=True,
         )
 
-    async def close(self):
+    @staticmethod
+    def _absolute_origin(url: str, field_name: str) -> tuple[str, str, int | None]:
+        parsed = urlsplit(url)
+        if not parsed.scheme or not parsed.netloc or parsed.hostname is None:
+            raise ValueError(f"{field_name} must be an absolute URL with an origin")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(f"{field_name} has an invalid port") from exc
+        scheme = parsed.scheme.lower()
+        if port is None:
+            port = {"http": 80, "https": 443}.get(scheme)
+        return scheme, parsed.hostname.lower(), port
+
+    def _validate_verifier_uri(self, uri: str, field_name: str) -> str:
+        parsed = urlsplit(uri)
+        if not parsed.scheme and not parsed.netloc:
+            return uri
+        origin = self._absolute_origin(uri, field_name)
+        if origin != self._verifier_origin:
+            raise ValueError(f"{field_name} origin does not match the configured EUDI verifier origin")
+        return uri
+
+    async def close(self) -> None:
         await self.client.aclose()
 
     async def health(self) -> bool:
@@ -129,12 +152,12 @@ class EUDIVerifierClient:
 
     async def initialize_transaction(
         self,
-        dcql_query: Dict[str, Any],
+        dcql_query: dict[str, Any],
         *,
         response_mode: str = "direct_post",
         jar_mode: str = "by_reference",
-        nonce: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        nonce: str | None = None,
+    ) -> dict[str, Any]:
         """Initialize a presentation transaction (OID4VP).
 
         Calls POST /ui/presentations to create a new verification session.
@@ -148,7 +171,7 @@ class EUDIVerifierClient:
         Returns:
             Dict with transaction_id, client_id, request_uri, etc.
         """
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "dcql_query": dcql_query,
             "response_mode": response_mode,
             "jar_mode": jar_mode,
@@ -172,8 +195,8 @@ class EUDIVerifierClient:
     async def get_wallet_response(
         self,
         transaction_id: str,
-        response_code: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        response_code: str | None = None,
+    ) -> dict[str, Any]:
         """Retrieve the wallet's response for a transaction.
 
         Calls GET /ui/presentations/{transactionId}
@@ -194,8 +217,9 @@ class EUDIVerifierClient:
         return resp.json()
 
     async def get_presentation_events(
-        self, transaction_id: str,
-    ) -> List[Dict[str, Any]]:
+        self,
+        transaction_id: str,
+    ) -> list[dict[str, Any]]:
         """Retrieve the event log for a presentation transaction."""
         resp = await self.client.get(
             f"/ui/presentations/{transaction_id}/events",
@@ -203,7 +227,7 @@ class EUDIVerifierClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def get_request_object(self, request_uri: str) -> Dict[str, Any]:
+    async def get_request_object(self, request_uri: str) -> dict[str, Any]:
         """Fetch the authorization request JWT from the verifier.
 
         The request_uri returned by initialize_transaction points to
@@ -213,17 +237,8 @@ class EUDIVerifierClient:
         Returns the decoded JWT payload (not verified — we only need
         the state and nonce for building a wallet response).
         """
-        # The request_uri may be an absolute URL with internal hostname;
-        # rewrite it to use our base_url so we can reach it from the host.
-        if request_uri.startswith("http"):
-            from urllib.parse import urlparse
-            parsed = urlparse(request_uri)
-            # Keep the path, replace the scheme+host with our base_url
-            url = f"{self.base_url}{parsed.path}"
-        else:
-            url = request_uri
-
-        resp = await self.client.get(url)
+        request_url = self._validate_verifier_uri(request_uri, "request_uri")
+        resp = await self.client.get(request_url)
         resp.raise_for_status()
 
         raw_jwt = resp.text
@@ -241,8 +256,8 @@ class EUDIVerifierClient:
         self,
         state: str,
         vp_token: Any,
-        response_uri: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        response_uri: str | None = None,
+    ) -> dict[str, Any]:
         """Submit a wallet response to the verifier's direct_post endpoint.
 
         This is the OID4VP wallet→verifier response.  The verifier uses
@@ -255,21 +270,16 @@ class EUDIVerifierClient:
             vp_token: The VP token — either a JSON-serializable object
                 (DCQL map) or a string (single credential).
             response_uri: The ``response_uri`` from the auth request JWT.
-                If provided, the host is rewritten to match ``self.base_url``
-                and the path is used as-is.  Falls back to
+                An absolute URI must use the configured verifier origin and
+                is submitted unchanged.  Falls back to
                 ``/wallet/direct_post`` (unlikely to work without requestId).
         """
-        if isinstance(vp_token, dict):
-            vp_token_str = json.dumps(vp_token)
-        else:
-            vp_token_str = str(vp_token)
+        vp_token_str = json.dumps(vp_token) if isinstance(vp_token, dict) else str(vp_token)
 
         # Determine the URL to POST to
         post_url = "/wallet/direct_post"
         if response_uri:
-            from urllib.parse import urlparse
-            parsed = urlparse(response_uri)
-            post_url = f"{self.base_url}{parsed.path}"
+            post_url = self._validate_verifier_uri(response_uri, "response_uri")
 
         resp = await self.client.post(
             post_url,
@@ -280,7 +290,7 @@ class EUDIVerifierClient:
             "[EUDI Verifier] direct_post response: status=%d",
             resp.status_code,
         )
-        result: Dict[str, Any] = {"status_code": resp.status_code}
+        result: dict[str, Any] = {"status_code": resp.status_code}
         try:
             result["body"] = resp.json()
         except Exception:
@@ -289,15 +299,16 @@ class EUDIVerifierClient:
 
     async def run_presentation_flow(
         self,
-        dcql_query: Dict[str, Any],
+        dcql_query: dict[str, Any],
         vp_token: Any,
-        nonce: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        nonce: str | None = None,
+    ) -> dict[str, Any]:
         """Run the full presentation flow: init → get request → submit.
 
         Returns a dict with transaction_id, request_state, and submission result.
         """
         import uuid
+
         nonce = nonce or uuid.uuid4().hex
 
         # 1. Initialize transaction
@@ -338,7 +349,8 @@ class EUDIVerifierClient:
         }
 
     async def validate_mdoc_device_response(
-        self, device_response_b64url: str,
+        self,
+        device_response_b64url: str,
     ) -> Any:
         """Validate an MSO MDoc DeviceResponse using the EUDI utility endpoint.
 
@@ -395,11 +407,13 @@ SD_JWT_DCQL_QUERY = {
         {
             "id": "sd-jwt-query",
             "format": "dc+sd-jwt",
-            "meta": {"vct_values": [
-                "https://marty.example/credentials/open_badge",
-                "https://beta.elevenidllc.com/credentials/open_badge",
-                "urn:credential:open_badge",
-            ]},
+            "meta": {
+                "vct_values": [
+                    "https://marty.example/credentials/open_badge",
+                    "https://beta.elevenidllc.com/credentials/open_badge",
+                    "urn:credential:open_badge",
+                ]
+            },
             "claims": [
                 {"path": ["given_name"]},
                 {"path": ["family_name"]},
@@ -441,18 +455,15 @@ class EUDIWalletTesterClient:
       2. Marty's .well-known metadata is parseable by a real EUDI client.
     """
 
-    def __init__(self, base_url: Optional[str] = None):
-        self.base_url = (
-            base_url
-            or os.getenv("EUDI_WALLET_TESTER_URL", "http://localhost:5050")
-        ).rstrip("/")
+    def __init__(self, base_url: str | None = None) -> None:
+        self.base_url = (base_url or os.getenv("EUDI_WALLET_TESTER_URL", "http://localhost:5050")).rstrip("/")
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=30.0,
             follow_redirects=False,  # We track redirects manually
         )
 
-    async def close(self):
+    async def close(self) -> None:
         await self.client.aclose()
 
     async def health(self) -> bool:
@@ -463,7 +474,7 @@ class EUDIWalletTesterClient:
         except Exception:
             return False
 
-    async def get_home_page(self) -> Dict[str, Any]:
+    async def get_home_page(self) -> dict[str, Any]:
         """Fetch the home page and verify it renders."""
         resp = await self.client.get("/")
         return {
@@ -473,7 +484,7 @@ class EUDIWalletTesterClient:
             "contains_preauth": "preauth" in resp.text,
         }
 
-    async def trigger_preauth(self) -> Dict[str, Any]:
+    async def trigger_preauth(self) -> dict[str, Any]:
         """Hit the /preauth endpoint and check the redirect target.
 
         The wallet tester redirects to {serv_url}/dynamic/preauth which
@@ -485,10 +496,10 @@ class EUDIWalletTesterClient:
             "status_code": resp.status_code,
             "redirect_location": resp.headers.get("location", ""),
             "redirects_to_gateway": "gateway" in resp.headers.get("location", "")
-                                    or "8000" in resp.headers.get("location", ""),
+            or "8000" in resp.headers.get("location", ""),
         }
 
-    async def fetch_metadata_via_tester(self) -> Dict[str, Any]:
+    async def fetch_metadata_via_tester(self) -> dict[str, Any]:
         """Drive the wallet tester through Marty's metadata endpoints.
 
         Calls the tester's ``/metadata1_na`` and ``/metadata_na`` routes
@@ -504,10 +515,12 @@ class EUDIWalletTesterClient:
         """
         # Use a session-aware client to match the Flask session flow
         async with httpx.AsyncClient(
-            base_url=self.base_url, timeout=30.0,
-            follow_redirects=False, cookies=httpx.Cookies(),
+            base_url=self.base_url,
+            timeout=30.0,
+            follow_redirects=False,
+            cookies=httpx.Cookies(),
         ) as session_client:
-            steps: Dict[str, Any] = {}
+            steps: dict[str, Any] = {}
 
             # Step 0: Hit home to init Flask session
             r0 = await session_client.get("/")
@@ -548,7 +561,7 @@ class EUDIWalletTesterClient:
     async def run_preauth_metadata_flow(
         self,
         credential_offer_uri: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Drive the wallet tester through the pre-auth flow using a
         credential offer URI from Marty.
 
@@ -567,7 +580,7 @@ class EUDIWalletTesterClient:
         Returns:
             Dict with step results, parsed offer data, and metadata status.
         """
-        from urllib.parse import urlparse, parse_qs
+        from urllib.parse import parse_qs, urlparse
 
         parsed = urlparse(credential_offer_uri)
         qs = parse_qs(parsed.query)
@@ -576,10 +589,12 @@ class EUDIWalletTesterClient:
             return {"success": False, "error": "No credential_offer param in URI"}
 
         async with httpx.AsyncClient(
-            base_url=self.base_url, timeout=30.0,
-            follow_redirects=False, cookies=httpx.Cookies(),
+            base_url=self.base_url,
+            timeout=30.0,
+            follow_redirects=False,
+            cookies=httpx.Cookies(),
         ) as session_client:
-            steps: Dict[str, Any] = {}
+            steps: dict[str, Any] = {}
 
             # Step 0: Init session
             r0 = await session_client.get("/")
@@ -631,7 +646,7 @@ class EUDIWalletTesterClient:
 
 def select_disclosures(
     sd_jwt: str,
-    requested_claims: List[str],
+    requested_claims: list[str],
 ) -> str:
     """Build an SD-JWT with only the requested disclosures included.
 

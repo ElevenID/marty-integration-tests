@@ -175,26 +175,102 @@ validated Docker host and teardown happens in reverse order. A standard
 GitHub-hosted Ubuntu runner can invoke Docker Compose directly; Docker-in-Docker
 and a self-hosted runner are not required.
 
+Generate a new local certificate authority, SAN TLS leaf, Java truststore, and
+non-self-signed EUDI verifier access-certificate keystore for every disposable
+run. Python creates the keys and certificates; JDK 17 or newer supplies
+`keytool` for the two JKS files. The private environment manifest is not an
+evidence artifact and must not be committed or uploaded.
+
 ```bash
 export OFFICIAL_SUITE_RUN_ID="${GITHUB_RUN_ID:-local1}"
+python scripts/eudi_test_material.py generate \
+  --output "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID"
+python scripts/eudi_test_material.py validate \
+  --material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID"
+
+# The host-side clients and Docker bridge use this same certificate hostname.
+# A GitHub-hosted Ubuntu runner may add this mapping in its disposable job.
+getent hosts marty-oidf.test >/dev/null || \
+  echo '127.0.0.1 marty-oidf.test' | sudo tee -a /etc/hosts >/dev/null
+
 python scripts/official_suite_compose.py up \
   --marty-ui ../marty-ui \
   --oidf-runner /opt/openid-conformance-suite \
+  --eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID" \
   --oidf --eudi --w3c
 
 # Capture results and logs, then always run:
 python scripts/official_suite_compose.py down \
   --marty-ui ../marty-ui \
   --oidf-runner /opt/openid-conformance-suite \
+  --eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID" \
   --oidf --eudi --w3c
 ```
 
 The launcher derives three distinct project names from the run ID. Marty starts
 first so it creates its scoped TLS bridge; OIDF and EUDI start afterward.
-Cleanup stops EUDI and OIDF before Marty removes the bridge. If
-`MARTY_CONFORMANCE_DOCKER_CONTEXT` selects a remote engine, that validated
-context is forwarded to every child process through `DOCKER_CONTEXT`; otherwise
-all projects use the runner's local engine.
+Cleanup stops EUDI and OIDF before Marty removes the bridge. Docker locality is
+derived from the actual endpoint selected by `MARTY_CONFORMANCE_DOCKER_CONTEXT`,
+standard `DOCKER_CONTEXT`, `DOCKER_HOST`, or the active context. A named context
+is not assumed remote: Unix sockets, Windows named pipes, and loopback endpoints
+are inspected rather than guessed from its name. Only Unix sockets, Windows
+named pipes, and `fd://` endpoints are local by default. TCP, HTTP, HTTPS, and
+SSH endpoints remain remote even on loopback because they may be tunnels to a
+different filesystem. Set `MARTY_CONFORMANCE_ALLOW_NETWORK_BINDS=1` only after
+reviewing and proving that every client bind path is shared with that daemon.
+Generated files can only be mounted into a local/shared Docker engine. The
+launcher rejects generated material when the selected endpoint is remote
+because Docker does not copy client-side bind mounts to the daemon host. For a
+remote engine, provision external files on that host and use the external mode
+below. Diagnostics and teardown do not validate certificate lifetimes, and can
+still remove the project if the disposable material directory was deleted.
+
+The generated manifest derives the exact HTTPS origins, host and bridge ports,
+bridge DNS alias, trust root, keystore type, key alias, and passwords. Marty,
+the official wallet tester, the EUDI verifier, and the wallet-kit harness then
+use those normal public protocol URLs. No request URI or response URI is
+rewritten to an internal container address, and the JVM harness uses the
+generated truststore instead of a trust-all TLS manager.
+
+Externally issued TLS certificates and an externally managed verifier
+keystore remain the certification path. Export the same environment contract
+(`OIDF_TLS_CERT_DIR`, `EUDI_VERIFIER_KEYSTORE_FILE`, its type/alias/passwords,
+the three public HTTPS origins, the wallet-kit public URL, ports, and truststore
+password), then validate it without `--material`:
+
+```bash
+python scripts/eudi_test_material.py validate
+python scripts/official_suite_compose.py up \
+  --marty-ui ../marty-ui \
+  --oidf-runner /opt/openid-conformance-suite \
+  --oidf --eudi --w3c
+```
+
+A complete external TLS-directory and EUDI-keystore pair takes precedence if
+`--eudi-material` is also present. A partial pair is rejected before Docker is
+called. On a local daemon, external validation checks the current TLS chain,
+SANs, matching key, Java private-key alias, non-self-signed access-certificate
+chain, and truststore root; it does not impose the disposable seven-day lifetime
+cap. On a remote daemon those paths belong to the daemon host, so run
+`eudi_test_material.py validate` on that host. The remote client validates only
+the URL/port/store contract, then the startup readiness probes exercise the
+public TLS paths. It never pretends that a remote file was validated locally.
+
+Remote external mode also fails closed unless all checkout/config binds are
+declared. `MARTY_CONFORMANCE_REMOTE_UI_ROOT` must equal the absolute local
+`--marty-ui` checkout path and that identical path must exist on the daemon.
+When OIDF is selected, `OIDF_CONFORMANCE_REMOTE_RUNNER_ROOT` has the same rule
+for `--oidf-runner`. Set `EUDI_CONFORMANCE_CONFIG_ROOT` to the absolute
+daemon-host directory containing `wallet-tester.nginx.conf` and
+`verifier.nginx.conf`; Compose uses that value directly. The external
+`OIDF_TLS_CERT_DIR` and `EUDI_VERIFIER_KEYSTORE_FILE` must likewise be absolute
+daemon-host paths. This explicit contract prevents a remote run from silently
+assuming that the client's repository exists on the daemon.
+
+After Compose reports its healthchecks, the lifecycle also polls Marty's public
+discovery endpoint, the wallet tester, the verifier Swagger endpoint, and the
+wallet-kit health endpoint. Startup fails and unwinds all projects if any real
+public path is not ready within the configured timeout.
 
 Add `--haip` only when the disposable verifier signing key and matching
 certificate are present in `VERIFIER_SIGNING_KEY_PEM` and
@@ -345,13 +421,15 @@ Point it only at the digest-pinned EUDI containers recorded in
 
 ```bash
 python scripts/eudi_reference_interop.py run \
-  --gateway-url https://marty-oidf.test:8443 \
-  --wallet-tester-url https://marty-oidf.test:25051 \
-  --verifier-url https://marty-oidf.test:28091 \
-  --wallet-kit-url http://localhost:29090 \
+  --eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID" \
   --stack-manifest path/to/stack-manifest.json \
   --output-dir reports/eudi-reference
 ```
+
+The runner loads the generated CA, exact endpoints, local hostname resolution,
+and public-login gateway from that same private manifest. Explicit endpoint
+flags remain available for externally managed certification deployments, but
+when combined with `--eudi-material` they must exactly match it.
 
 Run the reference wallet tester and verifier as a separate Compose project
 with `conformance/eudi-reference.compose.yml`. It joins only Marty's

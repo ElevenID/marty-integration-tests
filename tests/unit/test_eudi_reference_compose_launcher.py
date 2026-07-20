@@ -31,8 +31,16 @@ def test_launcher_rejects_a_nonconformance_marty_project() -> None:
         launcher.main(["--marty-project", "production", "--", "ps"])
 
 
+def test_launcher_rejects_generated_material_on_a_remote_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EUDI_TEST_MATERIAL_MODE", "generated")
+    monkeypatch.setattr(launcher, "docker_endpoint_is_local", lambda: False)
+    with pytest.raises(SystemExit, match="remote Docker context"):
+        launcher.main(["--marty-project", "marty-conformance-run1", "--", "ps"])
+
+
 def test_launcher_uses_only_the_existing_marty_tls_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(launcher, "docker_endpoint_is_local", lambda: True)
 
     monkeypatch.setattr(
         launcher,
@@ -79,3 +87,10 @@ def test_launcher_uses_only_the_existing_marty_tls_bridge(monkeypatch: pytest.Mo
         str(launcher.COMPOSE),
     ]
     assert calls[1][1]["env"]["OIDF_MARTY_BRIDGE_NETWORK"] == "marty-conformance-run1_oidf-runner"
+
+
+def test_launcher_requires_explicit_roots_for_remote_external_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(launcher, "docker_endpoint_is_local", lambda: False)
+
+    with pytest.raises(SystemExit, match="EUDI_CONFORMANCE_CONFIG_ROOT"):
+        launcher.main(["--marty-project", "marty-conformance-run1", "--", "ps"])
