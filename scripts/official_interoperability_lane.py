@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import time
+from hashlib import sha256
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
@@ -28,6 +29,13 @@ STACK_ENV_KEYS = {
     "POSTGRES_IMAGE",
     "REDIS_IMAGE",
 }
+STACK_IMAGE_REPOSITORIES = {
+    "MARTY_UI_IMAGE": "ui",
+    "MARTY_SERVICES_IMAGE": "services",
+    "MARTY_MIGRATIONS_IMAGE": "migrations",
+    "MARTY_ISSUANCE_IMAGE": "marty-credentials-issuance",
+}
+BASE_IMAGE_CONFIG_KEYS = {"POSTGRES_IMAGE": "postgres", "REDIS_IMAGE": "redis"}
 MATERIAL_ENV_KEYS = {
     "EUDI_TEST_MATERIAL_MODE",
     "EUDI_TEST_CA_FILE",
@@ -112,6 +120,94 @@ def load_stack_metadata(path: Path) -> dict[str, object]:
     if not isinstance(manifest, str) or Path(manifest).resolve() != expected_manifest:
         raise ValueError("stack metadata and stack manifest must share the verified release directory")
     return data
+
+
+def file_sha256(path: Path) -> str:
+    return f"sha256:{sha256(path.read_bytes()).hexdigest()}"
+
+
+def manifest_image_references(manifest: object) -> set[str]:
+    if not isinstance(manifest, dict) or manifest.get("schema") != "marty.stack/v1":
+        raise ValueError("stack manifest has an unsupported schema")
+    components = manifest.get("components")
+    if not isinstance(components, list) or not components:
+        raise ValueError("stack manifest contains no components")
+    references: set[str] = set()
+    for component in components:
+        if not isinstance(component, dict):
+            raise ValueError("stack manifest components must be objects")
+        artifacts = component.get("artifacts")
+        if not isinstance(artifacts, list):
+            raise ValueError("stack manifest component artifacts must be a list")
+        for artifact in artifacts:
+            if not isinstance(artifact, dict) or artifact.get("type") != "oci":
+                continue
+            uri = artifact.get("uri")
+            digest = artifact.get("digest")
+            reference = f"{uri}@{digest}"
+            if not isinstance(uri, str) or not isinstance(digest, str) or not DIGEST_IMAGE.fullmatch(reference):
+                raise ValueError("stack manifest contains an invalid OCI reference")
+            if reference in references:
+                raise ValueError("stack manifest contains a duplicate OCI reference")
+            references.add(reference)
+    if not references:
+        raise ValueError("stack manifest contains no OCI images")
+    return references
+
+
+def metadata_image_references(metadata: dict[str, object]) -> set[str]:
+    images = metadata.get("images")
+    if not isinstance(images, list) or not images:
+        raise ValueError("stack metadata contains no images")
+    references: set[str] = set()
+    for image in images:
+        if not isinstance(image, dict):
+            raise ValueError("stack metadata images must be objects")
+        reference = image.get("reference")
+        if not isinstance(reference, str) or not DIGEST_IMAGE.fullmatch(reference):
+            raise ValueError("stack metadata contains an invalid image reference")
+        if reference in references:
+            raise ValueError("stack metadata contains a duplicate image reference")
+        references.add(reference)
+    return references
+
+
+def validate_stack_binding(
+    manifest_path: Path,
+    metadata: dict[str, object],
+    stack_environment: dict[str, str],
+) -> None:
+    """Bind deployed image inputs to the exact attested manifest recorded as evidence."""
+    recorded_path = metadata.get("manifest_path")
+    if not isinstance(recorded_path, str) or manifest_path.resolve() != Path(recorded_path).resolve():
+        raise ValueError("the deployed stack manifest does not match the attested metadata path")
+    recorded_digest = metadata.get("manifest_sha256")
+    actual_digest = file_sha256(manifest_path)
+    if not isinstance(recorded_digest, str) or actual_digest != recorded_digest:
+        raise ValueError("the deployed stack manifest does not match the attested metadata digest")
+
+    manifest_references = manifest_image_references(json.loads(manifest_path.read_text(encoding="utf-8")))
+    if metadata_image_references(metadata) != manifest_references:
+        raise ValueError("stack metadata images do not match the attested manifest")
+
+    for variable, repository_name in STACK_IMAGE_REPOSITORIES.items():
+        matches = {
+            reference
+            for reference in manifest_references
+            if reference.split("@", 1)[0].rstrip("/").rsplit("/", 1)[-1] == repository_name
+        }
+        if len(matches) != 1 or stack_environment[variable] not in matches:
+            raise ValueError(f"{variable} does not match the attested stack manifest")
+
+    base_images_raw: object = json.loads((ROOT / "config" / "base-images.json").read_text(encoding="utf-8"))
+    if not isinstance(base_images_raw, dict):
+        raise ValueError("base image configuration must be a JSON object")
+    for variable, key in BASE_IMAGE_CONFIG_KEYS.items():
+        expected = base_images_raw.get(key)
+        if not isinstance(expected, str) or not DIGEST_IMAGE.fullmatch(expected):
+            raise ValueError(f"base image configuration has no immutable {key} image")
+        if stack_environment[variable] != expected:
+            raise ValueError(f"{variable} does not match the reviewed base image configuration")
 
 
 def write_private_json(path: Path, value: object) -> None:
@@ -267,8 +363,10 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         raise ValueError(f"{args.lane} requires generated verifier test material")
 
     metadata = load_stack_metadata(args.stack_metadata)
+    stack_environment = load_stack_environment(args.stack_env)
+    validate_stack_binding(args.stack_manifest, metadata, stack_environment)
     environment = os.environ.copy()
-    environment.update(load_stack_environment(args.stack_env))
+    environment.update(stack_environment)
     environment.update(load_material_environment(args.material))
     gateway_url = environment.get("OIDF_PUBLIC_BASE_URL", "https://marty-oidf.test:18443").rstrip("/")
     gateway = urlsplit(gateway_url)
@@ -288,6 +386,7 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
             "OIDF_MARTY_GATEWAY_URL": gateway_url,
             "OIDF_MARTY_RESOLVE_IP": environment.get("OIDF_MARTY_RESOLVE_IP", "127.0.0.1"),
             "GATEWAY_URL": gateway_url,
+            "EUDI_TEST_VCT_ORIGIN": gateway_url,
             "PUBLIC_DOMAIN": gateway.hostname,
             "SSL_CERT_FILE": str((args.material / "root-ca.pem").resolve()),
             "REQUESTS_CA_BUNDLE": str((args.material / "root-ca.pem").resolve()),
@@ -367,11 +466,10 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
     base = [sys.executable, str(launcher), "--project", project]
-    started = run([*base, "up"], environment) == 0
-    if not started:
-        return 1
     include_w3c = False
     try:
+        if run([*base, "up"], environment):
+            return 1
         wait_for_public_stack(environment)
         fixtures = bootstrap_fixtures(args, environment, mode="w3c")
         environment.update(
@@ -384,6 +482,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
         include_w3c = True
         if run([*base, "--include-w3c", "--resume", "up"], environment):
             return 1
+        wait_for_public_stack(environment)
         return run(
             [
                 sys.executable,

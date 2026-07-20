@@ -108,7 +108,7 @@ class EUDIVerifierClient:
     """
 
     def __init__(self, base_url: str | None = None) -> None:
-        self.base_url = (base_url or os.getenv("EUDI_VERIFIER_URL", "http://localhost:8090")).rstrip("/")
+        self.base_url = (base_url or os.getenv("EUDI_VERIFIER_URL") or "http://localhost:8090").rstrip("/")
         self._verifier_origin = self._absolute_origin(self.base_url, "base_url")
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -455,8 +455,10 @@ class EUDIWalletTesterClient:
       2. Marty's .well-known metadata is parseable by a real EUDI client.
     """
 
-    def __init__(self, base_url: str | None = None) -> None:
-        self.base_url = (base_url or os.getenv("EUDI_WALLET_TESTER_URL", "http://localhost:5050")).rstrip("/")
+    def __init__(self, base_url: str | None = None, gateway_url: str | None = None) -> None:
+        self.base_url = (base_url or os.getenv("EUDI_WALLET_TESTER_URL") or "http://localhost:5050").rstrip("/")
+        self.gateway_url = (gateway_url or os.getenv("GATEWAY_URL") or "http://localhost:8000").rstrip("/")
+        self._gateway_origin = EUDIVerifierClient._absolute_origin(self.gateway_url, "gateway_url")
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=30.0,
@@ -492,11 +494,15 @@ class EUDIWalletTesterClient:
         we just verify it points to the right place.
         """
         resp = await self.client.get("/preauth")
+        location = resp.headers.get("location", "")
+        try:
+            redirect_origin = EUDIVerifierClient._absolute_origin(location, "preauth redirect")
+        except ValueError:
+            redirect_origin = None
         return {
             "status_code": resp.status_code,
-            "redirect_location": resp.headers.get("location", ""),
-            "redirects_to_gateway": "gateway" in resp.headers.get("location", "")
-            or "8000" in resp.headers.get("location", ""),
+            "redirect_location": location,
+            "redirects_to_gateway": redirect_origin == self._gateway_origin,
         }
 
     async def fetch_metadata_via_tester(self) -> dict[str, Any]:

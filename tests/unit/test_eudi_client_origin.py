@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from tests.integration.gateway.helpers.eudi_client import EUDIVerifierClient
+from tests.integration.gateway.helpers.eudi_client import EUDIVerifierClient, EUDIWalletTesterClient
 
 
 def _unsigned_jwt(payload: dict[str, str]) -> str:
@@ -101,3 +101,47 @@ async def test_submit_wallet_response_rejects_a_different_origin() -> None:
         await client.close()
 
     post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_wallet_preauth_redirect_matches_configured_gateway_origin() -> None:
+    client = EUDIWalletTesterClient(
+        "https://wallet-tester.example:25051",
+        gateway_url="https://marty-oidf.test:18443",
+    )
+    client.client.get = AsyncMock(
+        return_value=httpx.Response(
+            302,
+            headers={"location": "https://marty-oidf.test:18443/dynamic/preauth"},
+            request=httpx.Request("GET", "https://wallet-tester.example:25051/preauth"),
+        )
+    )
+
+    try:
+        result = await client.trigger_preauth()
+    finally:
+        await client.close()
+
+    assert result["redirects_to_gateway"] is True
+
+
+@pytest.mark.asyncio
+async def test_wallet_preauth_redirect_rejects_lookalike_gateway_text() -> None:
+    client = EUDIWalletTesterClient(
+        "https://wallet-tester.example:25051",
+        gateway_url="https://marty-oidf.test:18443",
+    )
+    client.client.get = AsyncMock(
+        return_value=httpx.Response(
+            302,
+            headers={"location": "https://attacker.example/gateway:8000/dynamic/preauth"},
+            request=httpx.Request("GET", "https://wallet-tester.example:25051/preauth"),
+        )
+    )
+
+    try:
+        result = await client.trigger_preauth()
+    finally:
+        await client.close()
+
+    assert result["redirects_to_gateway"] is False
