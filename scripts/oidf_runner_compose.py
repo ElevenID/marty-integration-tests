@@ -11,14 +11,19 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from docker_context import docker_command
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "conformance" / "oidf-runner-bridge.compose.yml"
 PREBUILT_OVERLAY = ROOT / "conformance" / "oidf-runner-prebuilt.compose.yml"
+OIDF_PROJECT = re.compile(r"^oidf-runner(?:-[a-z0-9][a-z0-9-]{0,46})?$")
+MARTY_PROJECT = re.compile(r"^marty-conformance-[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -43,6 +48,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if not args.marty_project:
         raise SystemExit("--marty-project or MARTY_CONFORMANCE_PROJECT is required")
+    if not MARTY_PROJECT.fullmatch(args.marty_project):
+        raise SystemExit("--marty-project must be an isolated marty-conformance-<run-id> project")
+    if not OIDF_PROJECT.fullmatch(args.project):
+        raise SystemExit("--project must be oidf-runner or oidf-runner-<run-id>")
     if args.arguments and args.arguments[0] == "--":
         args.arguments = args.arguments[1:]
     if not args.arguments:
@@ -57,10 +66,17 @@ def main(argv: list[str] | None = None) -> int:
     overlays = ["--file", str(OVERLAY)]
     if args.prebuilt:
         overlays = ["--file", str(PREBUILT_OVERLAY), *overlays]
-    command = [
-        "docker", "compose", "--project-name", args.project,
-        "--file", str(compose), *overlays, *args.arguments,
-    ]
+    command = docker_command(
+        [
+            "compose",
+            "--project-name",
+            args.project,
+            "--file",
+            str(compose),
+            *overlays,
+            *args.arguments,
+        ]
+    )
     return subprocess.run(command, check=False, env=environment).returncode
 
 
