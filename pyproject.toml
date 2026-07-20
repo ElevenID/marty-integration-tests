@@ -64,6 +64,11 @@ markers = [
     "slow: Slow running tests",
     "conformance: OID4VC conformance tests (OIDF certification prep — expect some failures exposing missing features)",
     "ui_contract: Browser-driven UI contract tests against a local Marty UI checkout",
+    "eudi: EUDI reference implementation interoperability tests",
+    "inspection: Physical-document inspection-system integration tests",
+    "interop: Cross-wallet and cross-implementation interoperability tests",
+    "passport: ICAO passport and eMRTD tests",
+    "e2e: End-to-end tests requiring a complete deployed stack",
 ]
 addopts = [
     "-v",
