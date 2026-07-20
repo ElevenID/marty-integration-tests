@@ -17,6 +17,7 @@ import sys
 import urllib.request
 from hashlib import sha256
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,8 +25,11 @@ MANIFEST = ROOT / "conformance" / "oidf-runner.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def load_manifest(path: Path = MANIFEST) -> dict:
-    data = json.loads(path.read_text(encoding="utf-8"))
+def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
+    raw: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("OIDF runner manifest must be a JSON object")
+    data = cast(dict[str, Any], raw)
     if data.get("schema") != "elevenid.oidf-conformance-runner/v1":
         raise ValueError("unsupported OIDF runner manifest schema")
     runner = data.get("official_runner", {})
@@ -325,7 +329,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     print("Running the official OIDF plan:", profile["test_plan"])
     if args.interaction_script is None:
         result = subprocess.run(command, cwd=runner, check=False).returncode
-        write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
+        write_evidence(
+            output,
+            manifest,
+            args.profile,
+            config,
+            runner,
+            result,
+            args.stack_manifest,
+            mode,
+            expected_skips,
+        )
         return result
 
     interaction_script = args.interaction_script.resolve()
@@ -341,7 +355,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # hook receives only public test metadata through arguments; credentials
     # remain environment variables owned by the invoking environment.
     current_module = ""
-    hooks: list[subprocess.Popen[str]] = []
+    hooks: list[subprocess.Popen[bytes]] = []
     process = subprocess.Popen(
         # ``run-test-plan.py`` is a Python program.  Its output becomes a pipe
         # here, so force unbuffered mode; otherwise a waiting official module

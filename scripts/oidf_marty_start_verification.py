@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
-from oidf_marty_public_login import authenticated_json_request
+from oidf_marty_public_login import authenticated_json_request  # noqa: E402 -- import follows standalone path setup
 
 
 def required_env(name: str) -> str:
