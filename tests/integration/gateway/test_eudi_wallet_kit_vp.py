@@ -830,8 +830,10 @@ class TestMDocIssuance:
     async def test_mdoc_credential_issuance(
         self,
         issued_mdoc_credential,
+        record_property,
     ):
         """mDoc mDL can be issued through Marty and received by EUDI wallet kit."""
+        record_property("evidence_id", "eudi.oid4vci.mdoc-issuance.v1")
         assert issued_mdoc_credential["credential"], "Empty mDoc credential"
         logger.info(
             "[mDoc] Credential received: format=%s, length=%d",

@@ -345,8 +345,10 @@ class TestEUDIWalletKitIssuance:
         wallet_kit: EUDIWalletKitClient,
         eudi_test_org,
         open_badge_template,
+        record_property,
     ):
         """Issue SD-JWT VC through Marty, receive via EUDI Wallet Kit."""
+        record_property("evidence_id", "eudi.oid4vci.sd-jwt-issuance.v1")
         result = await authenticated_gateway_client.issue_credential(
             organization_id=eudi_test_org["id"],
             credential_template_id=open_badge_template["id"],

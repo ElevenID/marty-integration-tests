@@ -28,7 +28,11 @@ DIGEST_IMAGE = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 OCI_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+:[a-zA-Z0-9._-]+@sha256:[0-9a-f]{64}$")
 EUDI_HAIP_EVIDENCE_ID = "eudi.oid4vp.haip.resolve-dispatch.v1"
 EUDI_HOLDER_BINDING_EVIDENCE_ID = "eudi.sd-jwt.missing-holder-binding-key.v1"
+EUDI_SD_JWT_ISSUANCE_EVIDENCE_ID = "eudi.oid4vci.sd-jwt-issuance.v1"
+EUDI_MDOC_ISSUANCE_EVIDENCE_ID = "eudi.oid4vci.mdoc-issuance.v1"
 REQUIRED_EVIDENCE_CLAIMS = {
+    EUDI_SD_JWT_ISSUANCE_EVIDENCE_ID: frozenset({"issuance:sd_jwt_vc"}),
+    EUDI_MDOC_ISSUANCE_EVIDENCE_ID: frozenset({"issuance:mso_mdoc"}),
     EUDI_HAIP_EVIDENCE_ID: frozenset(
         {
             "presentation:sd_jwt_vc",
@@ -38,6 +42,25 @@ REQUIRED_EVIDENCE_CLAIMS = {
     ),
     EUDI_HOLDER_BINDING_EVIDENCE_ID: frozenset({"negative:missing_holder_binding_key"}),
 }
+
+
+def coverage_claims(coverage: Any) -> set[str]:
+    """Return normalized manifest claims, rejecting ambiguous coverage."""
+    if not isinstance(coverage, dict) or not coverage:
+        raise ValueError("EUDI coverage must be a non-empty object")
+    claims: set[str] = set()
+    for dimension, values in coverage.items():
+        if not isinstance(dimension, str) or not dimension or ":" in dimension:
+            raise ValueError("EUDI coverage dimensions must be non-empty names")
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(not isinstance(value, str) or not value or ":" in value for value in values)
+            or len(values) != len(set(values))
+        ):
+            raise ValueError(f"EUDI coverage {dimension} must contain unique non-empty names")
+        claims.update(f"{dimension}:{value}" for value in values)
+    return claims
 
 
 def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
@@ -74,6 +97,7 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         if library.get("release") != f"v{version}" or coordinate.rsplit(":", 1)[-1] != version:
             raise ValueError(f"wallet_kit {name} release and Maven coordinate must match its version")
     coverage = data.get("coverage", {})
+    declared_coverage_claims = coverage_claims(coverage)
     if not {"sd_jwt_vc", "mso_mdoc"} <= set(coverage.get("issuance", [])):
         raise ValueError("EUDI issuance coverage must include SD-JWT VC and mdoc")
     if "sd_jwt_vc" not in coverage.get("presentation", []):
@@ -96,10 +120,27 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     required_evidence = data.get("required_evidence")
     if not isinstance(required_evidence, dict) or set(required_evidence) != set(REQUIRED_EVIDENCE_CLAIMS):
         raise ValueError("EUDI manifest must declare the complete stable evidence contract")
+    bound_claim_counts: dict[str, int] = {}
     for evidence_id, expected_claims in REQUIRED_EVIDENCE_CLAIMS.items():
         record = required_evidence.get(evidence_id)
-        if not isinstance(record, dict) or set(record.get("claims", [])) != set(expected_claims):
+        claims = record.get("claims", []) if isinstance(record, dict) else []
+        if not isinstance(claims, list) or len(claims) != len(set(claims)) or set(claims) != set(expected_claims):
             raise ValueError(f"EUDI evidence {evidence_id} must bind its exact coverage claims")
+        for claim in claims:
+            bound_claim_counts[claim] = bound_claim_counts.get(claim, 0) + 1
+    multiply_bound = sorted(claim for claim, count in bound_claim_counts.items() if count != 1)
+    bound_claims = set(bound_claim_counts)
+    if multiply_bound or declared_coverage_claims != bound_claims:
+        unbound = sorted(declared_coverage_claims - bound_claims)
+        undeclared = sorted(bound_claims - declared_coverage_claims)
+        details = []
+        if unbound:
+            details.append("unbound coverage: " + ", ".join(unbound))
+        if undeclared:
+            details.append("evidence without coverage: " + ", ".join(undeclared))
+        if multiply_bound:
+            details.append("multiply-bound coverage: " + ", ".join(multiply_bound))
+        raise ValueError("EUDI coverage and stable evidence claims must be a bijection (" + "; ".join(details) + ")")
     limitations = data.get("limitations", {})
     if not {"mso_mdoc_presentation", "oid4vp_negative_vectors"} <= set(limitations):
         raise ValueError("EUDI manifest must record current presentation limitations")

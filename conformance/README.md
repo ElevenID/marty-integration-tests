@@ -489,11 +489,13 @@ encrypted `direct_post.jwt` response; a default/DID-only flow does not satisfy
 the lane's recorded presentation coverage.
 
 The public summary is also bound to stable, versioned JUnit evidence IDs for
-the official HAIP resolve/dispatch path and the missing-holder-binding-key
-negative path. The runner rejects a missing, renamed, duplicated, failed,
-errored, or skipped sentinel, and a passing `evidence.json` cannot be written
-unless both required assertions appear exactly once and pass. This prevents a
-suite refactor from silently deleting the tests behind a published claim.
+SD-JWT issuance, mdoc issuance, the official HAIP resolve/dispatch path, and
+the missing-holder-binding-key negative path. Every claimed coverage value
+must map one-to-one to one of these evidence assertions. The runner rejects an
+unbound claim or a missing, renamed, duplicated, failed, errored, or skipped
+sentinel, and a passing `evidence.json` cannot be written unless all required
+assertions appear exactly once and pass. This prevents a suite refactor from
+silently deleting the tests behind a published claim.
 
 The stack pin records immutable `marty-ui` release `v1.1.3` as `ready`, with
 the independently downloaded `stack-manifest.json` SHA-256 recorded in

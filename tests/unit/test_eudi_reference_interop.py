@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -19,6 +20,7 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     manifest = eudi.load_manifest()
     assert "@sha256:" in manifest["components"]["wallet_tester"]["image"]
     assert "@sha256:" in manifest["components"]["verifier_endpoint"]["image"]
+    assert manifest["coverage"]["issuance"] == ["sd_jwt_vc", "mso_mdoc"]
     assert manifest["coverage"]["presentation"] == ["sd_jwt_vc"]
     assert manifest["coverage"]["request_object_trust"] == ["signed_jar_x509_hash_pkix"]
     assert manifest["coverage"]["response_mode"] == ["direct_post.jwt"]
@@ -69,10 +71,21 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "ECKeyGenerator" not in presentation_source
     assert "holderKeyFor(credentialCompact)" in presentation_source
     assert "EncryptionMethod.A256GCM" in presentation_source
-    official_tests = (ROOT / "tests" / "integration" / "gateway" / "test_eudi_wallet_kit_vp.py").read_text(
-        encoding="utf-8"
+    official_tests = "\n".join(
+        (ROOT / "tests" / "integration" / "gateway" / path).read_text(encoding="utf-8")
+        for path in ("test_eudi_wallet_kit.py", "test_eudi_wallet_kit_vp.py")
     )
     assert all(evidence_id in official_tests for evidence_id in eudi.REQUIRED_EVIDENCE_CLAIMS)
+
+
+def test_eudi_manifest_cannot_claim_coverage_without_stable_evidence() -> None:
+    manifest = eudi.load_manifest()
+    manifest["coverage"]["issuance"].append("jwt_vc_json")
+    path = Mock(spec=Path)
+    path.read_text.return_value = json.dumps(manifest)
+
+    with pytest.raises(ValueError, match="must be a bijection.*unbound coverage: issuance:jwt_vc_json"):
+        eudi.load_manifest(path)
 
 
 def test_eudi_manifest_cannot_claim_presentation_without_haip_trust_evidence(tmp_path: Path) -> None:
