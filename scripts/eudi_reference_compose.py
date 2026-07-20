@@ -15,10 +15,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from docker_context import docker_command
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "conformance" / "eudi-reference.compose.yml"
 PROJECT = re.compile(r"^eudi-reference(?:-[a-z0-9][a-z0-9-]{0,46})?$")
+MARTY_PROJECT = re.compile(r"^marty-conformance-[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -37,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if not args.marty_project:
         raise SystemExit("--marty-project or MARTY_CONFORMANCE_PROJECT is required")
+    if not MARTY_PROJECT.fullmatch(args.marty_project):
+        raise SystemExit("--marty-project must be an isolated marty-conformance-<run-id> project")
     if not PROJECT.fullmatch(args.project):
         raise SystemExit("--project must be eudi-reference or eudi-reference-<run-id>")
     if args.arguments and args.arguments[0] == "--":
@@ -47,14 +52,20 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"EUDI reference Compose file is missing: {COMPOSE}")
 
     bridge = f"{args.marty_project}_oidf-runner"
-    if subprocess.run(["docker", "network", "inspect", bridge], check=False).returncode:
+    if subprocess.run(docker_command(["network", "inspect", bridge]), check=False).returncode:
         raise SystemExit(f"Marty TLS bridge does not exist: {bridge}")
     environment = os.environ.copy()
     environment["OIDF_MARTY_BRIDGE_NETWORK"] = bridge
-    command = [
-        "docker", "compose", "--project-name", args.project,
-        "--file", str(COMPOSE), *args.arguments,
-    ]
+    command = docker_command(
+        [
+            "compose",
+            "--project-name",
+            args.project,
+            "--file",
+            str(COMPOSE),
+            *args.arguments,
+        ]
+    )
     return subprocess.run(command, check=False, env=environment).returncode
 
 

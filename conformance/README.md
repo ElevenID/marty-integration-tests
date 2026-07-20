@@ -166,6 +166,39 @@ exists, then supplies it as the only Marty-facing network. It never attaches
 the EUDI project to `marty-network`; use the same helper with `down`, `logs`,
 or `config` for the matching project lifecycle.
 
+### Unified Compose lifecycle
+
+Use `official_suite_compose.py` in automation so every project uses one
+validated Docker host and teardown happens in reverse order. A standard
+GitHub-hosted Ubuntu runner can invoke Docker Compose directly; Docker-in-Docker
+and a self-hosted runner are not required.
+
+```bash
+export OFFICIAL_SUITE_RUN_ID="${GITHUB_RUN_ID:-local1}"
+python scripts/official_suite_compose.py up \
+  --marty-ui ../marty-ui \
+  --oidf-runner /opt/openid-conformance-suite \
+  --oidf --eudi --w3c
+
+# Capture results and logs, then always run:
+python scripts/official_suite_compose.py down \
+  --marty-ui ../marty-ui \
+  --oidf-runner /opt/openid-conformance-suite \
+  --oidf --eudi --w3c
+```
+
+The launcher derives three distinct project names from the run ID. Marty starts
+first so it creates its scoped TLS bridge; OIDF and EUDI start afterward.
+Cleanup stops EUDI and OIDF before Marty removes the bridge. If
+`MARTY_CONFORMANCE_DOCKER_CONTEXT` selects a remote engine, that validated
+context is forwarded to every child process through `DOCKER_CONTEXT`; otherwise
+all projects use the runner's local engine.
+
+Add `--haip` only when the disposable verifier signing key and matching
+certificate are present in `VERIFIER_SIGNING_KEY_PEM` and
+`VERIFIER_X509_CERT_PEM`. Certification later can supply externally issued
+material without changing the lifecycle or production protocol path.
+
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
 export CONFORMANCE_SERVER=https://oidf.test.example
