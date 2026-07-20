@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 
@@ -19,16 +20,56 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
     assert manifest["official_suite"]["repository"].startswith("https://github.com/w3c/")
     assert manifest["official_suite"]["node"] == "24"
     assert manifest["official_suite"]["npm"] == "11.11.0"
+    assert w3c.SRI_SHA512.fullmatch(manifest["official_suite"]["npm_integrity"])
     assert w3c.DIGEST.fullmatch(manifest["official_suite"]["package_lock_sha256"])
     assert manifest["adapter"]["path"] == "/__test__/vc-api"
     assert manifest["exclusions"][0]["review_date"]
 
 
+def test_w3c_manifest_rejects_a_non_object(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="JSON object"):
+        w3c.load_manifest(manifest)
+
+
 def test_npm_command_uses_the_windows_launcher_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("W3C_NPM_CLI", raising=False)
     monkeypatch.setattr(w3c.os, "name", "nt")
-    assert w3c.npm_command() == "npm.cmd"
+    assert w3c.npm_command() == ["npm.cmd"]
     monkeypatch.setattr(w3c.os, "name", "posix")
-    assert w3c.npm_command() == "npm"
+    assert w3c.npm_command() == ["npm"]
+
+
+def test_npm_command_uses_only_an_existing_private_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cli = (tmp_path / "npm-cli.js").resolve()
+    cli.write_text("", encoding="utf-8")
+    monkeypatch.setenv("W3C_NPM_CLI", str(cli))
+    monkeypatch.setattr(w3c, "node_command", lambda: "node24")
+    assert w3c.npm_command() == ["node24", str(cli)]
+
+
+def test_npm_payload_integrity_is_pinned_to_the_official_tarball() -> None:
+    manifest = w3c.load_manifest()["official_suite"]
+    assert manifest["npm_tarball"] == "https://registry.npmjs.org/npm/-/npm-11.11.0.tgz"
+    assert manifest["npm_integrity"] == (
+        "sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw=="
+    )
+
+
+def test_npm_bootstrap_rejects_content_before_extraction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Response(io.BytesIO):
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.close()
+
+    monkeypatch.setattr(w3c.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(b"tampered"))
+    output = tmp_path / "npm"
+    with pytest.raises(ValueError, match="npm tarball integrity"):
+        w3c.bootstrap_npm(output, w3c.load_manifest())
+    assert not output.exists()
 
 
 def test_w3c_test_command_uses_absolute_reporter_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

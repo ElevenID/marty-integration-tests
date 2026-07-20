@@ -400,6 +400,14 @@ manifest value, and copies it with the official reports into the private
 evidence directory. A suite update therefore changes its commit, npm version
 when necessary, and reviewed lock digest together.
 
+The workflow does not replace the runner's global npm. It downloads the exact
+npm tarball URL recorded in the manifest, verifies the recorded registry
+SHA-512 integrity before extracting it, and invokes that private `npm-cli.js`
+with Node 24. Its Python 3.12 dependencies are likewise installed only from
+`requirements/official-py312.lock` with pip hash checking and binary-only
+resolution. Regenerate that lock from `official-py312.in` with pip-tools 7.6.0
+under Python 3.12, then review the complete diff before merging.
+
 ```bash
 python scripts/w3c_vc_conformance.py run \
   --suite /opt/vc-data-model-2.0-test-suite \
@@ -467,11 +475,25 @@ official EUDI Wallet Kit Maven libraries, not a mock wallet. The three HTTPS
 endpoints above are the TLS boundaries; do not use private container ports
 from a host-side conformance run.
 
+The manifest records each library independently: OID4VP 0.12.3, OID4VCI
+0.9.1, and SD-JWT 0.18.0, including its Maven coordinate, official source
+repository, release tag, and dereferenced commit. The harness build uses
+digest-pinned Gradle and Temurin bases, Gradle dependency locking, and strict
+SHA-256 dependency verification metadata. The monthly upstream review checks
+all three source repositories rather than treating OID4VP as the whole wallet
+kit. Updating a coordinate requires regenerating and reviewing both
+`gradle.lockfile` and `gradle/verification-metadata.xml`.
+
 It writes JUnit output, the unredacted local runner log, and `evidence.json`
 with the exact EUDI component digests, coverage matrix, endpoints, Marty
 commit, attested stack-manifest and image digests, exit status, and result-file digests. The wallet-kit harness must use
 the Maven coordinate pinned in the same manifest; do not replace it with a
 moving upstream release.
+
+The public-safe workflow summary additionally records the locally built
+wallet-harness image ID (a `sha256:` content digest) and hashes of its
+Dockerfile, Gradle lock, and dependency-verification metadata. The ephemeral
+Compose image name, generated keys, passwords, and raw logs are not published.
 
 When certification funding is available, enable the protected certification
 environment and run the same command against the registered test deployment.

@@ -20,6 +20,28 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "@sha256:" in manifest["components"]["wallet_tester"]["image"]
     assert "@sha256:" in manifest["components"]["verifier_endpoint"]["image"]
     assert "replayed_response" in manifest["coverage"]["negative"]
+    libraries = manifest["components"]["wallet_kit"]["libraries"]
+    assert {name: value["version"] for name, value in libraries.items()} == {
+        "oid4vp": "0.12.3",
+        "oid4vci": "0.9.1",
+        "sd_jwt": "0.18.0",
+    }
+    assert all(value["maven_coordinate"].endswith(value["version"]) for value in libraries.values())
+    build = manifest["components"]["wallet_kit"]["build"]
+    assert "@sha256:" in build["builder_image"]
+    assert "@sha256:" in build["runtime_image"]
+    gradle = (ROOT / "services" / "eudi-wallet-harness" / "build.gradle.kts").read_text(encoding="utf-8")
+    lock = (ROOT / "services" / "eudi-wallet-harness" / "gradle.lockfile").read_text(encoding="utf-8")
+    verification = (ROOT / "services" / "eudi-wallet-harness" / "gradle" / "verification-metadata.xml").read_text(
+        encoding="utf-8"
+    )
+    for library in libraries.values():
+        coordinate = library["maven_coordinate"]
+        assert f'implementation("{coordinate}")' in gradle
+        assert coordinate + "=" in lock
+    assert "lockAllConfigurations()" in gradle
+    assert "<verify-metadata>true</verify-metadata>" in verification
+    assert '<sha256 value="' in verification
 
 
 def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:

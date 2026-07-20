@@ -1,0 +1,8 @@
+# Runtime dependencies used by the official interoperability workflow.
+# Regenerate official-py312.lock under Python 3.12 with pip-tools.
+cryptography>=41.0.0
+faker>=20.0.0
+httpx>=0.25.0
+pydantic>=2.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

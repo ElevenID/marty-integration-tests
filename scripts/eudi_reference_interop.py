@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "eudi-reference-interop.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_IMAGE = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
+OCI_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+:[a-zA-Z0-9._-]+@sha256:[0-9a-f]{64}$")
 
 
 def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
@@ -30,7 +31,7 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     if data.get("schema") != "elevenid.eudi-reference-interop/v1":
         raise ValueError("unsupported EUDI interop manifest schema")
     components = data.get("components", {})
-    for name in ("wallet_tester", "verifier_endpoint", "wallet_kit"):
+    for name in ("wallet_tester", "verifier_endpoint"):
         component = components.get(name, {})
         if not component.get("repository", "").startswith("https://github.com/eu-digital-identity-wallet/"):
             raise ValueError(f"{name} must point to an official EUDI repository")
@@ -39,6 +40,23 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         image = component.get("image")
         if image is not None and not DIGEST_IMAGE.fullmatch(image):
             raise ValueError(f"{name} image must be pinned by sha256 digest")
+    wallet_kit = components.get("wallet_kit", {})
+    build = wallet_kit.get("build", {})
+    for name in ("builder_image", "runtime_image"):
+        if not OCI_IMAGE.fullmatch(build.get(name, "")):
+            raise ValueError(f"wallet_kit {name} must be pinned by sha256 digest")
+    libraries = wallet_kit.get("libraries", {})
+    if set(libraries) != {"oid4vp", "oid4vci", "sd_jwt"}:
+        raise ValueError("wallet_kit must record the OID4VP, OID4VCI, and SD-JWT libraries")
+    for name, library in libraries.items():
+        if not library.get("repository", "").startswith("https://github.com/eu-digital-identity-wallet/"):
+            raise ValueError(f"wallet_kit {name} must point to an official EUDI repository")
+        if not SHA.fullmatch(library.get("commit", "")):
+            raise ValueError(f"wallet_kit {name} must pin a full commit SHA")
+        version = library.get("version", "")
+        coordinate = library.get("maven_coordinate", "")
+        if library.get("release") != f"v{version}" or coordinate.rsplit(":", 1)[-1] != version:
+            raise ValueError(f"wallet_kit {name} release and Maven coordinate must match its version")
     coverage = data.get("coverage", {})
     if not {"sd_jwt_vc", "mso_mdoc"} <= set(coverage.get("issuance", [])):
         raise ValueError("EUDI issuance coverage must include SD-JWT VC and mdoc")

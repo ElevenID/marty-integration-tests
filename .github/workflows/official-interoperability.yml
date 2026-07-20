@@ -58,9 +58,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements/official-py312.lock
 
-      - name: Install harness
-        run: python -m pip install --disable-pip-version-check -e .
+      - name: Install hash-locked harness dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --require-hashes --only-binary=:all:
+          --requirement requirements/official-py312.lock
 
       - name: Resolve and attest released stack
         id: stack
@@ -113,9 +117,12 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Pin reviewed npm runtime
+      - name: Bootstrap integrity-verified npm runtime
         if: matrix.lane == 'w3c-v2'
-        run: npm install --global npm@11.11.0
+        shell: bash
+        run: |
+          npm_cli="$(python scripts/w3c_vc_conformance.py bootstrap-npm --output work/npm-runtime)"
+          echo "W3C_NPM_CLI=$npm_cli" >> "$GITHUB_ENV"
 
       - name: Generate disposable TLS and EUDI material
         run: |
@@ -161,6 +168,13 @@ jobs:
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Record locally built EUDI harness digest
+        if: always() && matrix.lane == 'eudi'
+        run: >-
+          python scripts/eudi_harness_provenance.py
+          --project "eudi-reference-${OFFICIAL_SUITE_RUN_ID}"
+          --output work/eudi-harness-image.json
+
       - name: Build public-safe evidence
         if: always()
         env:
@@ -175,6 +189,7 @@ jobs:
             --exit-code "$LANE_EXIT_CODE"
             --stack-metadata work/stack/stack-metadata.json
             --material-report work/material/report.json
+            --harness-image-report work/eudi-harness-image.json
           )
           python scripts/sanitize_official_evidence.py "${sanitize_args[@]}"
 

@@ -68,3 +68,28 @@ def test_main_writes_no_raw_files(tmp_path: Path) -> None:
         == 0
     )
     assert [path.name for path in output.iterdir()] == ["summary.json"]
+
+
+def test_summary_records_public_safe_eudi_harness_image_digest(tmp_path: Path) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    report = tmp_path / "harness-image.json"
+    report.write_text(
+        json.dumps(
+            {
+                "schema": "elevenid.eudi-harness-build/v1",
+                "component": "eudi-wallet-harness",
+                "image_digest": "sha256:" + "a" * 64,
+                "recipe": {"gradle.lockfile": "sha256:" + "b" * 64},
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = sanitizer.build_summary(
+        raw,
+        lane="eudi",
+        harness_commit="c" * 40,
+        exit_code=0,
+        harness_image_report=report,
+    )
+    assert summary["eudi_harness_image"]["image_digest"] == "sha256:" + "a" * 64

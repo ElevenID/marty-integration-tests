@@ -80,6 +80,7 @@ def build_summary(
     exit_code: int,
     stack_metadata: Path | None = None,
     material_report: Path | None = None,
+    harness_image_report: Path | None = None,
 ) -> dict[str, object]:
     if lane not in LANES:
         raise ValueError(f"unknown official interoperability lane: {lane}")
@@ -94,6 +95,10 @@ def build_summary(
     material: object | None = None
     if material_report and material_report.is_file():
         material, count = sanitize(load_json(material_report))
+        redactions += count
+    harness_image: object | None = None
+    if harness_image_report and harness_image_report.is_file():
+        harness_image, count = sanitize(load_json(harness_image_report))
         redactions += count
 
     evidence: list[dict[str, object]] = []
@@ -117,6 +122,7 @@ def build_summary(
         "result": {"exit_code": exit_code, "passed": exit_code == 0},
         "stack": stack,
         "material": material,
+        "eudi_harness_image": harness_image,
         "official_evidence": evidence,
         "junit": junit,
         "redactions": redactions,
@@ -132,6 +138,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--exit-code", type=int, required=True)
     result.add_argument("--stack-metadata", type=Path)
     result.add_argument("--material-report", type=Path)
+    result.add_argument("--harness-image-report", type=Path)
     return result
 
 
@@ -144,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         exit_code=args.exit_code,
         stack_metadata=args.stack_metadata.resolve() if args.stack_metadata else None,
         material_report=args.material_report.resolve() if args.material_report else None,
+        harness_image_report=args.harness_image_report.resolve() if args.harness_image_report else None,
     )
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)

@@ -4,23 +4,31 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-from hashlib import sha256
+import tarfile
+import urllib.request
+from hashlib import sha256, sha512
 from pathlib import Path
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "w3c-vc-data-model-v2.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+SRI_SHA512 = re.compile(r"^sha512-[A-Za-z0-9+/]+={0,2}$")
 
 
-def load_manifest(path: Path = MANIFEST) -> dict:
+def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("W3C VC suite manifest must be a JSON object")
     if data.get("schema") != "elevenid.official-vc-suite/v1":
         raise ValueError("unsupported W3C VC suite manifest schema")
     suite = data.get("official_suite", {})
@@ -32,12 +40,17 @@ def load_manifest(path: Path = MANIFEST) -> dict:
         raise ValueError("W3C VC suite must run on Node 24")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", suite.get("npm", "")):
         raise ValueError("W3C VC suite must pin an exact npm version")
+    npm_tarball = f"https://registry.npmjs.org/npm/-/npm-{suite['npm']}.tgz"
+    if suite.get("npm_tarball") != npm_tarball:
+        raise ValueError("W3C VC suite npm tarball must match the pinned npm version")
+    if not SRI_SHA512.fullmatch(suite.get("npm_integrity", "")):
+        raise ValueError("W3C VC suite must pin the npm tarball SHA-512 integrity")
     if not DIGEST.fullmatch(suite.get("package_lock_sha256", "")):
         raise ValueError("W3C VC suite must pin the generated package-lock digest")
     for exclusion in data.get("exclusions", []):
         if not {"capability", "reason", "owner", "review_date"} <= exclusion.keys():
             raise ValueError("every W3C exclusion needs capability, reason, owner, and review_date")
-    return data
+    return cast(dict[str, Any], data)
 
 
 def revision(path: Path) -> str:
@@ -109,13 +122,48 @@ def stack_manifest_metadata(path: Path) -> dict:
     return {"path": str(path), "sha256": file_sha256(path), "release": raw.get("release"), "images": images}
 
 
-def npm_command() -> str:
-    """Return the executable npm launcher on the current platform."""
-    return "npm.cmd" if os.name == "nt" else "npm"
+def node_command() -> str:
+    """Return the Node launcher used for the verified private npm runtime."""
+    return shutil.which("node.exe") or shutil.which("node") or "node"
+
+
+def npm_command() -> list[str]:
+    """Return the verified npm CLI, falling back only for local validation."""
+    configured = os.environ.get("W3C_NPM_CLI", "").strip()
+    if configured:
+        cli = Path(configured)
+        if not cli.is_absolute() or not cli.is_file():
+            raise ValueError("W3C_NPM_CLI must be an existing absolute npm-cli.js path")
+        return [node_command(), str(cli)]
+    return ["npm.cmd" if os.name == "nt" else "npm"]
 
 
 def npm_version() -> str:
-    return subprocess.check_output([npm_command(), "--version"], text=True).strip()
+    return subprocess.check_output([*npm_command(), "--version"], text=True).strip()
+
+
+def bootstrap_npm(output: Path, manifest: dict) -> Path:
+    """Download, verify, and unpack the exact npm runtime used by the W3C lane."""
+    if output.exists():
+        raise ValueError("npm runtime output already exists")
+    suite = manifest["official_suite"]
+    request = urllib.request.Request(
+        suite["npm_tarball"],
+        headers={"Accept": "application/octet-stream", "User-Agent": "ElevenID-W3C-Interop"},
+    )
+    # B310: load_manifest restricts this URL to the exact HTTPS npm registry path.
+    with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310
+        payload = response.read()
+    actual_integrity = "sha512-" + base64.b64encode(sha512(payload).digest()).decode("ascii")
+    if actual_integrity != suite["npm_integrity"]:
+        raise ValueError(f"npm tarball integrity is {actual_integrity}; expected {suite['npm_integrity']}")
+    output.mkdir(parents=True)
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+        archive.extractall(output, filter="data")
+    cli = (output / "package" / "bin" / "npm-cli.js").resolve()
+    if not cli.is_file():
+        raise ValueError("verified npm tarball contains no package/bin/npm-cli.js")
+    return cli
 
 
 def install_dependencies(suite: Path, manifest: dict) -> int:
@@ -127,7 +175,7 @@ def install_dependencies(suite: Path, manifest: dict) -> int:
     lock = suite / "package-lock.json"
     lock.unlink(missing_ok=True)
     result = subprocess.run(
-        [npm_command(), "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+        [*npm_command(), "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
         cwd=suite,
         check=False,
     ).returncode
@@ -138,7 +186,7 @@ def install_dependencies(suite: Path, manifest: dict) -> int:
     if actual_digest != expected_digest:
         raise ValueError(f"generated W3C package lock is {actual_digest}; expected {expected_digest}")
     return subprocess.run(
-        [npm_command(), "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+        [*npm_command(), "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
         cwd=suite,
         check=False,
     ).returncode
@@ -261,6 +309,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("validate")
+    bootstrap = sub.add_parser("bootstrap-npm")
+    bootstrap.add_argument("--output", type=Path, required=True)
     run = sub.add_parser("write-local-config")
     run.add_argument("--adapter-url", required=True)
     run.add_argument("--output", type=Path, required=True)
@@ -290,6 +340,9 @@ def main() -> int:
             args.stack_manifest.resolve(),
             install=args.install,
         )
+    if args.command == "bootstrap-npm":
+        print(bootstrap_npm(args.output.resolve(), manifest))
+        return 0
     write_local_config(args.output, args.adapter_url)
     return 0
 
@@ -297,6 +350,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, tarfile.TarError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         print(f"W3C VC conformance setup error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
