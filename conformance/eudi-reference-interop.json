@@ -51,6 +51,8 @@
   "coverage": {
     "issuance": ["sd_jwt_vc", "mso_mdoc"],
     "presentation": ["sd_jwt_vc"],
+    "request_object_trust": ["signed_jar_x509_hash_pkix"],
+    "response_mode": ["direct_post.jwt"],
     "negative": ["missing_holder_binding_key"]
   },
   "compatibility_only": {

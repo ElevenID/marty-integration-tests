@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -278,9 +279,58 @@ def test_generated_haip_material_is_wired_to_marty(tmp_path: Path) -> None:
     lifecycle.configure_haip_environment(environment, material)
     assert environment["VERIFIER_SIGNING_KEY_PEM"] == (material / haip.KEY_FILE).read_text(encoding="ascii")
     assert environment["VERIFIER_X509_CERT_PEM"] == (material / haip.CERTIFICATE_FILE).read_text(encoding="ascii")
-    assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str(
-        (material / haip.TRUST_ANCHOR_FILE).resolve()
+    assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str((material / haip.TRUST_ANCHOR_FILE).resolve())
+
+
+def test_generated_haip_material_replaces_the_unrelated_tls_root(tmp_path: Path) -> None:
+    material = haip_material(tmp_path, "generated-separate-root")
+    tls_root = tmp_path / "tls-root.pem"
+    tls_root.write_text("not the request-object root", encoding="ascii")
+    environment = {haip.OID4VP_TRUST_ANCHOR_FILE_ENV: str(tls_root)}
+
+    lifecycle.configure_haip_environment(
+        environment,
+        material,
+        require_request_object_trust=True,
     )
+
+    assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str((material / haip.TRUST_ANCHOR_FILE).resolve())
+
+
+def test_child_environment_keeps_haip_root_separate_after_eudi_merge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    material = haip_material(tmp_path, "generated-child-environment")
+    tls_root = tmp_path / "eudi-tls-root.pem"
+    tls_root.write_text("independent EUDI TLS root", encoding="ascii")
+    monkeypatch.setattr(
+        lifecycle,
+        "merged_material_environment",
+        lambda *_args: (
+            "generated",
+            {
+                "EUDI_TEST_MATERIAL_MODE": "generated",
+                "SSL_CERT_FILE": str(tls_root),
+                haip.OID4VP_TRUST_ANCHOR_FILE_ENV: str(tls_root),
+            },
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+    monkeypatch.setattr(lifecycle, "validate_environment", lambda *_args: None)
+
+    environment = lifecycle.child_environment(
+        require_haip=True,
+        require_eudi=True,
+        haip_material=material,
+        eudi_material=tmp_path / "eudi-material",
+    )
+
+    haip_root = Path(environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV])
+    tls_ca = Path(environment["SSL_CERT_FILE"])
+    assert haip_root == (material / haip.TRUST_ANCHOR_FILE).resolve()
+    assert tls_ca == tls_root
+    assert sha256(haip_root.read_bytes()).digest() != sha256(tls_ca.read_bytes()).digest()
 
 
 def test_external_haip_pem_pair_takes_precedence(tmp_path: Path) -> None:
@@ -310,9 +360,7 @@ def test_external_haip_eudi_run_requires_and_validates_separate_trust_anchor(tmp
 
     environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] = str(external / haip.TRUST_ANCHOR_FILE)
     lifecycle.configure_haip_environment(environment, None, require_request_object_trust=True)
-    assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str(
-        (external / haip.TRUST_ANCHOR_FILE).resolve()
-    )
+    assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str((external / haip.TRUST_ANCHOR_FILE).resolve())
 
 
 def test_external_haip_eudi_run_rejects_untrusted_root(tmp_path: Path) -> None:
@@ -352,6 +400,42 @@ def test_haip_rejects_a_partial_external_pair(tmp_path: Path) -> None:
     }
     with pytest.raises(ValueError, match="set both"):
         lifecycle.configure_haip_environment(environment, material)
+
+
+def test_eudi_can_enable_haip_without_joining_the_oidf_runner_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    child_options: dict[str, object] = {}
+    monkeypatch.setattr(
+        lifecycle,
+        "child_environment",
+        lambda **kwargs: child_options.update(kwargs) or {},
+    )
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+    monkeypatch.setattr(lifecycle, "run", lambda command, _environment: calls.append(command) or 0)
+    monkeypatch.setattr(lifecycle, "wait_for_eudi_readiness", lambda _environment: None)
+
+    result = lifecycle.main(
+        [
+            "up",
+            "--run-id",
+            "run1",
+            "--marty-ui",
+            str(marty_checkout(tmp_path)),
+            "--eudi",
+            "--haip",
+            "--haip-material",
+            str(tmp_path / "haip-material"),
+        ]
+    )
+
+    assert result == 0
+    assert [component(command) for command in calls] == ["marty", "eudi"]
+    assert "--haip" in calls[0]
+    assert child_options["require_haip"] is True
+    assert child_options["require_eudi"] is True
 
 
 def test_failed_up_unwinds_only_started_projects_in_reverse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

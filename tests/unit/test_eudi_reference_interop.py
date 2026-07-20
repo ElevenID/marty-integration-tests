@@ -20,6 +20,8 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "@sha256:" in manifest["components"]["wallet_tester"]["image"]
     assert "@sha256:" in manifest["components"]["verifier_endpoint"]["image"]
     assert manifest["coverage"]["presentation"] == ["sd_jwt_vc"]
+    assert manifest["coverage"]["request_object_trust"] == ["signed_jar_x509_hash_pkix"]
+    assert manifest["coverage"]["response_mode"] == ["direct_post.jwt"]
     assert manifest["coverage"]["negative"] == ["missing_holder_binding_key"]
     assert manifest["compatibility_only"]["presentation"] == ["mso_mdoc"]
     assert "replayed_response" in manifest["planned_coverage"]["negative"]
@@ -65,6 +67,17 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "openId4Vp.dispatch" in presentation_source
     assert "ECKeyGenerator" not in presentation_source
     assert "holderKeyFor(credentialCompact)" in presentation_source
+    assert "EncryptionMethod.A256GCM" in presentation_source
+
+
+def test_eudi_manifest_cannot_claim_presentation_without_haip_trust_evidence(tmp_path: Path) -> None:
+    manifest = eudi.load_manifest()
+    manifest["coverage"].pop("request_object_trust")
+    path = tmp_path / "eudi-reference-interop.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="x509_hash PKIX"):
+        eudi.load_manifest(path)
 
 
 def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
@@ -115,6 +128,39 @@ def test_eudi_junit_skip_count_is_visible(tmp_path: Path) -> None:
     report = tmp_path / "junit.xml"
     report.write_text('<testsuites><testsuite tests="2" skipped="1"/></testsuites>', encoding="utf-8")
     assert eudi.junit_skip_count(report) == 1
+
+
+def test_eudi_haip_evidence_binds_a_request_root_separate_from_tls(tmp_path: Path) -> None:
+    request_root = tmp_path / "request-root.pem"
+    tls_root = tmp_path / "tls-root.pem"
+    request_root.write_text("request-object-root", encoding="ascii")
+    tls_root.write_text("tls-root", encoding="ascii")
+
+    metadata = eudi.request_object_trust_metadata(
+        {
+            eudi.OID4VP_TRUST_ANCHOR_FILE_ENV: str(request_root),
+            "SSL_CERT_FILE": str(tls_root),
+        }
+    )
+
+    assert metadata["profile"] == "haip"
+    assert metadata["client_id_prefix"] == "x509_hash"
+    assert metadata["response_mode"] == "direct_post.jwt"
+    assert metadata["separate_from_tls"] is True
+    assert metadata["anchor_sha256"] != metadata["tls_ca_sha256"]
+
+
+def test_eudi_haip_evidence_rejects_reusing_the_tls_root(tmp_path: Path) -> None:
+    root = tmp_path / "shared-root.pem"
+    root.write_text("shared-root", encoding="ascii")
+
+    with pytest.raises(ValueError, match="independent from TLS"):
+        eudi.request_object_trust_metadata(
+            {
+                eudi.OID4VP_TRUST_ANCHOR_FILE_ENV: str(root),
+                "SSL_CERT_FILE": str(root),
+            }
+        )
 
 
 def test_run_environment_loads_material_trust_and_public_login_values(

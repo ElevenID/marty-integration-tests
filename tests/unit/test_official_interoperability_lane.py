@@ -15,6 +15,7 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load official interoperability lane")
 lane = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lane)
+eudi_material = importlib.import_module("eudi_test_material")
 
 
 def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict[str, str]]:
@@ -94,6 +95,38 @@ def test_material_environment_uses_private_generator_envelope(tmp_path: Path) ->
     (tmp_path / "environment.json").write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ValueError, match="unsupported keys"):
         lane.load_material_environment(tmp_path)
+
+
+def test_material_environment_accepts_the_complete_generated_contract(tmp_path: Path) -> None:
+    for filename in ("tls.crt", "tls.key", "root-ca.pem", "truststore.jks", "keystore.jks"):
+        (tmp_path / filename).write_text("fixture", encoding="utf-8")
+    environment = eudi_material._environment(
+        tmp_path,
+        hostname="marty-oidf.test",
+        marty_port=18443,
+        wallet_tester_port=25051,
+        verifier_port=28091,
+        wallet_kit_port=29090,
+        store_password="store-password",
+        key_password="key-password",
+        truststore_password="trust-password",
+        alias="eudi-verifier",
+    )
+    (tmp_path / "environment.json").write_text(
+        json.dumps(
+            {
+                "schema": "elevenid.eudi-test-material/v1",
+                "mode": "generated",
+                "environment": environment,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = lane.load_material_environment(tmp_path)
+
+    assert set(environment) <= set(loaded)
+    assert loaded[lane.OID4VP_TRUST_ANCHOR_FILE_ENV] == str((tmp_path / "root-ca.pem").resolve())
 
 
 def test_stack_metadata_must_be_a_json_object(tmp_path: Path) -> None:
@@ -182,9 +215,7 @@ def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(
     )
 
     assert result["oid4vp_trust_profile_id"] == "trust-1"
-    assert captured[captured.index("--oidf-runner-config") + 1] == str(
-        haip_material / "marty-verifier-haip.json"
-    )
+    assert captured[captured.index("--oidf-runner-config") + 1] == str(haip_material / "marty-verifier-haip.json")
 
 
 def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
@@ -252,6 +283,8 @@ def test_base_environment_binds_eudi_vct_to_verified_gateway_origin(
     marty_ui = tmp_path / "marty-ui"
     (marty_ui / "scripts").mkdir(parents=True)
     (marty_ui / "scripts" / "conformance_stack.py").write_text("# released launcher\n", encoding="utf-8")
+    haip_material = tmp_path / "haip-material"
+    haip_material.mkdir()
     monkeypatch.setattr(lane, "load_stack_metadata", lambda _path: metadata)
     monkeypatch.setattr(lane, "load_stack_environment", lambda _path: stack_environment)
     monkeypatch.setattr(
@@ -271,7 +304,7 @@ def test_base_environment_binds_eudi_vct_to_verified_gateway_origin(
         material=tmp_path / "material",
         oidf_runner=None,
         w3c_suite=None,
-        haip_material=None,
+        haip_material=haip_material,
     )
 
     environment, _ = lane.base_environment(args)
@@ -348,6 +381,58 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
 
     assert lane.run_w3c(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test:18443"}) == 0
     assert events == ["ready", "adapter-up", "ready", "suite"]
+
+
+def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    lifecycle_environments: list[dict[str, str]] = []
+    suite_environment: dict[str, str] = {}
+
+    def fake_run(command: list[str], environment: dict[str, str], **_kwargs: object) -> int:
+        commands.append(command)
+        rendered = " ".join(command)
+        if "official_suite_compose.py" in rendered:
+            lifecycle_environments.append(dict(environment))
+        if "eudi_reference_interop.py" in rendered:
+            suite_environment.update(environment)
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(
+        lane,
+        "load_verifier_environment",
+        lambda _path: {
+            "VERIFIER_SIGNING_KEY_PEM": "signing-key",
+            "VERIFIER_X509_CERT_PEM": "certificate-chain",
+            lane.OID4VP_TRUST_ANCHOR_FILE_ENV: "/haip/request-object-root.pem",
+        },
+    )
+    args = SimpleNamespace(
+        marty_ui=tmp_path / "marty-ui",
+        run_id="run-1",
+        output_dir=tmp_path / "output",
+        haip_material=tmp_path / "haip-material",
+        stack_manifest=tmp_path / "stack-manifest.json",
+    )
+
+    assert lane.run_eudi(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
+
+    lifecycle_commands = [command for command in commands if "official_suite_compose.py" in " ".join(command)]
+    assert len(lifecycle_commands) == 3
+    for command in lifecycle_commands:
+        assert "--eudi" in command
+        assert "--haip" in command
+        assert "--haip-material" in command
+        assert "--oidf" not in command
+    assert len(lifecycle_environments) == 3
+    assert all("VERIFIER_SIGNING_KEY_PEM" not in item for item in lifecycle_environments)
+    assert all("VERIFIER_X509_CERT_PEM" not in item for item in lifecycle_environments)
+    assert suite_environment[lane.OID4VP_TRUST_ANCHOR_FILE_ENV] == "/haip/request-object-root.pem"
+    assert suite_environment["VERIFIER_X509_CERT_PEM"] == "certificate-chain"
 
 
 def test_w3c_lane_cleans_up_a_partial_initial_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
-from eudi_test_material import merged_material_environment, validate_environment
+from eudi_test_material import (
+    OID4VP_TRUST_ANCHOR_FILE_ENV,
+    merged_material_environment,
+    validate_environment,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "eudi-reference-interop.json"
@@ -62,6 +66,10 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         raise ValueError("EUDI issuance coverage must include SD-JWT VC and mdoc")
     if "sd_jwt_vc" not in coverage.get("presentation", []):
         raise ValueError("EUDI official-library presentation coverage must include SD-JWT VC")
+    if "signed_jar_x509_hash_pkix" not in coverage.get("request_object_trust", []):
+        raise ValueError("EUDI presentation coverage must prove signed-JAR x509_hash PKIX trust")
+    if "direct_post.jwt" not in coverage.get("response_mode", []):
+        raise ValueError("EUDI presentation coverage must prove encrypted direct_post.jwt")
     if "mso_mdoc" in coverage.get("presentation", []):
         raise ValueError("mDoc cannot be claimed until an ISO device response is exercised")
     unsupported_negative_claims = {
@@ -71,8 +79,7 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     } & set(coverage.get("negative", []))
     if unsupported_negative_claims:
         raise ValueError(
-            "EUDI negative coverage contains planned-only claims: "
-            + ", ".join(sorted(unsupported_negative_claims))
+            "EUDI negative coverage contains planned-only claims: " + ", ".join(sorted(unsupported_negative_claims))
         )
     limitations = data.get("limitations", {})
     if not {"mso_mdoc_presentation", "oid4vp_negative_vectors"} <= set(limitations):
@@ -126,6 +133,31 @@ def stack_manifest_metadata(path: Path) -> dict:
     return {"path": str(path), "sha256": file_sha256(path), "release": raw.get("release"), "images": images}
 
 
+def request_object_trust_metadata(environment: dict[str, str]) -> dict[str, object]:
+    """Bind EUDI presentation evidence to a non-TLS HAIP trust root."""
+    anchor_value = environment.get(OID4VP_TRUST_ANCHOR_FILE_ENV, "").strip()
+    tls_value = environment.get("SSL_CERT_FILE", "").strip()
+    if not anchor_value or not tls_value:
+        raise ValueError("EUDI HAIP evidence requires request-object and TLS trust files")
+    anchor = Path(anchor_value).resolve()
+    tls_ca = Path(tls_value).resolve()
+    if not anchor.is_file() or not tls_ca.is_file():
+        raise ValueError("EUDI HAIP request-object and TLS trust files must exist")
+    anchor_digest = file_sha256(anchor)
+    tls_digest = file_sha256(tls_ca)
+    if anchor_digest == tls_digest:
+        raise ValueError("EUDI HAIP request-object trust must be independent from TLS trust")
+    return {
+        "profile": "haip",
+        "client_id_prefix": "x509_hash",
+        "validation": "pkix",
+        "response_mode": "direct_post.jwt",
+        "anchor_sha256": anchor_digest,
+        "tls_ca_sha256": tls_digest,
+        "separate_from_tls": True,
+    }
+
+
 def write_evidence(
     output: Path,
     manifest: dict,
@@ -133,6 +165,7 @@ def write_evidence(
     result: int,
     skipped: int = 0,
     stack_manifest: Path | None = None,
+    request_object_trust: dict[str, object] | None = None,
 ) -> None:
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
@@ -151,6 +184,7 @@ def write_evidence(
             "stack_manifest": stack_manifest_metadata(stack_manifest) if stack_manifest else None,
         },
         "endpoints": endpoints,
+        "request_object_trust": request_object_trust,
         "result": {"exit_code": result, "passed": result == 0, "skipped": skipped},
         "artifacts": artifacts,
     }
@@ -240,6 +274,7 @@ def run(args: argparse.Namespace) -> int:
     # Validate before any external calls so an evidence run cannot silently use
     # mutable image tags or an unrelated deployment.
     stack_manifest_metadata(stack_manifest)
+    request_object_trust = request_object_trust_metadata(environment)
     environment["MARTY_TEST_SESSION_ID"] = public_gateway_session(environment)
     command = [
         sys.executable,
@@ -267,7 +302,15 @@ def run(args: argparse.Namespace) -> int:
             result = 1
             detail += f"\nEUDI evidence failure: {skipped} test(s) were skipped.\n"
     (output / "runner.log").write_text(detail, encoding="utf-8")
-    write_evidence(output, manifest, endpoints, result, skipped, stack_manifest)
+    write_evidence(
+        output,
+        manifest,
+        endpoints,
+        result,
+        skipped,
+        stack_manifest,
+        request_object_trust,
+    )
     return result
 
 

@@ -479,6 +479,15 @@ evidence is collected. The workflow uploads only the sanitized summary;
 private configuration, generated keys, cookies, raw logs, and unredacted
 official reports remain job-local and expire with the runner.
 
+The EUDI lane also generates a separate disposable HAIP verifier chain. Marty
+uses its leaf key and certificate to create the production signed JAR, while
+the wallet harness receives only that chain's root through the read-only
+`EUDI_OID4VP_TRUST_ANCHOR_FILE` mount. This root is deliberately different
+from the disposable TLS CA. The official EUDI OID4VP library must resolve an
+`x509_hash` request, validate its `x5c` chain with PKIX, and dispatch an
+encrypted `direct_post.jwt` response; a default/DID-only flow does not satisfy
+the lane's recorded presentation coverage.
+
 The stack pin records immutable `marty-ui` release `v1.1.3` as `ready`, with
 the independently downloaded `stack-manifest.json` SHA-256 recorded in
 `stack-under-test.json`. Execution hard-fails if the released asset, its
@@ -494,6 +503,17 @@ The EUDI harness runs the existing real-client issuance, presentation, mdoc,
 SD-JWT, invalid-request, and replay tests with the gate enabled explicitly.
 Point it only at the digest-pinned EUDI containers recorded in
 `eudi-reference-interop.json` and the disposable HTTPS Marty deployment.
+
+Start the separate EUDI project with Marty's HAIP overlay and the matching
+request-object material. This does not start or join the OIDF runner project;
+the existing scoped TLS bridge remains the only cross-project connection.
+
+```bash
+python scripts/official_suite_compose.py up \
+  --run-id "$OFFICIAL_SUITE_RUN_ID" \
+  --marty-ui /opt/marty-ui \
+  --eudi --haip --haip-material /secure/work/haip-material
+```
 
 ```bash
 python scripts/eudi_reference_interop.py run \

@@ -25,6 +25,11 @@ def test_workflow_attests_released_inputs_and_never_uploads_raw_evidence() -> No
     assert 'gh attestation verify "oci://$reference"' in text
     assert "eudi_test_material.py generate" in text
     assert "eudi_test_material.py validate" in text
+    verifier_material = text.split("- name: Generate disposable verifier material", 1)[1].split(
+        "- name: Generate disposable operator credentials", 1
+    )[0]
+    assert "matrix.lane == 'eudi'" in verifier_material
+    assert "haip_test_certificates.py" in verifier_material
     assert "sanitize_official_evidence.py" in text
     upload = text.split("- name: Upload sanitized evidence", 1)[1].split("- name: Enforce lane result", 1)[0]
     assert "work/sanitized/" in upload

@@ -139,7 +139,10 @@ object WalletPresentationService {
             ),
             responseEncryptionConfiguration = ResponseEncryptionConfiguration.Supported(
                 supportedAlgorithms = listOf(JWEAlgorithm.ECDH_ES),
-                supportedMethods = listOf(EncryptionMethod.A128GCM),
+                supportedMethods = listOf(
+                    EncryptionMethod.A128GCM,
+                    EncryptionMethod.A256GCM,
+                ),
             ),
             supportedClientIdPrefixes = listOf(
                 SupportedClientIdPrefix.RedirectUri,

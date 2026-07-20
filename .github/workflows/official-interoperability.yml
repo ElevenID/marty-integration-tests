@@ -131,7 +131,7 @@ jobs:
           python -c "import json; from urllib.parse import urlsplit; data=json.load(open('work/material/report.json', encoding='utf-8')); hosts=sorted({urlsplit(value).hostname for value in data['urls'].values()} | {'localhost.emobix.co.uk'}); print('127.0.0.1 ' + ' '.join(host for host in hosts if host and host != 'localhost'))" | sudo tee -a /etc/hosts
 
       - name: Generate disposable verifier material
-        if: matrix.lane == 'oid4vp-final' || matrix.lane == 'haip'
+        if: matrix.lane == 'oid4vp-final' || matrix.lane == 'haip' || matrix.lane == 'eudi'
         run: |
           python -c "import json, subprocess, sys; data=json.load(open('work/material/environment.json', encoding='utf-8')); subprocess.run([sys.executable, 'scripts/haip_test_certificates.py', '--output-dir', 'work/haip-material', '--gateway-url', data['environment']['OIDF_PUBLIC_BASE_URL']], check=True)"
 

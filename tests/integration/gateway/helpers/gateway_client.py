@@ -10,7 +10,7 @@ import base64
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -999,6 +999,8 @@ class GatewayClient:
         trust_profile_id: Optional[str] = None,
         expiry_minutes: int = 15,
         organization_id: Optional[str] = None,
+        oid4vp_profile: Optional[Literal["standard", "haip"]] = None,
+        request_uri_method: Optional[Literal["get", "post"]] = None,
     ) -> Dict[str, Any]:
         """
         Start a verification flow (creates QR code for wallet).
@@ -1008,6 +1010,8 @@ class GatewayClient:
             trust_profile_id: Optional trust profile
             expiry_minutes: Request expiry time
             organization_id: Selected organization context for authorization
+            oid4vp_profile: Optional production verifier profile selection
+            request_uri_method: Optional signed request-object retrieval method
             
         Returns:
             Flow instance with instance_id, request_uri, qr_code_data
@@ -1022,6 +1026,10 @@ class GatewayClient:
             # inputs before the request is proxied. The header is also sent so the
             # selected context remains explicit at downstream HTTP boundaries.
             payload["organization_id"] = organization_id
+        if oid4vp_profile is not None:
+            payload["oid4vp_profile"] = oid4vp_profile
+        if request_uri_method is not None:
+            payload["request_uri_method"] = request_uri_method
 
         return await self._request(
             "POST",

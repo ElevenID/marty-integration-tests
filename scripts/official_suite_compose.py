@@ -395,8 +395,8 @@ def stop_started(
 def execute(args: argparse.Namespace) -> int:
     if not args.run_id:
         raise ValueError("--run-id, OFFICIAL_SUITE_RUN_ID, or GITHUB_RUN_ID is required")
-    if args.haip and not args.oidf:
-        raise ValueError("--haip requires --oidf")
+    if args.haip and not (args.oidf or args.eudi):
+        raise ValueError("--haip requires --oidf or --eudi")
     if args.haip_material is not None and not args.haip:
         raise ValueError("--haip-material requires --haip")
     if args.eudi_material is not None and not args.eudi:

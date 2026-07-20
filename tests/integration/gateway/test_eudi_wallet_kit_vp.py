@@ -532,8 +532,8 @@ class TestOID4VPAuthorizationRequest:
         # OID4VP 1.0 Final uses a client identifier prefix. The old separate
         # client_id_scheme parameter is intentionally absent.
         assert "client_id_scheme" not in auth_req
-        assert auth_req["client_id"].startswith("decentralized_identifier:did:"), (
-            f"client_id should use the DID client identifier prefix: {auth_req['client_id']}"
+        assert auth_req["client_id"].startswith("x509_hash:"), (
+            f"EUDI runs must use the HAIP x509_hash client identifier: {auth_req['client_id']}"
         )
 
         logger.info(
@@ -594,16 +594,32 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
+            oid4vp_profile="haip",
+            request_uri_method="get",
         )
         request_uri = flow.get("request_uri", "")
         assert request_uri.startswith("openid4vp://"), request_uri
+        outer = parse_qs(urlparse(request_uri).query, keep_blank_values=True)
+        assert len(outer.get("client_id", [])) == 1, outer
+        assert outer["client_id"][0].startswith("x509_hash:"), outer
+        assert len(outer.get("request_uri", [])) == 1, outer
+        # OID4VP's default GET retrieval is represented by omission; only POST
+        # places request_uri_method in the outer authorization request.
+        assert "request_uri_method" not in outer, outer
+
+        signed_request = await authenticated_gateway_client.get_verification_request(
+            flow["instance_id"]
+        )
+        assert signed_request["client_id"] == outer["client_id"][0]
+        assert signed_request["response_mode"] == "direct_post.jwt"
+        assert signed_request["response_type"] == "vp_token"
 
         result = await wallet_kit.submit_presentation(
             authorization_request_uri=request_uri,
             credential=issued_sd_jwt_credential["credential"],
         )
         assert result["success"], result.get("error")
-        assert result["responseMode"] in ("direct_post", "direct_post.jwt")
+        assert result["responseMode"] == "direct_post.jwt"
         assert result["verifierAccepted"] is True
 
     @pytest.mark.asyncio

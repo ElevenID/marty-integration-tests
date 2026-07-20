@@ -17,6 +17,15 @@ from typing import cast
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from haip_test_certificates import (  # noqa: E402
+    OID4VP_TRUST_ANCHOR_FILE_ENV,
+    load_verifier_environment,
+)
+
 LANES = {"oid4vp-final", "haip", "w3c-v2", "eudi"}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
@@ -62,6 +71,7 @@ MATERIAL_ENV_KEYS = {
     "EUDI_VERIFIER_ORIGINAL_CLIENT_ID",
     "EUDI_TLS_TRUSTSTORE_PASSWORD",
     "EUDI_TLS_TRUSTSTORE_ALIAS",
+    OID4VP_TRUST_ANCHOR_FILE_ENV,
 }
 
 
@@ -364,7 +374,9 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         raise ValueError(f"{args.lane} requires the exact pinned OIDF runner checkout")
     if args.lane == "w3c-v2" and (args.w3c_suite is None or not args.w3c_suite.is_dir()):
         raise ValueError("w3c-v2 requires the exact pinned W3C suite checkout")
-    if args.lane in {"oid4vp-final", "haip"} and (args.haip_material is None or not args.haip_material.is_dir()):
+    if args.lane in {"oid4vp-final", "haip", "eudi"} and (
+        args.haip_material is None or not args.haip_material.is_dir()
+    ):
         raise ValueError(f"{args.lane} requires generated verifier test material")
 
     metadata = load_stack_metadata(args.stack_metadata)
@@ -515,12 +527,23 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
 
 
 def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
-    up = compose_command(args, "up", eudi=True)
+    # EUDI's official wallet library must exercise the same production HAIP
+    # request-object path as a real wallet. The dedicated HAIP chain signs the
+    # JAR and supplies its request-object root; the separately generated EUDI
+    # material continues to own TLS trust.
+    # Keep HAIP verifier material out of the launcher process environment.
+    # official_suite_compose loads the explicitly selected --haip-material
+    # *after* it merges EUDI material, so EUDI's TLS CA cannot accidentally
+    # replace the independent request-object trust anchor.
+    environment = dict(environment)
+    up = compose_command(args, "up", eudi=True, haip=True)
     started = run(up, environment) == 0
     if not started:
         return 1
     try:
         wait_for_public_stack(environment)
+        suite_environment = dict(environment)
+        suite_environment.update(load_verifier_environment(args.haip_material))
         return run(
             [
                 sys.executable,
@@ -539,11 +562,15 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "--output-dir",
                 str(args.output_dir / "raw" / "eudi"),
             ],
-            environment,
+            suite_environment,
         )
     finally:
-        run(compose_command(args, "logs", eudi=True), environment, capture=args.output_dir / "private" / "compose.log")
-        run(compose_command(args, "down", eudi=True), environment)
+        run(
+            compose_command(args, "logs", eudi=True, haip=True),
+            environment,
+            capture=args.output_dir / "private" / "compose.log",
+        )
+        run(compose_command(args, "down", eudi=True, haip=True), environment)
 
 
 def parser() -> argparse.ArgumentParser:
