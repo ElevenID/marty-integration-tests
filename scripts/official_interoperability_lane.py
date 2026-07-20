@@ -317,21 +317,26 @@ def bootstrap_fixtures(
     mode: str,
 ) -> dict[str, str]:
     destination = args.output_dir / "private" / f"{mode}-fixtures.json"
-    result = run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "official_fixture_bootstrap.py"),
-            "--mode",
-            mode,
-            "--run-id",
-            args.run_id,
-            "--gateway-url",
-            environment["OIDF_MARTY_GATEWAY_URL"],
-            "--output",
-            str(destination),
-        ],
-        environment,
-    )
+    command = [
+        sys.executable,
+        str(ROOT / "scripts" / "official_fixture_bootstrap.py"),
+        "--mode",
+        mode,
+        "--run-id",
+        args.run_id,
+        "--gateway-url",
+        environment["OIDF_MARTY_GATEWAY_URL"],
+        "--output",
+        str(destination),
+    ]
+    if mode == "oid4vp":
+        command.extend(
+            [
+                "--oidf-runner-config",
+                str(args.haip_material / "marty-verifier-haip.json"),
+            ]
+        )
+    result = run(command, environment)
     if result:
         raise RuntimeError(f"{mode} public fixture bootstrap failed with exit code {result}")
     fixtures = json.loads(destination.read_text(encoding="utf-8"))
@@ -414,6 +419,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         wait_for_public_stack(environment)
         fixtures = bootstrap_fixtures(args, environment, mode="oid4vp")
         environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures["oid4vp_policy_id"]
+        environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures["oid4vp_trust_profile_id"]
         environment.update(
             {
                 "CONFORMANCE_SERVER": "https://localhost.emobix.co.uk:8443/",

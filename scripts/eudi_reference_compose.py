@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Invoke the pinned EUDI reference services as a separate Compose project.
 
-Only the official wallet-facing services join Marty's project-scoped TLS
-bridge. This helper validates that the bridge already exists instead of using
-``docker network connect`` or silently creating a network with the same name.
+Only the pinned public-port forwarding sidecar joins Marty's project-scoped
+TLS bridge. Official wallet-facing services remain on a private network and
+use the exact public hostname and port. This helper validates that the bridge
+already exists instead of using ``docker network connect`` or silently
+creating a network with the same name.
 """
 
 from __future__ import annotations

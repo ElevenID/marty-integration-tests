@@ -68,7 +68,12 @@ DEFAULT_PORTS = {
 DEFAULT_ALIAS = "access_certificate"
 TRUSTSTORE_ALIAS = "elevenid-conformance-root"
 MAX_VALIDITY_HOURS = 168
-MATERIAL_PATH_VARIABLES = ("OIDF_TLS_CERT_DIR", "EUDI_VERIFIER_KEYSTORE_FILE")
+OID4VP_TRUST_ANCHOR_FILE_ENV = "EUDI_OID4VP_TRUST_ANCHOR_FILE"
+MATERIAL_PATH_VARIABLES = (
+    "OIDF_TLS_CERT_DIR",
+    "EUDI_VERIFIER_KEYSTORE_FILE",
+    OID4VP_TRUST_ANCHOR_FILE_ENV,
+)
 REQUIRED_ENVIRONMENT = (
     "OIDF_PUBLIC_BASE_URL",
     "OIDF_TLS_HOST_PORT",
@@ -81,6 +86,7 @@ REQUIRED_ENVIRONMENT = (
     "EUDI_VERIFIER_TLS_HOST_PORT",
     "EUDI_WALLET_KIT_HOST_PORT",
     "EUDI_WALLET_KIT_URL",
+    OID4VP_TRUST_ANCHOR_FILE_ENV,
     "EUDI_VERIFIER_KEYSTORE_FILE",
     "EUDI_VERIFIER_KEYSTORE_TYPE",
     "EUDI_VERIFIER_KEYSTORE_PASSWORD",
@@ -599,6 +605,7 @@ def _environment(
         "EUDI_VERIFIER_TLS_HOST_PORT": str(verifier_port),
         "EUDI_WALLET_KIT_HOST_PORT": str(wallet_kit_port),
         "EUDI_WALLET_KIT_URL": f"http://127.0.0.1:{wallet_kit_port}",
+        OID4VP_TRUST_ANCHOR_FILE_ENV: str(root),
         "EUDI_VERIFIER_KEYSTORE_FILE": str(output_dir / EUDI_KEYSTORE_FILE),
         "EUDI_VERIFIER_KEYSTORE_TYPE": "JKS",
         "EUDI_VERIFIER_KEYSTORE_PASSWORD": store_password,
@@ -781,7 +788,10 @@ def merged_material_environment(material_dir: Path, external: Mapping[str, str])
     """Load generated values unless a complete external material pair is present."""
     present_paths = [name for name in MATERIAL_PATH_VARIABLES if external.get(name, "").strip()]
     if present_paths and len(present_paths) != len(MATERIAL_PATH_VARIABLES):
-        raise ValueError("set both external OIDF_TLS_CERT_DIR and EUDI_VERIFIER_KEYSTORE_FILE, or neither")
+        raise ValueError(
+            "set external OIDF_TLS_CERT_DIR, EUDI_VERIFIER_KEYSTORE_FILE, and "
+            f"{OID4VP_TRUST_ANCHOR_FILE_ENV} together, or none of them"
+        )
     declared_mode = external.get("EUDI_TEST_MATERIAL_MODE", "").strip()
     if declared_mode not in {"", "generated", "external"}:
         raise ValueError("EUDI_TEST_MATERIAL_MODE must be generated or external")
@@ -882,9 +892,10 @@ def validate_environment(
     certificate_path = certificate_dir / TLS_CERTIFICATE_FILE
     root_path = certificate_dir / ROOT_CA_FILE
     truststore_path = certificate_dir / TRUSTSTORE_FILE
+    oid4vp_trust_anchor_path = Path(environment[OID4VP_TRUST_ANCHOR_FILE_ENV]).resolve()
     keystore_path = Path(environment["EUDI_VERIFIER_KEYSTORE_FILE"]).resolve()
     generated_access_path = certificate_dir / EUDI_CERTIFICATE_FILE
-    paths = [key_path, certificate_path, root_path, truststore_path, keystore_path]
+    paths = [key_path, certificate_path, root_path, truststore_path, oid4vp_trust_anchor_path, keystore_path]
     if environment.get("EUDI_TEST_MATERIAL_MODE") == "generated":
         paths.append(generated_access_path)
     for path in paths:
@@ -916,6 +927,19 @@ def validate_environment(
     if not required_names <= dns_names:
         raise ValueError("TLS certificate SAN does not cover every public HTTPS hostname")
     root = x509.load_pem_x509_certificate(root_path.read_bytes())
+    oid4vp_anchors = [
+        x509.load_pem_x509_certificate(value)
+        for value in PEM_CERTIFICATE.findall(oid4vp_trust_anchor_path.read_bytes())
+    ]
+    if not oid4vp_anchors:
+        raise ValueError(f"{OID4VP_TRUST_ANCHOR_FILE_ENV} contains no PEM certificate")
+    for anchor in oid4vp_anchors:
+        try:
+            constraints = anchor.extensions.get_extension_for_class(x509.BasicConstraints).value
+        except x509.ExtensionNotFound as exc:
+            raise ValueError(f"{OID4VP_TRUST_ANCHOR_FILE_ENV} requires CA BasicConstraints") from exc
+        if not constraints.ca:
+            raise ValueError(f"{OID4VP_TRUST_ANCHOR_FILE_ENV} must contain only CA certificates")
     if len(certificates) < 2 or certificates[-1].fingerprint(hashes.SHA256()) != root.fingerprint(hashes.SHA256()):
         raise ValueError("tls.crt must contain a leaf-first chain ending at root-ca.pem")
     try:

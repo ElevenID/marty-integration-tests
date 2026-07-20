@@ -26,6 +26,11 @@ import java.security.interfaces.ECPrivateKey
 object WalletIssuanceService {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    private data class HolderProofMaterial(
+        val proofs: ProofsSpecification,
+        val privateKey: ECKey,
+    )
+
     /**
      * OpenId4VCI configuration matching the EUDI Reference Wallet's defaults.
      * Public client with P-256 key, supporting credential response encryption.
@@ -59,7 +64,7 @@ object WalletIssuanceService {
      * javaAlgorithm must be the JCA name ("SHA256withECDSA"), which
      * the EUDI library maps to JWS alg "ES256".
      */
-    private fun createP256ProofSigner(): ProofsSpecification {
+    private fun createP256ProofSigner(): HolderProofMaterial {
         val ecKey: ECKey = ECKeyGenerator(Curve.P_256).generate()
         val publicJwk = ecKey.toPublicJWK()
         val privateKey: ECPrivateKey = ecKey.toECPrivateKey()
@@ -87,7 +92,10 @@ object WalletIssuanceService {
             }
         }
 
-        return ProofsSpecification.JwtProofs.NoKeyAttestation(batchSigner)
+        return HolderProofMaterial(
+            proofs = ProofsSpecification.JwtProofs.NoKeyAttestation(batchSigner),
+            privateKey = ecKey,
+        )
     }
 
     /**
@@ -143,7 +151,7 @@ object WalletIssuanceService {
         createHttpClient().use { httpClient ->
             try {
                 // Step 1: Resolve offer
-                log.info("Resolving credential offer: $credentialOfferUri")
+                log.info("Resolving credential offer through the public issuer endpoint")
                 val issuer = Issuer.make(vciConfig, credentialOfferUri, httpClient).getOrThrow()
                 val offer = issuer.credentialOffer
                 val meta = offer.credentialIssuerMetadata
@@ -175,10 +183,10 @@ object WalletIssuanceService {
                     val requestPayload = IssuanceRequestPayload.ConfigurationBased(credCfgId)
 
                     // Generate P-256 proof signer (same as EUDI Reference Wallet)
-                    val popSigner = createP256ProofSigner()
+                    val holderProof = createP256ProofSigner()
 
                     val (updatedAuth, outcome) = with(issuer) {
-                        currentAuth.request(requestPayload, popSigner).getOrThrow()
+                        currentAuth.request(requestPayload, holderProof.proofs).getOrThrow()
                     }
                     currentAuth = updatedAuth
 
@@ -194,6 +202,10 @@ object WalletIssuanceService {
                                     credential = credStr,
                                     notificationId = outcome.notificationId?.value,
                                 ))
+                                WalletPresentationService.rememberHolderKey(
+                                    credentialCompact = credStr,
+                                    holderKey = holderProof.privateKey,
+                                )
                             }
                             log.info("Credential issued for: ${credCfgId.value}")
                         }
@@ -214,6 +226,10 @@ object WalletIssuanceService {
                                             credential = credStr,
                                             notificationId = deferredOutcome.notificationId?.value,
                                         ))
+                                        WalletPresentationService.rememberHolderKey(
+                                            credentialCompact = credStr,
+                                            holderKey = holderProof.privateKey,
+                                        )
                                     }
                                 }
                                 is DeferredCredentialQueryOutcome.IssuancePending ->

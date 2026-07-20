@@ -2,15 +2,34 @@
 #
 # Start Marty first with docker-compose.profile.oidf.yml.  That profile exposes
 # only oidf-tls-proxy on ${MARTY_CONFORMANCE_PROJECT}_oidf-runner.  This
-# independent Compose project joins the bridge only for the official wallet
-# tester, so neither reference implementation can reach Marty's databases,
-# Keycloak HTTP port, signing service, or internal APIs.
+# independent Compose project joins that bridge only through a byte-forwarding
+# sidecar. Wallets stay on their own network and can reach Marty only at the
+# exact public TLS hostname and port; neither reference implementation can
+# reach Marty's databases, Keycloak HTTP port, signing service, or internal APIs.
 #
 # Example:
 #   docker compose -p eudi-reference \
 #     -f conformance/eudi-reference.compose.yml up -d
 
 services:
+  # Preserve the exact public Marty origin inside Docker. Publishing
+  # ${OIDF_TLS_HOST_PORT} on the host does not make that port exist on the
+  # tls-proxy container, which listens on 443. This byte-for-byte TCP bridge
+  # gives wallets the public hostname and port without rewriting requests or
+  # terminating TLS. It is the only EUDI service attached to Marty's external
+  # OIDF runner network.
+  eudi-marty-public-port-bridge:
+    image: docker.io/alpine/socat:1.8.0.3@sha256:a26f4bcee25ad4a4096ce91e596c0a2fffcbb51f7fd198dd87a5c86eae66f0e1
+    command:
+      - TCP-LISTEN:${OIDF_TLS_HOST_PORT:?set the Marty public TLS port},fork,reuseaddr
+      - TCP:oidf-tls-proxy:443
+    networks:
+      marty_public_url:
+        aliases:
+          - ${OIDF_CONFORMANCE_BRIDGE_ALIAS:?set the hostname from OIDF_PUBLIC_BASE_URL}
+      marty_oidf_bridge: {}
+    restart: "no"
+
   eudi-wallet-tester:
     image: ghcr.io/eu-digital-identity-wallet/eudi-app-web-wallet-tester-py@sha256:d2978c7a9bb29b00f8c202d054b8a9a4ec8e9addf2e16314f3ed06426aef19be
     environment:
@@ -24,7 +43,10 @@ services:
       REQUESTS_CA_BUNDLE: /certs/root-ca.pem
     volumes:
       - ${OIDF_TLS_CERT_DIR:?set a directory containing tls.crt and tls.key}:/certs:ro
-    networks: [default, marty_oidf_bridge]
+    networks: [default, marty_public_url]
+    depends_on:
+      eudi-marty-public-port-bridge:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/', timeout=4).read(1)"]
       interval: 5s
@@ -102,15 +124,25 @@ services:
       - "${EUDI_WALLET_KIT_HOST_PORT:-29090}:9090"
     volumes:
       - ${OIDF_TLS_CERT_DIR:?set a directory containing tls.crt and tls.key}:/certs:ro
+      - ${EUDI_OID4VP_TRUST_ANCHOR_FILE:?set the OID4VP request-object trust-anchor PEM file}:/oid4vp-trust/anchors.pem:ro
     environment:
       JAVA_TOOL_OPTIONS: >-
         -Djavax.net.ssl.trustStore=/certs/truststore.jks
         -Djavax.net.ssl.trustStoreType=JKS
         -Djavax.net.ssl.trustStorePassword=${EUDI_TLS_TRUSTSTORE_PASSWORD:-conformance-changeit}
-    networks: [default, marty_oidf_bridge]
+      # OID4VP request-object PKIX trust is deliberately independent from TLS
+      # trust. The host file is mounted read-only to avoid multiline secret
+      # interpolation and may contain more than one approved CA certificate.
+      EUDI_OID4VP_TRUST_ANCHOR_FILE: /oid4vp-trust/anchors.pem
+    networks: [default, marty_public_url]
+    depends_on:
+      eudi-marty-public-port-bridge:
+        condition: service_started
     restart: "no"
 
 networks:
+  marty_public_url:
+    internal: true
   marty_oidf_bridge:
     name: ${OIDF_MARTY_BRIDGE_NETWORK:?set to <MARTY_CONFORMANCE_PROJECT>_oidf-runner}
     external: true

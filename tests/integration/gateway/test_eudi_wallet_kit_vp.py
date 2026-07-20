@@ -34,6 +34,7 @@ import uuid
 from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
@@ -491,6 +492,7 @@ class TestOID4VPAuthorizationRequest:
         """Starting a verification flow produces an openid4vp:// request URI."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
 
         assert "instance_id" in flow, f"Missing instance_id: {flow}"
@@ -511,6 +513,7 @@ class TestOID4VPAuthorizationRequest:
         """Authorization request JWT has required OID4VP fields."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -526,12 +529,11 @@ class TestOID4VPAuthorizationRequest:
         assert auth_req.get("nonce"), "Missing nonce"
         assert auth_req.get("response_uri"), "Missing response_uri"
 
-        # client_id_scheme should be DID-based
-        assert auth_req.get("client_id_scheme") == "did", (
-            f"Expected client_id_scheme=did, got: {auth_req.get('client_id_scheme')}"
-        )
-        assert auth_req["client_id"].startswith("did:"), (
-            f"client_id should be a DID: {auth_req['client_id']}"
+        # OID4VP 1.0 Final uses a client identifier prefix. The old separate
+        # client_id_scheme parameter is intentionally absent.
+        assert "client_id_scheme" not in auth_req
+        assert auth_req["client_id"].startswith("decentralized_identifier:did:"), (
+            f"client_id should use the DID client identifier prefix: {auth_req['client_id']}"
         )
 
         logger.info(
@@ -550,6 +552,7 @@ class TestOID4VPAuthorizationRequest:
         """Authorization request includes a DCQL query by default."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
         auth_req = await authenticated_gateway_client.get_verification_request(
             flow["instance_id"]
@@ -580,6 +583,45 @@ class TestOID4VPSdJwtPresentation:
     """
 
     @pytest.mark.asyncio
+    async def test_official_library_resolves_and_dispatches_sd_jwt(
+        self,
+        authenticated_gateway_client: GatewayClient,
+        wallet_kit: EUDIWalletKitClient,
+        issued_sd_jwt_credential,
+        vp_age_policy,
+    ):
+        """The pinned EUDI OID4VP library resolves and dispatches the real request."""
+        flow = await authenticated_gateway_client.start_verification_flow(
+            presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
+        )
+        request_uri = flow.get("request_uri", "")
+        assert request_uri.startswith("openid4vp://"), request_uri
+
+        result = await wallet_kit.submit_presentation(
+            authorization_request_uri=request_uri,
+            credential=issued_sd_jwt_credential["credential"],
+        )
+        assert result["success"], result.get("error")
+        assert result["responseMode"] in ("direct_post", "direct_post.jwt")
+        assert result["verifierAccepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_unbound_credential_is_rejected_before_presentation(
+        self,
+        wallet_kit: EUDIWalletKitClient,
+    ):
+        """A credential without its issuance proof key cannot get a fake KB-JWT."""
+        with pytest.raises(httpx.HTTPStatusError) as failure:
+            await wallet_kit.build_vp_token(
+                credential="unbound.header.signature~",
+                audience="did:web:verifier.example",
+                nonce="negative-holder-binding-test",
+            )
+        assert failure.value.response.status_code == 422
+        assert failure.value.response.json()["error"] == "missing_holder_binding_key"
+
+    @pytest.mark.asyncio
     async def test_sd_jwt_vp_direct_post(
         self,
         authenticated_gateway_client: GatewayClient,
@@ -593,6 +635,7 @@ class TestOID4VPSdJwtPresentation:
         # Start verification flow
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -661,6 +704,7 @@ class TestOID4VPSdJwtPresentation:
 
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_identity_policy["id"],
+            organization_id=vp_identity_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -707,6 +751,7 @@ class TestOID4VPSdJwtPresentation:
 
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -812,6 +857,7 @@ class TestMDocPresentation:
 
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_mdoc_policy["id"],
+            organization_id=vp_mdoc_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -930,6 +976,7 @@ class TestEndToEndIssuanceAndPresentation:
         # 5. Start verification flow
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
+            organization_id=policy["organization_id"],
         )
         instance_id = flow["instance_id"]
         logger.info("[E2E] Verification flow started: %s", instance_id)

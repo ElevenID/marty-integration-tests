@@ -51,6 +51,7 @@ def test_haip_post_retrieval_module_is_scoped_to_the_required_signed_transport()
         item
         for item in skips
         if item["test-name"] == "oid4vp-1final-verifier-request-uri-method-post"
+        and item["configuration-filename"] == "*marty-verifier-haip*.json"
     )
     assert request_uri_post["configuration-filename"] == "*marty-verifier-haip*.json"
     assert request_uri_post["variant"] == {
@@ -58,6 +59,24 @@ def test_haip_post_retrieval_module_is_scoped_to_the_required_signed_transport()
         "request_method": "request_uri_signed",
         "vp_profile": "haip",
     }
+    assert "mutually exclusive" not in request_uri_post["reason"]
+    assert "request_uri_method=get" in request_uri_post["reason"]
+
+
+def test_standard_post_retrieval_skip_is_narrowly_scoped_to_the_standard_plan() -> None:
+    skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
+    request_uri_post = next(
+        item
+        for item in skips
+        if item["test-name"] == "oid4vp-1final-verifier-request-uri-method-post"
+        and item["configuration-filename"] == "marty-verifier.json"
+    )
+    assert request_uri_post["variant"] == {
+        "client_id_prefix": "redirect_uri",
+        "request_method": "url_query",
+        "vp_profile": "plain_vp",
+    }
+    assert "request_uri_method=post" in request_uri_post["reason"]
 
 
 def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:

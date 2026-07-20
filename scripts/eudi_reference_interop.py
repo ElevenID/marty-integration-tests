@@ -42,7 +42,7 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
             raise ValueError(f"{name} image must be pinned by sha256 digest")
     wallet_kit = components.get("wallet_kit", {})
     build = wallet_kit.get("build", {})
-    for name in ("builder_image", "runtime_image"):
+    for name in ("builder_image", "runtime_image", "public_url_bridge_image"):
         if not OCI_IMAGE.fullmatch(build.get(name, "")):
             raise ValueError(f"wallet_kit {name} must be pinned by sha256 digest")
     libraries = wallet_kit.get("libraries", {})
@@ -60,10 +60,23 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     coverage = data.get("coverage", {})
     if not {"sd_jwt_vc", "mso_mdoc"} <= set(coverage.get("issuance", [])):
         raise ValueError("EUDI issuance coverage must include SD-JWT VC and mdoc")
-    if not {"sd_jwt_vc", "mso_mdoc"} <= set(coverage.get("presentation", [])):
-        raise ValueError("EUDI presentation coverage must include SD-JWT VC and mdoc")
-    if "replayed_response" not in coverage.get("negative", []):
-        raise ValueError("EUDI coverage must include replay rejection")
+    if "sd_jwt_vc" not in coverage.get("presentation", []):
+        raise ValueError("EUDI official-library presentation coverage must include SD-JWT VC")
+    if "mso_mdoc" in coverage.get("presentation", []):
+        raise ValueError("mDoc cannot be claimed until an ISO device response is exercised")
+    unsupported_negative_claims = {
+        "replayed_response",
+        "invalid_signature",
+        "expired_or_invalid_request",
+    } & set(coverage.get("negative", []))
+    if unsupported_negative_claims:
+        raise ValueError(
+            "EUDI negative coverage contains planned-only claims: "
+            + ", ".join(sorted(unsupported_negative_claims))
+        )
+    limitations = data.get("limitations", {})
+    if not {"mso_mdoc_presentation", "oid4vp_negative_vectors"} <= set(limitations):
+        raise ValueError("EUDI manifest must record current presentation limitations")
     return data
 
 
@@ -130,6 +143,9 @@ def write_evidence(
         "schema": "elevenid.official-interop-evidence/v1",
         "components": manifest["components"],
         "coverage": manifest["coverage"],
+        "compatibility_only": manifest.get("compatibility_only", {}),
+        "planned_coverage": manifest.get("planned_coverage", {}),
+        "limitations": manifest.get("limitations", {}),
         "marty": {
             "commit": os.environ.get("MARTY_COMMIT", "unrecorded"),
             "stack_manifest": stack_manifest_metadata(stack_manifest) if stack_manifest else None,

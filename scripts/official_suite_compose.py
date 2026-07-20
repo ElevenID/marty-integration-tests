@@ -29,7 +29,12 @@ from eudi_test_material import (
     validate_environment,
     validate_environment_contract,
 )
-from haip_test_certificates import load_verifier_environment, validate_verifier_environment
+from haip_test_certificates import (
+    OID4VP_TRUST_ANCHOR_FILE_ENV,
+    load_verifier_environment,
+    validate_oid4vp_trust_anchor,
+    validate_verifier_environment,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
@@ -72,8 +77,14 @@ def project_names(run_id: str) -> dict[str, str]:
     }
 
 
-def configure_haip_environment(environment: dict[str, str], material_dir: Path | None) -> None:
-    """Wire the matching verifier key/certificate pair into Marty's HAIP overlay."""
+def configure_haip_environment(
+    environment: dict[str, str],
+    material_dir: Path | None,
+    *,
+    require_request_object_trust: bool = False,
+    validate_request_object_trust_file: bool = True,
+) -> None:
+    """Wire the verifier pair and independent wallet trust anchor into HAIP."""
     signing_key = environment.get("VERIFIER_SIGNING_KEY_PEM", "")
     certificate = environment.get("VERIFIER_X509_CERT_PEM", "")
     has_signing_key = bool(signing_key.strip())
@@ -82,7 +93,25 @@ def configure_haip_environment(environment: dict[str, str], material_dir: Path |
         raise ValueError("set both VERIFIER_SIGNING_KEY_PEM and VERIFIER_X509_CERT_PEM, or neither")
     if has_signing_key and has_certificate:
         # Externally issued certification material is always authoritative.
-        environment.update(validate_verifier_environment(signing_key, certificate))
+        validated = validate_verifier_environment(signing_key, certificate)
+        trust_anchor_file = environment.get(OID4VP_TRUST_ANCHOR_FILE_ENV, "").strip()
+        if trust_anchor_file:
+            if validate_request_object_trust_file:
+                anchor_path = Path(trust_anchor_file).resolve()
+                try:
+                    trust_anchor_pem = anchor_path.read_text(encoding="ascii")
+                except (OSError, UnicodeError) as exc:
+                    raise ValueError(f"cannot read HAIP request-object trust anchor: {anchor_path}") from exc
+                validate_oid4vp_trust_anchor(certificate, trust_anchor_pem)
+                validated[OID4VP_TRUST_ANCHOR_FILE_ENV] = str(anchor_path)
+            else:
+                validated[OID4VP_TRUST_ANCHOR_FILE_ENV] = trust_anchor_file
+        elif require_request_object_trust:
+            raise ValueError(
+                f"HAIP EUDI runs require {OID4VP_TRUST_ANCHOR_FILE_ENV}; "
+                "the TLS trust store is not a request-object trust policy"
+            )
+        environment.update(validated)
         return
     if material_dir is None:
         raise ValueError("--haip requires external VERIFIER_* PEM values or --haip-material")
@@ -101,6 +130,7 @@ def cleanup_eudi_environment(environment: dict[str, str], material_dir: Path) ->
             "OIDF_INTERNAL_TLS_PORT": "8443",
             "OIDF_CONFORMANCE_BRIDGE_ALIAS": "cleanup.invalid",
             "OIDF_TLS_CERT_DIR": str(directory),
+            OID4VP_TRUST_ANCHOR_FILE_ENV: str(directory / ROOT_CA_FILE),
             "EUDI_WALLET_TESTER_PUBLIC_URL": "https://cleanup.invalid:25051",
             "EUDI_WALLET_TESTER_TLS_HOST_PORT": "25051",
             "EUDI_VERIFIER_PUBLIC_URL": "https://cleanup.invalid:28091",
@@ -199,6 +229,10 @@ def validate_remote_bind_contract(
             environment.get("EUDI_VERIFIER_KEYSTORE_FILE", ""),
             "EUDI_VERIFIER_KEYSTORE_FILE",
         )
+        _absolute_remote_path(
+            environment.get(OID4VP_TRUST_ANCHOR_FILE_ENV, ""),
+            OID4VP_TRUST_ANCHOR_FILE_ENV,
+        )
 
 
 def child_environment(
@@ -248,7 +282,12 @@ def child_environment(
         docker_command(["info"])
         environment["DOCKER_CONTEXT"] = context
     if require_haip:
-        configure_haip_environment(environment, haip_material)
+        configure_haip_environment(
+            environment,
+            haip_material,
+            require_request_object_trust=require_eudi,
+            validate_request_object_trust_file=local_docker,
+        )
     return environment
 
 

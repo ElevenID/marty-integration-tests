@@ -19,6 +19,7 @@
         "dockerfile": "services/eudi-wallet-harness/Dockerfile",
         "builder_image": "docker.io/library/gradle:8.11-jdk17@sha256:91d559b8d55f522de5bc6882f73bcedc4e2cc7b0a58e839a9fa0ed95811a988d",
         "runtime_image": "docker.io/library/eclipse-temurin:17-jre@sha256:92999aea37688157a53a40bfcb187c30f317422e028045fd5fc5c548fde9e626",
+        "public_url_bridge_image": "docker.io/alpine/socat:1.8.0.3@sha256:a26f4bcee25ad4a4096ce91e596c0a2fffcbb51f7fd198dd87a5c86eae66f0e1",
         "dependency_lock": "services/eudi-wallet-harness/gradle.lockfile",
         "dependency_verification": "services/eudi-wallet-harness/gradle/verification-metadata.xml"
       },
@@ -49,8 +50,29 @@
   },
   "coverage": {
     "issuance": ["sd_jwt_vc", "mso_mdoc"],
-    "presentation": ["sd_jwt_vc", "mso_mdoc"],
+    "presentation": ["sd_jwt_vc"],
+    "negative": ["missing_holder_binding_key"]
+  },
+  "compatibility_only": {
+    "presentation": ["mso_mdoc"]
+  },
+  "planned_coverage": {
+    "presentation": ["mso_mdoc_device_response"],
     "negative": ["replayed_response", "invalid_signature", "expired_or_invalid_request"]
+  },
+  "limitations": {
+    "mso_mdoc_presentation": {
+      "status": "not_officially_exercised",
+      "reason": "The compatibility endpoint passes issuer-signed mDoc bytes through; it does not yet construct the ISO 18013-5 device response and device authentication required by the official OID4VP flow.",
+      "owner": "ElevenID interoperability",
+      "review_date": "2026-10-01"
+    },
+    "oid4vp_negative_vectors": {
+      "status": "planned",
+      "reason": "Replay, tampered-signature, and expired-request vectors are not claimed until they execute against the production verifier path.",
+      "owner": "ElevenID interoperability",
+      "review_date": "2026-10-01"
+    }
   },
   "target": "digest-pinned EUDI components against the public Marty gateway and normal issuer/verifier flows"
 }

@@ -166,6 +166,7 @@ def test_remote_external_mode_requires_explicit_daemon_bind_roots(tmp_path: Path
         lifecycle.REMOTE_EUDI_CONFIG_ROOT: "/srv/elevenid/eudi-config",
         "OIDF_TLS_CERT_DIR": "/srv/elevenid/certificates",
         "EUDI_VERIFIER_KEYSTORE_FILE": "/srv/elevenid/certificates/keystore.jks",
+        lifecycle.OID4VP_TRUST_ANCHOR_FILE_ENV: "/srv/elevenid/certificates/oid4vp-roots.pem",
     }
 
     lifecycle.validate_remote_bind_contract(args, environment)
@@ -277,6 +278,9 @@ def test_generated_haip_material_is_wired_to_marty(tmp_path: Path) -> None:
     lifecycle.configure_haip_environment(environment, material)
     assert environment["VERIFIER_SIGNING_KEY_PEM"] == (material / haip.KEY_FILE).read_text(encoding="ascii")
     assert environment["VERIFIER_X509_CERT_PEM"] == (material / haip.CERTIFICATE_FILE).read_text(encoding="ascii")
+    assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str(
+        (material / haip.TRUST_ANCHOR_FILE).resolve()
+    )
 
 
 def test_external_haip_pem_pair_takes_precedence(tmp_path: Path) -> None:
@@ -293,6 +297,52 @@ def test_external_haip_pem_pair_takes_precedence(tmp_path: Path) -> None:
         "VERIFIER_SIGNING_KEY_PEM": signing_key,
         "VERIFIER_X509_CERT_PEM": certificate,
     }
+
+
+def test_external_haip_eudi_run_requires_and_validates_separate_trust_anchor(tmp_path: Path) -> None:
+    external = haip_material(tmp_path, "external-eudi")
+    environment = {
+        "VERIFIER_SIGNING_KEY_PEM": (external / haip.KEY_FILE).read_text(encoding="ascii"),
+        "VERIFIER_X509_CERT_PEM": (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii"),
+    }
+    with pytest.raises(ValueError, match=haip.OID4VP_TRUST_ANCHOR_FILE_ENV):
+        lifecycle.configure_haip_environment(environment, None, require_request_object_trust=True)
+
+    environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] = str(external / haip.TRUST_ANCHOR_FILE)
+    lifecycle.configure_haip_environment(environment, None, require_request_object_trust=True)
+    assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str(
+        (external / haip.TRUST_ANCHOR_FILE).resolve()
+    )
+
+
+def test_external_haip_eudi_run_rejects_untrusted_root(tmp_path: Path) -> None:
+    external = haip_material(tmp_path, "external")
+    unrelated = haip_material(tmp_path, "unrelated")
+    environment = {
+        "VERIFIER_SIGNING_KEY_PEM": (external / haip.KEY_FILE).read_text(encoding="ascii"),
+        "VERIFIER_X509_CERT_PEM": (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii"),
+        haip.OID4VP_TRUST_ANCHOR_FILE_ENV: str(unrelated / haip.TRUST_ANCHOR_FILE),
+    }
+    with pytest.raises(ValueError, match="must end at"):
+        lifecycle.configure_haip_environment(environment, None, require_request_object_trust=True)
+
+
+def test_external_haip_eudi_run_accepts_multiple_approved_roots(tmp_path: Path) -> None:
+    external = haip_material(tmp_path, "external-multiple")
+    unrelated = haip_material(tmp_path, "unrelated-multiple")
+    approved_roots = tmp_path / "approved-roots.pem"
+    approved_roots.write_text(
+        (unrelated / haip.TRUST_ANCHOR_FILE).read_text(encoding="ascii")
+        + (external / haip.TRUST_ANCHOR_FILE).read_text(encoding="ascii"),
+        encoding="ascii",
+    )
+    environment = {
+        "VERIFIER_SIGNING_KEY_PEM": (external / haip.KEY_FILE).read_text(encoding="ascii"),
+        "VERIFIER_X509_CERT_PEM": (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii"),
+        haip.OID4VP_TRUST_ANCHOR_FILE_ENV: str(approved_roots),
+    }
+    lifecycle.configure_haip_environment(environment, None, require_request_object_trust=True)
+    assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str(approved_roots.resolve())
 
 
 def test_haip_rejects_a_partial_external_pair(tmp_path: Path) -> None:

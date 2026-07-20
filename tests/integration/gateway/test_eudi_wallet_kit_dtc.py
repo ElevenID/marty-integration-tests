@@ -333,6 +333,7 @@ class TestDtcWalletAuthorizationRequest:
         """Starting a DTC verification flow produces an openid4vp:// URI."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
+            organization_id=dtc_vp_policy["organization_id"],
         )
 
         assert "instance_id" in flow
@@ -349,6 +350,7 @@ class TestDtcWalletAuthorizationRequest:
         """DTC authorization request includes a DCQL query by default."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
+            organization_id=dtc_vp_policy["organization_id"],
         )
         auth_req = await authenticated_gateway_client.get_verification_request(
             flow["instance_id"]
@@ -391,6 +393,7 @@ class TestDtcWalletPresentation:
         # Start verification flow
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
+            organization_id=dtc_vp_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -455,6 +458,7 @@ class TestDtcWalletPresentation:
 
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_identity_vp_policy["id"],
+            organization_id=dtc_identity_vp_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -561,6 +565,7 @@ class TestDtcWalletEndToEnd:
         # 5. Start OID4VP verification flow
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
+            organization_id=policy["organization_id"],
         )
         instance_id = flow["instance_id"]
         logger.info("[DTC E2E] Verification flow started: %s", instance_id)

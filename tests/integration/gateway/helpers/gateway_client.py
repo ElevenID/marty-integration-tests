@@ -109,6 +109,7 @@ class GatewayClient:
         path: str,
         json: Optional[Dict] = None,
         params: Optional[Dict] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Make HTTP request and handle errors.
@@ -118,6 +119,7 @@ class GatewayClient:
             path: API path (e.g., "/v1/organizations")
             json: JSON body
             params: Query parameters
+            headers: Additional request headers merged with the client defaults
             
         Returns:
             Response JSON data
@@ -126,12 +128,16 @@ class GatewayClient:
             GatewayClientError: On request failure
         """
         try:
+            request_headers = self._get_headers()
+            if headers:
+                request_headers.update(headers)
+
             response = await self.client.request(
                 method=method,
                 url=path,
                 json=json,
                 params=params,
-                headers=self._get_headers(),
+                headers=request_headers,
             )
             response.raise_for_status()
             if response.status_code == 204 or not response.content:
@@ -992,6 +998,7 @@ class GatewayClient:
         presentation_policy_id: str,
         trust_profile_id: Optional[str] = None,
         expiry_minutes: int = 15,
+        organization_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Start a verification flow (creates QR code for wallet).
@@ -1000,18 +1007,31 @@ class GatewayClient:
             presentation_policy_id: Policy defining what to request
             trust_profile_id: Optional trust profile
             expiry_minutes: Request expiry time
+            organization_id: Selected organization context for authorization
             
         Returns:
             Flow instance with instance_id, request_uri, qr_code_data
         """
+        payload = {
+            "presentation_policy_id": presentation_policy_id,
+            "trust_profile_id": trust_profile_id,
+            "expiry_minutes": expiry_minutes,
+        }
+        if organization_id:
+            # Cedar resolves the authorization tenant from trusted route/query/body
+            # inputs before the request is proxied. The header is also sent so the
+            # selected context remains explicit at downstream HTTP boundaries.
+            payload["organization_id"] = organization_id
+
         return await self._request(
             "POST",
             "/v1/flows/verify",
-            json={
-                "presentation_policy_id": presentation_policy_id,
-                "trust_profile_id": trust_profile_id,
-                "expiry_minutes": expiry_minutes,
-            },
+            json=payload,
+            headers=(
+                {"X-Organization-ID": organization_id}
+                if organization_id
+                else None
+            ),
         )
         
     async def get_verification_request(self, instance_id: str) -> Dict[str, Any]:

@@ -172,6 +172,7 @@ def test_complete_external_material_paths_take_precedence_but_partial_pair_fails
     external = {
         "OIDF_TLS_CERT_DIR": "C:/secure/external-tls",
         "EUDI_VERIFIER_KEYSTORE_FILE": "C:/secure/external-verifier.jks",
+        material.OID4VP_TRUST_ANCHOR_FILE_ENV: "C:/secure/oid4vp-roots.pem",
         "UNRELATED": "preserved",
     }
     mode, environment = material.merged_material_environment(output, external)
@@ -179,7 +180,7 @@ def test_complete_external_material_paths_take_precedence_but_partial_pair_fails
     assert environment["EUDI_TEST_MATERIAL_MODE"] == "external"
     assert environment["OIDF_TLS_CERT_DIR"] == external["OIDF_TLS_CERT_DIR"]
 
-    with pytest.raises(ValueError, match="both external"):
+    with pytest.raises(ValueError, match="OIDF_TLS_CERT_DIR"):
         material.merged_material_environment(output, {"OIDF_TLS_CERT_DIR": external["OIDF_TLS_CERT_DIR"]})
 
 

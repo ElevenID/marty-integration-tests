@@ -108,10 +108,10 @@ class EUDIWalletKitClient:
     ) -> Dict[str, Any]:
         """Direct-post a VP token to a verifier's response_uri.
 
-        Bypasses the EUDI library's auth request resolution, useful when
-        the verifier uses a client_id_scheme (e.g. DID) not natively
-        supported by the EUDI library.  The harness sends an
-        application/x-www-form-urlencoded POST per OID4VP spec.
+        Bypasses the EUDI library's auth request resolution for compatibility
+        tests that intentionally operate on an already-resolved request. This
+        path is not counted as official-library OID4VP evidence. The harness
+        sends an application/x-www-form-urlencoded POST per OID4VP.
         """
         body: Dict[str, Any] = {
             "responseUri": response_uri,

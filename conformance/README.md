@@ -349,6 +349,14 @@ configuration additionally supplies the official runner's request-object trust
 anchor. No HAIP profile may be marked active merely because a local test
 adapter can execute it.
 
+The EUDI wallet harness receives that request-object root through the read-only
+file named by `EUDI_OID4VP_TRUST_ANCHOR_FILE` and validates Marty's JAR `x5c`
+with PKIX. It does not infer verifier trust from the HTTPS truststore. Generated
+`--haip-material` supplies the root automatically; an externally financed
+certification run must supply its approved root file alongside the external
+`VERIFIER_*` pair. The file may contain multiple approved CA certificates, but
+it must not be empty and non-CA certificates are rejected.
+
 Every runner export now includes `evidence.json`. It records the immutable
 official-runner commit, stack-manifest digest and release, Marty commit when
 provided as `MARTY_COMMIT`, configuration digest (never its secret contents),

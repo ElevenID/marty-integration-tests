@@ -142,6 +142,94 @@ def test_standard_verifier_config_reuses_only_generated_signing_jwk(tmp_path: Pa
     assert "client" not in config
 
 
+def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+    output_dir = tmp_path / "output"
+    haip_material = tmp_path / "haip"
+    haip_material.mkdir()
+
+    def fake_run(command: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
+        captured.extend(command)
+        destination = Path(command[command.index("--output") + 1])
+        destination.parent.mkdir(parents=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "organization_id": "org-1",
+                    "oid4vp_template_id": "template-1",
+                    "oid4vp_policy_id": "policy-1",
+                    "oid4vp_trust_profile_id": "trust-1",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    args = SimpleNamespace(
+        output_dir=output_dir,
+        run_id="run-1",
+        haip_material=haip_material,
+    )
+
+    result = lane.bootstrap_fixtures(
+        args,
+        {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+        mode="oid4vp",
+    )
+
+    assert result["oid4vp_trust_profile_id"] == "trust-1"
+    assert captured[captured.index("--oidf-runner-config") + 1] == str(
+        haip_material / "marty-verifier-haip.json"
+    )
+
+
+def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    suite_environment: dict[str, str] = {}
+
+    def fake_run(command: list[str], environment: dict[str, str], **_kwargs: object) -> int:
+        if "oidf_conformance.py" in " ".join(command):
+            suite_environment.update(environment)
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(
+        lane,
+        "bootstrap_fixtures",
+        lambda *_args, **_kwargs: {
+            "organization_id": "org-1",
+            "oid4vp_template_id": "template-1",
+            "oid4vp_policy_id": "policy-1",
+            "oid4vp_trust_profile_id": "trust-1",
+        },
+    )
+    monkeypatch.setattr(
+        lane,
+        "standard_verifier_config",
+        lambda _material, _gateway: tmp_path / "marty-verifier.json",
+    )
+    args = SimpleNamespace(
+        lane="oid4vp-final",
+        marty_ui=tmp_path / "marty-ui",
+        run_id="run-1",
+        oidf_runner=tmp_path / "runner",
+        haip_material=tmp_path / "haip",
+        output_dir=tmp_path / "output",
+        stack_manifest=tmp_path / "stack-manifest.json",
+    )
+
+    assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
+    assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "policy-1"
+    assert suite_environment["OIDF_MARTY_TRUST_PROFILE_ID"] == "trust-1"
+
+
 def test_old_release_fails_before_any_compose_command(tmp_path: Path) -> None:
     args = type(
         "Args",

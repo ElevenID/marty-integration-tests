@@ -19,6 +19,7 @@ from oidf_marty_start_verification import gateway_session_id, https_url
 DEFAULT_ORGANIZATION = "00000000-0000-0000-0000-000000000001"
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+OFFICIAL_OIDF_ISSUER_DOMAIN = "localhost.emobix.co.uk"
 
 
 def template_payload(organization_id: str, *, w3c: bool, run_id: str) -> dict[str, object]:
@@ -57,8 +58,8 @@ def template_payload(organization_id: str, *, w3c: bool, run_id: str) -> dict[st
     return {
         "organization_id": organization_id,
         "name": f"Official OID4VP SD-JWT {run_id}",
-        "credential_type": "DriversLicense",
-        "vct": "https://credentials.marty.dev/DriversLicense",
+        "credential_type": "PID",
+        "vct": "urn:eudi:pid:1",
         "supported_formats": ["sd_jwt_vc"],
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "compliance_profile": {
@@ -72,14 +73,14 @@ def template_payload(organization_id: str, *, w3c: bool, run_id: str) -> dict[st
             "properties": {
                 "family_name": {"type": "string"},
                 "given_name": {"type": "string"},
-                "birth_date": {"type": "string", "format": "full-date"},
+                "birthdate": {"type": "string", "format": "full-date"},
             },
-            "required": ["family_name", "given_name", "birth_date"],
+            "required": ["family_name", "given_name", "birthdate"],
         },
         "claims": [
             {"name": "family_name", "display_name": "Family Name", "required": True},
             {"name": "given_name", "display_name": "Given Name", "required": True},
-            {"name": "birth_date", "display_name": "Birth Date", "required": True},
+            {"name": "birthdate", "display_name": "Birth Date", "required": True},
         ],
         "auto_generate_artifacts": True,
     }
@@ -92,7 +93,7 @@ def policy_payload(
     w3c: bool,
     run_id: str,
 ) -> dict[str, object]:
-    claims = ("givenName", "familyName", "birthDate") if w3c else ("given_name", "family_name", "birth_date")
+    claims = ("givenName", "familyName", "birthDate") if w3c else ("given_name", "family_name", "birthdate")
     label = "W3C VC v2" if w3c else "OID4VP SD-JWT"
     return {
         "organization_id": organization_id,
@@ -115,6 +116,48 @@ def policy_payload(
     }
 
 
+def official_signer_public_jwk(config_path: Path) -> dict[str, str]:
+    """Extract only the public P-256 members from the private runner config."""
+    raw: object = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("official runner config must be a JSON object")
+    credential = raw.get("credential")
+    signing_jwk = credential.get("signing_jwk") if isinstance(credential, dict) else None
+    if not isinstance(signing_jwk, dict):
+        raise ValueError("official runner config has no credential signing JWK")
+    if signing_jwk.get("kty") != "EC" or signing_jwk.get("crv") != "P-256":
+        raise ValueError("official runner credential signing JWK must use EC P-256")
+    if any(not isinstance(signing_jwk.get(name), str) or not signing_jwk[name] for name in ("x", "y")):
+        raise ValueError("official runner credential signing JWK has no complete public key")
+    return {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": signing_jwk["x"],
+        "y": signing_jwk["y"],
+    }
+
+
+def trust_profile_payload(
+    organization_id: str,
+    public_jwk: dict[str, str],
+    *,
+    run_id: str,
+) -> dict[str, object]:
+    return {
+        "organization_id": organization_id,
+        "name": f"Official OIDF signer {run_id}",
+        "description": "Disposable trust anchor for the pinned official OIDF runner credential signer",
+        "profile_type": "CUSTOM",
+        "supported_formats": ["SD_JWT_VC"],
+        "allowed_algorithms": ["ES256"],
+        "allowed_issuers": [OFFICIAL_OIDF_ISSUER_DOMAIN],
+        "system_issuer_overrides": {
+            OFFICIAL_OIDF_ISSUER_DOMAIN: {"public_jwk": public_jwk},
+        },
+        "auto_generated": True,
+    }
+
+
 def response_id(value: object, resource: str) -> str:
     if not isinstance(value, dict):
         raise RuntimeError(f"public API returned a non-object for {resource}")
@@ -131,12 +174,15 @@ def bootstrap(
     organization_id: str,
     run_id: str,
     mode: str,
+    oidf_signer_public_jwk: dict[str, str] | None = None,
     request: Callable[..., object] = authenticated_json_request,
 ) -> dict[str, str]:
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("run id must use lowercase letters, digits, and internal hyphens")
     if not IDENTIFIER.fullmatch(organization_id):
         raise ValueError("organization id contains unsupported characters")
+    if mode in {"oid4vp", "all"} and oidf_signer_public_jwk is None:
+        raise ValueError("OID4VP fixture bootstrap requires the official runner public signing JWK")
     result = {"organization_id": organization_id}
     targets = (False, True) if mode == "all" else (mode == "w3c",)
     for w3c in targets:
@@ -168,6 +214,33 @@ def bootstrap(
             raise RuntimeError(f"activated {prefix} policy id changed unexpectedly")
         result[f"{prefix}_template_id"] = template_id
         result[f"{prefix}_policy_id"] = policy_id
+        if not w3c:
+            assert oidf_signer_public_jwk is not None
+            created_trust_profile = request(
+                gateway_url,
+                session_id,
+                "/v1/trust-profiles",
+                method="POST",
+                json_body=trust_profile_payload(
+                    organization_id,
+                    oidf_signer_public_jwk,
+                    run_id=run_id,
+                ),
+            )
+            trust_profile_id = response_id(created_trust_profile, "OID4VP trust profile")
+            activated_trust_profile = request(
+                gateway_url,
+                session_id,
+                f"/v1/trust-profiles/{trust_profile_id}/activate",
+                method="POST",
+            )
+            activated_trust_profile_id = response_id(
+                activated_trust_profile,
+                "activated OID4VP trust profile",
+            )
+            if activated_trust_profile_id != trust_profile_id:
+                raise RuntimeError("activated OID4VP trust profile id changed unexpectedly")
+            result["oid4vp_trust_profile_id"] = trust_profile_id
     return result
 
 
@@ -188,6 +261,7 @@ def parser() -> argparse.ArgumentParser:
         "--organization-id", default=os.environ.get("MARTY_CONFORMANCE_ORGANIZATION_ID", DEFAULT_ORGANIZATION)
     )
     result.add_argument("--run-id", default=os.environ.get("OFFICIAL_SUITE_RUN_ID"), required=False)
+    result.add_argument("--oidf-runner-config", type=Path)
     result.add_argument("--output", type=Path, required=True)
     return result
 
@@ -198,13 +272,22 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--gateway-url or OIDF_MARTY_GATEWAY_URL is required")
     if not args.run_id:
         raise ValueError("--run-id or OFFICIAL_SUITE_RUN_ID is required")
+    needs_oidf_signer = args.mode in {"oid4vp", "all"}
+    if needs_oidf_signer and args.oidf_runner_config is None:
+        raise ValueError("--oidf-runner-config is required for OID4VP fixture bootstrap")
     gateway = https_url(args.gateway_url, "gateway URL")
+    signer_public_jwk = (
+        official_signer_public_jwk(args.oidf_runner_config)
+        if args.oidf_runner_config is not None and needs_oidf_signer
+        else None
+    )
     fixtures = bootstrap(
         gateway,
         gateway_session_id(),
         organization_id=args.organization_id,
         run_id=args.run_id,
         mode=args.mode,
+        oidf_signer_public_jwk=signer_public_jwk,
     )
     write_private_json(args.output.resolve(), fixtures)
     # The file contains identifiers only, but keep stdout free of values so it
