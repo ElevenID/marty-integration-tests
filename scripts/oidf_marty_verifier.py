@@ -86,13 +86,27 @@ def curl_executable() -> str:
     return value
 
 
-def request_json(url: str, *, method: str = "GET", body: bytes | None = None,
-                 headers: dict[str, str] | None = None, insecure: bool = False) -> tuple[int, Any]:
+def request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+    insecure: bool = False,
+) -> tuple[int, Any]:
     resolver = local_marty_resolve(url) or local_conformance_resolve(url)
     if resolver:
         command = [
-            curl_executable(), "--silent", "--show-error", "--request", method,
-            "--connect-timeout", "10", "--max-time", "30", *resolver,
+            curl_executable(),
+            "--silent",
+            "--show-error",
+            "--request",
+            method,
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "30",
+            *resolver,
         ]
         if insecure:
             command.append("--insecure")
@@ -224,20 +238,36 @@ def query_parameters(claims: dict[str, Any]) -> dict[str, str]:
     return params
 
 
-def call_mock_wallet(endpoint: str, request_uri: str, *, request_method: str, insecure: bool) -> None:
-    claims = decode_request_object(request_uri, insecure=insecure)
+def call_mock_wallet(
+    endpoint: str,
+    request_uri: str,
+    *,
+    request_method: str,
+    conformance_insecure: bool,
+    marty_insecure: bool = False,
+) -> None:
+    # The released Marty endpoint must use the generated CA like production.
+    # Only the isolated upstream runner's fixed local certificate may use its
+    # explicitly named local-runner exception.
+    claims = decode_request_object(request_uri, insecure=marty_insecure)
     if request_method == "url_query":
         url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(query_parameters(claims))
-        status, _ = request_json(url, insecure=insecure)
+        status, _ = request_json(url, insecure=conformance_insecure)
     elif request_method == "request_uri_signed":
         client_id = claims.get("client_id")
         if not isinstance(client_id, str) or not client_id:
             raise RuntimeError("signed request object has no client_id")
-        url = endpoint + ("&" if "?" in endpoint else "?") + urlencode({
-            "client_id": client_id,
-            "request_uri": request_uri,
-        })
-        status, _ = request_json(url, insecure=insecure)
+        url = (
+            endpoint
+            + ("&" if "?" in endpoint else "?")
+            + urlencode(
+                {
+                    "client_id": client_id,
+                    "request_uri": request_uri,
+                }
+            )
+        )
+        status, _ = request_json(url, insecure=conformance_insecure)
     else:
         raise ValueError("OIDF_VERIFIER_REQUEST_METHOD must be url_query or request_uri_signed")
     if status not in {200, 302, 303}:
@@ -253,6 +283,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-method", default=os.environ.get("OIDF_VERIFIER_REQUEST_METHOD", "url_query"))
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--insecure", action="store_true", default=os.environ.get("OIDF_INSECURE_TLS") == "1")
+    parser.add_argument(
+        "--conformance-insecure",
+        action="store_true",
+        default=os.environ.get("OIDF_CONFORMANCE_INSECURE_TLS") == "1",
+        help="skip TLS verification only for the isolated upstream runner's local certificate",
+    )
     return parser.parse_args()
 
 
@@ -262,27 +298,37 @@ def main() -> int:
         raise ValueError("CONFORMANCE_SERVER must be set")
     if args.flow_command is None:
         raise ValueError("OIDF_VERIFIER_COMMAND is required")
+    conformance_insecure = args.insecure or args.conformance_insecure
     endpoint = wait_for_exposed_authorization_endpoint(
-        args.server, args.test_id, insecure=args.insecure, timeout=args.timeout
+        args.server, args.test_id, insecure=conformance_insecure, timeout=args.timeout
     )
     if endpoint is None:
         print(f"OIDF module {args.test_id} ({args.test_name}) finished without verifier interaction")
         return 0
-    authorization_request = invoke_flow_command(args.flow_command, {
-        "test_id": args.test_id,
-        "test_name": args.test_name,
-        "authorization_endpoint": endpoint,
-        "request_method": args.request_method,
-    })
+    authorization_request = invoke_flow_command(
+        args.flow_command,
+        {
+            "test_id": args.test_id,
+            "test_name": args.test_name,
+            "authorization_endpoint": endpoint,
+            "request_method": args.request_method,
+        },
+    )
     request_uri = request_uri_from_authorization_request(authorization_request)
     try:
-        call_mock_wallet(endpoint, request_uri, request_method=args.request_method, insecure=args.insecure)
+        call_mock_wallet(
+            endpoint,
+            request_uri,
+            request_method=args.request_method,
+            conformance_insecure=conformance_insecure,
+            marty_insecure=args.insecure,
+        )
     except RuntimeError:
         # The runner can finish a module after exposing its endpoint but before
         # this host-side hook submits a duplicate request.  Accept that race
         # only after asking the official runner; active-module failures remain
         # hard errors.
-        if not module_finished(args.server, args.test_id, insecure=args.insecure):
+        if not module_finished(args.server, args.test_id, insecure=conformance_insecure):
             raise
         print(f"OIDF module {args.test_id} finished before duplicate verifier interaction")
         return 0

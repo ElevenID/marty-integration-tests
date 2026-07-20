@@ -4,6 +4,9 @@
     "repository": "https://github.com/w3c/vc-data-model-2.0-test-suite.git",
     "commit": "1db599924e6601555933550e0e65925a6abbd0a8",
     "branch": "main",
+    "node": "24",
+    "npm": "11.11.0",
+    "package_lock_sha256": "sha256:732440bb8e3f2b0656bb695a1602211e1d854daaa92a52e0773ce60d13aa46eb",
     "review_cadence": "monthly"
   },
   "adapter": {

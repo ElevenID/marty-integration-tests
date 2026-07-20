@@ -252,6 +252,17 @@ def child_environment(
     return environment
 
 
+def configure_project_environment(environment: dict[str, str], projects: dict[str, str]) -> None:
+    """Keep Compose interpolation and CLI project selection identical."""
+    environment.update(
+        {
+            "MARTY_CONFORMANCE_PROJECT": projects["marty"],
+            "OIDF_CONFORMANCE_PROJECT": projects["oidf"],
+            "EUDI_CONFORMANCE_PROJECT": projects["eudi"],
+        }
+    )
+
+
 def run(command: list[str], environment: dict[str, str]) -> int:
     print("+", subprocess.list2cmdline(command), flush=True)
     return subprocess.run(command, check=False, env=environment).returncode
@@ -364,10 +375,7 @@ def execute(args: argparse.Namespace) -> int:
         # never prevent logs, inspection, or deterministic teardown.
         validate_eudi=args.command == "up",
     )
-    # The marty-ui profile uses this variable to name the one narrow bridge.
-    # Keep it tied to the validated project argument rather than caller state.
-    environment["MARTY_CONFORMANCE_PROJECT"] = projects["marty"]
-    environment["OIDF_CONFORMANCE_PROJECT"] = projects["oidf"]
+    configure_project_environment(environment, projects)
     if not docker_endpoint_is_local(environment):
         validate_remote_bind_contract(args, environment)
     selected = components(args, projects, args.command)

@@ -58,6 +58,21 @@ def test_projects_are_unique_and_scoped() -> None:
         lifecycle.project_names("production/stack")
 
 
+def test_compose_project_environment_matches_derived_names() -> None:
+    projects = lifecycle.project_names("123-1")
+    environment = {
+        "MARTY_CONFORMANCE_PROJECT": "wrong",
+        "OIDF_CONFORMANCE_PROJECT": "wrong",
+        "EUDI_CONFORMANCE_PROJECT": "wrong",
+    }
+    lifecycle.configure_project_environment(environment, projects)
+    assert environment == {
+        "MARTY_CONFORMANCE_PROJECT": "marty-conformance-123-1",
+        "OIDF_CONFORMANCE_PROJECT": "oidf-runner-123-1",
+        "EUDI_CONFORMANCE_PROJECT": "eudi-reference-123-1",
+    }
+
+
 def test_selected_context_is_forwarded_to_marty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
