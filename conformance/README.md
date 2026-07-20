@@ -439,12 +439,12 @@ evidence is collected. The workflow uploads only the sanitized summary;
 private configuration, generated keys, cookies, raw logs, and unredacted
 official reports remain job-local and expire with the runner.
 
-The stack pin explicitly records `v1.1.0` as `awaiting_release` with no
-placeholder digest. Publish and review that signed `marty-ui` stack release,
-then change the state to `ready` and record the exact downloaded manifest
-SHA-256 in `stack-under-test.json`. Execution hard-fails while the pin is
-awaiting release. A monthly execution schedule is intentionally deferred until
-all four manual lanes pass. The
+The stack pin records immutable `marty-ui` release `v1.1.3` as `ready`, with
+the independently downloaded `stack-manifest.json` SHA-256 recorded in
+`stack-under-test.json`. Execution hard-fails if the released asset, its
+attestation, or any digest-pinned component differs from that reviewed pin. A
+monthly execution schedule is intentionally deferred until all four manual
+lanes pass. The
 existing monthly upstream-review workflow may propose new suite revisions,
 but it never changes a runner pin or dependency lock automatically.
 
