@@ -57,6 +57,13 @@ def test_material_environment_uses_private_generator_envelope(tmp_path: Path) ->
         lane.load_material_environment(tmp_path)
 
 
+def test_stack_metadata_must_be_a_json_object(tmp_path: Path) -> None:
+    path = tmp_path / "stack-metadata.json"
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="JSON object"):
+        lane.load_stack_metadata(path)
+
+
 def test_standard_verifier_config_reuses_only_generated_signing_jwk(tmp_path: Path) -> None:
     source = {
         "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},

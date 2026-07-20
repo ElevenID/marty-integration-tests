@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,7 +98,10 @@ def load_material_environment(material: Path) -> dict[str, str]:
 
 
 def load_stack_metadata(path: Path) -> dict[str, object]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    raw: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("stack metadata must be a JSON object")
+    data = cast(dict[str, object], raw)
     commit = data.get("marty_commit")
     manifest = data.get("manifest_path")
     if data.get("schema") != "elevenid.official-stack-material/v1":

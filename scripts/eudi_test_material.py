@@ -983,6 +983,7 @@ def validate_environment(
         ):
             raise ValueError("EUDI verifier original client ID is absent from its access certificate SAN")
 
+    access_certificate = eudi_leaf if eudi_leaf is not None else generated_access_leaf
     return {
         "schema": REPORT_SCHEMA,
         "mode": environment.get("EUDI_TEST_MATERIAL_MODE", "external"),
@@ -995,7 +996,7 @@ def validate_environment(
         "tls_certificate_sha256": _fingerprint(leaf),
         "root_ca_sha256": _fingerprint(root),
         "eudi_access_certificate_sha256": (
-            _fingerprint(eudi_leaf or generated_access_leaf) if (eudi_leaf or generated_access_leaf) else "not-checked"
+            _fingerprint(access_certificate) if access_certificate is not None else "not-checked"
         ),
         "not_after": _certificate_not_after(leaf).isoformat(),
     }

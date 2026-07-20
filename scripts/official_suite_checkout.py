@@ -9,9 +9,18 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = {
+
+
+class SuiteDefinition(TypedDict):
+    manifest: Path
+    section: str
+    repository: str
+
+
+SUITES: dict[str, SuiteDefinition] = {
     "oidf": {
         "manifest": ROOT / "conformance" / "oidf-runner.json",
         "section": "official_runner",
@@ -28,7 +37,7 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
 def pinned_source(name: str) -> tuple[str, str]:
     definition = SUITES[name]
-    data = json.loads(Path(definition["manifest"]).read_text(encoding="utf-8"))
+    data = json.loads(definition["manifest"].read_text(encoding="utf-8"))
     section = data.get(definition["section"], {})
     repository = section.get("repository")
     commit = section.get("commit")
