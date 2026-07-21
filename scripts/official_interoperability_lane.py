@@ -402,13 +402,14 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
         "curl",
         "--silent",
         "--show-error",
-        # Keep HTTP failures non-zero, but retain the JSON readiness map so
-        # the timeout can report its already-redacted service states.
-        "--fail-with-body",
         "--max-time",
         "10",
         "--cacert",
         environment["SSL_CERT_FILE"],
+        # The gateway response itself is never printed. This fixed marker lets
+        # the timeout distinguish a gateway 503 from a proxy-generated 502.
+        "--write-out",
+        "\n__MARTY_PUBLIC_HTTP_STATUS__:%{http_code}\n",
     ]
     address = environment.get("OIDF_MARTY_RESOLVE_IP", "").strip()
     if address:
@@ -418,14 +419,19 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
     last_detail = "no HTTPS response received"
     while True:
         completed = subprocess.run(command, env=environment, text=True, capture_output=True, check=False)
+        body, marker, status_code = completed.stdout.rpartition("__MARTY_PUBLIC_HTTP_STATUS__:")
+        if marker:
+            status_code = status_code.strip()
+        else:
+            body = completed.stdout
+            status_code = "000"
         payload: object = None
         try:
-            payload = json.loads(completed.stdout)
+            payload = json.loads(body)
         except json.JSONDecodeError:
             pass
-        if completed.returncode == 0:
-            if isinstance(payload, dict) and payload.get("status") == "ready":
-                return
+        if completed.returncode == 0 and status_code == "200" and isinstance(payload, dict) and payload.get("status") == "ready":
+            return
 
         # Preserve the production TLS boundary but make a timeout actionable.
         # Do not print arbitrary response content: readiness responses can
@@ -445,7 +451,9 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
             else:
                 last_detail = f"status={status!r}; no service readiness map"
         elif completed.returncode:
-            last_detail = f"curl exit status {completed.returncode}; non-JSON readiness response"
+            last_detail = f"curl exit status {completed.returncode}; HTTP {status_code}; non-JSON readiness response"
+        else:
+            last_detail = f"HTTP {status_code}; non-JSON readiness response"
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 "released Marty stack did not become ready through its public TLS endpoint "

@@ -441,7 +441,7 @@ def test_public_readiness_uses_generated_ca_and_exact_origin(monkeypatch: pytest
     responses = iter(
         [
             type("Result", (), {"returncode": 22, "stdout": ""})(),
-            type("Result", (), {"returncode": 0, "stdout": '{"status":"ready"}'})(),
+            type("Result", (), {"returncode": 0, "stdout": '{"status":"ready"}\n__MARTY_PUBLIC_HTTP_STATUS__:200\n'})(),
         ]
     )
 
@@ -464,7 +464,8 @@ def test_public_readiness_uses_generated_ca_and_exact_origin(monkeypatch: pytest
     )
     assert "--cacert" in calls[0]
     assert "/material/root-ca.pem" in calls[0]
-    assert "--fail-with-body" in calls[0]
+    assert "--write-out" in calls[0]
+    assert any("__MARTY_PUBLIC_HTTP_STATUS__:%{http_code}" in value for value in calls[0])
     assert "marty-oidf.test:18443:127.0.0.1" in calls[0]
     assert calls[0][-1] == "https://marty-oidf.test:18443/ready"
 
