@@ -30,6 +30,9 @@ LANES = {"oid4vp-final", "haip", "w3c-v2", "eudi"}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+INITIALIZER_SECRET = re.compile(
+    r"(?i)(\b(?:password|secret|token|authorization)\b\s*(?:=|:|is)\s*)([^\s,;]+)"
+)
 STACK_ENV_KEYS = {
     "MARTY_UI_IMAGE",
     "MARTY_SERVICES_IMAGE",
@@ -290,6 +293,51 @@ def run(command: list[str], environment: dict[str, str], *, capture: Path | None
     return completed.returncode
 
 
+def redact_initializer_log(text: str) -> str:
+    """Preserve actionable initializer output without exposing disposable secrets."""
+    return INITIALIZER_SECRET.sub(r"\1<redacted>", text)
+
+
+def emit_keycloak_initializer_diagnostic(run_id: str) -> None:
+    """Print the failed one-shot configurator log before project teardown.
+
+    Every official lane uses the same project-scoped Keycloak initializer. A
+    targeted, redacted diagnostic turns a shared startup failure into an
+    actionable production configuration error without publishing the full
+    Compose environment or private test material.
+    """
+    project = f"marty-conformance-{run_id}"
+    lookup = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            "label=com.docker.compose.service=keycloak-configurator",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    container = next((line for line in lookup.stdout.splitlines() if line), "")
+    if not container:
+        print("Keycloak initializer diagnostic unavailable: configurator container was not created.", flush=True)
+        return
+    logs = subprocess.run(
+        ["docker", "logs", "--tail", "200", container],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = redact_initializer_log(logs.stdout + logs.stderr).strip()
+    print("--- keycloak-configurator diagnostic (redacted) ---", flush=True)
+    print(output or "No configurator output was available.", flush=True)
+    print("--- end keycloak-configurator diagnostic ---", flush=True)
+
+
 def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, poll: float = 3) -> None:
     """Wait for the released gateway's real readiness boundary over verified TLS."""
     origin = environment["OIDF_MARTY_GATEWAY_URL"]
@@ -458,6 +506,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     up = compose_command(args, "up", oidf=True, haip=haip)
     started = run(up, environment) == 0
     if not started:
+        emit_keycloak_initializer_diagnostic(args.run_id)
         return 1
     try:
         wait_for_public_stack(environment)
@@ -519,6 +568,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     include_w3c = False
     try:
         if run([*base, "up"], environment):
+            emit_keycloak_initializer_diagnostic(args.run_id)
             return 1
         wait_for_public_stack(environment)
         fixtures = bootstrap_fixtures(args, environment, mode="w3c")
@@ -571,6 +621,7 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     up = compose_command(args, "up", eudi=True, haip=True)
     started = run(up, environment) == 0
     if not started:
+        emit_keycloak_initializer_diagnostic(args.run_id)
         return 1
     try:
         wait_for_public_stack(environment)
