@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import io
 import re
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -47,9 +48,12 @@ def _decode_cbor_exact(raw: bytes, *, label: str) -> Any:
 
 
 def _require_map(value: Any, *, label: str) -> dict[Any, Any]:
-    if not isinstance(value, dict):
+    # cbor2 6 can expose CBOR maps as immutable Mapping implementations.
+    # Materialize a local copy so all later shape checks are independent of
+    # the decoder's Python container choices.
+    if not isinstance(value, Mapping):
         raise ValueError(f"{label} must be a CBOR map")
-    return value
+    return dict(value)
 
 
 def _as_utc_datetime(value: Any, *, label: str) -> datetime:
@@ -69,9 +73,9 @@ def _comparable_claim(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, cbor2.CBORTag) and value.tag == 1004:
         return value.value
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_comparable_claim(item) for item in value]
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {key: _comparable_claim(item) for key, item in value.items()}
     return value
 
@@ -80,8 +84,8 @@ def _x5chain(header: dict[Any, Any]) -> list[bytes]:
     raw_chain = header.get(33)
     if isinstance(raw_chain, bytes):
         return [raw_chain]
-    if isinstance(raw_chain, list) and raw_chain and all(isinstance(item, bytes) for item in raw_chain):
-        return raw_chain
+    if isinstance(raw_chain, (list, tuple)) and raw_chain and all(isinstance(item, bytes) for item in raw_chain):
+        return list(raw_chain)
     raise ValueError("mDoc issuerAuth protected header must contain a non-empty x5chain")
 
 
@@ -219,7 +223,7 @@ def validate_issuer_signed_mdoc(
     if set(namespaces) != {expected_namespace}:
         raise ValueError(f"mDoc namespaces do not match {expected_namespace!r}")
     raw_items = namespaces[expected_namespace]
-    if not isinstance(raw_items, list) or not raw_items:
+    if not isinstance(raw_items, (list, tuple)) or not raw_items:
         raise ValueError("mDoc namespace must contain IssuerSignedItemBytes")
 
     item_bytes_by_digest: dict[int, bytes] = {}

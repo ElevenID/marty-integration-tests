@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from types import MappingProxyType
 import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.x509.oid import NameOID
 
 from tests.integration.gateway.helpers.mdoc_evidence import validate_issuer_signed_mdoc
+from tests.integration.gateway.helpers.mdoc_evidence import _require_map
 
 DOC_TYPE = "org.iso.18013.5.1.mDL"
 NAMESPACE = "org.iso.18013.5.1"
@@ -145,6 +147,13 @@ def test_valid_mdoc_proves_signature_digests_validity_and_claims() -> None:
     assert evidence["claims"] == CLAIMS
     assert evidence["certificate_chain_length"] == 2
     assert len(evidence["certificate_chain_sha256"]) == 2
+
+
+def test_cbor_mapping_implementations_are_normalized_for_validation() -> None:
+    source = {1: "protected"}
+    normalized = _require_map(MappingProxyType(source), label="CBOR map")
+    assert normalized == source
+    assert normalized is not source
 
 
 def test_opaque_long_text_cannot_satisfy_mdoc_evidence() -> None:
