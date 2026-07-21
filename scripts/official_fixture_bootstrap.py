@@ -88,10 +88,35 @@ def issuer_profile_payload(
     }
 
 
+def revocation_profile_payload(
+    organization_id: str,
+    *,
+    w3c: bool,
+    run_id: str,
+) -> dict[str, object]:
+    """Build a disposable, standards-shaped revocation dependency.
+
+    Credential templates are intentionally not issuable until an active
+    revocation policy is bound to them.  The official-suite fixtures must use
+    that same lifecycle, rather than weakening the production issuance guard.
+    """
+    label = "W3C VC Data Model v2" if w3c else "OID4VP SD-JWT"
+    return {
+        "organization_id": organization_id,
+        "name": f"Official {label} revocation {run_id}",
+        "description": "Disposable status-list dependency for official interoperability evidence",
+        "revocation_mechanism": ["BITSTRING_STATUS_LIST"],
+        "mechanism_priority": ["BITSTRING_STATUS_LIST"],
+        "check_mode": "ALWAYS",
+        "supported_formats": ["VC_JWT"] if w3c else ["SD_JWT_VC"],
+    }
+
+
 def template_payload(
     organization_id: str,
     compliance_profile_id: str,
     issuer_profile_id: str,
+    revocation_profile_id: str,
     *,
     w3c: bool,
     run_id: str,
@@ -106,6 +131,7 @@ def template_payload(
             "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
             "compliance_profile_id": compliance_profile_id,
             "issuer_profile_id": issuer_profile_id,
+            "revocation_profile_id": revocation_profile_id,
             "schema_uri": {
                 "type": "object",
                 "properties": {
@@ -133,6 +159,7 @@ def template_payload(
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "compliance_profile_id": compliance_profile_id,
         "issuer_profile_id": issuer_profile_id,
+        "revocation_profile_id": revocation_profile_id,
         "schema_uri": {
             "type": "object",
             "properties": {
@@ -329,6 +356,33 @@ def bootstrap(
             created_compliance_profile,
             f"{prefix} compliance profile",
         )
+        created_revocation_profile = request(
+            gateway_url,
+            session_id,
+            "/v1/revocation-profiles",
+            method="POST",
+            json_body=revocation_profile_payload(
+                organization_id,
+                w3c=w3c,
+                run_id=run_id,
+            ),
+        )
+        revocation_profile_id = response_id(
+            created_revocation_profile,
+            f"{prefix} revocation profile",
+        )
+        activated_revocation_profile = request(
+            gateway_url,
+            session_id,
+            f"/v1/revocation-profiles/{revocation_profile_id}/activate",
+            method="POST",
+        )
+        activated_revocation_profile_id = response_id(
+            activated_revocation_profile,
+            f"activated {prefix} revocation profile",
+        )
+        if activated_revocation_profile_id != revocation_profile_id:
+            raise RuntimeError(f"activated {prefix} revocation profile id changed unexpectedly")
         created_template = request(
             gateway_url,
             session_id,
@@ -338,6 +392,7 @@ def bootstrap(
                 organization_id,
                 compliance_profile_id,
                 issuer_profile_id,
+                revocation_profile_id,
                 w3c=w3c,
                 run_id=run_id,
             ),
@@ -364,6 +419,7 @@ def bootstrap(
         result[f"{prefix}_policy_id"] = policy_id
         result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
         result[f"{prefix}_issuer_profile_id"] = issuer_profile_id
+        result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c:
             assert oidf_signer_public_jwk is not None
             created_trust_profile = request(
