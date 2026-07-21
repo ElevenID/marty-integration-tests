@@ -138,8 +138,11 @@ jobs:
       - name: Generate disposable operator credentials
         shell: bash
         run: |
-          admin_password="$(openssl rand -hex 32)"
-          reviewer_password="$(openssl rand -hex 32)"
+          # Keycloak's production password policy requires a special
+          # character. Keep entropy random while making disposable runner
+          # credentials policy-compliant on every supported Keycloak image.
+          admin_password="$(openssl rand -hex 32)!A1"
+          reviewer_password="$(openssl rand -hex 32)!B2"
           echo "::add-mask::$admin_password"
           echo "::add-mask::$reviewer_password"
           echo "MARTY_CONFORMANCE_ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"

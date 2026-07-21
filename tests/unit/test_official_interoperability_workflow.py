@@ -25,6 +25,8 @@ def test_workflow_attests_released_inputs_and_never_uploads_raw_evidence() -> No
     assert 'gh attestation verify "oci://$reference"' in text
     assert "eudi_test_material.py generate" in text
     assert "eudi_test_material.py validate" in text
+    assert 'admin_password="$(openssl rand -hex 32)!A1"' in text
+    assert 'reviewer_password="$(openssl rand -hex 32)!B2"' in text
     verifier_material = text.split("- name: Generate disposable verifier material", 1)[1].split(
         "- name: Generate disposable operator credentials", 1
     )[0]
