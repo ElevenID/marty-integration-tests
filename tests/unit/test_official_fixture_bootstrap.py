@@ -26,12 +26,16 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     calls: list[tuple[str, str, dict | None]] = []
     responses = iter(
         [
+            {"service": {"id": "service-1", "key_reference": "issuer-es256"}},
+            {"profile": {"id": "issuer-1"}},
             {"id": "compliance-1"},
             {"id": "template-1"},
             {"id": "policy-1"},
             {"id": "policy-1"},
             {"id": "trust-1"},
             {"id": "trust-1"},
+            {"service": {"id": "service-2", "key_reference": "issuer-es256"}},
+            {"profile": {"id": "issuer-2"}},
             {"id": "compliance-2"},
             {"id": "template-2"},
             {"id": "policy-2"},
@@ -60,26 +64,37 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
         request=request,
     )
     assert result["oid4vp_policy_id"] == "policy-1"
+    assert result["oid4vp_issuer_profile_id"] == "issuer-1"
     assert result["oid4vp_compliance_profile_id"] == "compliance-1"
     assert result["oid4vp_trust_profile_id"] == "trust-1"
     assert result["w3c_compliance_profile_id"] == "compliance-2"
+    assert result["w3c_issuer_profile_id"] == "issuer-2"
     assert result["w3c_policy_id"] == "policy-2"
-    assert calls[0][0] == "/v1/compliance-profiles"
-    assert calls[1][0] == "/v1/credential-templates"
-    assert calls[1][2]["compliance_profile_id"] == "compliance-1"
-    assert "compliance_profile" not in calls[1][2]
-    assert calls[2][0] == "/v1/presentation-policies"
-    assert calls[3][0] == "/v1/presentation-policies/policy-1/activate"
-    assert calls[4][0] == "/v1/trust-profiles"
-    assert calls[5][0] == "/v1/trust-profiles/trust-1/activate"
+    assert calls[0][0].startswith("/v1/signing-keys/config/resolve?")
+    assert calls[0][2] == {
+        "credential_format": "dc+sd-jwt",
+        "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES256",
+    }
+    assert calls[1][0].startswith("/v1/signing-keys/issuer-profiles?")
+    assert calls[2][0] == "/v1/compliance-profiles"
+    assert calls[3][0] == "/v1/credential-templates"
+    assert calls[3][2]["compliance_profile_id"] == "compliance-1"
+    assert calls[3][2]["issuer_profile_id"] == "issuer-1"
+    assert "compliance_profile" not in calls[3][2]
+    assert calls[4][0] == "/v1/presentation-policies"
+    assert calls[5][0] == "/v1/presentation-policies/policy-1/activate"
+    assert calls[6][0] == "/v1/trust-profiles"
+    assert calls[7][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
-    assert calls[7][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert calls[11][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
 
 
 def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     template = fixtures.template_payload(
         fixtures.DEFAULT_ORGANIZATION,
         "compliance-1",
+        "issuer-1",
         w3c=False,
         run_id="run-1",
     )
@@ -92,6 +107,7 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
         "birthdate",
     ]
     assert template["compliance_profile_id"] == "compliance-1"
+    assert template["issuer_profile_id"] == "issuer-1"
     assert "compliance_profile" not in template
 
     policy = fixtures.policy_payload(
@@ -142,6 +158,14 @@ def test_oidf_bootstrap_requires_the_runner_public_key() -> None:
 
 
 def test_bootstrap_rejects_invalid_public_api_identifier() -> None:
+    responses = iter(
+        [
+            {"service": {"id": "service-1", "key_reference": "issuer-es256"}},
+            {"profile": {"id": "issuer-1"}},
+            {"id": "compliance-1"},
+            {"id": "../../private"},
+        ]
+    )
     with pytest.raises(RuntimeError, match="invalid"):
         fixtures.bootstrap(
             "https://marty.test",
@@ -150,5 +174,5 @@ def test_bootstrap_rejects_invalid_public_api_identifier() -> None:
             run_id="run-1",
             mode="oid4vp",
             oidf_signer_public_jwk=PUBLIC_SIGNING_JWK,
-            request=lambda *_args, **_kwargs: {"id": "../../private"},
+            request=lambda *_args, **_kwargs: next(responses),
         )
