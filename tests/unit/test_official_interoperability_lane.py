@@ -108,6 +108,34 @@ def test_keycloak_initializer_diagnostic_redacts_secret_values() -> None:
     assert redacted.count("<redacted>") == 3
 
 
+def test_keycloak_startup_diagnostic_includes_service_logs_and_redacts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Result:
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+
+    calls: list[list[str]] = []
+
+    def docker(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
+        if command[1] == "ps":
+            return Result("container-id\n" if command[-1].endswith("=keycloak") else "")
+        return Result("Keycloak started with password=private-value\n")
+
+    monkeypatch.setattr(lane.subprocess, "run", docker)
+
+    lane.emit_keycloak_initializer_diagnostic("w3c-v2-1")
+
+    output = capsys.readouterr().out
+    assert "--- keycloak diagnostic (redacted) ---" in output
+    assert "No keycloak-configurator container was created." in output
+    assert "private-value" not in output
+    assert "password=<redacted>" in output
+    assert any(command[-1].endswith("=keycloak") for command in calls if command[1] == "ps")
+
+
 def test_material_environment_uses_private_generator_envelope(tmp_path: Path) -> None:
     for filename in ("tls.crt", "tls.key", "root-ca.pem", "truststore.jks", "keystore.jks"):
         (tmp_path / filename).write_text("fixture", encoding="utf-8")
