@@ -256,7 +256,11 @@ def validate_issuer_signed_mdoc(
         if issuer_auth.tag != 18:
             raise ValueError("mDoc issuerAuth must use COSE_Sign1 tag 18")
         issuer_auth = issuer_auth.value
-    if not isinstance(issuer_auth, list) or len(issuer_auth) != 4:
+    # cbor2 6 decodes CBOR arrays as tuples by default.  COSE_Sign1 is an
+    # array in the wire format, so validation must accept either Python
+    # sequence representation rather than coupling evidence verification to
+    # one decoder release.
+    if not isinstance(issuer_auth, (list, tuple)) or len(issuer_auth) != 4:
         raise ValueError("mDoc issuerAuth must be a four-element COSE_Sign1")
     protected_bytes, unprotected, payload, signature = issuer_auth
     if not isinstance(protected_bytes, bytes) or not protected_bytes:

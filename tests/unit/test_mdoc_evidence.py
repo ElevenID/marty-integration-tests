@@ -115,9 +115,27 @@ def _validate(credential: str) -> dict[str, object]:
 
 
 def _mutate(credential: str, operation: Callable[[dict[str, Any]], None]) -> str:
-    decoded = cbor2.loads(base64.urlsafe_b64decode(credential + "=" * (-len(credential) % 4)))
+    decoded = _mutable_cbor(
+        cbor2.loads(base64.urlsafe_b64decode(credential + "=" * (-len(credential) % 4)))
+    )
     operation(decoded)
     return base64.urlsafe_b64encode(cbor2.dumps(decoded)).rstrip(b"=").decode("ascii")
+
+
+def _mutable_cbor(value: Any) -> Any:
+    """Return a mutable test copy without changing the CBOR wire structure.
+
+    cbor2 6 represents decoded arrays as tuples.  Tampering fixtures need to
+    replace a signature or an IssuerSignedItem, so make only the local test
+    copy mutable and leave production validation decoder-agnostic.
+    """
+    if isinstance(value, cbor2.CBORTag):
+        return cbor2.CBORTag(value.tag, _mutable_cbor(value.value))
+    if isinstance(value, dict):
+        return {key: _mutable_cbor(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_mutable_cbor(item) for item in value]
+    return value
 
 
 def test_valid_mdoc_proves_signature_digests_validity_and_claims() -> None:
