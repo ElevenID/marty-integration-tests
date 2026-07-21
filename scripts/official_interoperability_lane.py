@@ -31,7 +31,10 @@ RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 INITIALIZER_SECRET = re.compile(
-    r"(?i)(\b(?:password|secret|token|authorization)\b\s*(?:=|:|is)\s*)([^\s,;]+)"
+    r"(?i)(\b(?:authorization|cookie|password|secret|session(?:_id)?|token|private[_-]?key|api[_-]?key)\b\s*(?:=|:|is)\s*)([^\s,;]+)"
+)
+W3C_DIAGNOSTIC_LINE = re.compile(
+    r"(?i)(?:credential creation failed|credential status allocation|exception|traceback|error|failed)"
 )
 STACK_ENV_KEYS = {
     "MARTY_UI_IMAGE",
@@ -341,6 +344,53 @@ def emit_keycloak_initializer_diagnostic(run_id: str) -> None:
         print(f"--- end {service} diagnostic ---", flush=True)
 
 
+def emit_w3c_issuance_diagnostic(run_id: str) -> None:
+    """Print a tightly scoped, redacted failure slice before W3C teardown.
+
+    The official W3C client deliberately reports only an HTTP status for a
+    failed VC-API call.  When a released production service rejects an
+    issuance request, this preserves the relevant service error without
+    exposing the full Compose environment, request headers, credentials, or
+    private test material.
+    """
+    project = f"marty-conformance-{run_id}"
+    for service in ("gateway", "issuance", "revocation-profile", "credential-template"):
+        lookup = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--quiet",
+                "--filter",
+                f"label=com.docker.compose.project={project}",
+                "--filter",
+                f"label=com.docker.compose.service={service}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        container = next((line for line in lookup.stdout.splitlines() if line), "")
+        if not container:
+            continue
+        logs = subprocess.run(
+            ["docker", "logs", "--tail", "300", container],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        lines = [
+            redact_initializer_log(line)[:500]
+            for line in (logs.stdout + logs.stderr).splitlines()
+            if W3C_DIAGNOSTIC_LINE.search(line)
+        ]
+        if not lines:
+            continue
+        print(f"--- {service} W3C issuance diagnostic (redacted) ---", flush=True)
+        print("\n".join(lines[-80:]), flush=True)
+        print(f"--- end {service} W3C issuance diagnostic ---", flush=True)
+
+
 def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, poll: float = 3) -> None:
     """Wait for the released gateway's real readiness boundary over verified TLS."""
     origin = environment["OIDF_MARTY_GATEWAY_URL"]
@@ -534,7 +584,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             else standard_verifier_config(args.haip_material, environment["OIDF_MARTY_GATEWAY_URL"])
         )
         profile = "oid4vp-haip-verifier" if haip else "oid4vp-verifier"
-        return run(
+        result = run(
             [
                 sys.executable,
                 str(ROOT / "scripts" / "oidf_conformance.py"),
@@ -555,6 +605,9 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             ],
             environment,
         )
+        if result:
+            emit_w3c_issuance_diagnostic(args.run_id)
+        return result
     finally:
         run(
             compose_command(args, "logs", oidf=True, haip=haip),
