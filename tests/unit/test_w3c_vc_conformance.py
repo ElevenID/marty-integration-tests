@@ -54,6 +54,18 @@ def test_npm_command_uses_only_an_existing_private_cli(tmp_path: Path, monkeypat
     assert w3c.npm_command() == ["node24", str(cli)]
 
 
+def test_package_lock_digest_is_identical_for_lf_and_crlf(tmp_path: Path) -> None:
+    lf = tmp_path / "lf-package-lock.json"
+    crlf = tmp_path / "crlf-package-lock.json"
+    lf.write_bytes(b'{\n  "lockfileVersion": 3\n}\n')
+    crlf.write_bytes(b'{\r\n  "lockfileVersion": 3\r\n}\r\n')
+
+    assert w3c.package_lock_sha256(lf) == w3c.package_lock_sha256(crlf)
+    assert w3c.package_lock_sha256(lf) == (
+        "sha256:e9ce8921579ead737c68c3c1025d71d433350255100f96293f5accc0e204871e"
+    )
+
+
 def test_npm_payload_integrity_is_pinned_to_the_official_tarball() -> None:
     manifest = w3c.load_manifest()["official_suite"]
     assert manifest["npm_tarball"] == "https://registry.npmjs.org/npm/-/npm-11.11.0.tgz"
