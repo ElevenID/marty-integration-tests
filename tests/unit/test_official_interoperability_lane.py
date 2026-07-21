@@ -468,6 +468,39 @@ def test_public_readiness_uses_generated_ca_and_exact_origin(monkeypatch: pytest
     assert calls[0][-1] == "https://marty-oidf.test:18443/ready"
 
 
+def test_public_readiness_timeout_reports_only_service_states(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = type(
+        "Result",
+        (),
+        {
+            "returncode": 22,
+            "stdout": (
+                '{"status":"not_ready","services":{"issuance":{"status":"unreachable",'
+                '"error":"secret-looking-detail"},"auth":{"status":"healthy"}}}'
+            ),
+        },
+    )()
+    monkeypatch.setattr(lane.subprocess, "run", lambda *_args, **_kwargs: response)
+    monotonic = iter([0.0, 1.0])
+    monkeypatch.setattr(lane.time, "monotonic", lambda: next(monotonic))
+    monkeypatch.setattr(lane.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError) as error:
+        lane.wait_for_public_stack(
+            {
+                "OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test:18443",
+                "SSL_CERT_FILE": "/material/root-ca.pem",
+            },
+            timeout=1,
+            poll=0,
+        )
+
+    message = str(error.value)
+    assert "auth=healthy" in message
+    assert "issuance=unreachable" in message
+    assert "secret-looking-detail" not in message
+
+
 def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -413,17 +413,42 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
         command.extend(["--resolve", f"{parsed.hostname}:{port}:{address}"])
     command.append(f"{origin}/ready")
     deadline = time.monotonic() + timeout
+    last_detail = "no HTTPS response received"
     while True:
         completed = subprocess.run(command, env=environment, text=True, capture_output=True, check=False)
+        payload: object = None
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            pass
         if completed.returncode == 0:
-            try:
-                payload = json.loads(completed.stdout)
-            except json.JSONDecodeError:
-                payload = {}
-            if payload.get("status") == "ready":
+            if isinstance(payload, dict) and payload.get("status") == "ready":
                 return
+
+        # Preserve the production TLS boundary but make a timeout actionable.
+        # Do not print arbitrary response content: readiness responses can
+        # contain service URLs and transport errors, neither of which belongs
+        # in public evidence. Service names and health states are enough to
+        # identify the stalled deployment dependency.
+        if isinstance(payload, dict):
+            status = payload.get("status")
+            services = payload.get("services")
+            if isinstance(services, dict):
+                states = ", ".join(
+                    f"{name}={details.get('status', 'unknown')}"
+                    for name, details in sorted(services.items())
+                    if isinstance(name, str) and isinstance(details, dict)
+                )
+                last_detail = f"status={status!r}; services: {states or 'none'}"
+            else:
+                last_detail = f"status={status!r}; no service readiness map"
+        elif completed.returncode:
+            last_detail = f"curl exit status {completed.returncode}; non-JSON readiness response"
         if time.monotonic() >= deadline:
-            raise RuntimeError("released Marty stack did not become ready through its public TLS endpoint")
+            raise RuntimeError(
+                "released Marty stack did not become ready through its public TLS endpoint "
+                f"({last_detail})"
+            )
         time.sleep(poll)
 
 
