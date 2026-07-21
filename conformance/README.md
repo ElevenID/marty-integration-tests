@@ -489,7 +489,7 @@ encrypted `direct_post.jwt` response; a default/DID-only flow does not satisfy
 the lane's recorded presentation coverage.
 
 The public summary is also bound to stable, versioned JUnit evidence IDs for
-SD-JWT issuance, mdoc issuance, the official HAIP resolve/dispatch path, and
+End-to-end SD-JWT issuance/presentation, cryptographically validated mdoc issuance, the official HAIP resolve/dispatch path, and
 the missing-holder-binding-key negative path. Every claimed coverage value
 must map one-to-one to one of these evidence assertions. The runner rejects an
 unbound claim or a missing, renamed, duplicated, failed, errored, or skipped

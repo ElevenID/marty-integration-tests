@@ -56,14 +56,12 @@
     "negative": ["missing_holder_binding_key"]
   },
   "required_evidence": {
-    "eudi.oid4vci.sd-jwt-issuance.v1": {
-      "claims": ["issuance:sd_jwt_vc"]
-    },
     "eudi.oid4vci.mdoc-issuance.v1": {
       "claims": ["issuance:mso_mdoc"]
     },
     "eudi.oid4vp.haip.resolve-dispatch.v1": {
       "claims": [
+        "issuance:sd_jwt_vc",
         "presentation:sd_jwt_vc",
         "request_object_trust:signed_jar_x509_hash_pkix",
         "response_mode:direct_post.jwt"

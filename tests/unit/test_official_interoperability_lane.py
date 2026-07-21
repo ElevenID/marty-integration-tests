@@ -419,7 +419,18 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
         stack_manifest=tmp_path / "stack-manifest.json",
     )
 
-    assert lane.run_eudi(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
+    assert (
+        lane.run_eudi(
+            args,
+            {
+                "OIDF_MARTY_GATEWAY_URL": "https://marty.test",
+                "EUDI_WALLET_TESTER_PUBLIC_URL": "https://wallet.test",
+                "EUDI_VERIFIER_PUBLIC_URL": "https://verifier.test",
+                "EUDI_WALLET_KIT_URL": "http://wallet-kit:9090",
+            },
+        )
+        == 0
+    )
 
     lifecycle_commands = [command for command in commands if "official_suite_compose.py" in " ".join(command)]
     assert len(lifecycle_commands) == 3

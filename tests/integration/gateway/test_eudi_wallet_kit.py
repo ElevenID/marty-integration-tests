@@ -345,10 +345,8 @@ class TestEUDIWalletKitIssuance:
         wallet_kit: EUDIWalletKitClient,
         eudi_test_org,
         open_badge_template,
-        record_property,
     ):
         """Issue SD-JWT VC through Marty, receive via EUDI Wallet Kit."""
-        record_property("evidence_id", "eudi.oid4vci.sd-jwt-issuance.v1")
         result = await authenticated_gateway_client.issue_credential(
             organization_id=eudi_test_org["id"],
             credential_template_id=open_badge_template["id"],
@@ -376,6 +374,9 @@ class TestEUDIWalletKitIssuance:
         # Log credential details
         raw = cred["credential"]
         is_sd_jwt = "~" in raw
+        assert is_sd_jwt, "EUDI issuance returned a non-SD-JWT payload"
+        issuer_jwt = raw.split("~", 1)[0]
+        assert len(issuer_jwt.split(".")) == 3, "SD-JWT issuer-signed JWT is malformed"
         logger.info(
             "[WalletKit] Credential issued: format=%s, length=%d, sd_jwt=%s",
             cred.get("format", "unknown"),

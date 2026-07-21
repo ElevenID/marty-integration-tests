@@ -39,6 +39,7 @@ import pytest
 
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
 from .helpers.gateway_client import GatewayClient
+from .helpers.mdoc_evidence import validate_issuer_signed_mdoc
 
 logger = logging.getLogger(__name__)
 
@@ -394,6 +395,7 @@ async def issued_mdoc_credential(
     return {
         "credential": cred["credential"],
         "format": cred.get("format", "mso_mdoc"),
+        "claims": mdoc_claims,
         "issuance_result": issuance,
     }
 
@@ -832,12 +834,18 @@ class TestMDocIssuance:
         issued_mdoc_credential,
         record_property,
     ):
-        """mDoc mDL can be issued through Marty and received by EUDI wallet kit."""
+        """The EUDI OID4VCI client receives a signed, digest-bound ISO mDL."""
         record_property("evidence_id", "eudi.oid4vci.mdoc-issuance.v1")
-        assert issued_mdoc_credential["credential"], "Empty mDoc credential"
+        evidence = validate_issuer_signed_mdoc(
+            issued_mdoc_credential["credential"],
+            expected_doc_type="org.iso.18013.5.1.mDL",
+            expected_namespace="org.iso.18013.5.1",
+            expected_claims=issued_mdoc_credential["claims"],
+        )
         logger.info(
-            "[mDoc] Credential received: format=%s, length=%d",
-            issued_mdoc_credential["format"],
+            "[mDoc] Verified credential: docType=%s, cert=%s, length=%d",
+            evidence["doc_type"],
+            evidence["certificate_sha256"],
             len(issued_mdoc_credential["credential"]),
         )
 
@@ -846,18 +854,14 @@ class TestMDocIssuance:
         self,
         issued_mdoc_credential,
     ):
-        """Issued mDoc credential has expected format characteristics."""
-        cred = issued_mdoc_credential["credential"]
-        fmt = issued_mdoc_credential["format"]
-
-        # mDoc credentials are CBOR-encoded and typically base64url or hex
-        assert len(cred) > 100, f"mDoc credential too short: {len(cred)}"
-
-        logger.info(
-            "[mDoc] Credential format=%s, size=%d bytes",
-            fmt,
-            len(cred),
+        """The independent parser rejects format labels as proof and inspects bytes."""
+        evidence = validate_issuer_signed_mdoc(
+            issued_mdoc_credential["credential"],
+            expected_doc_type="org.iso.18013.5.1.mDL",
+            expected_namespace="org.iso.18013.5.1",
+            expected_claims=issued_mdoc_credential["claims"],
         )
+        assert evidence["cose_algorithm"] == -7
 
 
 # ═══════════════════════════════════════════════════════════════════════════

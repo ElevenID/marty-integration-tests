@@ -28,13 +28,12 @@ DIGEST_IMAGE = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 OCI_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+:[a-zA-Z0-9._-]+@sha256:[0-9a-f]{64}$")
 EUDI_HAIP_EVIDENCE_ID = "eudi.oid4vp.haip.resolve-dispatch.v1"
 EUDI_HOLDER_BINDING_EVIDENCE_ID = "eudi.sd-jwt.missing-holder-binding-key.v1"
-EUDI_SD_JWT_ISSUANCE_EVIDENCE_ID = "eudi.oid4vci.sd-jwt-issuance.v1"
 EUDI_MDOC_ISSUANCE_EVIDENCE_ID = "eudi.oid4vci.mdoc-issuance.v1"
 REQUIRED_EVIDENCE_CLAIMS = {
-    EUDI_SD_JWT_ISSUANCE_EVIDENCE_ID: frozenset({"issuance:sd_jwt_vc"}),
     EUDI_MDOC_ISSUANCE_EVIDENCE_ID: frozenset({"issuance:mso_mdoc"}),
     EUDI_HAIP_EVIDENCE_ID: frozenset(
         {
+            "issuance:sd_jwt_vc",
             "presentation:sd_jwt_vc",
             "request_object_trust:signed_jar_x509_hash_pkix",
             "response_mode:direct_post.jwt",
