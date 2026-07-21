@@ -11,6 +11,7 @@ import stat
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlencode, urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
 from oidf_marty_public_login import authenticated_json_request
@@ -49,9 +50,48 @@ def compliance_profile_payload(organization_id: str, *, w3c: bool, run_id: str) 
     }
 
 
+def signing_service_request_payload(*, w3c: bool) -> dict[str, str]:
+    """Request the configured production signing service for the credential family."""
+    return {
+        "credential_format": "jwt_vc_json" if w3c else "dc+sd-jwt",
+        "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES256",
+    }
+
+
+def issuer_profile_payload(
+    organization_id: str,
+    signing_service: dict[str, object],
+    *,
+    gateway_url: str,
+    w3c: bool,
+    run_id: str,
+) -> dict[str, str]:
+    """Build a disposable active issuer identity backed by a resolved KMS key."""
+    service_id = signing_service.get("id")
+    key_reference = signing_service.get("key_reference")
+    if not isinstance(service_id, str) or not IDENTIFIER.fullmatch(service_id):
+        raise RuntimeError("public signing-service resolution returned an invalid service id")
+    if not isinstance(key_reference, str) or not key_reference:
+        raise RuntimeError("public signing-service resolution returned no KMS key reference")
+    domain = urlparse(gateway_url).hostname
+    if not domain:
+        raise ValueError("gateway URL has no hostname for the disposable issuer DID")
+    label = "W3C VC Data Model v2" if w3c else "OID4VP SD-JWT"
+    return {
+        "name": f"Official {label} issuer {run_id}",
+        "issuer_did": f"did:web:{domain}:orgs:{organization_id}",
+        "signing_service_id": service_id,
+        "signing_key_reference": key_reference,
+        "key_purpose": "vc_jwt_issuer",
+        "status": "active",
+    }
+
+
 def template_payload(
     organization_id: str,
     compliance_profile_id: str,
+    issuer_profile_id: str,
     *,
     w3c: bool,
     run_id: str,
@@ -65,6 +105,7 @@ def template_payload(
             "supported_formats": ["jwt_vc"],
             "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
             "compliance_profile_id": compliance_profile_id,
+            "issuer_profile_id": issuer_profile_id,
             "schema_uri": {
                 "type": "object",
                 "properties": {
@@ -91,6 +132,7 @@ def template_payload(
         "supported_formats": ["sd_jwt_vc"],
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "compliance_profile_id": compliance_profile_id,
+        "issuer_profile_id": issuer_profile_id,
         "schema_uri": {
             "type": "object",
             "properties": {
@@ -190,6 +232,51 @@ def response_id(value: object, resource: str) -> str:
     return identifier
 
 
+def issuer_profile_response_id(value: object) -> str:
+    """Extract the profile object returned by the public issuer-profile API."""
+    if not isinstance(value, dict):
+        raise RuntimeError("public API returned a non-object for issuer profile")
+    return response_id(value.get("profile", value), "issuer profile")
+
+
+def resolve_signing_service(
+    gateway_url: str,
+    session_id: str,
+    *,
+    organization_id: str,
+    w3c: bool,
+    request: Callable[..., object],
+) -> dict[str, object]:
+    """Resolve a KMS signing service through the gateway, with global fallback.
+
+    The fallback is still a public gateway call.  It supports stacks that
+    register a shared managed service while retaining the issuer profile in
+    the disposable test organization.
+    """
+    failure: RuntimeError | None = None
+    for candidate_organization in (organization_id, None):
+        query = (
+            f"?{urlencode({'organization_id': candidate_organization})}"
+            if candidate_organization is not None
+            else ""
+        )
+        try:
+            resolved = request(
+                gateway_url,
+                session_id,
+                f"/v1/signing-keys/config/resolve{query}",
+                method="POST",
+                json_body=signing_service_request_payload(w3c=w3c),
+            )
+        except RuntimeError as exc:
+            failure = exc
+            continue
+        if isinstance(resolved, dict) and isinstance(resolved.get("service"), dict):
+            return resolved["service"]
+        raise RuntimeError("public signing-service resolution returned no service object")
+    raise RuntimeError(f"no public KMS signing service is available: {failure}")
+
+
 def bootstrap(
     gateway_url: str,
     session_id: str,
@@ -210,6 +297,27 @@ def bootstrap(
     targets = (False, True) if mode == "all" else (mode == "w3c",)
     for w3c in targets:
         prefix = "w3c" if w3c else "oid4vp"
+        signing_service = resolve_signing_service(
+            gateway_url,
+            session_id,
+            organization_id=organization_id,
+            w3c=w3c,
+            request=request,
+        )
+        created_issuer_profile = request(
+            gateway_url,
+            session_id,
+            f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
+            method="POST",
+            json_body=issuer_profile_payload(
+                organization_id,
+                signing_service,
+                gateway_url=gateway_url,
+                w3c=w3c,
+                run_id=run_id,
+            ),
+        )
+        issuer_profile_id = issuer_profile_response_id(created_issuer_profile)
         created_compliance_profile = request(
             gateway_url,
             session_id,
@@ -229,6 +337,7 @@ def bootstrap(
             json_body=template_payload(
                 organization_id,
                 compliance_profile_id,
+                issuer_profile_id,
                 w3c=w3c,
                 run_id=run_id,
             ),
@@ -254,6 +363,7 @@ def bootstrap(
         result[f"{prefix}_template_id"] = template_id
         result[f"{prefix}_policy_id"] = policy_id
         result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
+        result[f"{prefix}_issuer_profile_id"] = issuer_profile_id
         if not w3c:
             assert oidf_signer_public_jwk is not None
             created_trust_profile = request(
