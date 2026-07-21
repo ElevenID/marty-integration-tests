@@ -299,43 +299,46 @@ def redact_initializer_log(text: str) -> str:
 
 
 def emit_keycloak_initializer_diagnostic(run_id: str) -> None:
-    """Print the failed one-shot configurator log before project teardown.
+    """Print redacted Keycloak startup logs before project teardown.
 
     Every official lane uses the same project-scoped Keycloak initializer. A
     targeted, redacted diagnostic turns a shared startup failure into an
     actionable production configuration error without publishing the full
-    Compose environment or private test material.
+    Compose environment or private test material.  The configurator is useful
+    after Keycloak starts; on an earlier health-check failure only the Keycloak
+    service exists, so inspect both project-scoped containers.
     """
     project = f"marty-conformance-{run_id}"
-    lookup = subprocess.run(
-        [
-            "docker",
-            "ps",
-            "--all",
-            "--quiet",
-            "--filter",
-            f"label=com.docker.compose.project={project}",
-            "--filter",
-            "label=com.docker.compose.service=keycloak-configurator",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    container = next((line for line in lookup.stdout.splitlines() if line), "")
-    if not container:
-        print("Keycloak initializer diagnostic unavailable: configurator container was not created.", flush=True)
-        return
-    logs = subprocess.run(
-        ["docker", "logs", "--tail", "200", container],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    output = redact_initializer_log(logs.stdout + logs.stderr).strip()
-    print("--- keycloak-configurator diagnostic (redacted) ---", flush=True)
-    print(output or "No configurator output was available.", flush=True)
-    print("--- end keycloak-configurator diagnostic ---", flush=True)
+    for service in ("keycloak", "keycloak-configurator"):
+        lookup = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--quiet",
+                "--filter",
+                f"label=com.docker.compose.project={project}",
+                "--filter",
+                f"label=com.docker.compose.service={service}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        container = next((line for line in lookup.stdout.splitlines() if line), "")
+        print(f"--- {service} diagnostic (redacted) ---", flush=True)
+        if not container:
+            print(f"No {service} container was created.", flush=True)
+        else:
+            logs = subprocess.run(
+                ["docker", "logs", "--tail", "200", container],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = redact_initializer_log(logs.stdout + logs.stderr).strip()
+            print(output or f"No {service} output was available.", flush=True)
+        print(f"--- end {service} diagnostic ---", flush=True)
 
 
 def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, poll: float = 3) -> None:
