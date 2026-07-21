@@ -21,6 +21,10 @@ REQUIRED_IMAGES = {
     "MARTY_MIGRATIONS_IMAGE": "migrations",
     "MARTY_ISSUANCE_IMAGE": "marty-credentials-issuance",
 }
+REQUIRED_PYTHON_ARTIFACTS = {
+    "MARTY_RS": ("marty-core-python", "python"),
+    "MARTY_COMMON": ("marty-common", "python"),
+}
 
 
 def load_manifest(path: Path) -> dict:
@@ -64,6 +68,38 @@ def image_map(manifest: dict) -> dict[str, str]:
     return rendered
 
 
+def python_artifact_map(manifest: dict) -> dict[str, str]:
+    """Render immutable wheel inputs required when Compose builds local adapters."""
+    rendered: dict[str, str] = {}
+    components = manifest.get("components", [])
+    for variable, (component_name, artifact_type) in REQUIRED_PYTHON_ARTIFACTS.items():
+        matches = [
+            artifact
+            for component in components
+            if component.get("name") == component_name
+            for artifact in component.get("artifacts", [])
+            if artifact.get("type") == artifact_type
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"expected exactly one {artifact_type} artifact for {component_name}, found {len(matches)}"
+            )
+        artifact = matches[0]
+        uri = artifact.get("uri")
+        digest = artifact.get("digest")
+        if (
+            not isinstance(uri, str)
+            or not uri.startswith("https://github.com/ElevenID/")
+            or "/releases/download/" not in uri
+            or "?" in uri
+            or not DIGEST.fullmatch(digest if isinstance(digest, str) else "")
+        ):
+            raise ValueError(f"{component_name} must use an immutable GitHub release artifact")
+        rendered[f"{variable}_URI"] = uri
+        rendered[f"{variable}_DIGEST"] = digest
+    return rendered
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
@@ -74,6 +110,7 @@ def main() -> int:
 
     manifest = load_manifest(args.manifest)
     images = image_map(manifest)
+    artifacts = python_artifact_map(manifest)
     base = json.loads(Path("config/base-images.json").read_text(encoding="utf-8"))
     images["POSTGRES_IMAGE"] = base["postgres"]
     images["REDIS_IMAGE"] = base["redis"]
@@ -82,7 +119,7 @@ def main() -> int:
             raise ValueError(f"image is not pinned by digest: {value}")
 
     args.output.write_text(
-        "\n".join(f"{key}={images[key]}" for key in sorted(images)) + "\n",
+        "\n".join(f"{key}={value}" for key, value in sorted({**images, **artifacts}.items())) + "\n",
         encoding="utf-8",
     )
 

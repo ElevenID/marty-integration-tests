@@ -35,7 +35,25 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
             {
                 "schema": "marty.stack/v1",
                 "release": "marty-ui@1.2.3",
-                "components": [{"name": "images", "artifacts": artifacts}],
+                "components": [
+                    {"name": "images", "artifacts": artifacts},
+                    {
+                        "name": "marty-core-python",
+                        "artifacts": [{
+                            "type": "python",
+                            "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_rs.whl",
+                            "digest": "sha256:" + "5" * 64,
+                        }],
+                    },
+                    {
+                        "name": "marty-common",
+                        "artifacts": [{
+                            "type": "python",
+                            "uri": "https://github.com/ElevenID/Marty/releases/download/v0.1.0/marty_common.whl",
+                            "digest": "sha256:" + "6" * 64,
+                        }],
+                    },
+                ],
             }
         ),
         encoding="utf-8",
@@ -50,6 +68,10 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
     base_images = json.loads((ROOT / "config" / "base-images.json").read_text(encoding="utf-8"))
     environment = {
         **references,
+        "MARTY_RS_URI": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_rs.whl",
+        "MARTY_RS_DIGEST": "sha256:" + "5" * 64,
+        "MARTY_COMMON_URI": "https://github.com/ElevenID/Marty/releases/download/v0.1.0/marty_common.whl",
+        "MARTY_COMMON_DIGEST": "sha256:" + "6" * 64,
         "POSTGRES_IMAGE": base_images["postgres"],
         "REDIS_IMAGE": base_images["redis"],
     }
@@ -60,7 +82,13 @@ def test_stack_environment_accepts_only_complete_digest_pins(tmp_path: Path) -> 
     path = tmp_path / ".env.stack"
     path.write_text(
         "\n".join(
-            f"{name}=ghcr.io/elevenid/{name.lower()}@sha256:{index:064x}"
+            (
+                f"{name}=https://github.com/ElevenID/example/releases/download/v0.1.0/{name.lower()}.whl"
+                if name.endswith("_URI")
+                else f"{name}=sha256:{index:064x}"
+                if name.endswith("_DIGEST")
+                else f"{name}=ghcr.io/elevenid/{name.lower()}@sha256:{index:064x}"
+            )
             for index, name in enumerate(sorted(lane.STACK_ENV_KEYS), 1)
         ),
         encoding="utf-8",

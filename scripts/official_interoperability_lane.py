@@ -37,6 +37,14 @@ STACK_ENV_KEYS = {
     "MARTY_ISSUANCE_IMAGE",
     "POSTGRES_IMAGE",
     "REDIS_IMAGE",
+    "MARTY_RS_URI",
+    "MARTY_RS_DIGEST",
+    "MARTY_COMMON_URI",
+    "MARTY_COMMON_DIGEST",
+}
+STACK_ARTIFACT_ENVIRONMENT = {
+    "MARTY_RS": ("marty-core-python", "python"),
+    "MARTY_COMMON": ("marty-common", "python"),
 }
 STACK_IMAGE_REPOSITORIES = {
     "MARTY_UI_IMAGE": "ui",
@@ -83,7 +91,13 @@ def load_stack_environment(path: Path) -> dict[str, str]:
         key, separator, value = raw.partition("=")
         if not separator or key not in STACK_ENV_KEYS or not value:
             raise ValueError(f"unsupported stack environment entry on line {number}")
-        if not DIGEST_IMAGE.fullmatch(value):
+        if key.endswith("_URI") and not (
+            value.startswith("https://github.com/ElevenID/") and "/releases/download/" in value and "?" not in value
+        ):
+            raise ValueError(f"{key} must be an immutable GitHub release artifact")
+        if key.endswith("_DIGEST") and not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+            raise ValueError(f"{key} must be a sha256 digest")
+        if not key.endswith(("_URI", "_DIGEST")) and not DIGEST_IMAGE.fullmatch(value):
             raise ValueError(f"{key} must be an OCI image pinned by sha256 digest")
         result[key] = value
     missing = STACK_ENV_KEYS - result.keys()
@@ -208,6 +222,24 @@ def validate_stack_binding(
         }
         if len(matches) != 1 or stack_environment[variable] not in matches:
             raise ValueError(f"{variable} does not match the attested stack manifest")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    components = manifest.get("components", []) if isinstance(manifest, dict) else []
+    for prefix, (component_name, artifact_type) in STACK_ARTIFACT_ENVIRONMENT.items():
+        matches = [
+            artifact
+            for component in components
+            if isinstance(component, dict) and component.get("name") == component_name
+            for artifact in component.get("artifacts", [])
+            if isinstance(artifact, dict) and artifact.get("type") == artifact_type
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"attested stack must contain one {artifact_type} artifact for {component_name}")
+        artifact = matches[0]
+        if stack_environment[f"{prefix}_URI"] != artifact.get("uri") or stack_environment[
+            f"{prefix}_DIGEST"
+        ] != artifact.get("digest"):
+            raise ValueError(f"{prefix} artifact does not match the attested stack manifest")
 
     base_images_raw: object = json.loads((ROOT / "config" / "base-images.json").read_text(encoding="utf-8"))
     if not isinstance(base_images_raw, dict):
