@@ -464,6 +464,7 @@ def test_public_readiness_uses_generated_ca_and_exact_origin(monkeypatch: pytest
     )
     assert "--cacert" in calls[0]
     assert "/material/root-ca.pem" in calls[0]
+    assert "--fail-with-body" in calls[0]
     assert "marty-oidf.test:18443:127.0.0.1" in calls[0]
     assert calls[0][-1] == "https://marty-oidf.test:18443/ready"
 

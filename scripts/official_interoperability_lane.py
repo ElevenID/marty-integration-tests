@@ -402,7 +402,9 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
         "curl",
         "--silent",
         "--show-error",
-        "--fail",
+        # Keep HTTP failures non-zero, but retain the JSON readiness map so
+        # the timeout can report its already-redacted service states.
+        "--fail-with-body",
         "--max-time",
         "10",
         "--cacert",
