@@ -605,8 +605,6 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             ],
             environment,
         )
-        if result:
-            emit_w3c_issuance_diagnostic(args.run_id)
         return result
     finally:
         run(
@@ -639,7 +637,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
         if run([*base, "--include-w3c", "--resume", "up"], environment):
             return 1
         wait_for_public_stack(environment)
-        return run(
+        result = run(
             [
                 sys.executable,
                 str(ROOT / "scripts" / "w3c_vc_conformance.py"),
@@ -656,6 +654,9 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
             ],
             environment,
         )
+        if result:
+            emit_w3c_issuance_diagnostic(args.run_id)
+        return result
     finally:
         down = [*base]
         if include_w3c:

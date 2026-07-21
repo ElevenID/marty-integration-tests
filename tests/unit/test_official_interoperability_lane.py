@@ -165,6 +165,36 @@ def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
     assert "routine startup complete" not in output
 
 
+def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    args = SimpleNamespace(
+        marty_ui=tmp_path,
+        run_id="w3c-v2-1",
+        w3c_suite=tmp_path / "w3c-suite",
+        stack_manifest=tmp_path / "stack-manifest.json",
+        output_dir=tmp_path / "evidence",
+    )
+    exit_codes = iter((0, 0, 1, 0))
+    diagnostics: list[str] = []
+
+    monkeypatch.setattr(lane, "run", lambda *_args, **_kwargs: next(exit_codes))
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(
+        lane,
+        "bootstrap_fixtures",
+        lambda *_args, **_kwargs: {
+            "organization_id": "organization",
+            "w3c_template_id": "template",
+            "w3c_policy_id": "policy",
+        },
+    )
+    monkeypatch.setattr(lane, "emit_w3c_issuance_diagnostic", diagnostics.append)
+
+    assert lane.run_w3c(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test"}) == 1
+    assert diagnostics == ["w3c-v2-1"]
+
+
 def test_material_environment_uses_private_generator_envelope(tmp_path: Path) -> None:
     for filename in ("tls.crt", "tls.key", "root-ca.pem", "truststore.jks", "keystore.jks"):
         (tmp_path / filename).write_text("fixture", encoding="utf-8")
