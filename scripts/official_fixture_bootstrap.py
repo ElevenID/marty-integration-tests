@@ -22,7 +22,40 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 OFFICIAL_OIDF_ISSUER_DOMAIN = "localhost.emobix.co.uk"
 
 
-def template_payload(organization_id: str, *, w3c: bool, run_id: str) -> dict[str, object]:
+def compliance_profile_payload(organization_id: str, *, w3c: bool, run_id: str) -> dict[str, object]:
+    """Build the public API resource a credential template must reference.
+
+    The production credential-template API deliberately accepts only a profile
+    identifier.  Creating the profile through its own public endpoint avoids
+    relying on the older, removed inline-profile shape and exercises the same
+    lifecycle a real integrator uses.
+    """
+    if w3c:
+        return {
+            "organization_id": organization_id,
+            "name": f"Official W3C VC Data Model v2 {run_id}",
+            "compliance_code": "W3C_VC",
+            "credential_format": "jwt_vc",
+            "frameworks": ["w3c_vc"],
+            "system_profile": False,
+        }
+    return {
+        "organization_id": organization_id,
+        "name": f"Official OID4VP SD-JWT {run_id}",
+        "compliance_code": "OID4VP_FINAL",
+        "credential_format": "sd_jwt_vc",
+        "frameworks": ["openid4vp"],
+        "system_profile": False,
+    }
+
+
+def template_payload(
+    organization_id: str,
+    compliance_profile_id: str,
+    *,
+    w3c: bool,
+    run_id: str,
+) -> dict[str, object]:
     if w3c:
         return {
             "organization_id": organization_id,
@@ -31,12 +64,7 @@ def template_payload(organization_id: str, *, w3c: bool, run_id: str) -> dict[st
             "vct": "https://credentials.marty.dev/VerifiableId",
             "supported_formats": ["jwt_vc"],
             "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
-            "compliance_profile": {
-                "name": "W3C VC Data Model v2",
-                "compliance_code": "W3C_VC",
-                "credential_format": "jwt_vc",
-                "frameworks": ["w3c_vc"],
-            },
+            "compliance_profile_id": compliance_profile_id,
             "schema_uri": {
                 "type": "object",
                 "properties": {
@@ -62,12 +90,7 @@ def template_payload(organization_id: str, *, w3c: bool, run_id: str) -> dict[st
         "vct": "urn:eudi:pid:1",
         "supported_formats": ["sd_jwt_vc"],
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
-        "compliance_profile": {
-            "name": "Official OID4VP SD-JWT",
-            "compliance_code": "OID4VP_FINAL",
-            "credential_format": "sd_jwt_vc",
-            "frameworks": ["openid4vp"],
-        },
+        "compliance_profile_id": compliance_profile_id,
         "schema_uri": {
             "type": "object",
             "properties": {
@@ -187,12 +210,28 @@ def bootstrap(
     targets = (False, True) if mode == "all" else (mode == "w3c",)
     for w3c in targets:
         prefix = "w3c" if w3c else "oid4vp"
+        created_compliance_profile = request(
+            gateway_url,
+            session_id,
+            "/v1/compliance-profiles",
+            method="POST",
+            json_body=compliance_profile_payload(organization_id, w3c=w3c, run_id=run_id),
+        )
+        compliance_profile_id = response_id(
+            created_compliance_profile,
+            f"{prefix} compliance profile",
+        )
         created_template = request(
             gateway_url,
             session_id,
             "/v1/credential-templates",
             method="POST",
-            json_body=template_payload(organization_id, w3c=w3c, run_id=run_id),
+            json_body=template_payload(
+                organization_id,
+                compliance_profile_id,
+                w3c=w3c,
+                run_id=run_id,
+            ),
         )
         template_id = response_id(created_template, f"{prefix} credential template")
         created_policy = request(
@@ -214,6 +253,7 @@ def bootstrap(
             raise RuntimeError(f"activated {prefix} policy id changed unexpectedly")
         result[f"{prefix}_template_id"] = template_id
         result[f"{prefix}_policy_id"] = policy_id
+        result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
         if not w3c:
             assert oidf_signer_public_jwk is not None
             created_trust_profile = request(

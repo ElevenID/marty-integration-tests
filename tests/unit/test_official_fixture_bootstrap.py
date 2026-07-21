@@ -26,11 +26,13 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     calls: list[tuple[str, str, dict | None]] = []
     responses = iter(
         [
+            {"id": "compliance-1"},
             {"id": "template-1"},
             {"id": "policy-1"},
             {"id": "policy-1"},
             {"id": "trust-1"},
             {"id": "trust-1"},
+            {"id": "compliance-2"},
             {"id": "template-2"},
             {"id": "policy-2"},
             {"id": "policy-2"},
@@ -58,19 +60,29 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
         request=request,
     )
     assert result["oid4vp_policy_id"] == "policy-1"
+    assert result["oid4vp_compliance_profile_id"] == "compliance-1"
     assert result["oid4vp_trust_profile_id"] == "trust-1"
+    assert result["w3c_compliance_profile_id"] == "compliance-2"
     assert result["w3c_policy_id"] == "policy-2"
-    assert calls[0][0] == "/v1/credential-templates"
-    assert calls[1][0] == "/v1/presentation-policies"
-    assert calls[2][0] == "/v1/presentation-policies/policy-1/activate"
-    assert calls[3][0] == "/v1/trust-profiles"
-    assert calls[4][0] == "/v1/trust-profiles/trust-1/activate"
+    assert calls[0][0] == "/v1/compliance-profiles"
+    assert calls[1][0] == "/v1/credential-templates"
+    assert calls[1][2]["compliance_profile_id"] == "compliance-1"
+    assert "compliance_profile" not in calls[1][2]
+    assert calls[2][0] == "/v1/presentation-policies"
+    assert calls[3][0] == "/v1/presentation-policies/policy-1/activate"
+    assert calls[4][0] == "/v1/trust-profiles"
+    assert calls[5][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
-    assert calls[5][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert calls[7][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
 
 
 def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
-    template = fixtures.template_payload(fixtures.DEFAULT_ORGANIZATION, w3c=False, run_id="run-1")
+    template = fixtures.template_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        "compliance-1",
+        w3c=False,
+        run_id="run-1",
+    )
     assert template["credential_type"] == "PID"
     assert template["vct"] == "urn:eudi:pid:1"
     assert template["schema_uri"]["required"] == ["family_name", "given_name", "birthdate"]
@@ -79,6 +91,8 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
         "given_name",
         "birthdate",
     ]
+    assert template["compliance_profile_id"] == "compliance-1"
+    assert "compliance_profile" not in template
 
     policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,
