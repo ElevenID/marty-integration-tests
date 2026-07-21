@@ -1428,6 +1428,41 @@ class GatewayClient:
         """List static provider capability metadata."""
         return await self._request("GET", "/v1/signing-keys/config/service-capabilities")
 
+    async def publish_signing_service_jwks(
+        self,
+        *,
+        service_id: str,
+        organization_id: str,
+        key_reference: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetch a service's real public key and publish it through the gateway."""
+        body = {"key_reference": key_reference} if key_reference else {}
+        return await self._request(
+            "POST",
+            f"/v1/signing-keys/services/{service_id}/publish-jwks",
+            json=body,
+            params={"organization_id": organization_id},
+        )
+
+    async def store_signing_service_certificate(
+        self,
+        *,
+        service_id: str,
+        organization_id: str,
+        cert_pem: str,
+        cert_chain_pem: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Attach public X.509 material to a real gateway signing service."""
+        body: Dict[str, Any] = {"cert_pem": cert_pem}
+        if cert_chain_pem:
+            body["cert_chain_pem"] = cert_chain_pem
+        return await self._request(
+            "PUT",
+            f"/v1/signing-keys/services/{service_id}/certificate",
+            json=body,
+            params={"organization_id": organization_id},
+        )
+
     async def create_issuer_profile(
         self,
         *,

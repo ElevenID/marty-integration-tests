@@ -13,7 +13,7 @@ from typing import Any
 import cbor2
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed448, ed25519, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 _MDOC_TEXT = re.compile(r"[A-Za-z0-9_+/=-]+")
@@ -92,7 +92,7 @@ def _verify_cose_signature(
     payload: bytes,
     signature: bytes,
     now: datetime,
-) -> tuple[x509.Certificate, int]:
+) -> tuple[x509.Certificate, list[x509.Certificate], int]:
     protected = _require_map(
         _decode_cbor_exact(protected_bytes, label="COSE protected header"), label="COSE protected header"
     )
@@ -109,11 +109,8 @@ def _verify_cose_signature(
         except ValueError as exc:
             raise ValueError(f"mDoc x5chain certificate {index} is invalid DER") from exc
 
+    _verify_certificate_chain(certificates, now=now)
     leaf = certificates[0]
-    not_before = leaf.not_valid_before_utc
-    not_after = leaf.not_valid_after_utc
-    if not_before > now or not_after <= now:
-        raise ValueError("mDoc document-signer certificate is not currently valid")
 
     curve_type, hash_algorithm, coordinate_size = _COSE_ALGORITHMS[algorithm]
     public_key = leaf.public_key()
@@ -131,7 +128,68 @@ def _verify_cose_signature(
     except Exception as exc:
         raise ValueError("mDoc issuerAuth COSE signature is invalid") from exc
 
-    return leaf, algorithm
+    return leaf, certificates, algorithm
+
+
+def _verify_certificate_signature(
+    certificate: x509.Certificate,
+    issuer_public_key: Any,
+) -> None:
+    if isinstance(issuer_public_key, ec.EllipticCurvePublicKey):
+        issuer_public_key.verify(
+            certificate.signature,
+            certificate.tbs_certificate_bytes,
+            ec.ECDSA(certificate.signature_hash_algorithm),
+        )
+    elif isinstance(issuer_public_key, rsa.RSAPublicKey):
+        algorithm_parameters = certificate.signature_algorithm_parameters
+        signature_padding = (
+            algorithm_parameters if isinstance(algorithm_parameters, padding.AsymmetricPadding) else padding.PKCS1v15()
+        )
+        issuer_public_key.verify(
+            certificate.signature,
+            certificate.tbs_certificate_bytes,
+            signature_padding,
+            certificate.signature_hash_algorithm,
+        )
+    elif isinstance(issuer_public_key, dsa.DSAPublicKey):
+        issuer_public_key.verify(
+            certificate.signature,
+            certificate.tbs_certificate_bytes,
+            certificate.signature_hash_algorithm,
+        )
+    elif isinstance(issuer_public_key, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
+        issuer_public_key.verify(certificate.signature, certificate.tbs_certificate_bytes)
+    else:
+        raise ValueError("mDoc x5chain uses an unsupported certificate issuer key")
+
+
+def _verify_certificate_chain(certificates: list[x509.Certificate], *, now: datetime) -> None:
+    for index, certificate in enumerate(certificates):
+        if certificate.not_valid_before_utc > now or certificate.not_valid_after_utc <= now:
+            label = "document-signer" if index == 0 else f"chain certificate {index}"
+            raise ValueError(f"mDoc {label} certificate is not currently valid")
+
+    for index, (child, parent) in enumerate(zip(certificates, certificates[1:], strict=False)):
+        if child.issuer != parent.subject:
+            raise ValueError(f"mDoc x5chain certificate {index} issuer does not match its parent")
+        try:
+            constraints = parent.extensions.get_extension_for_class(x509.BasicConstraints).value
+        except x509.ExtensionNotFound as exc:
+            raise ValueError(f"mDoc x5chain parent certificate {index + 1} lacks CA constraints") from exc
+        if not constraints.ca:
+            raise ValueError(f"mDoc x5chain parent certificate {index + 1} is not a CA")
+        try:
+            _verify_certificate_signature(child, parent.public_key())
+        except Exception as exc:
+            raise ValueError(f"mDoc x5chain certificate {index} signature is invalid") from exc
+
+    chain_tail = certificates[-1]
+    if len(certificates) > 1 and chain_tail.issuer == chain_tail.subject:
+        try:
+            _verify_certificate_signature(chain_tail, chain_tail.public_key())
+        except Exception as exc:
+            raise ValueError("mDoc x5chain self-signed trust anchor is invalid") from exc
 
 
 def validate_issuer_signed_mdoc(
@@ -207,7 +265,7 @@ def validate_issuer_signed_mdoc(
     if not isinstance(payload, bytes) or not payload or not isinstance(signature, bytes) or not signature:
         raise ValueError("mDoc COSE payload and signature must be non-empty bytes")
 
-    leaf, algorithm = _verify_cose_signature(
+    leaf, certificates, algorithm = _verify_cose_signature(
         protected_bytes=protected_bytes,
         unprotected=unprotected,
         payload=payload,
@@ -260,5 +318,7 @@ def validate_issuer_signed_mdoc(
         "claims": comparable_claims,
         "cose_algorithm": algorithm,
         "certificate_sha256": leaf.fingerprint(hashes.SHA256()).hex(),
+        "certificate_chain_length": len(certificates),
+        "certificate_chain_sha256": [certificate.fingerprint(hashes.SHA256()).hex() for certificate in certificates],
         "valid_until": valid_until.isoformat(),
     }

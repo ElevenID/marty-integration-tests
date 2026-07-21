@@ -30,7 +30,20 @@ CLAIMS = {
 
 def _encoded_mdoc() -> str:
     key = ec.generate_private_key(ec.SECP256R1())
-    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "EUDI test document signer")])
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "EUDI test document CA")])
+    root = (
+        x509.CertificateBuilder()
+        .subject_name(issuer)
+        .issuer_name(issuer)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(NOW - timedelta(days=1))
+        .not_valid_after(NOW + timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "EUDI test document signer")])
     certificate = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -40,7 +53,7 @@ def _encoded_mdoc() -> str:
         .not_valid_before(NOW - timedelta(days=1))
         .not_valid_after(NOW + timedelta(days=30))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .sign(key, hashes.SHA256())
+        .sign(ca_key, hashes.SHA256())
     )
 
     items: list[cbor2.CBORTag] = []
@@ -74,7 +87,10 @@ def _encoded_mdoc() -> str:
     protected = cbor2.dumps(
         {
             1: -7,
-            33: [certificate.public_bytes(serialization.Encoding.DER)],
+            33: [
+                certificate.public_bytes(serialization.Encoding.DER),
+                root.public_bytes(serialization.Encoding.DER),
+            ],
         }
     )
     to_be_signed = cbor2.dumps(["Signature1", protected, b"", mso])
@@ -109,6 +125,8 @@ def test_valid_mdoc_proves_signature_digests_validity_and_claims() -> None:
     assert evidence["doc_type"] == DOC_TYPE
     assert evidence["cose_algorithm"] == -7
     assert evidence["claims"] == CLAIMS
+    assert evidence["certificate_chain_length"] == 2
+    assert len(evidence["certificate_chain_sha256"]) == 2
 
 
 def test_opaque_long_text_cannot_satisfy_mdoc_evidence() -> None:

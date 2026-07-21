@@ -40,6 +40,7 @@ import pytest
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
 from .helpers.gateway_client import GatewayClient
 from .helpers.mdoc_evidence import validate_issuer_signed_mdoc
+from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
 
 logger = logging.getLogger(__name__)
 
@@ -144,16 +145,15 @@ async def vp_test_org(authenticated_gateway_client: GatewayClient):
     return org
 
 
-async def _issuer_profile(
+async def _resolve_signing_service(
     client: GatewayClient,
     organization_id: str,
     *,
     credential_format: str,
     key_purpose: str,
     algorithm: str,
-    name: str,
 ) -> Dict[str, Any]:
-    """Create an issuer profile backed by Marty's configured signing service."""
+    """Resolve the production signing service, allowing the configured fallback scope."""
     service = None
     resolution_error: Exception | None = None
     for candidate_organization_id in (organization_id, None):
@@ -172,6 +172,28 @@ async def _issuer_profile(
             resolution_error = exc
     if not isinstance(service, dict) or not service.get("id"):
         raise RuntimeError(f"No signing service for {credential_format}/{key_purpose}: {resolution_error}")
+    return service
+
+
+async def _issuer_profile(
+    client: GatewayClient,
+    organization_id: str,
+    *,
+    credential_format: str,
+    key_purpose: str,
+    algorithm: str,
+    name: str,
+    service: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Create an issuer profile backed by Marty's configured signing service."""
+    if service is None:
+        service = await _resolve_signing_service(
+            client,
+            organization_id,
+            credential_format=credential_format,
+            key_purpose=key_purpose,
+            algorithm=algorithm,
+        )
     domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
     domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
     return await client.create_issuer_profile(
@@ -227,6 +249,50 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         credential_format="mso_mdoc",
         frameworks=["aamva", "iso_18013_5"],
     )
+    service = await _resolve_signing_service(
+        authenticated_gateway_client,
+        vp_test_org["id"],
+        credential_format="mso_mdoc",
+        key_purpose="mdoc_dsc",
+        algorithm="ES256",
+    )
+    service_id = str(service["id"])
+    key_reference = str(service.get("key_reference") or "") or None
+    publication = await authenticated_gateway_client.publish_signing_service_jwks(
+        service_id=service_id,
+        organization_id=vp_test_org["id"],
+        key_reference=key_reference,
+    )
+    public_jwk = publication.get("jwk")
+    if not isinstance(public_jwk, dict):
+        raise RuntimeError("Gateway did not return the mDoc signing service public JWK")
+    certificate = create_disposable_mdoc_certificate_chain(
+        public_jwk,
+        organization_id=vp_test_org["id"],
+    )
+    stored = await authenticated_gateway_client.store_signing_service_certificate(
+        service_id=service_id,
+        organization_id=vp_test_org["id"],
+        cert_pem=certificate.leaf_pem,
+        cert_chain_pem=certificate.chain_pem,
+    )
+    assert stored.get("ok") is True
+    # Republish after certificate attachment so the same public JWKS path that
+    # relying parties use exposes the corresponding x5c chain.
+    publication = await authenticated_gateway_client.publish_signing_service_jwks(
+        service_id=service_id,
+        organization_id=vp_test_org["id"],
+        key_reference=key_reference,
+    )
+    published_jwk = publication.get("jwk")
+    assert isinstance(published_jwk, dict)
+    assert len(published_jwk.get("x5c") or []) == 2
+    logger.info(
+        "[mDoc] Attached disposable DSC %s with test trust anchor %s to service %s",
+        certificate.leaf_sha256,
+        certificate.trust_anchor_sha256,
+        service_id,
+    )
     issuer = await _issuer_profile(
         authenticated_gateway_client,
         vp_test_org["id"],
@@ -234,6 +300,7 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         key_purpose="mdoc_dsc",
         algorithm="ES256",
         name="EUDI VP mDoc document signer",
+        service=service,
     )
     revocation = await authenticated_gateway_client.create_revocation_profile(
         organization_id=vp_test_org["id"],
