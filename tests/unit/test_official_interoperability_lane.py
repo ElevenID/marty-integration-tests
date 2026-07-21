@@ -99,6 +99,15 @@ def test_stack_environment_accepts_only_complete_digest_pins(tmp_path: Path) -> 
         lane.load_stack_environment(path)
 
 
+def test_keycloak_initializer_diagnostic_redacts_secret_values() -> None:
+    value = "password=private-value token: abc123 Authorization is bearer-value"
+    redacted = lane.redact_initializer_log(value)
+    assert "private-value" not in redacted
+    assert "abc123" not in redacted
+    assert "bearer-value" not in redacted
+    assert redacted.count("<redacted>") == 3
+
+
 def test_material_environment_uses_private_generator_envelope(tmp_path: Path) -> None:
     for filename in ("tls.crt", "tls.key", "root-ca.pem", "truststore.jks", "keystore.jks"):
         (tmp_path / filename).write_text("fixture", encoding="utf-8")
