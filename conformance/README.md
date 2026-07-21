@@ -508,7 +508,7 @@ sentinel, and a passing `evidence.json` cannot be written unless all required
 assertions appear exactly once and pass. This prevents a suite refactor from
 silently deleting the tests behind a published claim.
 
-The stack pin records immutable `marty-ui` release `v1.1.3` as `ready`, with
+The stack pin records immutable `marty-ui` release `v1.1.4` as `ready`, with
 the independently downloaded `stack-manifest.json` SHA-256 recorded in
 `stack-under-test.json`. Execution hard-fails if the released asset, its
 attestation, or any digest-pinned component differs from that reviewed pin. A
