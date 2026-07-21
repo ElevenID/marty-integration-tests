@@ -8,7 +8,7 @@
     "npm": "11.11.0",
     "npm_tarball": "https://registry.npmjs.org/npm/-/npm-11.11.0.tgz",
     "npm_integrity": "sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
-    "package_lock_sha256": "sha256:732440bb8e3f2b0656bb695a1602211e1d854daaa92a52e0773ce60d13aa46eb",
+    "package_lock_sha256": "sha256:47769e63f449a60e05fa1569fec39813771bd5c22ce38161b42fe386ba2c4445",
     "review_cadence": "monthly"
   },
   "adapter": {

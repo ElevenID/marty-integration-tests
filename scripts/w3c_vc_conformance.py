@@ -117,6 +117,19 @@ def file_sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def package_lock_sha256(path: Path) -> str:
+    """Hash an npm-generated lockfile independently of the runner's newline mode.
+
+    The pinned W3C suite has no committed lockfile.  npm generates identical
+    JSON with CRLF on Windows and LF on GitHub's Linux runners, so using the
+    raw file digest made an otherwise reviewed dependency graph appear to
+    drift across platforms.  Canonical LF bytes preserve a strict graph pin
+    without making the official lane operating-system dependent.
+    """
+    payload = path.read_bytes().replace(b"\r\n", b"\n")
+    return f"sha256:{sha256(payload).hexdigest()}"
+
+
 def stack_manifest_metadata(path: Path) -> dict:
     """Validate and record the immutable deployment tested by the W3C suite."""
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -197,7 +210,7 @@ def install_dependencies(suite: Path, manifest: dict) -> int:
     ).returncode
     if result:
         return result
-    actual_digest = file_sha256(lock)
+    actual_digest = package_lock_sha256(lock)
     expected_digest = manifest["official_suite"]["package_lock_sha256"]
     if actual_digest != expected_digest:
         raise ValueError(f"generated W3C package lock is {actual_digest}; expected {expected_digest}")
