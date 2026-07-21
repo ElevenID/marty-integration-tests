@@ -14,9 +14,9 @@ import json
 import subprocess
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 RECORD = ROOT / "conformance" / "upstream-review.json"
@@ -30,50 +30,83 @@ def git_head(repository: str, ref: str = "HEAD") -> str:
     return sha
 
 
+def git_tag_commit(repository: str, tag: str) -> str:
+    """Resolve a release tag to the commit it identifies.
+
+    Annotated tags report both the tag object and its peeled commit.  Prefer
+    the peeled value and fall back to the direct value for lightweight tags.
+    """
+    ref = f"refs/tags/{tag}"
+    output = subprocess.check_output(["git", "ls-remote", repository, ref, f"{ref}^{{}}"], text=True)
+    candidates: dict[str, str] = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) == 2:
+            candidates[fields[1]] = fields[0]
+    sha = candidates.get(f"{ref}^{{}}") or candidates.get(ref, "")
+    if len(sha) != 40:
+        raise RuntimeError(f"no full commit SHA returned for {repository} {tag}")
+    return sha
+
+
 def latest_oidf_release() -> str:
     request = urllib.request.Request(
         "https://gitlab.com/api/v4/projects/openid%2Fconformance-suite/releases/permalink/latest",
         headers={"Accept": "application/json", "User-Agent": "ElevenID-Official-Suite-Updates"},
     )
-    with urllib.request.urlopen(request, timeout=20) as response:  # nosec B310: fixed HTTPS endpoint
-        value = json.load(response).get("tag_name", "")
+    # B310: the request URL above is a fixed official GitLab HTTPS endpoint.
+    with urllib.request.urlopen(request, timeout=20) as response:  # nosec B310
+        payload: object = json.load(response)
+    if not isinstance(payload, dict):
+        raise RuntimeError("OIDF latest-release response is not a JSON object")
+    value = payload.get("tag_name")
+    if not isinstance(value, str):
+        raise RuntimeError("OIDF latest-release response has no string tag_name")
     if not value.startswith("release-v"):
         raise RuntimeError("OIDF latest-release response has no release-v tag")
     return value
 
 
-def load_json(relative: str) -> dict:
-    return json.loads((ROOT / relative).read_text(encoding="utf-8"))
+def load_json(relative: str) -> dict[str, Any]:
+    value: object = json.loads((ROOT / relative).read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{relative} must contain a JSON object")
+    return cast(dict[str, Any], value)
 
 
 def observe() -> dict:
     oidf = load_json("conformance/oidf-runner.json")["official_runner"]
     w3c = load_json("conformance/w3c-vc-data-model-v2.json")["official_suite"]
     eudi = load_json("conformance/eudi-reference-interop.json")["components"]
+    latest_oidf = latest_oidf_release()
+    upstreams = {
+        "oidf": {
+            "pinned_release": oidf["release"],
+            "latest_release": latest_oidf,
+            "pinned_commit": oidf["commit"],
+            "latest_commit": git_tag_commit(oidf["repository"], latest_oidf),
+        },
+        "w3c_vc_data_model_v2": {
+            "pinned_commit": w3c["commit"],
+            "latest_commit": git_head(w3c["repository"], "refs/heads/main"),
+        },
+        "eudi_wallet_tester": {
+            "pinned_commit": eudi["wallet_tester"]["commit"],
+            "latest_commit": git_head(eudi["wallet_tester"]["repository"], "refs/heads/main"),
+        },
+        "eudi_verifier_endpoint": {
+            "pinned_commit": eudi["verifier_endpoint"]["commit"],
+            "latest_commit": git_head(eudi["verifier_endpoint"]["repository"], "refs/heads/main"),
+        },
+    }
+    for name, library in eudi["wallet_kit"]["libraries"].items():
+        upstreams[f"eudi_wallet_kit_{name}"] = {
+            "pinned_commit": library["commit"],
+            "latest_commit": git_head(library["repository"], "refs/heads/main"),
+        }
     return {
         "schema": "elevenid.official-suite-upstream-review/v1",
-        "upstreams": {
-            "oidf": {
-                "pinned_release": oidf["release"],
-                "latest_release": latest_oidf_release(),
-            },
-            "w3c_vc_data_model_v2": {
-                "pinned_commit": w3c["commit"],
-                "latest_commit": git_head(w3c["repository"], "refs/heads/main"),
-            },
-            "eudi_wallet_tester": {
-                "pinned_commit": eudi["wallet_tester"]["commit"],
-                "latest_commit": git_head(eudi["wallet_tester"]["repository"], "refs/heads/main"),
-            },
-            "eudi_verifier_endpoint": {
-                "pinned_commit": eudi["verifier_endpoint"]["commit"],
-                "latest_commit": git_head(eudi["verifier_endpoint"]["repository"], "refs/heads/main"),
-            },
-            "eudi_wallet_kit": {
-                "pinned_commit": eudi["wallet_kit"]["commit"],
-                "latest_commit": git_head(eudi["wallet_kit"]["repository"], "refs/heads/main"),
-            },
-        },
+        "upstreams": upstreams,
     }
 
 
@@ -93,7 +126,7 @@ def main() -> int:
     observation = observe()
     drift = has_drift(observation)
     if args.write and drift:
-        observation["observed_at"] = datetime.now(timezone.utc).isoformat()
+        observation["observed_at"] = datetime.now(UTC).isoformat()
         RECORD.write_text(json.dumps(observation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(observation, indent=2, sort_keys=True))
     return 3 if drift else 0

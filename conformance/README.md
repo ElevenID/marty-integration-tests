@@ -175,26 +175,102 @@ validated Docker host and teardown happens in reverse order. A standard
 GitHub-hosted Ubuntu runner can invoke Docker Compose directly; Docker-in-Docker
 and a self-hosted runner are not required.
 
+Generate a new local certificate authority, SAN TLS leaf, Java truststore, and
+non-self-signed EUDI verifier access-certificate keystore for every disposable
+run. Python creates the keys and certificates; JDK 17 or newer supplies
+`keytool` for the two JKS files. The private environment manifest is not an
+evidence artifact and must not be committed or uploaded.
+
 ```bash
 export OFFICIAL_SUITE_RUN_ID="${GITHUB_RUN_ID:-local1}"
+python scripts/eudi_test_material.py generate \
+  --output "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID"
+python scripts/eudi_test_material.py validate \
+  --material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID"
+
+# The host-side clients and Docker bridge use this same certificate hostname.
+# A GitHub-hosted Ubuntu runner may add this mapping in its disposable job.
+getent hosts marty-oidf.test >/dev/null || \
+  echo '127.0.0.1 marty-oidf.test' | sudo tee -a /etc/hosts >/dev/null
+
 python scripts/official_suite_compose.py up \
   --marty-ui ../marty-ui \
   --oidf-runner /opt/openid-conformance-suite \
+  --eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID" \
   --oidf --eudi --w3c
 
 # Capture results and logs, then always run:
 python scripts/official_suite_compose.py down \
   --marty-ui ../marty-ui \
   --oidf-runner /opt/openid-conformance-suite \
+  --eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID" \
   --oidf --eudi --w3c
 ```
 
 The launcher derives three distinct project names from the run ID. Marty starts
 first so it creates its scoped TLS bridge; OIDF and EUDI start afterward.
-Cleanup stops EUDI and OIDF before Marty removes the bridge. If
-`MARTY_CONFORMANCE_DOCKER_CONTEXT` selects a remote engine, that validated
-context is forwarded to every child process through `DOCKER_CONTEXT`; otherwise
-all projects use the runner's local engine.
+Cleanup stops EUDI and OIDF before Marty removes the bridge. Docker locality is
+derived from the actual endpoint selected by `MARTY_CONFORMANCE_DOCKER_CONTEXT`,
+standard `DOCKER_CONTEXT`, `DOCKER_HOST`, or the active context. A named context
+is not assumed remote: Unix sockets, Windows named pipes, and loopback endpoints
+are inspected rather than guessed from its name. Only Unix sockets, Windows
+named pipes, and `fd://` endpoints are local by default. TCP, HTTP, HTTPS, and
+SSH endpoints remain remote even on loopback because they may be tunnels to a
+different filesystem. Set `MARTY_CONFORMANCE_ALLOW_NETWORK_BINDS=1` only after
+reviewing and proving that every client bind path is shared with that daemon.
+Generated files can only be mounted into a local/shared Docker engine. The
+launcher rejects generated material when the selected endpoint is remote
+because Docker does not copy client-side bind mounts to the daemon host. For a
+remote engine, provision external files on that host and use the external mode
+below. Diagnostics and teardown do not validate certificate lifetimes, and can
+still remove the project if the disposable material directory was deleted.
+
+The generated manifest derives the exact HTTPS origins, host and bridge ports,
+bridge DNS alias, trust root, keystore type, key alias, and passwords. Marty,
+the official wallet tester, the EUDI verifier, and the wallet-kit harness then
+use those normal public protocol URLs. No request URI or response URI is
+rewritten to an internal container address, and the JVM harness uses the
+generated truststore instead of a trust-all TLS manager.
+
+Externally issued TLS certificates and an externally managed verifier
+keystore remain the certification path. Export the same environment contract
+(`OIDF_TLS_CERT_DIR`, `EUDI_VERIFIER_KEYSTORE_FILE`, its type/alias/passwords,
+the three public HTTPS origins, the wallet-kit public URL, ports, and truststore
+password), then validate it without `--material`:
+
+```bash
+python scripts/eudi_test_material.py validate
+python scripts/official_suite_compose.py up \
+  --marty-ui ../marty-ui \
+  --oidf-runner /opt/openid-conformance-suite \
+  --oidf --eudi --w3c
+```
+
+A complete external TLS-directory and EUDI-keystore pair takes precedence if
+`--eudi-material` is also present. A partial pair is rejected before Docker is
+called. On a local daemon, external validation checks the current TLS chain,
+SANs, matching key, Java private-key alias, non-self-signed access-certificate
+chain, and truststore root; it does not impose the disposable seven-day lifetime
+cap. On a remote daemon those paths belong to the daemon host, so run
+`eudi_test_material.py validate` on that host. The remote client validates only
+the URL/port/store contract, then the startup readiness probes exercise the
+public TLS paths. It never pretends that a remote file was validated locally.
+
+Remote external mode also fails closed unless all checkout/config binds are
+declared. `MARTY_CONFORMANCE_REMOTE_UI_ROOT` must equal the absolute local
+`--marty-ui` checkout path and that identical path must exist on the daemon.
+When OIDF is selected, `OIDF_CONFORMANCE_REMOTE_RUNNER_ROOT` has the same rule
+for `--oidf-runner`. Set `EUDI_CONFORMANCE_CONFIG_ROOT` to the absolute
+daemon-host directory containing `wallet-tester.nginx.conf` and
+`verifier.nginx.conf`; Compose uses that value directly. The external
+`OIDF_TLS_CERT_DIR` and `EUDI_VERIFIER_KEYSTORE_FILE` must likewise be absolute
+daemon-host paths. This explicit contract prevents a remote run from silently
+assuming that the client's repository exists on the daemon.
+
+After Compose reports its healthchecks, the lifecycle also polls Marty's public
+discovery endpoint, the wallet tester, the verifier Swagger endpoint, and the
+wallet-kit health endpoint. Startup fails and unwinds all projects if any real
+public path is not ready within the configured timeout.
 
 Add `--haip` only when the disposable verifier signing key and matching
 certificate are present in `VERIFIER_SIGNING_KEY_PEM` and
@@ -266,12 +342,36 @@ python scripts/oidf_conformance.py run \
   --interaction-script scripts/oidf_marty_verifier.py
 ```
 
+The standard verifier plan asks the official wallet to receive a URL-query
+authorization request. Marty production emits a signed `request_uri` instead,
+so this lane fetches that normal signed JAR over public TLS and adapts its
+claims into the official runner's URL-query input. Authentication, policy
+selection, request generation, and callback processing all use production
+paths, but the front-channel transport is adapted and must not be represented
+as transport-identical URL-query evidence.
+
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
 per-request encryption key, and encrypted `direct_post.jwt` handling. Its
 configuration additionally supplies the official runner's request-object trust
 anchor. No HAIP profile may be marked active merely because a local test
 adapter can execute it.
+
+For `oid4vp-1final-verifier-request-uri-method-post` only, the flow-start
+adapter selects production `request_uri_method=post`. The interaction bridge
+forwards that original outer parameter and does not pre-fetch the POST-only
+URI. The official mock wallet creates `wallet_nonce`, POSTs it to Marty's
+ordinary public request endpoint, and verifies the returned signed JAR carries
+the same nonce. Other signed-request modules keep GET retrieval, and the
+standard URL-query plan is not forced into this behavior.
+
+The EUDI wallet harness receives that request-object root through the read-only
+file named by `EUDI_OID4VP_TRUST_ANCHOR_FILE` and validates Marty's JAR `x5c`
+with PKIX. It does not infer verifier trust from the HTTPS truststore. Generated
+`--haip-material` supplies the root automatically; an externally financed
+certification run must supply its approved root file alongside the external
+`VERIFIER_*` pair. The file may contain multiple approved CA certificates, but
+it must not be empty and non-CA certificates are rejected.
 
 Every runner export now includes `evidence.json`. It records the immutable
 official-runner commit, stack-manifest digest and release, Marty commit when
@@ -316,10 +416,21 @@ python scripts/w3c_vc_conformance.py write-local-config \
   --output /opt/vc-data-model-2.0-test-suite/localConfig.cjs
 ```
 
-Run the pinned suite itself (using Node 24) only against the disposable HTTPS
-adapter deployment. `--install` is explicit because the upstream suite does
-not publish a lockfile; its generated lock and official reports are copied
-into the evidence directory.
+Run the pinned suite itself (using Node 24 and the exact npm version in the
+manifest) only against the disposable HTTPS adapter deployment. `--install`
+is explicit because the upstream suite does not publish a lockfile. The helper
+recreates that lock, rejects it unless its SHA-256 matches the reviewed
+manifest value, and copies it with the official reports into the private
+evidence directory. A suite update therefore changes its commit, npm version
+when necessary, and reviewed lock digest together.
+
+The workflow does not replace the runner's global npm. It downloads the exact
+npm tarball URL recorded in the manifest, verifies the recorded registry
+SHA-512 integrity before extracting it, and invokes that private `npm-cli.js`
+with Node 24. Its Python 3.12 dependencies are likewise installed only from
+`requirements/official-py312.lock` with pip hash checking and binary-only
+resolution. Regenerate that lock from `official-py312.in` with pip-tools 7.6.0
+under Python 3.12, then review the complete diff before merging.
 
 ```bash
 python scripts/w3c_vc_conformance.py run \
@@ -334,7 +445,77 @@ python scripts/w3c_vc_conformance.py run \
 without digest-pinned OCI artifacts and records the release, manifest hash, and
 tested image digests in `evidence.json`.
 
+A zero exit code is accepted only when the official report contains passed
+ElevenID matrix rows proving all three configured capabilities: issuer, VC
+verifier, and VP verifier. The reviewed row markers live with the suite pin;
+there is deliberately no fixed total-case count, so upstream may add tests
+without weakening or spuriously breaking this evidence guard.
+
 ## Certification later
+
+At the pinned OIDF `release-v5.2.0`, the official source labels both the
+OID4VP Final verifier plan and the HAIP verifier plan as alpha tests that are
+not currently part of the certification program. Passing them is valuable
+official-runner interoperability evidence, but it is not an OIDF certificate.
+When financing permits, externally managed certificate material and a
+registered test deployment can exercise these same production paths. A formal
+certificate can be pursued only after OIDF makes the applicable program
+available; review and adopt newer runner releases through the monthly updater
+when that status changes.
+
+## Manual production-path interoperability workflow
+
+Run **Official interoperability** from the Actions tab to execute one lane or
+all four lanes. The workflow downloads the reviewed `marty-ui` release
+manifest named in `stack-under-test.json`, checks its independent SHA-256 and
+GitHub attestation, verifies each OCI attestation, and checks out the exact
+Marty commit recorded by that release. A tag override is accepted only when
+its reviewed manifest SHA-256 is supplied in the same dispatch.
+
+Each lane owns separate Compose projects and disposable TLS, truststore,
+keystore, operator credentials, fixtures, and output directories. OID4VP Final
+and HAIP retain their `planned` profile status while this pre-activation
+evidence is collected. The workflow uploads only the sanitized summary;
+private configuration, generated keys, cookies, raw logs, and unredacted
+official reports remain job-local and expire with the runner.
+
+The EUDI lane also generates a separate disposable HAIP verifier chain. Marty
+uses its leaf key and certificate to create the production signed JAR, while
+the wallet harness receives only that chain's root through the read-only
+`EUDI_OID4VP_TRUST_ANCHOR_FILE` mount. This root is deliberately different
+from the disposable TLS CA. The official EUDI OID4VP library must resolve an
+`x509_hash` request, validate its `x5c` chain with PKIX, and dispatch an
+encrypted `direct_post.jwt` response; a default/DID-only flow does not satisfy
+the lane's recorded presentation coverage.
+
+For mdoc issuance, the harness asks the normal gateway API to export the
+selected production KMS public key, issues a short-lived document-signer
+certificate for that key under a disposable test CA, stores the public chain
+through the normal certificate API, and republishes JWKS. The KMS private key
+never enters the test process. The independent evidence parser verifies the
+resulting COSE signature, X.509 chain, MSO validity, digest coverage, CBOR
+types, and issuance claims. An externally managed DSC chain can replace the
+disposable chain later without changing the gateway, KMS, issuance, or wallet
+paths exercised by the lane.
+
+The public summary is also bound to stable, versioned JUnit evidence IDs for
+end-to-end SD-JWT issuance/presentation, cryptographically validated mdoc
+issuance, the official HAIP resolve/dispatch path, and the
+missing-holder-binding-key negative path. Every claimed coverage value
+must map one-to-one to one of these evidence assertions. The runner rejects an
+unbound claim or a missing, renamed, duplicated, failed, errored, or skipped
+sentinel, and a passing `evidence.json` cannot be written unless all required
+assertions appear exactly once and pass. This prevents a suite refactor from
+silently deleting the tests behind a published claim.
+
+The stack pin records immutable `marty-ui` release `v1.1.4` as `ready`, with
+the independently downloaded `stack-manifest.json` SHA-256 recorded in
+`stack-under-test.json`. Execution hard-fails if the released asset, its
+attestation, or any digest-pinned component differs from that reviewed pin. A
+monthly execution schedule is intentionally deferred until all four manual
+lanes pass. The single monthly `official-suite-updates.yml` workflow creates
+or refreshes one draft review PR when any official suite has moved. It never
+changes a runner pin or dependency lock automatically and never merges.
 
 ## EUDI reference interoperability
 
@@ -343,15 +524,28 @@ SD-JWT, invalid-request, and replay tests with the gate enabled explicitly.
 Point it only at the digest-pinned EUDI containers recorded in
 `eudi-reference-interop.json` and the disposable HTTPS Marty deployment.
 
+Start the separate EUDI project with Marty's HAIP overlay and the matching
+request-object material. This does not start or join the OIDF runner project;
+the existing scoped TLS bridge remains the only cross-project connection.
+
+```bash
+python scripts/official_suite_compose.py up \
+  --run-id "$OFFICIAL_SUITE_RUN_ID" \
+  --marty-ui /opt/marty-ui \
+  --eudi --haip --haip-material /secure/work/haip-material
+```
+
 ```bash
 python scripts/eudi_reference_interop.py run \
-  --gateway-url https://marty-oidf.test:8443 \
-  --wallet-tester-url https://marty-oidf.test:25051 \
-  --verifier-url https://marty-oidf.test:28091 \
-  --wallet-kit-url http://localhost:29090 \
+  --eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID" \
   --stack-manifest path/to/stack-manifest.json \
   --output-dir reports/eudi-reference
 ```
+
+The runner loads the generated CA, exact endpoints, local hostname resolution,
+and public-login gateway from that same private manifest. Explicit endpoint
+flags remain available for externally managed certification deployments, but
+when combined with `--eudi-material` they must exactly match it.
 
 Run the reference wallet tester and verifier as a separate Compose project
 with `conformance/eudi-reference.compose.yml`. It joins only Marty's
@@ -361,11 +555,25 @@ official EUDI Wallet Kit Maven libraries, not a mock wallet. The three HTTPS
 endpoints above are the TLS boundaries; do not use private container ports
 from a host-side conformance run.
 
+The manifest records each library independently: OID4VP 0.12.3, OID4VCI
+0.9.1, and SD-JWT 0.18.0, including its Maven coordinate, official source
+repository, release tag, and dereferenced commit. The harness build uses
+digest-pinned Gradle and Temurin bases, Gradle dependency locking, and strict
+SHA-256 dependency verification metadata. The monthly upstream review checks
+all three source repositories rather than treating OID4VP as the whole wallet
+kit. Updating a coordinate requires regenerating and reviewing both
+`gradle.lockfile` and `gradle/verification-metadata.xml`.
+
 It writes JUnit output, the unredacted local runner log, and `evidence.json`
 with the exact EUDI component digests, coverage matrix, endpoints, Marty
 commit, attested stack-manifest and image digests, exit status, and result-file digests. The wallet-kit harness must use
 the Maven coordinate pinned in the same manifest; do not replace it with a
 moving upstream release.
+
+The public-safe workflow summary additionally records the locally built
+wallet-harness image ID (a `sha256:` content digest) and hashes of its
+Dockerfile, Gradle lock, and dependency-verification metadata. The ephemeral
+Compose image name, generated keys, passwords, and raw logs are not published.
 
 When certification funding is available, enable the protected certification
 environment and run the same command against the registered test deployment.
@@ -373,16 +581,19 @@ Attach the pinned runner revision, stack manifest, image digests, sanitized
 configuration, exported result JSON, logs, and the commit under test. There is
 no second certification-only implementation to drift from daily testing.
 
-## Updating the runner
+## Updating official suites
 
-`python scripts/oidf_conformance.py check-update` compares the pinned release
-with the latest official GitLab release. The monthly workflow makes an update
-visible; it never silently switches versions. Review an update by changing both
-the release and full commit in `oidf-runner.json`, then run the active profile
-against the production-path stack before merging. Expected failures are allowed
-only in `expected-failures.json`, with an OIDF test id, issue URL, owner, and
-expiry date. Optional OIDF modules that Marty does not claim to support use
-the separate `expected-skips.json`, which requires a matching test name,
+The monthly `official-suite-updates.yml` workflow checks OIDF, W3C, and every
+pinned EUDI source through `scripts/official_suite_updates.py`. When it finds
+drift, it creates or refreshes the stable
+`automation/official-suite-updates` draft PR with the observed release and
+commit revisions. It never silently switches versions, changes immutable
+pins, or merges. For OIDF, review an update by changing both the release and
+full commit in `oidf-runner.json`, then run the affected profile against the
+production-path stack before merging. Expected failures are allowed only in
+`expected-failures.json`, with an OIDF test id, issue URL, owner, and expiry
+date. Optional OIDF modules that Marty does not claim to support use the
+separate `expected-skips.json`, which requires a matching test name,
 configuration pattern, rationale, owner, and expiry. The runner fails on a
 new skip, or when an expected skip stops occurring, so neither file is a
 permanent baseline.

@@ -23,7 +23,9 @@ from urllib.parse import urlparse
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
-from oidf_marty_public_login import authenticated_json_request
+from oidf_marty_public_login import authenticated_json_request  # noqa: E402 -- import follows standalone path setup
+
+REQUEST_URI_METHOD_POST_TEST = "oid4vp-1final-verifier-request-uri-method-post"
 
 
 def required_env(name: str) -> str:
@@ -43,6 +45,8 @@ def https_url(value: str, field: str) -> str:
 def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload.get("test_id"), str) or not payload["test_id"]:
         raise ValueError("OIDF module test_id is required")
+    if not isinstance(payload.get("test_name"), str) or not payload["test_name"]:
+        raise ValueError("OIDF module test_name is required")
     request_method = payload.get("request_method", "url_query")
     if request_method not in {"url_query", "request_uri_signed"}:
         raise ValueError("OIDF request method is unsupported")
@@ -54,12 +58,15 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         "trust_profile_id": os.environ.get("OIDF_MARTY_TRUST_PROFILE_ID") or None,
         "expiry_minutes": int(os.environ.get("OIDF_MARTY_FLOW_EXPIRY_MINUTES", "15")),
         "oid4vp_profile": profile,
-        # ``request_uri_signed`` describes the authorization-request
-        # transport to the wallet; it does not select OID4VP's optional POST
-        # request-URI retrieval.  HAIP's signed-request-uri profile fetches
-        # the signed object with GET, and the public request endpoint must be
-        # retrievable before it is handed to the mock wallet.
-        "request_uri_method": "get",
+        # Select POST retrieval only for the official module that verifies
+        # the OID4VP 5.10 wallet_nonce round trip.  The ordinary signed-JAR
+        # modules remain GET, and the standard url_query plan remains a
+        # transport adaptation rather than being silently forced to POST.
+        "request_uri_method": (
+            "post"
+            if request_method == "request_uri_signed" and payload["test_name"] == REQUEST_URI_METHOD_POST_TEST
+            else "get"
+        ),
     }
 
 

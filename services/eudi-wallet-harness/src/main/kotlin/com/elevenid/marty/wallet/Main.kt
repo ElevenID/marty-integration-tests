@@ -36,6 +36,16 @@ fun main() {
             })
         }
         install(StatusPages) {
+            exception<MissingHolderKeyException> { call, cause ->
+                call.respond(
+                    HttpStatusCode.UnprocessableEntity,
+                    ErrorResponse(
+                        error = "missing_holder_binding_key",
+                        message = cause.message ?: "Holder binding key is unavailable",
+                        stackTrace = "",
+                    ),
+                )
+            }
             exception<Throwable> { call, cause ->
                 call.application.log.error("Unhandled error", cause)
                 call.respond(
@@ -61,13 +71,20 @@ fun Application.configureRoutes() {
                 service = "eudi-wallet-harness",
                 openid4vciVersion = "0.9.1",
                 openid4vpVersion = "0.12.3",
+                capabilities = WalletCapabilities(
+                    officialOid4vciIssuance = true,
+                    officialOid4vpPresentation = true,
+                    officialOid4vpFormats = listOf("dc+sd-jwt"),
+                    holderBinding = "issuance-proof-key-reused",
+                    compatibilityOnlyFormats = listOf("mso_mdoc"),
+                ),
             ))
         }
 
         // OID4VCI: Pre-authorized code issuance flow
         post("/issuance/pre-auth") {
             val request = call.receive<IssuanceRequest>()
-            log.info("Starting pre-auth issuance: offerUri=${request.credentialOfferUri}")
+            log.info("Starting pre-auth issuance")
 
             val result = WalletIssuanceService.runPreAuthIssuance(
                 credentialOfferUri = request.credentialOfferUri,
@@ -79,7 +96,7 @@ fun Application.configureRoutes() {
         // OID4VCI: Metadata resolution only
         post("/issuance/resolve-offer") {
             val request = call.receive<IssuanceRequest>()
-            log.info("Resolving offer: offerUri=${request.credentialOfferUri}")
+            log.info("Resolving credential offer")
 
             val result = WalletIssuanceService.resolveOffer(
                 credentialOfferUri = request.credentialOfferUri,
@@ -90,7 +107,7 @@ fun Application.configureRoutes() {
         // OID4VP: Presentation flow (resolve auth request + submit VP)
         post("/presentation/submit") {
             val request = call.receive<PresentationRequest>()
-            log.info("Starting presentation: authRequestUri=${request.authorizationRequestUri}")
+            log.info("Starting official OID4VP presentation")
 
             val result = WalletPresentationService.submitPresentation(
                 authorizationRequestUri = request.authorizationRequestUri,
@@ -99,10 +116,8 @@ fun Application.configureRoutes() {
             call.respond(result)
         }
 
-        // OID4VP: Build and submit VP token without the EUDI library's resolution.
-        // Useful when the verifier's client_id_scheme is not supported by the
-        // library (e.g. DID-based) — the test orchestrator resolves the request
-        // itself and passes in the details.
+        // Compatibility-only direct post for tests that deliberately resolve the
+        // request themselves. This is not official-library OID4VP evidence.
         post("/presentation/direct-post") {
             val request = call.receive<DirectPostRequest>()
             log.info("Direct posting VP to: ${request.responseUri}")
@@ -116,8 +131,8 @@ fun Application.configureRoutes() {
             call.respond(result)
         }
 
-        // OID4VP: Build a VP token (SD-JWT with KB-JWT) without submitting.
-        // The test orchestrator can then submit it via the gateway client.
+        // Compatibility-only token builder. SD-JWT reuses its issuance proof key.
+        // mDoc is a raw pass-through and is not ISO device-response evidence.
         post("/presentation/build-vp-token") {
             val request = call.receive<BuildVpTokenRequest>()
             log.info("Building VP token: audience=${request.audience}, format=${request.format}")

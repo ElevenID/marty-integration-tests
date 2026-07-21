@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -29,6 +30,68 @@ def test_optional_remote_context_is_validated(monkeypatch: pytest.MonkeyPatch) -
         lambda *args, **_kwargs: subprocess.CompletedProcess(args[0], 0, "[]", ""),
     )
     assert context.docker_command(["ps"]) == ["docker", "--context", "conformance-vm", "ps"]
+
+
+def inspected(endpoint: str) -> str:
+    return json.dumps([{"Endpoints": {"docker": {"Host": endpoint}}}])
+
+
+def test_named_local_context_is_recognized_by_its_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        context.subprocess,
+        "run",
+        lambda command, **_kwargs: (
+            calls.append(command)
+            or subprocess.CompletedProcess(command, 0, inspected("npipe:////./pipe/docker_engine"), "")
+        ),
+    )
+
+    assert context.docker_endpoint_is_local({context.CONTEXT_ENV: "desktop-linux"}) is True
+    assert calls == [["docker", "context", "inspect", "desktop-linux"]]
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({"DOCKER_HOST": "unix:///var/run/docker.sock"}, True),
+        ({"DOCKER_HOST": "tcp://127.0.0.1:2375"}, False),
+        ({"DOCKER_HOST": "ssh://runner@example.test"}, False),
+        ({"DOCKER_HOST": "tcp://192.0.2.10:2376"}, False),
+    ],
+)
+def test_docker_host_locality_is_not_inferred_from_context_name(
+    environment: dict[str, str],
+    expected: bool,
+) -> None:
+    assert context.docker_endpoint_is_local(environment) is expected
+
+
+def test_standard_or_active_context_endpoint_controls_locality(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        context.subprocess,
+        "run",
+        lambda command, **_kwargs: (
+            calls.append(command) or subprocess.CompletedProcess(command, 0, inspected("ssh://docker.example.test"), "")
+        ),
+    )
+
+    assert context.docker_endpoint_is_local({"DOCKER_CONTEXT": "remote-builder"}) is False
+    assert context.docker_endpoint_is_local({}) is False
+    assert calls == [
+        ["docker", "context", "inspect", "remote-builder"],
+        ["docker", "context", "inspect"],
+    ]
+
+
+def test_network_endpoint_requires_explicit_shared_bind_override() -> None:
+    environment = {
+        "DOCKER_HOST": "tcp://127.0.0.1:2375",
+        context.NETWORK_BIND_OVERRIDE_ENV: "1",
+    }
+
+    assert context.docker_endpoint_is_local(environment) is True
 
 
 def test_marty_project_must_be_explicit_and_scoped(monkeypatch: pytest.MonkeyPatch) -> None:

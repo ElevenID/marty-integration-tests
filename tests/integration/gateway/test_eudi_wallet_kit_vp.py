@@ -34,10 +34,13 @@ import uuid
 from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
 from .helpers.gateway_client import GatewayClient
+from .helpers.mdoc_evidence import validate_issuer_signed_mdoc
+from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +73,7 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _decode_jwt_payload(jwt_str: str) -> Dict[str, Any]:
     """Decode a JWT's payload (no verification) for test inspection."""
@@ -104,22 +108,25 @@ def _presentation_submission_for_request(
         return None
 
     descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-    return json.dumps({
-        "id": str(uuid.uuid4()),
-        "definition_id": pd.get("id", str(uuid.uuid4())),
-        "descriptor_map": [
-            {
-                "id": descriptor_id,
-                "format": credential_format,
-                "path": "$",
-            },
-        ],
-    })
+    return json.dumps(
+        {
+            "id": str(uuid.uuid4()),
+            "definition_id": pd.get("id", str(uuid.uuid4())),
+            "descriptor_map": [
+                {
+                    "id": descriptor_id,
+                    "format": credential_format,
+                    "path": "$",
+                },
+            ],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 async def wallet_kit() -> EUDIWalletKitClient:
@@ -138,16 +145,15 @@ async def vp_test_org(authenticated_gateway_client: GatewayClient):
     return org
 
 
-async def _issuer_profile(
+async def _resolve_signing_service(
     client: GatewayClient,
     organization_id: str,
     *,
     credential_format: str,
     key_purpose: str,
     algorithm: str,
-    name: str,
 ) -> Dict[str, Any]:
-    """Create an issuer profile backed by Marty's configured signing service."""
+    """Resolve the production signing service, allowing the configured fallback scope."""
     service = None
     resolution_error: Exception | None = None
     for candidate_organization_id in (organization_id, None):
@@ -165,8 +171,28 @@ async def _issuer_profile(
         except Exception as exc:  # API reports an unavailable capability as 4xx.
             resolution_error = exc
     if not isinstance(service, dict) or not service.get("id"):
-        raise RuntimeError(
-            f"No signing service for {credential_format}/{key_purpose}: {resolution_error}"
+        raise RuntimeError(f"No signing service for {credential_format}/{key_purpose}: {resolution_error}")
+    return service
+
+
+async def _issuer_profile(
+    client: GatewayClient,
+    organization_id: str,
+    *,
+    credential_format: str,
+    key_purpose: str,
+    algorithm: str,
+    name: str,
+    service: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Create an issuer profile backed by Marty's configured signing service."""
+    if service is None:
+        service = await _resolve_signing_service(
+            client,
+            organization_id,
+            credential_format=credential_format,
+            key_purpose=key_purpose,
+            algorithm=algorithm,
         )
     domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
     domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
@@ -192,17 +218,24 @@ async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_te
         frameworks=["eudi"],
     )
     issuer = await _issuer_profile(
-        authenticated_gateway_client, vp_test_org["id"], credential_format="dc+sd-jwt",
-        key_purpose="vc_jwt_issuer", algorithm="ES256", name="EUDI VP SD-JWT issuer",
+        authenticated_gateway_client,
+        vp_test_org["id"],
+        credential_format="dc+sd-jwt",
+        key_purpose="vc_jwt_issuer",
+        algorithm="ES256",
+        name="EUDI VP SD-JWT issuer",
     )
     revocation = await authenticated_gateway_client.create_revocation_profile(
-        organization_id=vp_test_org["id"], name="EUDI VP status list",
+        organization_id=vp_test_org["id"],
+        name="EUDI VP status list",
         revocation_mechanism=["STATUS_LIST_2021"],
     )
     return {
         "compliance_profile_id": compliance["id"],
         "issuer_profile_id": issuer["id"],
-        "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))["id"],
+        "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))[
+            "id"
+        ],
     }
 
 
@@ -216,18 +249,70 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         credential_format="mso_mdoc",
         frameworks=["aamva", "iso_18013_5"],
     )
+    service = await _resolve_signing_service(
+        authenticated_gateway_client,
+        vp_test_org["id"],
+        credential_format="mso_mdoc",
+        key_purpose="mdoc_dsc",
+        algorithm="ES256",
+    )
+    service_id = str(service["id"])
+    key_reference = str(service.get("key_reference") or "") or None
+    publication = await authenticated_gateway_client.publish_signing_service_jwks(
+        service_id=service_id,
+        organization_id=vp_test_org["id"],
+        key_reference=key_reference,
+    )
+    public_jwk = publication.get("jwk")
+    if not isinstance(public_jwk, dict):
+        raise RuntimeError("Gateway did not return the mDoc signing service public JWK")
+    certificate = create_disposable_mdoc_certificate_chain(
+        public_jwk,
+        organization_id=vp_test_org["id"],
+    )
+    stored = await authenticated_gateway_client.store_signing_service_certificate(
+        service_id=service_id,
+        organization_id=vp_test_org["id"],
+        cert_pem=certificate.leaf_pem,
+        cert_chain_pem=certificate.chain_pem,
+    )
+    assert stored.get("ok") is True
+    # Republish after certificate attachment so the same public JWKS path that
+    # relying parties use exposes the corresponding x5c chain.
+    publication = await authenticated_gateway_client.publish_signing_service_jwks(
+        service_id=service_id,
+        organization_id=vp_test_org["id"],
+        key_reference=key_reference,
+    )
+    published_jwk = publication.get("jwk")
+    assert isinstance(published_jwk, dict)
+    assert len(published_jwk.get("x5c") or []) == 2
+    logger.info(
+        "[mDoc] Attached disposable DSC %s with test trust anchor %s to service %s",
+        certificate.leaf_sha256,
+        certificate.trust_anchor_sha256,
+        service_id,
+    )
     issuer = await _issuer_profile(
-        authenticated_gateway_client, vp_test_org["id"], credential_format="mso_mdoc",
-        key_purpose="mdoc_dsc", algorithm="ES256", name="EUDI VP mDoc document signer",
+        authenticated_gateway_client,
+        vp_test_org["id"],
+        credential_format="mso_mdoc",
+        key_purpose="mdoc_dsc",
+        algorithm="ES256",
+        name="EUDI VP mDoc document signer",
+        service=service,
     )
     revocation = await authenticated_gateway_client.create_revocation_profile(
-        organization_id=vp_test_org["id"], name="EUDI VP mDoc status list",
+        organization_id=vp_test_org["id"],
+        name="EUDI VP mDoc status list",
         revocation_mechanism=["STATUS_LIST_2021"],
     )
     return {
         "compliance_profile_id": compliance["id"],
         "issuer_profile_id": issuer["id"],
-        "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))["id"],
+        "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))[
+            "id"
+        ],
     }
 
 
@@ -377,6 +462,7 @@ async def issued_mdoc_credential(
     return {
         "credential": cred["credential"],
         "format": cred.get("format", "mso_mdoc"),
+        "claims": mdoc_claims,
         "issuance_result": issuance,
     }
 
@@ -406,9 +492,7 @@ async def vp_age_policy(
             },
         ],
     )
-    policy = await authenticated_gateway_client.activate_presentation_policy(
-        policy["id"]
-    )
+    policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     return policy
 
 
@@ -435,9 +519,7 @@ async def vp_identity_policy(
             },
         ],
     )
-    policy = await authenticated_gateway_client.activate_presentation_policy(
-        policy["id"]
-    )
+    policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     return policy
 
 
@@ -464,15 +546,14 @@ async def vp_mdoc_policy(
             },
         ],
     )
-    policy = await authenticated_gateway_client.activate_presentation_policy(
-        policy["id"]
-    )
+    policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     return policy
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Authorization Request Structure
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestOID4VPAuthorizationRequest:
     """Verify Marty's OID4VP authorization request is well-formed.
@@ -491,15 +572,14 @@ class TestOID4VPAuthorizationRequest:
         """Starting a verification flow produces an openid4vp:// request URI."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
 
         assert "instance_id" in flow, f"Missing instance_id: {flow}"
         assert "request_uri" in flow, f"Missing request_uri: {flow}"
 
         request_uri = flow["request_uri"]
-        assert request_uri.startswith("openid4vp://"), (
-            f"Expected openid4vp:// scheme, got: {request_uri}"
-        )
+        assert request_uri.startswith("openid4vp://"), f"Expected openid4vp:// scheme, got: {request_uri}"
         logger.info("[VP] Flow started: instance=%s", flow["instance_id"])
 
     @pytest.mark.asyncio
@@ -511,13 +591,12 @@ class TestOID4VPAuthorizationRequest:
         """Authorization request JWT has required OID4VP fields."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
         # Fetch the authorization request (decoded JWT payload)
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(instance_id)
 
         # OID4VP 1.0 Final §5: required fields
         assert auth_req.get("response_type") == "vp_token"
@@ -526,12 +605,11 @@ class TestOID4VPAuthorizationRequest:
         assert auth_req.get("nonce"), "Missing nonce"
         assert auth_req.get("response_uri"), "Missing response_uri"
 
-        # client_id_scheme should be DID-based
-        assert auth_req.get("client_id_scheme") == "did", (
-            f"Expected client_id_scheme=did, got: {auth_req.get('client_id_scheme')}"
-        )
-        assert auth_req["client_id"].startswith("did:"), (
-            f"client_id should be a DID: {auth_req['client_id']}"
+        # OID4VP 1.0 Final uses a client identifier prefix. The old separate
+        # client_id_scheme parameter is intentionally absent.
+        assert "client_id_scheme" not in auth_req
+        assert auth_req["client_id"].startswith("x509_hash:"), (
+            f"EUDI runs must use the HAIP x509_hash client identifier: {auth_req['client_id']}"
         )
 
         logger.info(
@@ -550,10 +628,9 @@ class TestOID4VPAuthorizationRequest:
         """Authorization request includes a DCQL query by default."""
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            flow["instance_id"]
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
 
         pd = auth_req.get("presentation_definition")
         dcql = auth_req.get("dcql_query")
@@ -571,6 +648,7 @@ class TestOID4VPAuthorizationRequest:
 # SD-JWT VP Token Presentation
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestOID4VPSdJwtPresentation:
     """Full OID4VP flow: issue SD-JWT → present to verifier.
 
@@ -578,6 +656,66 @@ class TestOID4VPSdJwtPresentation:
     SD-JWT VC issuance via EUDI wallet kit → VP token construction
     with KB-JWT → form-encoded direct_post to Marty → verification.
     """
+
+    @pytest.mark.asyncio
+    async def test_official_library_resolves_and_dispatches_sd_jwt(
+        self,
+        authenticated_gateway_client: GatewayClient,
+        wallet_kit: EUDIWalletKitClient,
+        issued_sd_jwt_credential,
+        vp_age_policy,
+        record_property,
+    ):
+        """The pinned EUDI OID4VP library resolves and dispatches the real request."""
+        record_property("evidence_id", "eudi.oid4vp.haip.resolve-dispatch.v1")
+        flow = await authenticated_gateway_client.start_verification_flow(
+            presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
+            oid4vp_profile="haip",
+            request_uri_method="get",
+        )
+        request_uri = flow.get("request_uri", "")
+        assert request_uri.startswith("openid4vp://"), request_uri
+        outer = parse_qs(urlparse(request_uri).query, keep_blank_values=True)
+        assert len(outer.get("client_id", [])) == 1, outer
+        assert outer["client_id"][0].startswith("x509_hash:"), outer
+        assert len(outer.get("request_uri", [])) == 1, outer
+        # OID4VP's default GET retrieval is represented by omission; only POST
+        # places request_uri_method in the outer authorization request.
+        assert "request_uri_method" not in outer, outer
+
+        signed_request = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
+        assert signed_request["client_id"] == outer["client_id"][0]
+        assert signed_request["response_mode"] == "direct_post.jwt"
+        assert signed_request["response_type"] == "vp_token"
+
+        result = await wallet_kit.submit_presentation(
+            authorization_request_uri=request_uri,
+            credential=issued_sd_jwt_credential["credential"],
+        )
+        assert result["success"], result.get("error")
+        assert result["responseMode"] == "direct_post.jwt"
+        assert result["verifierAccepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_unbound_credential_is_rejected_before_presentation(
+        self,
+        wallet_kit: EUDIWalletKitClient,
+        record_property,
+    ):
+        """A credential without its issuance proof key cannot get a fake KB-JWT."""
+        record_property(
+            "evidence_id",
+            "eudi.sd-jwt.missing-holder-binding-key.v1",
+        )
+        with pytest.raises(httpx.HTTPStatusError) as failure:
+            await wallet_kit.build_vp_token(
+                credential="unbound.header.signature~",
+                audience="did:web:verifier.example",
+                nonce="negative-holder-binding-test",
+            )
+        assert failure.value.response.status_code == 422
+        assert failure.value.response.json()["error"] == "missing_holder_binding_key"
 
     @pytest.mark.asyncio
     async def test_sd_jwt_vp_direct_post(
@@ -593,13 +731,12 @@ class TestOID4VPSdJwtPresentation:
         # Start verification flow
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
         # Parse authorization request to get nonce, client_id, response_uri, state
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(instance_id)
         nonce = auth_req["nonce"]
         client_id = auth_req["client_id"]
         response_uri = auth_req["response_uri"]
@@ -607,7 +744,8 @@ class TestOID4VPSdJwtPresentation:
 
         logger.info(
             "[VP] Auth request parsed: client_id=%s, nonce=%s",
-            client_id, nonce,
+            client_id,
+            nonce,
         )
 
         # Build VP token using the wallet harness (adds KB-JWT with nonce binding)
@@ -661,12 +799,11 @@ class TestOID4VPSdJwtPresentation:
 
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_identity_policy["id"],
+            organization_id=vp_identity_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(instance_id)
 
         vp_token = await wallet_kit.build_vp_token(
             credential=credential,
@@ -707,12 +844,11 @@ class TestOID4VPSdJwtPresentation:
 
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(instance_id)
 
         vp_token = await wallet_kit.build_vp_token(
             credential=credential,
@@ -733,20 +869,22 @@ class TestOID4VPSdJwtPresentation:
         )
 
         # Poll for the verification result
-        result = await authenticated_gateway_client.get_verification_result(
-            instance_id
-        )
+        result = await authenticated_gateway_client.get_verification_result(instance_id)
         logger.info("[VP] Verification result: %s", json.dumps(result, indent=2)[:500])
 
         status = result.get("status", "").upper()
         assert status in (
-            "COMPLETED", "VERIFIED", "SUCCESS", "APPROVED",
+            "COMPLETED",
+            "VERIFIED",
+            "SUCCESS",
+            "APPROVED",
         ), f"Unexpected verification status: {status}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # mDoc/mDL Credential Issuance
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestMDocIssuance:
     """Verify mDoc/mDL credential issuance via the EUDI Wallet Kit.
@@ -761,12 +899,20 @@ class TestMDocIssuance:
     async def test_mdoc_credential_issuance(
         self,
         issued_mdoc_credential,
+        record_property,
     ):
-        """mDoc mDL can be issued through Marty and received by EUDI wallet kit."""
-        assert issued_mdoc_credential["credential"], "Empty mDoc credential"
+        """The EUDI OID4VCI client receives a signed, digest-bound ISO mDL."""
+        record_property("evidence_id", "eudi.oid4vci.mdoc-issuance.v1")
+        evidence = validate_issuer_signed_mdoc(
+            issued_mdoc_credential["credential"],
+            expected_doc_type="org.iso.18013.5.1.mDL",
+            expected_namespace="org.iso.18013.5.1",
+            expected_claims=issued_mdoc_credential["claims"],
+        )
         logger.info(
-            "[mDoc] Credential received: format=%s, length=%d",
-            issued_mdoc_credential["format"],
+            "[mDoc] Verified credential: docType=%s, cert=%s, length=%d",
+            evidence["doc_type"],
+            evidence["certificate_sha256"],
             len(issued_mdoc_credential["credential"]),
         )
 
@@ -775,22 +921,20 @@ class TestMDocIssuance:
         self,
         issued_mdoc_credential,
     ):
-        """Issued mDoc credential has expected format characteristics."""
-        cred = issued_mdoc_credential["credential"]
-        fmt = issued_mdoc_credential["format"]
-
-        # mDoc credentials are CBOR-encoded and typically base64url or hex
-        assert len(cred) > 100, f"mDoc credential too short: {len(cred)}"
-
-        logger.info(
-            "[mDoc] Credential format=%s, size=%d bytes",
-            fmt, len(cred),
+        """The independent parser rejects format labels as proof and inspects bytes."""
+        evidence = validate_issuer_signed_mdoc(
+            issued_mdoc_credential["credential"],
+            expected_doc_type="org.iso.18013.5.1.mDL",
+            expected_namespace="org.iso.18013.5.1",
+            expected_claims=issued_mdoc_credential["claims"],
         )
+        assert evidence["cose_algorithm"] == -7
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # mDoc/mDL VP Presentation
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestMDocPresentation:
     """mDoc/mDL presentation flow.
@@ -812,12 +956,11 @@ class TestMDocPresentation:
 
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_mdoc_policy["id"],
+            organization_id=vp_mdoc_policy["organization_id"],
         )
         instance_id = flow["instance_id"]
 
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(instance_id)
 
         # For mDoc, the VP token is the raw credential (no KB-JWT wrapping)
         vp_token = await wallet_kit.build_vp_token(
@@ -854,6 +997,7 @@ class TestMDocPresentation:
 # ═══════════════════════════════════════════════════════════════════════════
 # End-to-End: Issue + Present + Verify
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestEndToEndIssuanceAndPresentation:
     """Full lifecycle: credential issuance → wallet presentation → verification.
@@ -922,22 +1066,19 @@ class TestEndToEndIssuanceAndPresentation:
                 },
             ],
         )
-        policy = await authenticated_gateway_client.activate_presentation_policy(
-            policy["id"]
-        )
+        policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
         logger.info("[E2E] Policy created and activated: %s", policy["id"])
 
         # 5. Start verification flow
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
+            organization_id=policy["organization_id"],
         )
         instance_id = flow["instance_id"]
         logger.info("[E2E] Verification flow started: %s", instance_id)
 
         # 6. Parse authorization request
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(instance_id)
         assert auth_req.get("response_type") == "vp_token"
         assert auth_req.get("nonce")
 
@@ -961,15 +1102,11 @@ class TestEndToEndIssuanceAndPresentation:
             presentation_submission=presentation_submission,
             state=auth_req.get("state", instance_id),
         )
-        assert post_result["success"], (
-            f"VP direct-post failed: {(post_result.get('responseBody') or '')[:500]}"
-        )
+        assert post_result["success"], f"VP direct-post failed: {(post_result.get('responseBody') or '')[:500]}"
         logger.info("[E2E] VP token accepted by verifier")
 
         # 9. Check verification result
-        result = await authenticated_gateway_client.get_verification_result(
-            instance_id
-        )
+        result = await authenticated_gateway_client.get_verification_result(instance_id)
         logger.info(
             "[E2E] Verification result: status=%s",
             result.get("status"),
@@ -977,7 +1114,10 @@ class TestEndToEndIssuanceAndPresentation:
 
         status = result.get("status", "").upper()
         assert status in (
-            "COMPLETED", "VERIFIED", "SUCCESS", "APPROVED",
+            "COMPLETED",
+            "VERIFIED",
+            "SUCCESS",
+            "APPROVED",
         ), f"Unexpected final status: {status} — full result: {json.dumps(result)[:500]}"
 
         logger.info("[E2E] ✓ Full SD-JWT lifecycle passed: issue → present → verify")

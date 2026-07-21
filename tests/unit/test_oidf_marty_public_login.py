@@ -33,6 +33,20 @@ def test_operator_credential_prefers_role_neutral_environment_variable(
     )
 
 
+def test_ca_options_requires_and_returns_the_configured_ca(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ca_file = tmp_path / "root-ca.pem"
+    ca_file.write_text("test CA fixture", encoding="utf-8")
+    monkeypatch.setenv("SSL_CERT_FILE", str(ca_file))
+    assert public_login.ca_options() == ["--cacert", str(ca_file.resolve())]
+
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))
+    with pytest.raises(ValueError, match="does not exist"):
+        public_login.ca_options()
+
+
 def test_parse_response_uses_the_last_header_block() -> None:
     raw = (
         "HTTP/1.1 100 Continue\r\n\r\n"

@@ -374,6 +374,9 @@ class TestEUDIWalletKitIssuance:
         # Log credential details
         raw = cred["credential"]
         is_sd_jwt = "~" in raw
+        assert is_sd_jwt, "EUDI issuance returned a non-SD-JWT payload"
+        issuer_jwt = raw.split("~", 1)[0]
+        assert len(issuer_jwt.split(".")) == 3, "SD-JWT issuer-signed JWT is malformed"
         logger.info(
             "[WalletKit] Credential issued: format=%s, length=%d, sd_jwt=%s",
             cred.get("format", "unknown"),

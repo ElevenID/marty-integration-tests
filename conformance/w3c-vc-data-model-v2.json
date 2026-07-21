@@ -4,6 +4,11 @@
     "repository": "https://github.com/w3c/vc-data-model-2.0-test-suite.git",
     "commit": "1db599924e6601555933550e0e65925a6abbd0a8",
     "branch": "main",
+    "node": "24",
+    "npm": "11.11.0",
+    "npm_tarball": "https://registry.npmjs.org/npm/-/npm-11.11.0.tgz",
+    "npm_integrity": "sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
+    "package_lock_sha256": "sha256:732440bb8e3f2b0656bb695a1602211e1d854daaa92a52e0773ce60d13aa46eb",
     "review_cadence": "monthly"
   },
   "adapter": {
@@ -15,6 +20,20 @@
   "supported": {
     "serializations": ["jwt_vc_json", "sd_jwt_vc", "mso_mdoc"],
     "verification_path": "Marty presentation-policy evaluator"
+  },
+  "evidence": {
+    "implementation_column": "ElevenID",
+    "required_capabilities": {
+      "issuer": [
+        "A conforming issuer implementation MUST include all required properties"
+      ],
+      "vc_verifier": [
+        "A conforming verifier implementation MUST perform verification"
+      ],
+      "vp_verifier": [
+        "Verifiable presentations MUST include a @context property"
+      ]
+    }
   },
   "exclusions": [
     {

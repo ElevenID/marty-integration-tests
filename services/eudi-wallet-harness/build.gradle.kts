@@ -13,6 +13,10 @@ repositories {
     maven { url = uri("https://jitpack.io") }
 }
 
+dependencyLocking {
+    lockAllConfigurations()
+}
+
 dependencies {
     // EUDI Wallet Kit — OID4VCI (wallet role)
     implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.9.1")

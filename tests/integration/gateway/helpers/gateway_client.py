@@ -10,7 +10,7 @@ import base64
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -109,6 +109,7 @@ class GatewayClient:
         path: str,
         json: Optional[Dict] = None,
         params: Optional[Dict] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Make HTTP request and handle errors.
@@ -118,6 +119,7 @@ class GatewayClient:
             path: API path (e.g., "/v1/organizations")
             json: JSON body
             params: Query parameters
+            headers: Additional request headers merged with the client defaults
             
         Returns:
             Response JSON data
@@ -126,12 +128,16 @@ class GatewayClient:
             GatewayClientError: On request failure
         """
         try:
+            request_headers = self._get_headers()
+            if headers:
+                request_headers.update(headers)
+
             response = await self.client.request(
                 method=method,
                 url=path,
                 json=json,
                 params=params,
-                headers=self._get_headers(),
+                headers=request_headers,
             )
             response.raise_for_status()
             if response.status_code == 204 or not response.content:
@@ -992,6 +998,9 @@ class GatewayClient:
         presentation_policy_id: str,
         trust_profile_id: Optional[str] = None,
         expiry_minutes: int = 15,
+        organization_id: Optional[str] = None,
+        oid4vp_profile: Optional[Literal["standard", "haip"]] = None,
+        request_uri_method: Optional[Literal["get", "post"]] = None,
     ) -> Dict[str, Any]:
         """
         Start a verification flow (creates QR code for wallet).
@@ -1000,18 +1009,37 @@ class GatewayClient:
             presentation_policy_id: Policy defining what to request
             trust_profile_id: Optional trust profile
             expiry_minutes: Request expiry time
+            organization_id: Selected organization context for authorization
+            oid4vp_profile: Optional production verifier profile selection
+            request_uri_method: Optional signed request-object retrieval method
             
         Returns:
             Flow instance with instance_id, request_uri, qr_code_data
         """
+        payload = {
+            "presentation_policy_id": presentation_policy_id,
+            "trust_profile_id": trust_profile_id,
+            "expiry_minutes": expiry_minutes,
+        }
+        if organization_id:
+            # Cedar resolves the authorization tenant from trusted route/query/body
+            # inputs before the request is proxied. The header is also sent so the
+            # selected context remains explicit at downstream HTTP boundaries.
+            payload["organization_id"] = organization_id
+        if oid4vp_profile is not None:
+            payload["oid4vp_profile"] = oid4vp_profile
+        if request_uri_method is not None:
+            payload["request_uri_method"] = request_uri_method
+
         return await self._request(
             "POST",
             "/v1/flows/verify",
-            json={
-                "presentation_policy_id": presentation_policy_id,
-                "trust_profile_id": trust_profile_id,
-                "expiry_minutes": expiry_minutes,
-            },
+            json=payload,
+            headers=(
+                {"X-Organization-ID": organization_id}
+                if organization_id
+                else None
+            ),
         )
         
     async def get_verification_request(self, instance_id: str) -> Dict[str, Any]:
@@ -1399,6 +1427,41 @@ class GatewayClient:
     async def list_signing_key_service_capabilities(self) -> Dict[str, Any]:
         """List static provider capability metadata."""
         return await self._request("GET", "/v1/signing-keys/config/service-capabilities")
+
+    async def publish_signing_service_jwks(
+        self,
+        *,
+        service_id: str,
+        organization_id: str,
+        key_reference: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetch a service's real public key and publish it through the gateway."""
+        body = {"key_reference": key_reference} if key_reference else {}
+        return await self._request(
+            "POST",
+            f"/v1/signing-keys/services/{service_id}/publish-jwks",
+            json=body,
+            params={"organization_id": organization_id},
+        )
+
+    async def store_signing_service_certificate(
+        self,
+        *,
+        service_id: str,
+        organization_id: str,
+        cert_pem: str,
+        cert_chain_pem: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Attach public X.509 material to a real gateway signing service."""
+        body: Dict[str, Any] = {"cert_pem": cert_pem}
+        if cert_chain_pem:
+            body["cert_chain_pem"] = cert_chain_pem
+        return await self._request(
+            "PUT",
+            f"/v1/signing-keys/services/{service_id}/certificate",
+            json=body,
+            params={"organization_id": organization_id},
+        )
 
     async def create_issuer_profile(
         self,

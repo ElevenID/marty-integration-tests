@@ -63,6 +63,17 @@ def resolve_option(origin: str) -> list[str]:
     return ["--resolve", f"{host}:{port}:{address}"]
 
 
+def ca_options() -> list[str]:
+    """Bind curl to the same explicit CA file used by the Python clients."""
+    configured = os.environ.get("SSL_CERT_FILE", "").strip()
+    if not configured:
+        return []
+    ca_file = Path(configured).resolve()
+    if not ca_file.is_file():
+        raise ValueError(f"SSL_CERT_FILE does not exist: {ca_file}")
+    return ["--cacert", str(ca_file)]
+
+
 def parse_response(raw: str) -> tuple[int, dict[str, list[str]], str]:
     """Extract the final HTTP header block emitted by curl without redirects."""
     matches = list(re.finditer(r"HTTP/\d(?:\.\d)?\s+(\d{3})[^\r\n]*\r?\n", raw))
@@ -113,6 +124,7 @@ def curl_request(
         str(cookie_jar),
         "--cookie-jar",
         str(cookie_jar),
+        *ca_options(),
         *resolve_option(origin),
     ]
     for name, value in (headers or {}).items():

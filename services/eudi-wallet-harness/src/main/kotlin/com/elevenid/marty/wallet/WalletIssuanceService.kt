@@ -21,14 +21,15 @@ import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.security.Signature
-import java.security.cert.X509Certificate
 import java.security.interfaces.ECPrivateKey
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 
 object WalletIssuanceService {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    private data class HolderProofMaterial(
+        val proofs: ProofsSpecification,
+        val privateKey: ECKey,
+    )
 
     /**
      * OpenId4VCI configuration matching the EUDI Reference Wallet's defaults.
@@ -46,14 +47,6 @@ object WalletIssuanceService {
         issuerMetadataPolicy = IssuerMetadataPolicy.IgnoreSigned,
     )
 
-    /** Trust-all manager for test environments with self-signed certs. */
-    private val trustAllManager = object : X509TrustManager {
-        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-    }
-
-    /** Create an HTTP client that trusts self-signed certs (test environment). */
     private fun createHttpClient(): HttpClient = HttpClient(Java) {
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
@@ -63,15 +56,6 @@ object WalletIssuanceService {
             logger = Logger.DEFAULT
             level = LogLevel.INFO
         }
-        engine {
-            config {
-                sslContext(
-                    SSLContext.getInstance("TLS").apply {
-                        init(null, arrayOf<TrustManager>(trustAllManager), java.security.SecureRandom())
-                    }
-                )
-            }
-        }
     }
 
     /**
@@ -80,7 +64,7 @@ object WalletIssuanceService {
      * javaAlgorithm must be the JCA name ("SHA256withECDSA"), which
      * the EUDI library maps to JWS alg "ES256".
      */
-    private fun createP256ProofSigner(): ProofsSpecification {
+    private fun createP256ProofSigner(): HolderProofMaterial {
         val ecKey: ECKey = ECKeyGenerator(Curve.P_256).generate()
         val publicJwk = ecKey.toPublicJWK()
         val privateKey: ECPrivateKey = ecKey.toECPrivateKey()
@@ -108,7 +92,10 @@ object WalletIssuanceService {
             }
         }
 
-        return ProofsSpecification.JwtProofs.NoKeyAttestation(batchSigner)
+        return HolderProofMaterial(
+            proofs = ProofsSpecification.JwtProofs.NoKeyAttestation(batchSigner),
+            privateKey = ecKey,
+        )
     }
 
     /**
@@ -164,7 +151,7 @@ object WalletIssuanceService {
         createHttpClient().use { httpClient ->
             try {
                 // Step 1: Resolve offer
-                log.info("Resolving credential offer: $credentialOfferUri")
+                log.info("Resolving credential offer through the public issuer endpoint")
                 val issuer = Issuer.make(vciConfig, credentialOfferUri, httpClient).getOrThrow()
                 val offer = issuer.credentialOffer
                 val meta = offer.credentialIssuerMetadata
@@ -196,10 +183,10 @@ object WalletIssuanceService {
                     val requestPayload = IssuanceRequestPayload.ConfigurationBased(credCfgId)
 
                     // Generate P-256 proof signer (same as EUDI Reference Wallet)
-                    val popSigner = createP256ProofSigner()
+                    val holderProof = createP256ProofSigner()
 
                     val (updatedAuth, outcome) = with(issuer) {
-                        currentAuth.request(requestPayload, popSigner).getOrThrow()
+                        currentAuth.request(requestPayload, holderProof.proofs).getOrThrow()
                     }
                     currentAuth = updatedAuth
 
@@ -215,6 +202,10 @@ object WalletIssuanceService {
                                     credential = credStr,
                                     notificationId = outcome.notificationId?.value,
                                 ))
+                                WalletPresentationService.rememberHolderKey(
+                                    credentialCompact = credStr,
+                                    holderKey = holderProof.privateKey,
+                                )
                             }
                             log.info("Credential issued for: ${credCfgId.value}")
                         }
@@ -235,6 +226,10 @@ object WalletIssuanceService {
                                             credential = credStr,
                                             notificationId = deferredOutcome.notificationId?.value,
                                         ))
+                                        WalletPresentationService.rememberHolderKey(
+                                            credentialCompact = credStr,
+                                            holderKey = holderProof.privateKey,
+                                        )
                                     }
                                 }
                                 is DeferredCredentialQueryOutcome.IssuancePending ->

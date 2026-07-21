@@ -78,7 +78,8 @@ The fast regression suite is strict: a failure fails the command. The actual
 OpenID Foundation runner is pinned separately and runs against the same
 gateway-facing production-path deployment. See
 [conformance/README.md](conformance/README.md) for the official issuer plan,
-evidence handling, certification switch, and monthly runner-update check.
+evidence handling, certification switch, and the single monthly draft-PR
+review of every official suite pin.
 
 ## Configuration
 

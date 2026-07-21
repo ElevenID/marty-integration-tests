@@ -13,6 +13,16 @@ data class HealthResponse(
     val service: String,
     val openid4vciVersion: String,
     val openid4vpVersion: String,
+    val capabilities: WalletCapabilities,
+)
+
+@Serializable
+data class WalletCapabilities(
+    val officialOid4vciIssuance: Boolean,
+    val officialOid4vpPresentation: Boolean,
+    val officialOid4vpFormats: List<String>,
+    val holderBinding: String,
+    val compatibilityOnlyFormats: List<String>,
 )
 
 @Serializable

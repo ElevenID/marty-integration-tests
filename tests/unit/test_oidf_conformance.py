@@ -37,27 +37,37 @@ def test_documented_optional_signed_metadata_skip_is_valid() -> None:
 def test_optional_encryption_skip_is_documented_narrowly() -> None:
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
     encryption = next(
-        item
-        for item in skips
-        if item["test-name"] == "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm"
+        item for item in skips if item["test-name"] == "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm"
     )
     assert encryption["variant"] == {"vci_credential_encryption": "plain"}
     assert encryption["expires"] == "2027-01-01"
 
 
-def test_haip_post_retrieval_module_is_scoped_to_the_required_signed_transport() -> None:
+def test_haip_post_retrieval_module_is_not_expected_to_skip() -> None:
+    skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
+    request_uri_post = [
+        item
+        for item in skips
+        if item["test-name"] == "oid4vp-1final-verifier-request-uri-method-post"
+        and item["configuration-filename"] == "*marty-verifier-haip*.json"
+    ]
+    assert request_uri_post == []
+
+
+def test_standard_post_retrieval_skip_is_narrowly_scoped_to_the_standard_plan() -> None:
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
     request_uri_post = next(
         item
         for item in skips
         if item["test-name"] == "oid4vp-1final-verifier-request-uri-method-post"
+        and item["configuration-filename"] == "marty-verifier.json"
     )
-    assert request_uri_post["configuration-filename"] == "*marty-verifier-haip*.json"
     assert request_uri_post["variant"] == {
-        "client_id_prefix": "x509_hash",
-        "request_method": "request_uri_signed",
-        "vp_profile": "haip",
+        "client_id_prefix": "redirect_uri",
+        "request_method": "url_query",
+        "vp_profile": "plain_vp",
     }
+    assert "request_uri_method=post" in request_uri_post["reason"]
 
 
 def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:
@@ -125,9 +135,7 @@ def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
     config.write_text(
         json.dumps(
             {
-                "credential": {
-                    "signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}
-                },
+                "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},
                 "verifier": {
                     "gateway_url": "https://conformance.example.test",
                     "profile": "oid4vp-1.0-final",
@@ -144,9 +152,7 @@ def test_verifier_configuration_profile_must_match_the_official_plan(tmp_path: P
     config.write_text(
         json.dumps(
             {
-                "credential": {
-                    "signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}
-                },
+                "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},
                 "verifier": {
                     "gateway_url": "https://conformance.example.test",
                     "profile": "oid4vp-haip-1.0",

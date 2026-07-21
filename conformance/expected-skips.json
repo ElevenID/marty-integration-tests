@@ -33,13 +33,13 @@
   },
   {
     "test-name": "oid4vp-1final-verifier-request-uri-method-post",
-    "configuration-filename": "*marty-verifier-haip*.json",
+    "configuration-filename": "marty-verifier.json",
     "variant": {
-      "client_id_prefix": "x509_hash",
-      "request_method": "request_uri_signed",
-      "vp_profile": "haip"
+      "client_id_prefix": "redirect_uri",
+      "request_method": "url_query",
+      "vp_profile": "plain_vp"
     },
-    "reason": "The official HAIP plan fixes request_method=request_uri_signed. This module exclusively tests POST request-URI retrieval, which is mutually exclusive with that required signed request-URI transport; it remains an explicitly inapplicable upstream-module skip, not a verifier failure exemption.",
+    "reason": "Marty's production verifier flow currently supports GET retrieval for request_uri objects. This upstream module exercises request_uri_method=post and remains narrowly skipped until POST retrieval is implemented and selected by the production flow.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
   }

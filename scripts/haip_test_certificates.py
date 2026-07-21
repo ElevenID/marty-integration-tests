@@ -34,6 +34,7 @@ OUTPUT_FILES = (KEY_FILE, CERTIFICATE_FILE, TRUST_ANCHOR_FILE, CONFIG_FILE)
 DEFAULT_GATEWAY_URL = "https://marty-oidf.test:8443"
 MAX_VALIDITY_HOURS = 168
 PEM_CERTIFICATE = re.compile(rb"-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----")
+OID4VP_TRUST_ANCHOR_FILE_ENV = "EUDI_OID4VP_TRUST_ANCHOR_FILE"
 
 
 def _base64url(value: bytes) -> str:
@@ -149,8 +150,8 @@ def generate_material(
                 key_agreement=False,
                 key_cert_sign=True,
                 crl_sign=True,
-                encipher_only=None,
-                decipher_only=None,
+                encipher_only=False,
+                decipher_only=False,
             ),
             critical=True,
         )
@@ -187,8 +188,8 @@ def generate_material(
                 key_agreement=False,
                 key_cert_sign=False,
                 crl_sign=False,
-                encipher_only=None,
-                decipher_only=None,
+                encipher_only=False,
+                decipher_only=False,
             ),
             critical=True,
         )
@@ -284,16 +285,47 @@ def validate_verifier_environment(key_pem: str, certificate_pem: str) -> dict[st
     }
 
 
+def validate_oid4vp_trust_anchor(certificate_pem: str, trust_anchor_pem: str) -> str:
+    """Require the separately trusted root to terminate the verifier bundle."""
+    try:
+        certificate_bundle = certificate_pem.encode("ascii")
+        trust_anchor_bytes = trust_anchor_pem.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("HAIP request-object trust anchor must be PEM") from exc
+    certificates = [x509.load_pem_x509_certificate(value) for value in PEM_CERTIFICATE.findall(certificate_bundle)]
+    anchors = [x509.load_pem_x509_certificate(value) for value in PEM_CERTIFICATE.findall(trust_anchor_bytes)]
+    if not anchors:
+        raise ValueError("HAIP request-object trust-anchor file contains no PEM certificate")
+    for anchor in anchors:
+        try:
+            constraints = anchor.extensions.get_extension_for_class(x509.BasicConstraints).value
+        except x509.ExtensionNotFound as exc:
+            raise ValueError("HAIP request-object trust anchors require BasicConstraints") from exc
+        if not constraints.ca:
+            raise ValueError("HAIP request-object trust-anchor file must contain only CA certificates")
+    if not certificates or not any(
+        certificates[-1].fingerprint(hashes.SHA256()) == anchor.fingerprint(hashes.SHA256())
+        for anchor in anchors
+    ):
+        raise ValueError("HAIP verifier certificate bundle must end at the request-object trust anchor")
+    return trust_anchor_pem
+
+
 def load_verifier_environment(material_dir: Path) -> dict[str, str]:
-    """Load and validate generated verifier material for Marty's flow service."""
+    """Load generated verifier material and its independent wallet trust anchor."""
     key_path = material_dir / KEY_FILE
     certificate_path = material_dir / CERTIFICATE_FILE
+    trust_anchor_path = material_dir / TRUST_ANCHOR_FILE
     try:
         key_pem = key_path.read_text(encoding="ascii")
         certificate_pem = certificate_path.read_text(encoding="ascii")
+        trust_anchor_pem = trust_anchor_path.read_text(encoding="ascii")
     except FileNotFoundError as exc:
         raise ValueError(f"HAIP material is incomplete: {exc.filename}") from exc
-    return validate_verifier_environment(key_pem, certificate_pem)
+    environment = validate_verifier_environment(key_pem, certificate_pem)
+    validate_oid4vp_trust_anchor(certificate_pem, trust_anchor_pem)
+    environment[OID4VP_TRUST_ANCHOR_FILE_ENV] = str(trust_anchor_path.resolve())
+    return environment
 
 
 def parser() -> argparse.ArgumentParser:

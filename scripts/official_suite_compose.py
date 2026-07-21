@@ -14,15 +14,33 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
+
+import httpx
 
 sys.path.insert(0, str(Path(__file__).parent))
-from docker_context import CONTEXT_ENV, docker_command
-from haip_test_certificates import load_verifier_environment, validate_verifier_environment
+from docker_context import CONTEXT_ENV, docker_command, docker_endpoint_is_local
+from eudi_test_material import (
+    EUDI_KEYSTORE_FILE,
+    ROOT_CA_FILE,
+    merged_material_environment,
+    validate_environment,
+    validate_environment_contract,
+)
+from haip_test_certificates import (
+    OID4VP_TRUST_ANCHOR_FILE_ENV,
+    load_verifier_environment,
+    validate_oid4vp_trust_anchor,
+    validate_verifier_environment,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
+REMOTE_UI_ROOT = "MARTY_CONFORMANCE_REMOTE_UI_ROOT"
+REMOTE_OIDF_ROOT = "OIDF_CONFORMANCE_REMOTE_RUNNER_ROOT"
+REMOTE_EUDI_CONFIG_ROOT = "EUDI_CONFORMANCE_CONFIG_ROOT"
 
 
 def parser() -> argparse.ArgumentParser:
@@ -33,6 +51,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--oidf-runner", type=Path, help="pinned official OIDF runner checkout")
     result.add_argument("--oidf", action="store_true", help="include the official OIDF runner project")
     result.add_argument("--eudi", action="store_true", help="include the EUDI reference project")
+    result.add_argument(
+        "--eudi-material",
+        type=Path,
+        help="generated EUDI/TLS material; a complete external environment takes precedence",
+    )
     result.add_argument("--w3c", action="store_true", help="enable Marty's test-only W3C VC adapter")
     result.add_argument("--haip", action="store_true", help="enable Marty's HAIP verifier profile")
     result.add_argument(
@@ -54,8 +77,14 @@ def project_names(run_id: str) -> dict[str, str]:
     }
 
 
-def configure_haip_environment(environment: dict[str, str], material_dir: Path | None) -> None:
-    """Wire the matching verifier key/certificate pair into Marty's HAIP overlay."""
+def configure_haip_environment(
+    environment: dict[str, str],
+    material_dir: Path | None,
+    *,
+    require_request_object_trust: bool = False,
+    validate_request_object_trust_file: bool = True,
+) -> None:
+    """Wire the verifier pair and independent wallet trust anchor into HAIP."""
     signing_key = environment.get("VERIFIER_SIGNING_KEY_PEM", "")
     certificate = environment.get("VERIFIER_X509_CERT_PEM", "")
     has_signing_key = bool(signing_key.strip())
@@ -64,23 +93,213 @@ def configure_haip_environment(environment: dict[str, str], material_dir: Path |
         raise ValueError("set both VERIFIER_SIGNING_KEY_PEM and VERIFIER_X509_CERT_PEM, or neither")
     if has_signing_key and has_certificate:
         # Externally issued certification material is always authoritative.
-        environment.update(validate_verifier_environment(signing_key, certificate))
+        validated = validate_verifier_environment(signing_key, certificate)
+        trust_anchor_file = environment.get(OID4VP_TRUST_ANCHOR_FILE_ENV, "").strip()
+        if trust_anchor_file:
+            if validate_request_object_trust_file:
+                anchor_path = Path(trust_anchor_file).resolve()
+                try:
+                    trust_anchor_pem = anchor_path.read_text(encoding="ascii")
+                except (OSError, UnicodeError) as exc:
+                    raise ValueError(f"cannot read HAIP request-object trust anchor: {anchor_path}") from exc
+                validate_oid4vp_trust_anchor(certificate, trust_anchor_pem)
+                validated[OID4VP_TRUST_ANCHOR_FILE_ENV] = str(anchor_path)
+            else:
+                validated[OID4VP_TRUST_ANCHOR_FILE_ENV] = trust_anchor_file
+        elif require_request_object_trust:
+            raise ValueError(
+                f"HAIP EUDI runs require {OID4VP_TRUST_ANCHOR_FILE_ENV}; "
+                "the TLS trust store is not a request-object trust policy"
+            )
+        environment.update(validated)
         return
     if material_dir is None:
         raise ValueError("--haip requires external VERIFIER_* PEM values or --haip-material")
     environment.update(load_verifier_environment(material_dir.resolve()))
 
 
-def child_environment(*, require_haip: bool = False, haip_material: Path | None = None) -> dict[str, str]:
+def cleanup_eudi_environment(environment: dict[str, str], material_dir: Path) -> dict[str, str]:
+    """Supply inert Compose substitutions when disposable files were deleted."""
+    result = dict(environment)
+    directory = material_dir.resolve()
+    result.update(
+        {
+            "EUDI_TEST_MATERIAL_MODE": "external",
+            "OIDF_PUBLIC_BASE_URL": "https://cleanup.invalid:8443",
+            "OIDF_TLS_HOST_PORT": "8443",
+            "OIDF_INTERNAL_TLS_PORT": "8443",
+            "OIDF_CONFORMANCE_BRIDGE_ALIAS": "cleanup.invalid",
+            "OIDF_TLS_CERT_DIR": str(directory),
+            OID4VP_TRUST_ANCHOR_FILE_ENV: str(directory / ROOT_CA_FILE),
+            "EUDI_WALLET_TESTER_PUBLIC_URL": "https://cleanup.invalid:25051",
+            "EUDI_WALLET_TESTER_TLS_HOST_PORT": "25051",
+            "EUDI_VERIFIER_PUBLIC_URL": "https://cleanup.invalid:28091",
+            "EUDI_VERIFIER_TLS_HOST_PORT": "28091",
+            "EUDI_WALLET_KIT_HOST_PORT": "29090",
+            "EUDI_VERIFIER_KEYSTORE_FILE": str(directory / EUDI_KEYSTORE_FILE),
+            "EUDI_VERIFIER_KEYSTORE_TYPE": "JKS",
+            "EUDI_VERIFIER_KEYSTORE_PASSWORD": "unused-cleanup-value",
+            "EUDI_VERIFIER_KEYSTORE_ALIAS": "unused-cleanup-value",
+            "EUDI_VERIFIER_KEY_PASSWORD": "unused-cleanup-value",
+            "EUDI_VERIFIER_SIGNING_ALGORITHM": "ES512",
+            "EUDI_VERIFIER_CLIENT_ID_PREFIX": "x509_san_dns",
+            "EUDI_VERIFIER_ORIGINAL_CLIENT_ID": "cleanup.invalid",
+            "EUDI_TLS_TRUSTSTORE_PASSWORD": "unused-cleanup-value",
+            "EUDI_TLS_TRUSTSTORE_ALIAS": "unused-cleanup-value",
+        }
+    )
+    return result
+
+
+def wait_for_eudi_readiness(environment: dict[str, str]) -> None:
+    """Wait for every public EUDI path that the real tests will exercise."""
+    try:
+        timeout = int(environment.get("EUDI_READINESS_TIMEOUT_SECONDS", "120"))
+    except ValueError as exc:
+        raise ValueError("EUDI_READINESS_TIMEOUT_SECONDS must be an integer") from exc
+    if not 5 <= timeout <= 600:
+        raise ValueError("EUDI_READINESS_TIMEOUT_SECONDS must be between 5 and 600")
+    wallet_kit = environment.get("EUDI_WALLET_KIT_URL", "").strip() or (
+        f"http://127.0.0.1:{environment['EUDI_WALLET_KIT_HOST_PORT']}"
+    )
+    probes = {
+        "Marty public gateway": environment["OIDF_PUBLIC_BASE_URL"] + "/.well-known/openid-configuration",
+        "EUDI wallet tester": environment["EUDI_WALLET_TESTER_PUBLIC_URL"] + "/",
+        "EUDI verifier": environment["EUDI_VERIFIER_PUBLIC_URL"] + "/swagger-ui",
+        "EUDI wallet kit": wallet_kit.rstrip("/") + "/health",
+    }
+    ca_file = Path(environment.get("EUDI_TEST_CA_FILE", ""))
+    if not ca_file.is_file():
+        candidate = Path(environment.get("OIDF_TLS_CERT_DIR", "")) / ROOT_CA_FILE
+        ca_file = candidate if candidate.is_file() else Path()
+    verify: bool | str = str(ca_file) if ca_file.is_file() else True
+    pending = dict(probes)
+    failures: dict[str, str] = {}
+    deadline = time.monotonic() + timeout
+    with httpx.Client(verify=verify, follow_redirects=True, timeout=5.0) as client:
+        while pending and time.monotonic() < deadline:
+            for name, url in list(pending.items()):
+                try:
+                    response = client.get(url)
+                    if response.status_code < 400:
+                        pending.pop(name)
+                        failures.pop(name, None)
+                    else:
+                        failures[name] = f"HTTP {response.status_code} from {url}"
+                except httpx.HTTPError as exc:
+                    failures[name] = f"{url}: {exc}"
+            if pending:
+                time.sleep(1)
+    if pending:
+        detail = "; ".join(f"{name}: {failures.get(name, url)}" for name, url in pending.items())
+        raise ValueError(f"EUDI services did not become ready within {timeout} seconds: {detail}")
+
+
+def _absolute_remote_path(value: str, field: str) -> str:
+    normalized = value.strip()
+    if not normalized or not (PurePosixPath(normalized).is_absolute() or PureWindowsPath(normalized).is_absolute()):
+        raise ValueError(f"{field} must be an absolute path on the Docker daemon host")
+    return normalized
+
+
+def _mirrored_checkout(environment: dict[str, str], field: str, local_checkout: Path) -> None:
+    remote = _absolute_remote_path(environment.get(field, ""), field)
+    local = str(local_checkout.resolve())
+    if os.path.normcase(os.path.normpath(remote)) != os.path.normcase(os.path.normpath(local)):
+        raise ValueError(
+            f"{field} must equal the client checkout path {local!r}; "
+            "the current Compose files resolve repository binds before contacting the remote daemon"
+        )
+
+
+def validate_remote_bind_contract(
+    args: argparse.Namespace,
+    environment: dict[str, str],
+) -> None:
+    """Fail closed unless every remote-daemon bind root is explicit."""
+    _mirrored_checkout(environment, REMOTE_UI_ROOT, args.marty_ui)
+    if args.oidf:
+        if args.oidf_runner is None:
+            raise ValueError("--oidf requires --oidf-runner")
+        _mirrored_checkout(environment, REMOTE_OIDF_ROOT, args.oidf_runner)
+    if args.eudi:
+        _absolute_remote_path(environment.get(REMOTE_EUDI_CONFIG_ROOT, ""), REMOTE_EUDI_CONFIG_ROOT)
+        _absolute_remote_path(environment.get("OIDF_TLS_CERT_DIR", ""), "OIDF_TLS_CERT_DIR")
+        _absolute_remote_path(
+            environment.get("EUDI_VERIFIER_KEYSTORE_FILE", ""),
+            "EUDI_VERIFIER_KEYSTORE_FILE",
+        )
+        _absolute_remote_path(
+            environment.get(OID4VP_TRUST_ANCHOR_FILE_ENV, ""),
+            OID4VP_TRUST_ANCHOR_FILE_ENV,
+        )
+
+
+def child_environment(
+    *,
+    require_haip: bool = False,
+    require_eudi: bool = False,
+    haip_material: Path | None = None,
+    eudi_material: Path | None = None,
+    validate_eudi: bool = True,
+) -> dict[str, str]:
     environment = os.environ.copy()
+    material_mode = environment.get("EUDI_TEST_MATERIAL_MODE", "external").strip() or "external"
+    if eudi_material is not None:
+        try:
+            material_mode, environment = merged_material_environment(eudi_material, environment)
+        except (OSError, ValueError):
+            if validate_eudi:
+                raise
+            environment = cleanup_eudi_environment(environment, eudi_material)
+            material_mode = "external"
+    needs_eudi = require_eudi or eudi_material is not None
+    if needs_eudi and not validate_eudi and eudi_material is None:
+        try:
+            validate_environment_contract(environment)
+        except ValueError:
+            environment = cleanup_eudi_environment(environment, ROOT / "conformance" / "eudi-material" / "cleanup")
+            material_mode = "external"
+    local_docker = docker_endpoint_is_local(environment) if needs_eudi else True
+    if not local_docker and material_mode == "generated":
+        raise ValueError(
+            "generated EUDI material cannot be bind-mounted through a remote Docker context; "
+            "run on the Docker host or provide externally provisioned material paths"
+        )
+    if needs_eudi and validate_eudi:
+        if local_docker:
+            # Local generated and external modes can prove the key, complete
+            # chains, aliases, passwords, and Java stores before startup.
+            validate_environment(environment)
+        else:
+            # Remote bind paths belong to the daemon host and are intentionally
+            # not opened on this client. Validate their public contract here;
+            # run eudi_test_material.py validate on the daemon host itself.
+            validate_environment_contract(environment)
     context = environment.get(CONTEXT_ENV, "").strip()
     if context:
         # docker_command validates the named context before any project starts.
         docker_command(["info"])
         environment["DOCKER_CONTEXT"] = context
     if require_haip:
-        configure_haip_environment(environment, haip_material)
+        configure_haip_environment(
+            environment,
+            haip_material,
+            require_request_object_trust=require_eudi,
+            validate_request_object_trust_file=local_docker,
+        )
     return environment
+
+
+def configure_project_environment(environment: dict[str, str], projects: dict[str, str]) -> None:
+    """Keep Compose interpolation and CLI project selection identical."""
+    environment.update(
+        {
+            "MARTY_CONFORMANCE_PROJECT": projects["marty"],
+            "OIDF_CONFORMANCE_PROJECT": projects["oidf"],
+            "EUDI_CONFORMANCE_PROJECT": projects["eudi"],
+        }
+    )
 
 
 def run(command: list[str], environment: dict[str, str]) -> int:
@@ -176,15 +395,28 @@ def stop_started(
 def execute(args: argparse.Namespace) -> int:
     if not args.run_id:
         raise ValueError("--run-id, OFFICIAL_SUITE_RUN_ID, or GITHUB_RUN_ID is required")
-    if args.haip and not args.oidf:
-        raise ValueError("--haip requires --oidf")
+    if args.haip and not (args.oidf or args.eudi):
+        raise ValueError("--haip requires --oidf or --eudi")
     if args.haip_material is not None and not args.haip:
         raise ValueError("--haip-material requires --haip")
+    if args.eudi_material is not None and not args.eudi:
+        raise ValueError("--eudi-material requires --eudi")
     if not any((args.oidf, args.eudi, args.w3c)):
         raise ValueError("select at least one of --oidf, --eudi, or --w3c")
 
     projects = project_names(args.run_id)
-    environment = child_environment(require_haip=args.haip, haip_material=args.haip_material)
+    environment = child_environment(
+        require_haip=args.haip,
+        require_eudi=args.eudi,
+        haip_material=args.haip_material,
+        eudi_material=args.eudi_material,
+        # Expired or deleted disposable material must block startup, but must
+        # never prevent logs, inspection, or deterministic teardown.
+        validate_eudi=args.command == "up",
+    )
+    configure_project_environment(environment, projects)
+    if not docker_endpoint_is_local(environment):
+        validate_remote_bind_contract(args, environment)
     selected = components(args, projects, args.command)
     if args.command != "up":
         first_failure = 0
@@ -202,6 +434,12 @@ def execute(args: argparse.Namespace) -> int:
         if result:
             stop_started(started, args, projects, environment)
             return result
+        if name == "eudi":
+            try:
+                wait_for_eudi_readiness(environment)
+            except ValueError:
+                stop_started(started, args, projects, environment)
+                raise
     return 0
 
 
