@@ -100,12 +100,13 @@ def test_stack_environment_accepts_only_complete_digest_pins(tmp_path: Path) -> 
 
 
 def test_keycloak_initializer_diagnostic_redacts_secret_values() -> None:
-    value = "password=private-value token: abc123 Authorization is bearer-value"
+    value = "password=private-value token: abc123 Authorization is bearer-value session_id=opaque-cookie"
     redacted = lane.redact_initializer_log(value)
     assert "private-value" not in redacted
     assert "abc123" not in redacted
     assert "bearer-value" not in redacted
-    assert redacted.count("<redacted>") == 3
+    assert "opaque-cookie" not in redacted
+    assert redacted.count("<redacted>") == 4
 
 
 def test_keycloak_startup_diagnostic_includes_service_logs_and_redacts(
@@ -134,6 +135,34 @@ def test_keycloak_startup_diagnostic_includes_service_logs_and_redacts(
     assert "private-value" not in output
     assert "password=<redacted>" in output
     assert any(command[-1].endswith("=keycloak") for command in calls if command[1] == "ps")
+
+
+def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Result:
+        def __init__(self, stdout: str = "", stderr: str = "") -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def docker(command: list[str], **_kwargs: object) -> Result:
+        if command[1] == "ps":
+            return Result("issuance-container\n" if command[-1].endswith("=issuance") else "")
+        return Result(
+            "routine startup complete\n"
+            "credential creation failed: session_id=opaque-cookie reason=remote signer unavailable\n"
+        )
+
+    monkeypatch.setattr(lane.subprocess, "run", docker)
+
+    lane.emit_w3c_issuance_diagnostic("w3c-v2-1")
+
+    output = capsys.readouterr().out
+    assert "issuance W3C issuance diagnostic" in output
+    assert "credential creation failed" in output
+    assert "opaque-cookie" not in output
+    assert "session_id=<redacted>" in output
+    assert "routine startup complete" not in output
 
 
 def test_material_environment_uses_private_generator_envelope(tmp_path: Path) -> None:
