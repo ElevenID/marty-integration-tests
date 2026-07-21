@@ -488,9 +488,20 @@ from the disposable TLS CA. The official EUDI OID4VP library must resolve an
 encrypted `direct_post.jwt` response; a default/DID-only flow does not satisfy
 the lane's recorded presentation coverage.
 
+For mdoc issuance, the harness asks the normal gateway API to export the
+selected production KMS public key, issues a short-lived document-signer
+certificate for that key under a disposable test CA, stores the public chain
+through the normal certificate API, and republishes JWKS. The KMS private key
+never enters the test process. The independent evidence parser verifies the
+resulting COSE signature, X.509 chain, MSO validity, digest coverage, CBOR
+types, and issuance claims. An externally managed DSC chain can replace the
+disposable chain later without changing the gateway, KMS, issuance, or wallet
+paths exercised by the lane.
+
 The public summary is also bound to stable, versioned JUnit evidence IDs for
-End-to-end SD-JWT issuance/presentation, cryptographically validated mdoc issuance, the official HAIP resolve/dispatch path, and
-the missing-holder-binding-key negative path. Every claimed coverage value
+end-to-end SD-JWT issuance/presentation, cryptographically validated mdoc
+issuance, the official HAIP resolve/dispatch path, and the
+missing-holder-binding-key negative path. Every claimed coverage value
 must map one-to-one to one of these evidence assertions. The runner rejects an
 unbound claim or a missing, renamed, duplicated, failed, errored, or skipped
 sentinel, and a passing `evidence.json` cannot be written unless all required
