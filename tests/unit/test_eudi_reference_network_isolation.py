@@ -58,7 +58,7 @@ def test_eudi_reference_services_use_real_ca_and_access_certificate_contracts() 
     assert "urllib.request.urlopen('http://127.0.0.1:5000/'" in compose
     assert compose.count('["CMD", "nginx", "-t"]') == 2
     assert compose.count("${EUDI_CONFORMANCE_CONFIG_ROOT:-./eudi-reference}") == 2
-    assert "mem_limit: 1g" in verifier
+    assert "mem_limit: 2g" in verifier
     assert 'JAVA_TOOL_OPTIONS: "-XX:ActiveProcessorCount=2 -Xss512k"' in verifier
     assert "mem_limit: 768m" in wallet_kit
 

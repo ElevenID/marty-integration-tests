@@ -80,7 +80,9 @@ services:
     # Keep Paketo sizing inside a deterministic cgroup while leaving enough
     # native memory for Spring startup on GitHub's hosted kernel. Limiting the
     # visible processors also prevents the JVM from creating host-sized pools.
-    mem_limit: 1g
+    # The verifier's Spring graph exhausts a 1 GiB cgroup during cold startup
+    # on the hosted runner even though the kernel does not OOM-kill it.
+    mem_limit: 2g
     environment:
       JAVA_TOOL_OPTIONS: "-XX:ActiveProcessorCount=2 -Xss512k"
       SERVER_PORT: "8080"
