@@ -444,7 +444,7 @@ class TestDtcWalletPresentation:
             credential=credential,
             audience=client_id,
             nonce=nonce,
-            format="mso_mdoc",
+            credential_format="mso_mdoc",
         )
         assert vp_token, "VP token is empty"
         logger.info("[DTC VP] VP token built: length=%d", len(vp_token))
@@ -500,7 +500,7 @@ class TestDtcWalletPresentation:
             credential=credential,
             audience=auth_req["client_id"],
             nonce=auth_req["nonce"],
-            format="mso_mdoc",
+            credential_format="mso_mdoc",
         )
 
         presentation_submission = _presentation_submission_for_request(
@@ -615,7 +615,7 @@ class TestDtcWalletEndToEnd:
             credential=credential,
             audience=auth_req["client_id"],
             nonce=auth_req["nonce"],
-            format="mso_mdoc",
+            credential_format="mso_mdoc",
         )
         logger.info("[DTC E2E] VP token built: length=%d", len(vp_token))
 
