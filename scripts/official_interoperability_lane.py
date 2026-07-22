@@ -406,16 +406,37 @@ def classify_public_proxy_diagnostics(text: str) -> list[str]:
     ]
 
 
-def emit_public_proxy_diagnostic(launcher: Path, project: str, environment: dict[str, str]) -> None:
+def emit_public_proxy_diagnostic(project: str, environment: dict[str, str]) -> None:
     """Classify proxy failures before Compose teardown without publishing logs."""
+    containers = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            "label=com.docker.compose.service=oidf-tls-proxy",
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    container_ids = [value for value in containers.stdout.splitlines() if value]
+    if containers.returncode or len(container_ids) != 1:
+        print("--- public TLS proxy diagnostic (redacted) ---\ndiagnostic-unavailable\n--- end public TLS proxy diagnostic ---", flush=True)
+        return
     completed = subprocess.run(
-        [sys.executable, str(launcher), "--project", project, "logs"],
+        ["docker", "logs", "--tail", "250", container_ids[0]],
         env=environment,
         text=True,
         capture_output=True,
         check=False,
     )
     classes = classify_public_proxy_diagnostics(completed.stdout + completed.stderr)
+    if completed.returncode:
+        classes.append("diagnostic-unavailable")
     if classes:
         print(
             "--- public TLS proxy diagnostic (redacted) ---\n"
@@ -733,7 +754,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
         return result
     except RuntimeError as error:
         if "public TLS endpoint" in str(error):
-            emit_public_proxy_diagnostic(launcher, project, environment)
+            emit_public_proxy_diagnostic(project, environment)
         raise
     finally:
         down = [*base]

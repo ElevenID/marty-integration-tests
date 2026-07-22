@@ -514,6 +514,30 @@ def test_public_proxy_diagnostics_are_fixed_categories_only() -> None:
     assert classes == ["upstream-connect", "upstream-timeout"]
 
 
+def test_public_proxy_diagnostic_selects_exact_compose_service(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> object:
+        calls.append(command)
+        if command[:2] == ["docker", "ps"]:
+            return type("Result", (), {"returncode": 0, "stdout": "proxy-id\n", "stderr": ""})()
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": "", "stderr": "connect() failed while connecting to upstream"},
+        )()
+
+    monkeypatch.setattr(lane.subprocess, "run", fake_run)
+    lane.emit_public_proxy_diagnostic("marty-conformance-run-1", {})
+
+    assert "label=com.docker.compose.project=marty-conformance-run-1" in calls[0]
+    assert "label=com.docker.compose.service=oidf-tls-proxy" in calls[0]
+    assert calls[1] == ["docker", "logs", "--tail", "250", "proxy-id"]
+    assert "upstream-connect" in capsys.readouterr().out
+
+
 def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
