@@ -208,6 +208,22 @@ async def _issuer_profile(
 
 
 @pytest.fixture
+async def vp_request_object_issuer_profile(
+    authenticated_gateway_client: GatewayClient,
+    vp_test_org,
+):
+    """Create the tenant-local DID identity that signs OID4VP Request Objects."""
+    return await _issuer_profile(
+        authenticated_gateway_client,
+        vp_test_org["id"],
+        credential_format="",
+        key_purpose="oid4vp_request_signing",
+        algorithm="ES256",
+        name="EUDI VP Request Object issuer",
+    )
+
+
+@pytest.fixture
 async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_test_org):
     """Provision the current API resources for an SD-JWT test template."""
     compliance = await authenticated_gateway_client.create_compliance_profile(
@@ -472,6 +488,7 @@ async def vp_age_policy(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
     sd_jwt_dl_template,
+    vp_request_object_issuer_profile,
 ):
     """Create and activate an age verification policy for VP tests."""
     policy = await authenticated_gateway_client.create_presentation_policy(
@@ -493,6 +510,7 @@ async def vp_age_policy(
         ],
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
+    policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
     return policy
 
 
@@ -501,6 +519,7 @@ async def vp_identity_policy(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
     sd_jwt_dl_template,
+    vp_request_object_issuer_profile,
 ):
     """Create and activate an identity verification policy for VP tests."""
     policy = await authenticated_gateway_client.create_presentation_policy(
@@ -520,6 +539,7 @@ async def vp_identity_policy(
         ],
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
+    policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
     return policy
 
 
@@ -528,6 +548,7 @@ async def vp_mdoc_policy(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
     mdl_mdoc_template,
+    vp_request_object_issuer_profile,
 ):
     """Create and activate an mDoc mDL verification policy."""
     policy = await authenticated_gateway_client.create_presentation_policy(
@@ -547,6 +568,7 @@ async def vp_mdoc_policy(
         ],
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
+    policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
     return policy
 
 
@@ -573,6 +595,7 @@ class TestOID4VPAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
+            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
         )
 
         assert "instance_id" in flow, f"Missing instance_id: {flow}"
@@ -592,6 +615,7 @@ class TestOID4VPAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
+            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -629,6 +653,7 @@ class TestOID4VPAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
+            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
         )
         auth_req = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
 
@@ -671,6 +696,7 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
+            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
             oid4vp_profile="haip",
             request_uri_method="get",
         )
@@ -732,6 +758,7 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
+            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -800,6 +827,7 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_identity_policy["id"],
             organization_id=vp_identity_policy["organization_id"],
+            issuer_profile_id=vp_identity_policy["_request_object_issuer_profile_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -845,6 +873,7 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
+            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -957,6 +986,7 @@ class TestMDocPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_mdoc_policy["id"],
             organization_id=vp_mdoc_policy["organization_id"],
+            issuer_profile_id=vp_mdoc_policy["_request_object_issuer_profile_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -1013,6 +1043,7 @@ class TestEndToEndIssuanceAndPresentation:
         wallet_kit: EUDIWalletKitClient,
         vp_test_org,
         vp_sd_jwt_resources,
+        vp_request_object_issuer_profile,
     ):
         """Full SD-JWT lifecycle: create template → issue → present → verify."""
         # 1. Create credential template
@@ -1073,6 +1104,7 @@ class TestEndToEndIssuanceAndPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
+            issuer_profile_id=vp_request_object_issuer_profile["id"],
         )
         instance_id = flow["instance_id"]
         logger.info("[E2E] Verification flow started: %s", instance_id)

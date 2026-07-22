@@ -101,6 +101,43 @@ async def dtc_test_org(authenticated_gateway_client: GatewayClient):
 
 
 @pytest.fixture
+async def dtc_request_object_issuer_profile(
+    authenticated_gateway_client: GatewayClient,
+    dtc_test_org,
+):
+    """Create the tenant-local DID identity that signs OID4VP Request Objects."""
+    service = None
+    resolution_error: Exception | None = None
+    for organization_id in (dtc_test_org["id"], None):
+        try:
+            resolved = await authenticated_gateway_client.resolve_signing_service(
+                organization_id=organization_id,
+                credential_format="",
+                key_purpose="oid4vp_request_signing",
+                algorithm="ES256",
+            )
+            candidate = resolved.get("service")
+            if isinstance(candidate, dict) and candidate.get("id"):
+                service = candidate
+                break
+        except Exception as exc:  # Capability absence is surfaced by the public API.
+            resolution_error = exc
+    if not isinstance(service, dict) or not service.get("id"):
+        raise RuntimeError(f"No OID4VP Request Object signer is available: {resolution_error}")
+    domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
+    domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
+    return await authenticated_gateway_client.create_issuer_profile(
+        organization_id=dtc_test_org["id"],
+        name="EUDI DTC Request Object issuer",
+        issuer_did=f"did:web:{domain.replace('/', ':')}:orgs:{dtc_test_org['id']}",
+        signing_service_id=str(service["id"]),
+        signing_key_reference=str(service.get("key_reference") or "") or None,
+        key_purpose="oid4vp_request_signing",
+        status="active",
+    )
+
+
+@pytest.fixture
 async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_test_org):
     """Create the separately managed mDoc resources required by the public API."""
     compliance = await authenticated_gateway_client.create_compliance_profile(
@@ -222,6 +259,7 @@ async def dtc_vp_policy(
     authenticated_gateway_client: GatewayClient,
     dtc_test_org,
     dtc_mdoc_template,
+    dtc_request_object_issuer_profile,
 ):
     """Create and activate a DTC verification policy for wallet VP tests."""
     policy_data = TestDataBuilder.presentation_policy_dtc_verification(
@@ -232,6 +270,7 @@ async def dtc_vp_policy(
     policy = await authenticated_gateway_client.activate_presentation_policy(
         policy["id"]
     )
+    policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
     return policy
 
 
@@ -240,6 +279,7 @@ async def dtc_identity_vp_policy(
     authenticated_gateway_client: GatewayClient,
     dtc_test_org,
     dtc_mdoc_template,
+    dtc_request_object_issuer_profile,
 ):
     """Create and activate a DTC identity-only verification policy (no biometrics)."""
     policy_data = TestDataBuilder.presentation_policy_dtc_identity_only(
@@ -250,6 +290,7 @@ async def dtc_identity_vp_policy(
     policy = await authenticated_gateway_client.activate_presentation_policy(
         policy["id"]
     )
+    policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
     return policy
 
 
@@ -334,6 +375,7 @@ class TestDtcWalletAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
+            issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
         )
 
         assert "instance_id" in flow
@@ -351,6 +393,7 @@ class TestDtcWalletAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
+            issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
         )
         auth_req = await authenticated_gateway_client.get_verification_request(
             flow["instance_id"]
@@ -394,6 +437,7 @@ class TestDtcWalletPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
+            issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -459,6 +503,7 @@ class TestDtcWalletPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_identity_vp_policy["id"],
             organization_id=dtc_identity_vp_policy["organization_id"],
+            issuer_profile_id=dtc_identity_vp_policy["_request_object_issuer_profile_id"],
         )
         instance_id = flow["instance_id"]
 
@@ -511,6 +556,7 @@ class TestDtcWalletEndToEnd:
         wallet_kit: EUDIWalletKitClient,
         dtc_test_org,
         dtc_mdoc_resources,
+        dtc_request_object_issuer_profile,
     ):
         """Full DTC lifecycle: create template → issue → wallet receive → present → verify."""
         # 1. Create DTC template
@@ -566,6 +612,7 @@ class TestDtcWalletEndToEnd:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
+            issuer_profile_id=dtc_request_object_issuer_profile["id"],
         )
         instance_id = flow["instance_id"]
         logger.info("[DTC E2E] Verification flow started: %s", instance_id)

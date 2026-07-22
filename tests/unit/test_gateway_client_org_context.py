@@ -21,6 +21,7 @@ async def test_start_verification_flow_sends_selected_organization_header() -> N
             trust_profile_id="trust-1",
             expiry_minutes=10,
             organization_id="org-1",
+            issuer_profile_id="request-object-profile-1",
         )
     finally:
         await client.close()
@@ -34,6 +35,7 @@ async def test_start_verification_flow_sends_selected_organization_header() -> N
             "trust_profile_id": "trust-1",
             "expiry_minutes": 10,
             "organization_id": "org-1",
+            "issuer_profile_id": "request-object-profile-1",
         },
         headers={"X-Organization-ID": "org-1"},
     )
