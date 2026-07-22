@@ -22,6 +22,9 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
     assert manifest["official_suite"]["npm"] == "11.11.0"
     assert w3c.SRI_SHA512.fullmatch(manifest["official_suite"]["npm_integrity"])
     assert w3c.DIGEST.fullmatch(manifest["official_suite"]["package_lock_sha256"])
+    lock = w3c.reviewed_package_lock_path(manifest)
+    assert lock.is_file()
+    assert w3c.package_lock_sha256(lock) == manifest["official_suite"]["package_lock_sha256"]
     assert manifest["adapter"]["path"] == "/__test__/vc-api"
     assert set(manifest["evidence"]["required_capabilities"]) == {
         "issuer",
@@ -61,9 +64,15 @@ def test_package_lock_digest_is_identical_for_lf_and_crlf(tmp_path: Path) -> Non
     crlf.write_bytes(b'{\r\n  "lockfileVersion": 3\r\n}\r\n')
 
     assert w3c.package_lock_sha256(lf) == w3c.package_lock_sha256(crlf)
-    assert w3c.package_lock_sha256(lf) == (
-        "sha256:e9ce8921579ead737c68c3c1025d71d433350255100f96293f5accc0e204871e"
-    )
+    assert w3c.package_lock_sha256(lf) == ("sha256:e9ce8921579ead737c68c3c1025d71d433350255100f96293f5accc0e204871e")
+
+
+def test_reviewed_lock_pins_the_upstream_implementation_registry_commit() -> None:
+    manifest = w3c.load_manifest()
+    lock = json.loads(w3c.reviewed_package_lock_path(manifest).read_text(encoding="utf-8"))
+    implementation_registry = lock["packages"]["node_modules/vc-test-suite-implementations"]
+
+    assert implementation_registry["resolved"].endswith("#4c994a7a024e643c1e16513744527de3c8daece8")
 
 
 def test_npm_payload_integrity_is_pinned_to_the_official_tarball() -> None:
@@ -110,10 +119,7 @@ def test_w3c_local_config_registers_the_real_issuer_and_verifiers(tmp_path: Path
     vp_registration = config.split("vpVerifiers:", maxsplit=1)[1]
     assert "tags: ['vc2.0']" in vp_registration
     assert "EnvelopingProof" not in vp_registration
-    assert (
-        "options: { domain: 'github.com/w3c/vc-data-model-2.0-test-suite' }"
-        in vp_registration
-    )
+    assert "options: { domain: 'github.com/w3c/vc-data-model-2.0-test-suite' }" in vp_registration
 
 
 def capability_row(

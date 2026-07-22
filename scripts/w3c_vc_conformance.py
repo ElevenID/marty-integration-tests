@@ -46,8 +46,14 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         raise ValueError("W3C VC suite npm tarball must match the pinned npm version")
     if not SRI_SHA512.fullmatch(suite.get("npm_integrity", "")):
         raise ValueError("W3C VC suite must pin the npm tarball SHA-512 integrity")
+    lock_path = reviewed_package_lock_path(data)
+    if not lock_path.is_file():
+        raise ValueError("W3C VC suite reviewed package lock is missing")
     if not DIGEST.fullmatch(suite.get("package_lock_sha256", "")):
-        raise ValueError("W3C VC suite must pin the generated package-lock digest")
+        raise ValueError("W3C VC suite must pin the reviewed package-lock digest")
+    actual_lock_digest = package_lock_sha256(lock_path)
+    if actual_lock_digest != suite["package_lock_sha256"]:
+        raise ValueError(f"reviewed W3C package lock is {actual_lock_digest}; expected {suite['package_lock_sha256']}")
     evidence = data.get("evidence")
     if not isinstance(evidence, dict):
         raise ValueError("W3C VC suite must define evidence requirements")
@@ -122,16 +128,25 @@ def file_sha256(path: Path) -> str:
 
 
 def package_lock_sha256(path: Path) -> str:
-    """Hash an npm-generated lockfile independently of the runner's newline mode.
+    """Hash a reviewed npm lockfile independently of the runner's newline mode.
 
-    The pinned W3C suite has no committed lockfile.  npm generates identical
-    JSON with CRLF on Windows and LF on GitHub's Linux runners, so using the
-    raw file digest made an otherwise reviewed dependency graph appear to
-    drift across platforms.  Canonical LF bytes preserve a strict graph pin
-    without making the official lane operating-system dependent.
+    The pinned W3C suite has no committed lockfile. ElevenID therefore vendors
+    the reviewed graph beside its suite manifest. Canonical LF bytes preserve
+    that strict graph pin without making the official lane platform-dependent.
     """
     payload = path.read_bytes().replace(b"\r\n", b"\n")
     return f"sha256:{sha256(payload).hexdigest()}"
+
+
+def reviewed_package_lock_path(manifest: dict[str, Any]) -> Path:
+    """Resolve the repository-owned lock without permitting path traversal."""
+    configured = manifest.get("official_suite", {}).get("package_lock_path")
+    if not isinstance(configured, str) or not configured.strip():
+        raise ValueError("W3C VC suite must name its reviewed package lock")
+    candidate = (ROOT / configured).resolve()
+    if not candidate.is_relative_to(ROOT.resolve()):
+        raise ValueError("W3C VC suite package lock must remain inside the repository")
+    return candidate
 
 
 def stack_manifest_metadata(path: Path) -> dict:
@@ -206,18 +221,12 @@ def install_dependencies(suite: Path, manifest: dict) -> int:
     if actual_version != expected_version:
         raise ValueError(f"W3C suite requires npm {expected_version}; found {actual_version}")
     lock = suite / "package-lock.json"
-    lock.unlink(missing_ok=True)
-    result = subprocess.run(
-        [*npm_command(), "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
-        cwd=suite,
-        check=False,
-    ).returncode
-    if result:
-        return result
-    actual_digest = package_lock_sha256(lock)
+    reviewed_lock = reviewed_package_lock_path(manifest)
+    actual_digest = package_lock_sha256(reviewed_lock)
     expected_digest = manifest["official_suite"]["package_lock_sha256"]
     if actual_digest != expected_digest:
-        raise ValueError(f"generated W3C package lock is {actual_digest}; expected {expected_digest}")
+        raise ValueError(f"reviewed W3C package lock is {actual_digest}; expected {expected_digest}")
+    shutil.copyfile(reviewed_lock, lock)
     return subprocess.run(
         [*npm_command(), "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
         cwd=suite,
@@ -342,8 +351,9 @@ def run_suite(suite: Path, adapter_url: str, output: Path, stack_manifest: Path,
 
     The upstream checkout is pinned before invoking its own ``npm test``
     command. Install is explicit because the upstream suite has no lockfile;
-    the generated package lock must match the reviewed digest and is included
-    in the result artifact set.
+    the repository-owned reviewed lock is copied into the checkout, verified,
+    and used with ``npm ci``. Upstream dependency changes therefore arrive only
+    through a reviewed manifest/lock update and cannot drift during a run.
     """
     manifest = load_manifest()
     validate_checkout(suite, manifest)

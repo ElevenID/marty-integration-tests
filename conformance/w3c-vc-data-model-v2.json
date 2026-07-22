@@ -8,6 +8,7 @@
     "npm": "11.11.0",
     "npm_tarball": "https://registry.npmjs.org/npm/-/npm-11.11.0.tgz",
     "npm_integrity": "sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
+    "package_lock_path": "conformance/locks/w3c-vc-data-model-v2.npm-lock.json",
     "package_lock_sha256": "sha256:47769e63f449a60e05fa1569fec39813771bd5c22ce38161b42fe386ba2c4445",
     "review_cadence": "monthly"
   },
