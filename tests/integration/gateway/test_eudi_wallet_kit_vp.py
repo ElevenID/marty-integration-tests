@@ -149,7 +149,7 @@ async def _resolve_signing_service(
     client: GatewayClient,
     organization_id: str,
     *,
-    credential_format: str,
+    credential_format: str | None,
     key_purpose: str,
     algorithm: str,
 ) -> Dict[str, Any]:
@@ -179,7 +179,7 @@ async def _issuer_profile(
     client: GatewayClient,
     organization_id: str,
     *,
-    credential_format: str,
+    credential_format: str | None,
     key_purpose: str,
     algorithm: str,
     name: str,
@@ -216,7 +216,7 @@ async def vp_request_object_issuer_profile(
     return await _issuer_profile(
         authenticated_gateway_client,
         vp_test_org["id"],
-        credential_format="",
+        credential_format=None,
         key_purpose="oid4vp_request_signing",
         algorithm="ES256",
         name="EUDI VP Request Object issuer",
