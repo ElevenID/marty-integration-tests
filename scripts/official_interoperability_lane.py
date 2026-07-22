@@ -436,6 +436,11 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
         "curl",
         "--silent",
         "--show-error",
+        # --resolve changes DNS, but curl otherwise still honors an HTTPS
+        # proxy inherited from a hosted runner. This loopback-only hostname
+        # must remain on the runner and never be sent to an outbound proxy.
+        "--noproxy",
+        parsed.hostname,
         "--max-time",
         "10",
         "--cacert",

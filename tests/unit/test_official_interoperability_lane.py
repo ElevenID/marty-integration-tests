@@ -464,6 +464,8 @@ def test_public_readiness_uses_generated_ca_and_exact_origin(monkeypatch: pytest
     )
     assert "--cacert" in calls[0]
     assert "/material/root-ca.pem" in calls[0]
+    assert "--noproxy" in calls[0]
+    assert "marty-oidf.test" in calls[0]
     assert "--write-out" in calls[0]
     assert any("__MARTY_PUBLIC_HTTP_STATUS__:%{http_code}" in value for value in calls[0])
     assert "marty-oidf.test:18443:127.0.0.1" in calls[0]
