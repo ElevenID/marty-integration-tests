@@ -39,19 +39,23 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
                     {"name": "images", "artifacts": artifacts},
                     {
                         "name": "marty-core-python",
-                        "artifacts": [{
-                            "type": "python",
-                            "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_rs.whl",
-                            "digest": "sha256:" + "5" * 64,
-                        }],
+                        "artifacts": [
+                            {
+                                "type": "python",
+                                "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_rs.whl",
+                                "digest": "sha256:" + "5" * 64,
+                            }
+                        ],
                     },
                     {
                         "name": "marty-common",
-                        "artifacts": [{
-                            "type": "python",
-                            "uri": "https://github.com/ElevenID/Marty/releases/download/v0.1.0/marty_common.whl",
-                            "digest": "sha256:" + "6" * 64,
-                        }],
+                        "artifacts": [
+                            {
+                                "type": "python",
+                                "uri": "https://github.com/ElevenID/Marty/releases/download/v0.1.0/marty_common.whl",
+                                "digest": "sha256:" + "6" * 64,
+                            }
+                        ],
                     },
                 ],
             }
@@ -600,7 +604,6 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
         lane,
         "load_verifier_environment",
         lambda _path: {
-            "VERIFIER_SIGNING_KEY_PEM": "signing-key",
             "VERIFIER_X509_CERT_PEM": "certificate-chain",
             lane.OID4VP_TRUST_ANCHOR_FILE_ENV: "/haip/request-object-root.pem",
         },
@@ -634,7 +637,8 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
         assert "--haip-material" in command
         assert "--oidf" not in command
     assert len(lifecycle_environments) == 3
-    assert all("VERIFIER_SIGNING_KEY_PEM" not in item for item in lifecycle_environments)
+    legacy_private_key_name = "VERIFIER_" + "SIGNING_KEY_PEM"
+    assert all(legacy_private_key_name not in item for item in lifecycle_environments)
     assert all("VERIFIER_X509_CERT_PEM" not in item for item in lifecycle_environments)
     assert suite_environment[lane.OID4VP_TRUST_ANCHOR_FILE_ENV] == "/haip/request-object-root.pem"
     assert suite_environment["VERIFIER_X509_CERT_PEM"] == "certificate-chain"

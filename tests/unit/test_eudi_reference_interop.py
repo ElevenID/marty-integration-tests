@@ -189,6 +189,25 @@ def test_eudi_junit_requires_each_stable_evidence_id_exactly_once(tmp_path: Path
     assert all(record["status"] == "passed" for record in observed.values())
 
 
+def test_eudi_junit_failure_summary_exposes_no_failure_text(tmp_path: Path) -> None:
+    report = tmp_path / "junit.xml"
+    report.write_text(
+        '<testsuites><testsuite><testcase classname="eudi.wallet" name="test_public_path">'
+        '<failure message="secret-bearing detail">private response body</failure>'
+        "</testcase></testsuite></testsuites>",
+        encoding="utf-8",
+    )
+
+    assert eudi.junit_failure_summary(report) == [
+        {
+            "classname": "eudi.wallet",
+            "testcase": "test_public_path",
+            "outcomes": ["failure"],
+        }
+    ]
+    assert "secret" not in json.dumps(eudi.junit_failure_summary(report))
+
+
 @pytest.mark.parametrize(
     ("cases", "message"),
     [

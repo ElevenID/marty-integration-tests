@@ -272,19 +272,21 @@ discovery endpoint, the wallet tester, the verifier Swagger endpoint, and the
 wallet-kit health endpoint. Startup fails and unwinds all projects if any real
 public path is not ready within the configured timeout.
 
-Add `--haip` only when the disposable verifier signing key and matching
-certificate are present in `VERIFIER_SIGNING_KEY_PEM` and
-`VERIFIER_X509_CERT_PEM`. Certification later can supply externally issued
-material without changing the lifecycle or production protocol path.
+Add `--haip` with prepared trust material. The lifecycle first starts Marty,
+resolves the active verifier issuer profile's public DID key inside the
+gateway network, and issues a short-lived certificate for that public key.
+Marty signs only through the issuer profile; its private key remains in KMS.
 
 For local and CI HAIP runs, generate new material for every run. The helper
-creates a P-256 disposable root, a matching P-256 verifier leaf and signing
-key, and a separate P-256 credential-signing JWK for the official mock wallet.
-It writes a ready `marty-verifier-haip.json`, embeds the root as the official
-runner's request-object trust anchor, and stores the leaf-first certificate
-bundle that Marty uses for its `x509_hash` and `x5c` request object. The root
-is omitted from Marty's JOSE `x5c` header by the production verifier code and
-is trusted independently by the official runner.
+prepares a P-256 disposable root and a separate P-256 credential-signing JWK
+for the official mock wallet. After Marty and its migrations are ready, the
+lifecycle retrieves only the issuer profile's public JWK from inside the
+gateway container, issues the matching leaf, destroys the disposable root
+private key, and restarts the flow service in HAIP mode. It writes a ready
+`marty-verifier-haip.json`, embeds the root as the official runner's
+request-object trust anchor, and stores the leaf-first certificate bundle that
+Marty uses for its `x509_hash` and `x5c` request object. The root is omitted
+from Marty's JOSE `x5c` header and is trusted independently by the runner.
 
 ```bash
 python scripts/haip_test_certificates.py \
@@ -308,17 +310,17 @@ python scripts/oidf_conformance.py run \
 ```
 
 The default certificate lifetime is 24 hours and is capped at seven days.
-Private files are created owner-readable/writable, existing material is never
-overwritten, and standard output contains only paths, public certificate
-fingerprints, validity, and configuration digests. Do not commit the generated
-directory or upload it as an artifact.
+Private test-counterparty files are created owner-readable/writable, existing
+material is never overwritten, and standard output contains only paths,
+public certificate fingerprints, validity, and configuration digests. Do not
+commit the generated directory or upload it as an artifact.
 
-For a financed certification run, provide both externally managed
-`VERIFIER_SIGNING_KEY_PEM` and `VERIFIER_X509_CERT_PEM` values and an approved
-HAIP configuration containing the issuer's trust anchor. Those environment
-values take precedence even if `--haip-material` is present, so the same
-Compose path exercises the real verifier implementation. A partial external
-pair is rejected before any container starts.
+For a financed certification run, provision the approved signing key in KMS,
+bind it to the active issuer profile and DID verification method, and provide
+only its externally issued `VERIFIER_X509_CERT_PEM` plus the approved trust
+anchor file. The external certificate takes precedence over disposable
+issuance, but request objects still traverse the identical issuer-profile
+signing path. Direct private-key environment input is rejected.
 
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
@@ -370,7 +372,7 @@ file named by `EUDI_OID4VP_TRUST_ANCHOR_FILE` and validates Marty's JAR `x5c`
 with PKIX. It does not infer verifier trust from the HTTPS truststore. Generated
 `--haip-material` supplies the root automatically; an externally financed
 certification run must supply its approved root file alongside the external
-`VERIFIER_*` pair. The file may contain multiple approved CA certificates, but
+public certificate. The file may contain multiple approved CA certificates, but
 it must not be empty and non-CA certificates are rejected.
 
 Every runner export now includes `evidence.json`. It records the immutable
@@ -479,8 +481,9 @@ evidence is collected. The workflow uploads only the sanitized summary;
 private configuration, generated keys, cookies, raw logs, and unredacted
 official reports remain job-local and expire with the runner.
 
-The EUDI lane also generates a separate disposable HAIP verifier chain. Marty
-uses its leaf key and certificate to create the production signed JAR, while
+The EUDI lane also generates a separate disposable HAIP verifier chain. The
+leaf certifies Marty's issuer-profile DID key, which remains in KMS and signs
+the production JAR through the profile service, while
 the wallet harness receives only that chain's root through the read-only
 `EUDI_OID4VP_TRUST_ANCHOR_FILE` mount. This root is deliberately different
 from the disposable TLS CA. The official EUDI OID4VP library must resolve an
