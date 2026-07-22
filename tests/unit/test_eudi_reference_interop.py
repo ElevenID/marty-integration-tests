@@ -203,9 +203,40 @@ def test_eudi_junit_failure_summary_exposes_no_failure_text(tmp_path: Path) -> N
             "classname": "eudi.wallet",
             "testcase": "test_public_path",
             "outcomes": ["failure"],
+            "categories": ["unclassified"],
         }
     ]
     assert "secret" not in json.dumps(eudi.junit_failure_summary(report))
+
+
+def test_eudi_junit_failure_summary_emits_only_fixed_actionable_categories(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "junit.xml"
+    report.write_text(
+        '<testsuites><testsuite><testcase classname="eudi.wallet" name="test_offer">'
+        '<failure message="HTTP 422 while resolving credential_offer">'
+        "issuer profile DID resolution failed; token=must-not-escape"
+        "</failure></testcase></testsuite></testsuites>",
+        encoding="utf-8",
+    )
+
+    summary = eudi.junit_failure_summary(report)
+    assert summary == [
+        {
+            "classname": "eudi.wallet",
+            "testcase": "test_offer",
+            "outcomes": ["failure"],
+            "categories": [
+                "http-422",
+                "credential-offer",
+                "issuer-profile-or-did",
+            ],
+        }
+    ]
+    serialized = json.dumps(summary)
+    assert "must-not-escape" not in serialized
+    assert "token" not in serialized
 
 
 @pytest.mark.parametrize(
