@@ -171,6 +171,40 @@ def _xml_local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
+    "http-400": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+400\b|400\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b400\b)"),
+    "http-401": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+401\b|401\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b401\b)"),
+    "http-403": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+403\b|403\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b403\b)"),
+    "http-404": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+404\b|404\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b404\b)"),
+    "http-409": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+409\b|409\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b409\b)"),
+    "http-422": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+422\b|422\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b422\b)"),
+    "http-500": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+500\b|500\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b500\b)"),
+    "http-502": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+502\b|502\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b502\b)"),
+    "http-503": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+503\b|503\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b503\b)"),
+    "connectivity": re.compile(
+        r"(?i)(?:connection refused|connect timeout|read timeout|name or service not known|dns)"
+    ),
+    "metadata-contract": re.compile(
+        r"(?i)(?:token_endpoint|nonce_endpoint|credential_issuer|openid-credential-issuer|issuer metadata)"
+    ),
+    "credential-offer": re.compile(r"(?i)(?:credential[_ -]?offer|resolve[_ -]?offer)"),
+    "issuer-profile-or-did": re.compile(
+        r"(?i)(?:issuer[_ -]?profile|issuer DID|DID resolution|remote sign|signing service)"
+    ),
+    "request-object": re.compile(r"(?i)(?:request_uri|request object|authorization request|x509_hash|direct_post)"),
+    "holder-binding": re.compile(r"(?i)(?:holder[_ -]?binding|holder key|key binding)"),
+    "sd-jwt": re.compile(r"(?i)(?:sd[-_ ]jwt|selective disclosure)"),
+    "mdoc": re.compile(r"(?i)(?:mso_mdoc|mdoc|device response)"),
+    "wallet-kit": re.compile(r"(?i)(?:wallet[_ -]?kit|official library)"),
+}
+
+
+def classify_eudi_failure_text(text: str) -> list[str]:
+    """Return fixed public categories without returning any source text."""
+    categories = [category for category, pattern in EUDI_FAILURE_DIAGNOSTIC_PATTERNS.items() if pattern.search(text)]
+    return categories or ["unclassified"]
+
+
 def junit_required_evidence(
     path: Path,
     required_ids: set[str],
@@ -216,7 +250,7 @@ def junit_required_evidence(
 
 
 def junit_failure_summary(path: Path) -> list[dict[str, object]]:
-    """Return safe test identities and outcome classes, never failure text/output."""
+    """Return safe test identities, outcomes, and fixed diagnostic categories."""
     root = ElementTree.parse(path).getroot()
     failures: list[dict[str, object]] = []
     for testcase in root.iter():
@@ -230,11 +264,17 @@ def junit_failure_summary(path: Path) -> list[dict[str, object]]:
             }
         )
         if outcomes:
+            failure_text = "\n".join(
+                " ".join(value for value in (node.attrib.get("message", ""), node.text or "") if value)
+                for node in testcase
+                if _xml_local_name(node.tag) in {"failure", "error"}
+            )
             failures.append(
                 {
                     "classname": testcase.attrib.get("classname", ""),
                     "testcase": testcase.attrib.get("name", ""),
                     "outcomes": outcomes,
+                    "categories": classify_eudi_failure_text(failure_text),
                 }
             )
     return failures
@@ -454,7 +494,10 @@ def run(args: argparse.Namespace) -> int:
         detail += f"\nEUDI evidence failure: {skipped} test(s) were skipped.\n"
     (output / "runner.log").write_text(detail, encoding="utf-8")
     if failure_summary:
-        print("EUDI failing tests (names and outcome classes only):", file=sys.stderr)
+        print(
+            "EUDI failing tests (names, outcome classes, and fixed diagnostic categories only):",
+            file=sys.stderr,
+        )
         print(json.dumps(failure_summary, sort_keys=True), file=sys.stderr)
     write_evidence(
         output,
