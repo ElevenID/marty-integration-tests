@@ -169,6 +169,8 @@ def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates() -> None:
         [
             {"service": {"id": "managed-service", "key_reference": "managed-key"}},
             {"profile": {"id": "issuer-profile"}},
+            {"service": {"id": "request-service", "key_reference": "request-key"}},
+            {"profile": {"id": "request-profile"}},
             {"id": "compliance-profile"},
             {"id": "revocation-profile"},
             {"id": "revocation-profile"},
@@ -202,6 +204,8 @@ def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates() -> None:
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
         "eudi_issuer_profile_id": "issuer-profile",
         "eudi_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
+        "eudi_request_issuer_profile_id": "request-profile",
+        "eudi_request_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
         "eudi_compliance_profile_id": "compliance-profile",
         "eudi_revocation_profile_id": "revocation-profile",
         "eudi_passport_template_id": "passport-template",
@@ -213,7 +217,13 @@ def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates() -> None:
     assert profile_body["issuer_did"] == result["eudi_issuer_did"]
     assert profile_body["signing_service_id"] == "managed-service"
     assert profile_body["signing_key_reference"] == "managed-key"
-    for _path, _method, body in calls[5:]:
+    request_profile_body = calls[3][2]
+    assert request_profile_body is not None
+    assert request_profile_body["issuer_did"] == result["eudi_request_issuer_did"]
+    assert request_profile_body["signing_service_id"] == "request-service"
+    assert request_profile_body["signing_key_reference"] == "request-key"
+    assert request_profile_body["key_purpose"] == "oid4vp_request_signing"
+    for _path, _method, body in calls[7:]:
         assert body is not None
         assert body["issuer_profile_id"] == "issuer-profile"
         assert "signing_service_id" not in body

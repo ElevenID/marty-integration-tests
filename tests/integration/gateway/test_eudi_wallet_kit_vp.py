@@ -212,18 +212,15 @@ async def _issuer_profile(
 
 @pytest.fixture
 async def vp_request_object_issuer_profile(
-    authenticated_gateway_client: GatewayClient,
     vp_test_org,
 ):
-    """Create the tenant-local DID identity that signs OID4VP Request Objects."""
-    return await _issuer_profile(
-        authenticated_gateway_client,
-        vp_test_org["id"],
-        credential_format=None,
-        key_purpose="oid4vp_request_signing",
-        algorithm="ES256",
-        name="EUDI VP Request Object issuer",
-    )
+    """Select the pre-provisioned DID profile that signs request objects."""
+    profile_id = os.environ.get("EUDI_TEST_REQUEST_ISSUER_PROFILE_ID", "").strip()
+    issuer_did = os.environ.get("EUDI_TEST_REQUEST_ISSUER_DID", "").strip()
+    if not profile_id or not issuer_did:
+        raise RuntimeError("EUDI request-object issuer profile identity is required")
+    assert issuer_did.endswith(f":orgs:{vp_test_org['id']}")
+    return {"id": profile_id, "issuer_did": issuer_did}
 
 
 @pytest.fixture
@@ -236,14 +233,11 @@ async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_te
         credential_format="sd_jwt_vc",
         frameworks=["eudi"],
     )
-    issuer = await _issuer_profile(
-        authenticated_gateway_client,
-        vp_test_org["id"],
-        credential_format="dc+sd-jwt",
-        key_purpose="vc_jwt_issuer",
-        algorithm="ES256",
-        name="EUDI VP SD-JWT issuer",
-    )
+    issuer_profile_id = os.environ.get("EUDI_TEST_ISSUER_PROFILE_ID", "").strip()
+    issuer_did = os.environ.get("EUDI_TEST_ISSUER_DID", "").strip()
+    if not issuer_profile_id or not issuer_did:
+        raise RuntimeError("EUDI credential issuer profile identity is required")
+    assert issuer_did.endswith(f":orgs:{vp_test_org['id']}")
     revocation = await authenticated_gateway_client.create_revocation_profile(
         organization_id=vp_test_org["id"],
         name="EUDI VP status list",
@@ -251,7 +245,7 @@ async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_te
     )
     return {
         "compliance_profile_id": compliance["id"],
-        "issuer_profile_id": issuer["id"],
+        "issuer_profile_id": issuer_profile_id,
         "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))[
             "id"
         ],

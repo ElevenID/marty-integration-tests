@@ -33,18 +33,18 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Dict
 
 import pytest
 
 from .helpers.eudi_client import (
     AGE_VERIFICATION_DCQL_QUERY,
-    EUDIVerifierClient,
-    EUDIWalletTesterClient,
     MDL_DCQL_QUERY,
     PID_DCQL_QUERY,
     SD_JWT_DCQL_QUERY,
+    EUDIVerifierClient,
+    EUDIWalletTesterClient,
     build_kb_jwt,
+    dcql_query_for_sd_jwt,
     select_disclosures,
 )
 from .helpers.gateway_client import GatewayClient
@@ -80,8 +80,6 @@ TEMPLATES = {
         "40000000-0000-0000-0000-000000000007",
     ),
 }
-VCT_ORIGIN = os.getenv("EUDI_TEST_VCT_ORIGIN", GATEWAY_URL).rstrip("/")
-
 TEST_CLAIMS = {
     "given_name": "EUDI",
     "family_name": "Interop",
@@ -580,8 +578,12 @@ class TestEUDIVerifierCryptoValidation:
 
         # 2. Initialize EUDI verifier transaction
         nonce = uuid.uuid4().hex
+        dcql_query = dcql_query_for_sd_jwt(
+            raw_credential,
+            requested_claims=["given_name", "family_name"],
+        )
         txn = await eudi_verifier.initialize_transaction(
-            dcql_query=SD_JWT_DCQL_QUERY,
+            dcql_query=dcql_query,
             nonce=nonce,
         )
         assert txn.get("request_uri"), f"No request_uri: {txn}"
@@ -914,19 +916,10 @@ class TestSelectiveDisclosure:
 
         # 3. Build presentation with only the selected claims
         nonce = uuid.uuid4().hex
-        dcql_query = {
-            "credentials": [{
-                "id": "sd-jwt-query",
-                "format": "dc+sd-jwt",
-                "meta": {"vct_values": [
-                    f"{VCT_ORIGIN}/credentials/OpenBadge",
-                    "https://marty.example/credentials/open_badge",
-                    "https://beta.elevenidllc.com/credentials/open_badge",
-                    "urn:credential:open_badge",
-                ]},
-                "claims": [{"path": ["given_name"]}],
-            }],
-        }
+        dcql_query = dcql_query_for_sd_jwt(
+            raw_credential,
+            requested_claims=["given_name"],
+        )
         txn = await eudi_verifier.initialize_transaction(
             dcql_query=dcql_query, nonce=nonce,
         )
