@@ -20,8 +20,14 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.security.KeyStore
+import java.security.SecureRandom
 import java.security.Signature
 import java.security.interfaces.ECPrivateKey
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
 
 object WalletIssuanceService {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -115,7 +121,41 @@ object WalletIssuanceService {
         issuerMetadataPolicy = IssuerMetadataPolicy.IgnoreSigned,
     )
 
+    private fun configuredTlsContext(): SSLContext? {
+        val trustStorePath = System.getProperty("javax.net.ssl.trustStore")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val trustStorePassword = requireNotNull(
+            System.getProperty("javax.net.ssl.trustStorePassword")?.takeIf { it.isNotEmpty() }
+        ) { "configured TLS truststore requires a password" }
+        val trustStoreType = System.getProperty("javax.net.ssl.trustStoreType")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: KeyStore.getDefaultType()
+
+        val trustStore = KeyStore.getInstance(trustStoreType)
+        Files.newInputStream(Path.of(trustStorePath)).use { input ->
+            trustStore.load(input, trustStorePassword.toCharArray())
+        }
+        val trustManagers = TrustManagerFactory.getInstance(
+            TrustManagerFactory.getDefaultAlgorithm()
+        ).apply {
+            init(trustStore)
+        }
+        return SSLContext.getInstance("TLS").apply {
+            init(null, trustManagers.trustManagers, SecureRandom())
+        }
+    }
+
     private fun createHttpClient(): HttpClient = HttpClient(Java) {
+        engine {
+            configuredTlsContext()?.let { tlsContext ->
+                config {
+                    sslContext(tlsContext)
+                }
+            }
+        }
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }
