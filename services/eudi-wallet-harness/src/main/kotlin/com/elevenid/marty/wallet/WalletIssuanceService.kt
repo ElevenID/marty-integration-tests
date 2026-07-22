@@ -67,14 +67,25 @@ object WalletIssuanceService {
     }
 
     private fun classifyMetadataFailure(reason: Throwable, boundary: String): String {
-        val classes = generateSequence(reason) { it.cause }
-            .mapNotNull { it::class.simpleName }
-            .toSet()
+        val causes = generateSequence(reason) { it.cause }.toList()
+        val classes = causes.mapNotNull { it::class.simpleName }.toSet()
+        val messages = causes.mapNotNull { it.message }
         val detail = when {
             // Prefer the transport root cause over the library's outer
             // UnableToFetch wrapper so a CI run remains directly actionable.
-            "SSLHandshakeException" in classes || "CertPathBuilderException" in classes ->
-                "tls-trust-failed"
+            "CertPathBuilderException" in classes || messages.any {
+                it.contains("PKIX path building failed", ignoreCase = true) ||
+                    it.contains("unable to find valid certification path", ignoreCase = true)
+            } -> "tls-certificate-path-untrusted"
+            classes.any { it in setOf("CertificateExpiredException", "CertificateNotYetValidException") } ->
+                "tls-certificate-validity-failed"
+            messages.any {
+                it.contains("No subject alternative DNS name matching", ignoreCase = true) ||
+                    it.contains("No name matching", ignoreCase = true)
+            } -> "tls-hostname-mismatch"
+            messages.any { it.contains("trustAnchors parameter must be non-empty", ignoreCase = true) } ->
+                "tls-truststore-empty"
+            "SSLHandshakeException" in classes -> "tls-handshake-failed"
             "UnknownHostException" in classes -> "hostname-resolution-failed"
             "ConnectException" in classes || "HttpConnectTimeoutException" in classes ->
                 "connection-failed"

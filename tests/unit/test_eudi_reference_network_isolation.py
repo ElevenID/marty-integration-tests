@@ -25,7 +25,7 @@ def test_eudi_reference_wallets_only_reach_marty_through_the_tls_bridge() -> Non
 
     assert "docker.io/alpine/socat:1.8.0.3@sha256:" in port_bridge
     assert "TCP-LISTEN:${OIDF_TLS_HOST_PORT" in port_bridge
-    assert "TCP:oidf-tls-proxy:443" in port_bridge
+    assert "TCP:oidf-tls-proxy:${OIDF_INTERNAL_TLS_PORT" in port_bridge
     assert "${OIDF_CONFORMANCE_BRIDGE_ALIAS" in port_bridge
     assert "marty_public_url:" in port_bridge
     assert "marty_oidf_bridge: {}" in port_bridge

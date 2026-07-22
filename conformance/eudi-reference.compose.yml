@@ -12,17 +12,18 @@
 #     -f conformance/eudi-reference.compose.yml up -d
 
 services:
-  # Preserve the exact public Marty origin inside Docker. Publishing
-  # ${OIDF_TLS_HOST_PORT} on the host does not make that port exist on the
-  # tls-proxy container, which listens on 443. This byte-for-byte TCP bridge
-  # gives wallets the public hostname and port without rewriting requests or
-  # terminating TLS. It is the only EUDI service attached to Marty's external
+  # Preserve the exact public Marty origin inside Docker. Publishing a host
+  # port alone does not make it reachable between Compose networks. The Marty
+  # conformance proxy deliberately listens on OIDF_INTERNAL_TLS_PORT (the same
+  # port encoded in its public URLs), so both ends of this byte-for-byte bridge
+  # must use the generated port contract. The bridge does not rewrite requests
+  # or terminate TLS and is the only EUDI service attached to Marty's external
   # OIDF runner network.
   eudi-marty-public-port-bridge:
     image: docker.io/alpine/socat:1.8.0.3@sha256:a26f4bcee25ad4a4096ce91e596c0a2fffcbb51f7fd198dd87a5c86eae66f0e1
     command:
       - TCP-LISTEN:${OIDF_TLS_HOST_PORT:?set the Marty public TLS port},fork,reuseaddr
-      - TCP:oidf-tls-proxy:443
+      - TCP:oidf-tls-proxy:${OIDF_INTERNAL_TLS_PORT:?set the Marty internal TLS listener port}
     networks:
       marty_public_url:
         aliases:
