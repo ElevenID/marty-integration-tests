@@ -112,7 +112,6 @@ async def dtc_request_object_issuer_profile(
         try:
             resolved = await authenticated_gateway_client.resolve_signing_service(
                 organization_id=organization_id,
-                credential_format="",
                 key_purpose="oid4vp_request_signing",
                 algorithm="ES256",
             )
