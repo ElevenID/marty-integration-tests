@@ -30,17 +30,5 @@
     "reason": "Marty's active issuer profile does not advertise credential encryption. Enable this negative module only with reviewed encryption support and interoperability coverage.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
-  },
-  {
-    "test-name": "oid4vp-1final-verifier-request-uri-method-post",
-    "configuration-filename": "marty-verifier.json",
-    "variant": {
-      "client_id_prefix": "redirect_uri",
-      "request_method": "url_query",
-      "vp_profile": "plain_vp"
-    },
-    "reason": "Marty's production verifier flow currently supports GET retrieval for request_uri objects. This upstream module exercises request_uri_method=post and remains narrowly skipped until POST retrieval is implemented and selected by the production flow.",
-    "owner": "ElevenID",
-    "expires": "2027-01-01"
   }
 ]

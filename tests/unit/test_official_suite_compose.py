@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from hashlib import sha256
 from pathlib import Path
 
@@ -469,6 +470,55 @@ def test_failed_up_unwinds_only_started_projects_in_reverse(tmp_path: Path, monk
         ("oidf", "down"),
         ("marty", "down"),
     ]
+
+
+def test_eudi_failure_is_classified_before_teardown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[str, str]] = []
+    diagnostic_calls: list[str] = []
+    monkeypatch.setattr(lifecycle, "child_environment", dict)
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+
+    def fake_run(command: list[str], _environment: dict[str, str]) -> int:
+        call = (component(command), action(command))
+        calls.append(call)
+        return 17 if call == ("eudi", "up") else 0
+
+    def fake_subprocess_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        rendered = " ".join(command)
+        diagnostic_calls.append(rendered)
+        if " ps " in f" {rendered} ":
+            return subprocess.CompletedProcess(command, 0, "verifier-id\n", "")
+        if " inspect " in f" {rendered} ":
+            return subprocess.CompletedProcess(command, 0, '{"ExitCode":1,"OOMKilled":false}\n', "")
+        if " logs " in f" {rendered} ":
+            return subprocess.CompletedProcess(command, 0, "APPLICATION FAILED TO START: password was incorrect", "")
+        raise AssertionError(f"unexpected diagnostic command: {rendered}")
+
+    monkeypatch.setattr(lifecycle, "run", fake_run)
+    monkeypatch.setattr(lifecycle.subprocess, "run", fake_subprocess_run)
+    result = lifecycle.main(
+        [
+            "up",
+            "--run-id",
+            "run1",
+            "--marty-ui",
+            str(marty_checkout(tmp_path)),
+            "--eudi",
+        ]
+    )
+
+    assert result == 17
+    assert calls == [("marty", "up"), ("eudi", "up"), ("eudi", "down"), ("marty", "down")]
+    assert [
+        marker for marker in (" ps ", " inspect ", " logs ") if any(marker in f" {call} " for call in diagnostic_calls)
+    ] == [" ps ", " inspect ", " logs "]
+    stderr = capsys.readouterr().err
+    assert "exit-code=1" in stderr
+    assert "oom-killed=false" in stderr
+    assert "categories=access-certificate-password,application-startup" in stderr
+    assert "password was incorrect" not in stderr
 
 
 def test_down_always_runs_eudi_oidf_then_marty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

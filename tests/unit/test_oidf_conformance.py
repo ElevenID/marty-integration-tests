@@ -54,20 +54,15 @@ def test_haip_post_retrieval_module_is_not_expected_to_skip() -> None:
     assert request_uri_post == []
 
 
-def test_standard_post_retrieval_skip_is_narrowly_scoped_to_the_standard_plan() -> None:
+def test_request_uri_post_retrieval_is_not_expected_to_skip() -> None:
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
-    request_uri_post = next(
-        item
-        for item in skips
-        if item["test-name"] == "oid4vp-1final-verifier-request-uri-method-post"
-        and item["configuration-filename"] == "marty-verifier.json"
-    )
-    assert request_uri_post["variant"] == {
-        "client_id_prefix": "redirect_uri",
-        "request_method": "url_query",
-        "vp_profile": "plain_vp",
-    }
-    assert "request_uri_method=post" in request_uri_post["reason"]
+    request_uri_post = [item for item in skips if item["test-name"] == "oid4vp-1final-verifier-request-uri-method-post"]
+    assert request_uri_post == []
+
+
+def test_official_runner_always_emits_actionable_failure_detail() -> None:
+    source = (ROOT / "scripts" / "oidf_conformance.py").read_text(encoding="utf-8")
+    assert '"--no-parallel",\n        "--verbose",' in source
 
 
 def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:

@@ -10,6 +10,7 @@ reverse order in which projects were started.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -41,6 +42,24 @@ RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 REMOTE_UI_ROOT = "MARTY_CONFORMANCE_REMOTE_UI_ROOT"
 REMOTE_OIDF_ROOT = "OIDF_CONFORMANCE_REMOTE_RUNNER_ROOT"
 REMOTE_EUDI_CONFIG_ROOT = "EUDI_CONFORMANCE_CONFIG_ROOT"
+EUDI_STARTUP_PATTERNS = {
+    "access-certificate-algorithm": re.compile(
+        r"NoSuchAlgorithmException|Curve not supported|signing.algorithm", re.IGNORECASE
+    ),
+    "access-certificate-client-id": re.compile(
+        r"Original Client Id|not contained in.*Subject Alternative", re.IGNORECASE
+    ),
+    "access-certificate-keystore": re.compile(
+        r"Could not load (?:the )?Key[Ss]tore|Key[Ss]tore.*(?:not found|failed)", re.IGNORECASE
+    ),
+    "access-certificate-password": re.compile(r"password was incorrect|UnrecoverableKeyException", re.IGNORECASE),
+    "application-startup": re.compile(
+        r"Application run failed|BeanCreationException|APPLICATION FAILED TO START", re.IGNORECASE
+    ),
+    "jvm-memory-exhaustion": re.compile(
+        r"OutOfMemoryError|unable to create native thread|Cannot reserve", re.IGNORECASE
+    ),
+}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -307,6 +326,68 @@ def run(command: list[str], environment: dict[str, str]) -> int:
     return subprocess.run(command, check=False, env=environment).returncode
 
 
+def emit_eudi_startup_diagnostic(project: str, environment: dict[str, str]) -> None:
+    """Classify verifier startup failure without publishing sensitive logs."""
+    selector = [
+        "--filter",
+        f"label=com.docker.compose.project={project}",
+        "--filter",
+        "label=com.docker.compose.service=eudi-verifier",
+    ]
+    containers = subprocess.run(
+        docker_command(["ps", "--all", "--quiet", *selector]),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+    ids = containers.stdout.split() if containers.returncode == 0 else []
+    exit_code: int | str = "unavailable"
+    oom_killed: bool | str = "unavailable"
+    categories: set[str] = set()
+    if len(ids) != 1:
+        categories.add("container-unavailable")
+    else:
+        container = ids[0]
+        inspected = subprocess.run(
+            docker_command(["inspect", "--format", "{{json .State}}", container]),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+        if inspected.returncode == 0:
+            try:
+                state = json.loads(inspected.stdout)
+                exit_code = int(state["ExitCode"])
+                oom_killed = bool(state["OOMKilled"])
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                categories.add("state-unavailable")
+        else:
+            categories.add("state-unavailable")
+        logs = subprocess.run(
+            docker_command(["logs", "--tail", "250", container]),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+        if logs.returncode == 0:
+            combined = f"{logs.stdout}\n{logs.stderr}"
+            categories.update(name for name, pattern in EUDI_STARTUP_PATTERNS.items() if pattern.search(combined))
+        else:
+            categories.add("logs-unavailable")
+    if oom_killed is True:
+        categories.add("container-oom-killed")
+    if not categories:
+        categories.add("unclassified-startup-failure")
+    print("--- EUDI verifier startup diagnostic (redacted) ---", file=sys.stderr)
+    print(f"exit-code={exit_code}", file=sys.stderr)
+    print(f"oom-killed={str(oom_killed).lower()}", file=sys.stderr)
+    print(f"categories={','.join(sorted(categories))}", file=sys.stderr)
+    print("--- end EUDI verifier startup diagnostic ---", file=sys.stderr)
+
+
 def marty_command(args: argparse.Namespace, projects: dict[str, str], action: str) -> list[str]:
     script = args.marty_ui.resolve() / "scripts" / "conformance_stack.py"
     if not script.is_file():
@@ -432,6 +513,8 @@ def execute(args: argparse.Namespace) -> int:
         started.append(name)
         result = run(command(), environment)
         if result:
+            if name == "eudi":
+                emit_eudi_startup_diagnostic(projects["eudi"], environment)
             stop_started(started, args, projects, environment)
             return result
         if name == "eudi":
