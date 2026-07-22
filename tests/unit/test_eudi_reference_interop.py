@@ -247,6 +247,27 @@ def test_eudi_failure_categories_recognize_gateway_client_status() -> None:
     assert categories == ["http-422", "signing-service-resolution"]
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "category"),
+    [
+        ("offer-json-invalid", "offer-document-invalid"),
+        ("issuer-metadata-json-invalid", "issuer-metadata-json-invalid"),
+        ("issuer-metadata-credential-configurations-empty", "issuer-metadata-configurations-empty"),
+        ("authorization-server-metadata-resolution-failed", "authorization-server-metadata-failed"),
+        ("issuer-metadata-tls-trust-failed", "wallet-tls-trust-failed"),
+        ("issuer-metadata-hostname-resolution-failed", "wallet-hostname-resolution-failed"),
+        ("issuer-metadata-connection-failed", "wallet-connection-failed"),
+    ],
+)
+def test_eudi_failure_categories_recognize_public_safe_wallet_codes(
+    diagnostic: str,
+    category: str,
+) -> None:
+    categories = eudi.classify_eudi_failure_text(diagnostic)
+
+    assert category in categories
+
+
 def test_eudi_junit_failure_summary_classifies_safe_oid4vci_error_codes(
     tmp_path: Path,
 ) -> None:

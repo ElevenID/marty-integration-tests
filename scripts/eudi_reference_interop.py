@@ -218,6 +218,24 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "wallet-offer-resolution": re.compile(r"(?i)/issuance/resolve-offer\b"),
     "wallet-preauthorized-issuance": re.compile(r"(?i)/issuance/pre-auth\b"),
     "wallet-presentation": re.compile(r"(?i)/presentation/(?:submit|direct-post|build-vp-token)\b"),
+    "offer-parameter-invalid": re.compile(
+        r"(?i)offer-(?:endpoint-url|parameter-selection|reference-url)-(?:invalid)\b"
+    ),
+    "offer-document-invalid": re.compile(r"(?i)offer-(?:json|issuer-id|credential-configuration|grants)-invalid\b"),
+    "offer-fetch-failed": re.compile(r"(?i)offer-fetch-failed\b"),
+    "issuer-metadata-fetch-failed": re.compile(r"(?i)issuer-metadata-fetch-failed\b"),
+    "issuer-metadata-json-invalid": re.compile(r"(?i)issuer-metadata-json-invalid\b"),
+    "issuer-metadata-field-invalid": re.compile(
+        r"(?i)issuer-metadata-(?:issuer-id|authorization-server-url|credential-endpoint|nonce-endpoint|"
+        r"deferred-endpoint|notification-endpoint|credential-configuration|batch-size)-invalid\b"
+    ),
+    "issuer-metadata-configurations-empty": re.compile(r"(?i)issuer-metadata-credential-configurations-empty\b"),
+    "authorization-server-metadata-failed": re.compile(r"(?i)authorization-server-metadata-[a-z-]+\b"),
+    "wallet-tls-trust-failed": re.compile(r"(?i)(?:issuer|authorization-server)-metadata-tls-trust-failed\b"),
+    "wallet-hostname-resolution-failed": re.compile(
+        r"(?i)(?:issuer|authorization-server)-metadata-hostname-resolution-failed\b"
+    ),
+    "wallet-connection-failed": re.compile(r"(?i)(?:issuer|authorization-server)-metadata-connection-failed\b"),
 }
 
 
