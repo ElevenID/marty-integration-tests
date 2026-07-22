@@ -13,9 +13,13 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).parent))
 from oidf_marty_public_login import authenticated_json_request
 from oidf_marty_start_verification import gateway_session_id, https_url
+from tests.integration.gateway.helpers.mdoc_test_certificate import (
+    create_disposable_issuer_certificate_chain,
+)
 
 DEFAULT_ORGANIZATION = "00000000-0000-0000-0000-000000000001"
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
@@ -418,7 +422,13 @@ def bootstrap_eudi(
     template identifiers; KMS service and key references never cross into the
     issuance request path.
     """
-    def provision_profile(label: str, key_purpose: str) -> tuple[str, str]:
+
+    def provision_profile(
+        label: str,
+        key_purpose: str,
+        *,
+        attach_certificate: bool = False,
+    ) -> tuple[str, str]:
         custody_service = resolve_signing_service(
             gateway_url,
             session_id,
@@ -443,9 +453,51 @@ def bootstrap_eudi(
             method="POST",
             json_body=payload,
         )
-        return issuer_profile_response_id(created), payload["issuer_did"]
+        profile_id = issuer_profile_response_id(created)
+        if attach_certificate:
+            identity = request(
+                gateway_url,
+                session_id,
+                (
+                    f"/v1/signing-keys/issuer-profiles/{profile_id}/public-identity?"
+                    f"{urlencode({'organization_id': organization_id})}"
+                ),
+                method="GET",
+            )
+            public_jwk = identity.get("public_jwk") if isinstance(identity, dict) else None
+            if not isinstance(public_jwk, dict):
+                raise RuntimeError("issuer profile public identity returned no public JWK")
+            certificate = create_disposable_issuer_certificate_chain(
+                public_jwk,
+                organization_id=organization_id,
+                profile_label=label,
+            )
+            attached = request(
+                gateway_url,
+                session_id,
+                (
+                    f"/v1/signing-keys/issuer-profiles/{profile_id}/certificate?"
+                    f"{urlencode({'organization_id': organization_id})}"
+                ),
+                method="PUT",
+                json_body={
+                    "cert_pem": certificate.leaf_pem,
+                    "cert_chain_pem": certificate.chain_pem,
+                },
+            )
+            if (
+                not isinstance(attached, dict)
+                or attached.get("issuer_profile_id") != profile_id
+                or attached.get("certificate_chain_length") != 2
+            ):
+                raise RuntimeError("issuer profile certificate attachment was not confirmed")
+        return profile_id, payload["issuer_did"]
 
-    issuer_profile_id, issuer_did = provision_profile("EUDI SD-JWT", "vc_jwt_issuer")
+    issuer_profile_id, issuer_did = provision_profile(
+        "EUDI SD-JWT",
+        "vc_jwt_issuer",
+        attach_certificate=True,
+    )
     request_profile_id, request_issuer_did = provision_profile(
         "EUDI OID4VP request",
         "oid4vp_request_signing",

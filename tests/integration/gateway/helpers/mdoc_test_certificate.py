@@ -52,13 +52,14 @@ def p256_public_key_from_jwk(jwk: dict[str, Any]) -> ec.EllipticCurvePublicKey:
         raise ValueError("mDoc signing JWK is not a point on P-256") from exc
 
 
-def create_disposable_mdoc_certificate_chain(
+def create_disposable_issuer_certificate_chain(
     jwk: dict[str, Any],
     *,
     organization_id: str,
+    profile_label: str = "issuer",
     now: datetime | None = None,
 ) -> MdocCertificateMaterial:
-    """Issue a short-lived DSC for the real KMS public key using a test CA."""
+    """Issue a short-lived certificate for a profile's real KMS public key."""
     checked_at = (now or datetime.now(UTC)).astimezone(UTC)
     signer_public_key = p256_public_key_from_jwk(jwk)
     ca_private_key = ec.generate_private_key(ec.SECP256R1())
@@ -89,7 +90,7 @@ def create_disposable_mdoc_certificate_chain(
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_private_key.public_key()), critical=False)
         .sign(ca_private_key, hashes.SHA256())
     )
-    leaf_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"Marty mdoc DSC {organization_id}")])
+    leaf_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"Marty {profile_label} {organization_id}")])
     leaf_certificate = (
         x509.CertificateBuilder()
         .subject_name(leaf_subject)
@@ -124,4 +125,20 @@ def create_disposable_mdoc_certificate_chain(
         chain_pem=chain_pem,
         leaf_sha256=leaf_certificate.fingerprint(hashes.SHA256()).hex(),
         trust_anchor_sha256=ca_certificate.fingerprint(hashes.SHA256()).hex(),
+    )
+
+
+def create_disposable_mdoc_certificate_chain(
+    jwk: dict[str, Any],
+    *,
+    organization_id: str,
+    now: datetime | None = None,
+) -> MdocCertificateMaterial:
+    """Backward-compatible mdoc-specific name for the generic profile helper."""
+
+    return create_disposable_issuer_certificate_chain(
+        jwk,
+        organization_id=organization_id,
+        profile_label="mdoc DSC",
+        now=now,
     )

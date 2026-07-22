@@ -269,43 +269,6 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         key_purpose="mdoc_dsc",
         algorithm="ES256",
     )
-    service_id = str(service["id"])
-    key_reference = str(service.get("key_reference") or "") or None
-    publication = await authenticated_gateway_client.publish_signing_service_jwks(
-        service_id=service_id,
-        organization_id=vp_test_org["id"],
-        key_reference=key_reference,
-    )
-    public_jwk = publication.get("jwk")
-    if not isinstance(public_jwk, dict):
-        raise RuntimeError("Gateway did not return the mDoc signing service public JWK")
-    certificate = create_disposable_mdoc_certificate_chain(
-        public_jwk,
-        organization_id=vp_test_org["id"],
-    )
-    stored = await authenticated_gateway_client.store_signing_service_certificate(
-        service_id=service_id,
-        organization_id=vp_test_org["id"],
-        cert_pem=certificate.leaf_pem,
-        cert_chain_pem=certificate.chain_pem,
-    )
-    assert stored.get("ok") is True
-    # Republish after certificate attachment so the same public JWKS path that
-    # relying parties use exposes the corresponding x5c chain.
-    publication = await authenticated_gateway_client.publish_signing_service_jwks(
-        service_id=service_id,
-        organization_id=vp_test_org["id"],
-        key_reference=key_reference,
-    )
-    published_jwk = publication.get("jwk")
-    assert isinstance(published_jwk, dict)
-    assert len(published_jwk.get("x5c") or []) == 2
-    logger.info(
-        "[mDoc] Attached disposable DSC %s with test trust anchor %s to service %s",
-        certificate.leaf_sha256,
-        certificate.trust_anchor_sha256,
-        service_id,
-    )
     issuer = await _issuer_profile(
         authenticated_gateway_client,
         vp_test_org["id"],
@@ -314,6 +277,35 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         algorithm="ES256",
         name="EUDI VP mDoc document signer",
         service=service,
+    )
+    identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
+        issuer_profile_id=issuer["id"],
+        organization_id=vp_test_org["id"],
+    )
+    public_jwk = identity.get("public_jwk")
+    if not isinstance(public_jwk, dict):
+        raise RuntimeError("Gateway did not return the issuer profile public JWK")
+    certificate = create_disposable_mdoc_certificate_chain(
+        public_jwk,
+        organization_id=vp_test_org["id"],
+    )
+    stored = await authenticated_gateway_client.store_issuer_profile_certificate(
+        issuer_profile_id=issuer["id"],
+        organization_id=vp_test_org["id"],
+        cert_pem=certificate.leaf_pem,
+        cert_chain_pem=certificate.chain_pem,
+    )
+    assert stored.get("ok") is True
+    published_identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
+        issuer_profile_id=issuer["id"],
+        organization_id=vp_test_org["id"],
+    )
+    assert len(published_identity.get("x5c") or []) == 2
+    logger.info(
+        "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer profile %s",
+        certificate.leaf_sha256,
+        certificate.trust_anchor_sha256,
+        issuer["id"],
     )
     revocation = await authenticated_gateway_client.create_revocation_profile(
         organization_id=vp_test_org["id"],
