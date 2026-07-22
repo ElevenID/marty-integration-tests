@@ -184,6 +184,7 @@ def policy_payload(
     *,
     w3c: bool,
     run_id: str,
+    presentation: bool = True,
 ) -> dict[str, object]:
     # The W3C verifier suite supplies standards-conforming generic credentials,
     # not Marty's product-specific identity schema. Marty's policy schema still
@@ -195,22 +196,31 @@ def policy_payload(
         if w3c
         else tuple((claim, True) for claim in ("given_name", "family_name", "birthdate"))
     )
-    label = "W3C VC v2" if w3c else "OID4VP SD-JWT"
+    if not w3c and not presentation:
+        raise ValueError("OID4VP fixtures require a presentation policy")
+    label = (
+        f"W3C VC v2 {'presentation' if presentation else 'credential'}"
+        if w3c
+        else "OID4VP SD-JWT"
+    )
     return {
         "organization_id": organization_id,
         "name": f"Official {label} {run_id}",
         "purpose": f"Disposable {label} official-suite verification",
-        # Both the OIDF plans and W3C Data Integrity presentations are holder
-        # bound. Activating holder binding makes the ordinary policy service
-        # supply the expected audience/domain and nonce/challenge to marty-core
-        # instead of weakening the disposable fixture path.
-        "holder_binding": {"required": True},
+        # OIDF and W3C Data Integrity presentations are holder bound. A JWT VC
+        # verified outside a presentation is not: requiring a VP challenge on
+        # that path would reject a valid credential before signature checks.
+        "holder_binding": {"required": presentation},
         "credential_requirements": [
             {
                 "credential_template_id": template_id,
                 "display_name": label,
                 "credential_payload_format": (
-                    "w3c_vcdm_v2_jwt_vc" if w3c else "w3c_vcdm_v2_sd_jwt"
+                    "w3c_vcdm_v2_di"
+                    if w3c and presentation
+                    else "w3c_vcdm_v2_jwt_vc"
+                    if w3c
+                    else "w3c_vcdm_v2_sd_jwt"
                 ),
                 "requested_claims": [
                     {
@@ -413,25 +423,39 @@ def bootstrap(
             ),
         )
         template_id = response_id(created_template, f"{prefix} credential template")
-        created_policy = request(
-            gateway_url,
-            session_id,
-            "/v1/presentation-policies",
-            method="POST",
-            json_body=policy_payload(organization_id, template_id, w3c=w3c, run_id=run_id),
-        )
-        policy_id = response_id(created_policy, f"{prefix} presentation policy")
-        activated = request(
-            gateway_url,
-            session_id,
-            f"/v1/presentation-policies/{policy_id}/activate",
-            method="POST",
-        )
-        activated_id = response_id(activated, f"activated {prefix} presentation policy")
-        if activated_id != policy_id:
-            raise RuntimeError(f"activated {prefix} policy id changed unexpectedly")
+        policy_roles = ("credential", "presentation") if w3c else ("presentation",)
+        policy_ids: dict[str, str] = {}
+        for role in policy_roles:
+            created_policy = request(
+                gateway_url,
+                session_id,
+                "/v1/presentation-policies",
+                method="POST",
+                json_body=policy_payload(
+                    organization_id,
+                    template_id,
+                    w3c=w3c,
+                    run_id=run_id,
+                    presentation=role == "presentation",
+                ),
+            )
+            policy_id = response_id(created_policy, f"{prefix} {role} policy")
+            activated = request(
+                gateway_url,
+                session_id,
+                f"/v1/presentation-policies/{policy_id}/activate",
+                method="POST",
+            )
+            activated_id = response_id(activated, f"activated {prefix} {role} policy")
+            if activated_id != policy_id:
+                raise RuntimeError(f"activated {prefix} {role} policy id changed unexpectedly")
+            policy_ids[role] = policy_id
         result[f"{prefix}_template_id"] = template_id
-        result[f"{prefix}_policy_id"] = policy_id
+        if w3c:
+            result["w3c_credential_policy_id"] = policy_ids["credential"]
+            result["w3c_presentation_policy_id"] = policy_ids["presentation"]
+        else:
+            result["oid4vp_policy_id"] = policy_ids["presentation"]
         result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
         result[f"{prefix}_issuer_profile_id"] = issuer_profile_id
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id

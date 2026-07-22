@@ -28,7 +28,7 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
         "vc_verifier",
         "vp_verifier",
     }
-    assert manifest["exclusions"][0]["review_date"]
+    assert manifest["exclusions"] == []
 
 
 def test_w3c_manifest_rejects_a_non_object(tmp_path: Path) -> None:
@@ -107,6 +107,9 @@ def test_w3c_local_config_registers_the_real_issuer_and_verifiers(tmp_path: Path
     assert "/credentials/verify" in config
     assert "/presentations/verify" in config
     assert "issuers:" in config
+    vp_registration = config.split("vpVerifiers:", maxsplit=1)[1]
+    assert "tags: ['vc2.0']" in vp_registration
+    assert "EnvelopingProof" not in vp_registration
 
 
 def capability_row(
@@ -177,7 +180,7 @@ def test_w3c_report_does_not_count_failed_pending_or_other_implementation_rows()
     assert w3c.executed_capabilities_from_report(report, manifest) == set()
 
 
-def test_w3c_evidence_preserves_the_narrow_exclusion_and_immutable_stack(
+def test_w3c_evidence_records_no_stale_exclusion_and_preserves_immutable_stack(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     suite = tmp_path / "suite"
@@ -217,5 +220,5 @@ def test_w3c_evidence_preserves_the_narrow_exclusion_and_immutable_stack(
         "required_capabilities": ["issuer", "vc_verifier", "vp_verifier"],
         "executed_capabilities": [],
     }
-    assert evidence["exclusions"][0]["capability"] == "JSON-LD Data Integrity eddsa-rdfc-2022"
+    assert evidence["exclusions"] == []
     assert evidence["marty"]["stack_manifest"]["images"][0]["digest"] == "sha256:" + "a" * 64

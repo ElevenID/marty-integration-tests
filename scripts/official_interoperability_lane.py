@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
@@ -425,7 +426,12 @@ def emit_public_proxy_diagnostic(project: str, environment: dict[str, str]) -> N
     )
     container_ids = [value for value in containers.stdout.splitlines() if value]
     if containers.returncode or len(container_ids) != 1:
-        print("--- public TLS proxy diagnostic (redacted) ---\ndiagnostic-unavailable\n--- end public TLS proxy diagnostic ---", flush=True)
+        print(
+            "--- public TLS proxy diagnostic (redacted) ---\n"
+            "diagnostic-unavailable\n"
+            "--- end public TLS proxy diagnostic ---",
+            flush=True,
+        )
         return
     completed = subprocess.run(
         ["docker", "logs", "--tail", "250", container_ids[0]],
@@ -486,11 +492,14 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
             body = completed.stdout
             status_code = "000"
         payload: object = None
-        try:
+        with suppress(json.JSONDecodeError):
             payload = json.loads(body)
-        except json.JSONDecodeError:
-            pass
-        if completed.returncode == 0 and status_code == "200" and isinstance(payload, dict) and payload.get("status") == "ready":
+        if (
+            completed.returncode == 0
+            and status_code == "200"
+            and isinstance(payload, dict)
+            and payload.get("status") == "ready"
+        ):
             return
 
         # Preserve the production TLS boundary but make a timeout actionable.
@@ -679,7 +688,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             else standard_verifier_config(args.haip_material, environment["OIDF_MARTY_GATEWAY_URL"])
         )
         profile = "oid4vp-haip-verifier" if haip else "oid4vp-verifier"
-        result = run(
+        return run(
             [
                 sys.executable,
                 str(ROOT / "scripts" / "oidf_conformance.py"),
@@ -700,7 +709,6 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             ],
             environment,
         )
-        return result
     finally:
         run(
             compose_command(args, "logs", oidf=True, haip=haip),
@@ -725,7 +733,10 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
             {
                 "W3C_VC_TEST_ORGANIZATION_ID": fixtures["organization_id"],
                 "W3C_VC_TEST_TEMPLATE_ID": fixtures["w3c_template_id"],
-                "W3C_VC_TEST_POLICY_ID": fixtures["w3c_policy_id"],
+                "W3C_VC_TEST_CREDENTIAL_POLICY_ID": fixtures["w3c_credential_policy_id"],
+                "W3C_VC_TEST_PRESENTATION_POLICY_ID": fixtures[
+                    "w3c_presentation_policy_id"
+                ],
             }
         )
         include_w3c = True
