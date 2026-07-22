@@ -171,6 +171,7 @@ def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
     assert "session_id=<redacted>" in output
     assert "routine startup complete" not in output
     assert any(command[-1].endswith("=presentation-policy") for command in calls if command[1] == "ps")
+    assert ["docker", "logs", "--tail", "2000", "issuance-container"] in calls
 
 
 def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(
@@ -372,6 +373,8 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
             "oid4vp_template_id": "template-1",
             "oid4vp_policy_id": "policy-1",
             "oid4vp_trust_profile_id": "trust-1",
+            "oid4vp_issuer_profile_id": "issuer-profile-1",
+            "oid4vp_issuer_did": "did:web:marty.test:orgs:org-1",
         },
     )
     monkeypatch.setattr(
@@ -392,6 +395,8 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
     assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "policy-1"
     assert suite_environment["OIDF_MARTY_TRUST_PROFILE_ID"] == "trust-1"
+    assert suite_environment["OIDF_MARTY_ISSUER_PROFILE_ID"] == "issuer-profile-1"
+    assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
 
 
 def test_old_release_fails_before_any_compose_command(tmp_path: Path) -> None:

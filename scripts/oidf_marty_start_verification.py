@@ -57,6 +57,10 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "presentation_policy_id": required_env("OIDF_MARTY_PRESENTATION_POLICY_ID"),
         "trust_profile_id": os.environ.get("OIDF_MARTY_TRUST_PROFILE_ID") or None,
+        # The verifier selects its profile and asserts that profile's DID. The
+        # flow API intentionally accepts no KMS service or provider key fields.
+        "issuer_profile_id": required_env("OIDF_MARTY_ISSUER_PROFILE_ID"),
+        "issuer_did": required_env("OIDF_MARTY_ISSUER_DID"),
         "expiry_minutes": int(os.environ.get("OIDF_MARTY_FLOW_EXPIRY_MINUTES", "15")),
         "oid4vp_profile": profile,
         # Select POST retrieval only for the official module that verifies

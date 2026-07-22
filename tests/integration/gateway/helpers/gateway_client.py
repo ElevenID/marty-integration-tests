@@ -1000,6 +1000,7 @@ class GatewayClient:
         expiry_minutes: int = 15,
         organization_id: Optional[str] = None,
         issuer_profile_id: Optional[str] = None,
+        issuer_did: Optional[str] = None,
         oid4vp_profile: Optional[Literal["standard", "haip"]] = None,
         request_uri_method: Optional[Literal["get", "post"]] = None,
     ) -> Dict[str, Any]:
@@ -1011,7 +1012,8 @@ class GatewayClient:
             trust_profile_id: Optional trust profile
             expiry_minutes: Request expiry time
             organization_id: Selected organization context for authorization
-            issuer_profile_id: Issuer profile whose DID signs the request object
+            issuer_profile_id: Issuer profile that signs the request object
+            issuer_did: Expected DID owned by the selected issuer profile
             oid4vp_profile: Optional production verifier profile selection
             request_uri_method: Optional signed request-object retrieval method
             
@@ -1030,6 +1032,8 @@ class GatewayClient:
             payload["organization_id"] = organization_id
         if issuer_profile_id:
             payload["issuer_profile_id"] = issuer_profile_id
+        if issuer_did:
+            payload["issuer_did"] = issuer_did
         if oid4vp_profile is not None:
             payload["oid4vp_profile"] = oid4vp_profile
         if request_uri_method is not None:

@@ -71,12 +71,18 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     )
     assert result["oid4vp_policy_id"] == "policy-1"
     assert result["oid4vp_issuer_profile_id"] == "issuer-1"
+    assert result["oid4vp_issuer_did"] == (
+        f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}"
+    )
     assert result["oid4vp_compliance_profile_id"] == "compliance-1"
     assert result["oid4vp_revocation_profile_id"] == "revocation-1"
     assert result["oid4vp_trust_profile_id"] == "trust-1"
     assert result["w3c_compliance_profile_id"] == "compliance-2"
     assert result["w3c_revocation_profile_id"] == "revocation-2"
     assert result["w3c_issuer_profile_id"] == "issuer-2"
+    assert result["w3c_issuer_did"] == (
+        f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}"
+    )
     assert result["w3c_credential_policy_id"] == "policy-2"
     assert result["w3c_presentation_policy_id"] == "policy-3"
     assert "w3c_policy_id" not in result

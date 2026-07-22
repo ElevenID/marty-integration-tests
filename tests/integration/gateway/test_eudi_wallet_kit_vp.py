@@ -511,6 +511,7 @@ async def vp_age_policy(
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
+    policy["_request_object_issuer_did"] = vp_request_object_issuer_profile["issuer_did"]
     return policy
 
 
@@ -540,6 +541,7 @@ async def vp_identity_policy(
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
+    policy["_request_object_issuer_did"] = vp_request_object_issuer_profile["issuer_did"]
     return policy
 
 
@@ -569,6 +571,7 @@ async def vp_mdoc_policy(
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
+    policy["_request_object_issuer_did"] = vp_request_object_issuer_profile["issuer_did"]
     return policy
 
 
@@ -596,6 +599,7 @@ class TestOID4VPAuthorizationRequest:
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
             issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
 
         assert "instance_id" in flow, f"Missing instance_id: {flow}"
@@ -616,6 +620,7 @@ class TestOID4VPAuthorizationRequest:
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
             issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
 
@@ -654,6 +659,7 @@ class TestOID4VPAuthorizationRequest:
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
             issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
         auth_req = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
 
@@ -697,6 +703,7 @@ class TestOID4VPSdJwtPresentation:
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
             issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
             oid4vp_profile="haip",
             request_uri_method="get",
         )
@@ -759,6 +766,7 @@ class TestOID4VPSdJwtPresentation:
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
             issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
 
@@ -828,6 +836,7 @@ class TestOID4VPSdJwtPresentation:
             presentation_policy_id=vp_identity_policy["id"],
             organization_id=vp_identity_policy["organization_id"],
             issuer_profile_id=vp_identity_policy["_request_object_issuer_profile_id"],
+            issuer_did=vp_identity_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
 
@@ -874,6 +883,7 @@ class TestOID4VPSdJwtPresentation:
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
             issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
 
@@ -987,6 +997,7 @@ class TestMDocPresentation:
             presentation_policy_id=vp_mdoc_policy["id"],
             organization_id=vp_mdoc_policy["organization_id"],
             issuer_profile_id=vp_mdoc_policy["_request_object_issuer_profile_id"],
+            issuer_did=vp_mdoc_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
 
@@ -1105,6 +1116,7 @@ class TestEndToEndIssuanceAndPresentation:
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
             issuer_profile_id=vp_request_object_issuer_profile["id"],
+            issuer_did=vp_request_object_issuer_profile["issuer_did"],
         )
         instance_id = flow["instance_id"]
         logger.info("[E2E] Verification flow started: %s", instance_id)

@@ -387,7 +387,11 @@ def emit_w3c_issuance_diagnostic(run_id: str) -> None:
         if not container:
             continue
         logs = subprocess.run(
-            ["docker", "logs", "--tail", "300", container],
+            # The official suite deliberately exercises many negative vectors.
+            # Keep a broad in-memory window so an early, valid-credential
+            # failure category is not displaced by later expected rejections;
+            # only the final bounded set of redacted error lines is printed.
+            ["docker", "logs", "--tail", "2000", container],
             capture_output=True,
             text=True,
             check=False,
@@ -671,6 +675,8 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         fixtures = bootstrap_fixtures(args, environment, mode="oid4vp")
         environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures["oid4vp_policy_id"]
         environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures["oid4vp_trust_profile_id"]
+        environment["OIDF_MARTY_ISSUER_PROFILE_ID"] = fixtures["oid4vp_issuer_profile_id"]
+        environment["OIDF_MARTY_ISSUER_DID"] = fixtures["oid4vp_issuer_did"]
         environment.update(
             {
                 "CONFORMANCE_SERVER": "https://localhost.emobix.co.uk:8443/",

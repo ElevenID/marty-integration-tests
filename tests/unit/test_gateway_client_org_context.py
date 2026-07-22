@@ -22,6 +22,7 @@ async def test_start_verification_flow_sends_selected_organization_header() -> N
             expiry_minutes=10,
             organization_id="org-1",
             issuer_profile_id="request-object-profile-1",
+            issuer_did="did:web:verifier.example",
         )
     finally:
         await client.close()
@@ -36,6 +37,7 @@ async def test_start_verification_flow_sends_selected_organization_header() -> N
             "expiry_minutes": 10,
             "organization_id": "org-1",
             "issuer_profile_id": "request-object-profile-1",
+            "issuer_did": "did:web:verifier.example",
         },
         headers={"X-Organization-ID": "org-1"},
     )
