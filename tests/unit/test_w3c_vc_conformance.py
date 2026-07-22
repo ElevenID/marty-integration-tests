@@ -110,6 +110,10 @@ def test_w3c_local_config_registers_the_real_issuer_and_verifiers(tmp_path: Path
     vp_registration = config.split("vpVerifiers:", maxsplit=1)[1]
     assert "tags: ['vc2.0']" in vp_registration
     assert "EnvelopingProof" not in vp_registration
+    assert (
+        "options: { domain: 'github.com/w3c/vc-data-model-2.0-test-suite' }"
+        in vp_registration
+    )
 
 
 def capability_row(
