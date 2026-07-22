@@ -231,7 +231,21 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     ),
     "issuer-metadata-configurations-empty": re.compile(r"(?i)issuer-metadata-credential-configurations-empty\b"),
     "authorization-server-metadata-failed": re.compile(r"(?i)authorization-server-metadata-[a-z-]+\b"),
-    "wallet-tls-trust-failed": re.compile(r"(?i)(?:issuer|authorization-server)-metadata-tls-trust-failed\b"),
+    "wallet-tls-certificate-path-untrusted": re.compile(
+        r"(?i)(?:issuer|authorization-server)-metadata-tls-certificate-path-untrusted\b"
+    ),
+    "wallet-tls-certificate-validity-failed": re.compile(
+        r"(?i)(?:issuer|authorization-server)-metadata-tls-certificate-validity-failed\b"
+    ),
+    "wallet-tls-hostname-mismatch": re.compile(
+        r"(?i)(?:issuer|authorization-server)-metadata-tls-hostname-mismatch\b"
+    ),
+    "wallet-tls-truststore-empty": re.compile(
+        r"(?i)(?:issuer|authorization-server)-metadata-tls-truststore-empty\b"
+    ),
+    "wallet-tls-handshake-failed": re.compile(
+        r"(?i)(?:issuer|authorization-server)-metadata-tls-handshake-failed\b"
+    ),
     "wallet-hostname-resolution-failed": re.compile(
         r"(?i)(?:issuer|authorization-server)-metadata-hostname-resolution-failed\b"
     ),
