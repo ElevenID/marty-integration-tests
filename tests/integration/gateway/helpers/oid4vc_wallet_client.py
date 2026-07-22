@@ -42,6 +42,39 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+_SAFE_OID4VCI_ERROR_CODES = frozenset(
+    {
+        "invalid_credential_request",
+        "invalid_grant",
+        "invalid_nonce",
+        "invalid_proof",
+        "invalid_request",
+        "invalid_token",
+        "issuance_pending",
+        "unknown_credential_configuration",
+        "unknown_credential_identifier",
+        "unsupported_credential_format",
+        "unsupported_credential_type",
+    }
+)
+
+
+def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
+    """Raise a public-safe failure containing only status and a fixed error code."""
+    if response.status_code < 400:
+        return
+    error_code = "unclassified"
+    try:
+        body = response.json()
+    except (json.JSONDecodeError, ValueError):
+        body = None
+    if isinstance(body, dict) and body.get("error") in _SAFE_OID4VCI_ERROR_CODES:
+        error_code = str(body["error"])
+    raise RuntimeError(
+        f"OID4VCI {operation} failed: status={response.status_code} error={error_code}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
@@ -266,7 +299,7 @@ class OID4VCIWalletClient:
         elif "credential_offer_uri" in qs:
             uri = self._rewrite_url(qs["credential_offer_uri"][0])
             resp = await self.client.get(uri)
-            resp.raise_for_status()
+            _raise_for_oid4vci_error(resp, "credential-offer")
             self.credential_offer = resp.json()
         else:
             raise ValueError(f"Cannot parse credential offer from: {offer_uri[:200]}")
@@ -310,7 +343,7 @@ class OID4VCIWalletClient:
             # Fall back to standard path
             wellknown_url = f"{base}/.well-known/openid-credential-issuer"
             resp = await self.client.get(wellknown_url)
-        resp.raise_for_status()
+        _raise_for_oid4vci_error(resp, "issuer-metadata")
         self.issuer_metadata = resp.json()
 
         # Validate required fields (OID4VCI v1 §12.2.4)
@@ -369,7 +402,7 @@ class OID4VCIWalletClient:
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-        resp.raise_for_status()
+        _raise_for_oid4vci_error(resp, "token")
         token_data = resp.json()
 
         self.access_token = token_data.get("access_token")
@@ -398,7 +431,7 @@ class OID4VCIWalletClient:
             nonce_endpoint = f"{self.issuer_base_url}/v1/issuance/nonce"
 
         resp = await self.client.post(nonce_endpoint, json={})
-        resp.raise_for_status()
+        _raise_for_oid4vci_error(resp, "nonce")
         data = resp.json()
 
         self.c_nonce = data.get("c_nonce")
@@ -473,7 +506,7 @@ class OID4VCIWalletClient:
                 "Content-Type": "application/json",
             },
         )
-        resp.raise_for_status()
+        _raise_for_oid4vci_error(resp, "credential")
         cred_data = resp.json()
 
         # Validate response structure (OID4VCI §8.3)
