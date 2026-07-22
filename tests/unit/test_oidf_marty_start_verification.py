@@ -16,6 +16,12 @@ oidf_start = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(oidf_start)
 
 
+@pytest.fixture(autouse=True)
+def issuer_profile_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OIDF_MARTY_ISSUER_PROFILE_ID", "issuer-profile-1")
+    monkeypatch.setenv("OIDF_MARTY_ISSUER_DID", "did:web:verifier.example")
+
+
 def test_flow_body_selects_post_only_for_the_official_signed_post_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -30,6 +36,8 @@ def test_flow_body_selects_post_only_for_the_official_signed_post_module(
     assert oidf_start.flow_body(payload) == {
         "presentation_policy_id": "policy-1",
         "trust_profile_id": "trust-1",
+        "issuer_profile_id": "issuer-profile-1",
+        "issuer_did": "did:web:verifier.example",
         "expiry_minutes": 15,
         "oid4vp_profile": "haip",
         "request_uri_method": "post",

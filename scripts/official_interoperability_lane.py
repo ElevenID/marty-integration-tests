@@ -671,6 +671,8 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         fixtures = bootstrap_fixtures(args, environment, mode="oid4vp")
         environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures["oid4vp_policy_id"]
         environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures["oid4vp_trust_profile_id"]
+        environment["OIDF_MARTY_ISSUER_PROFILE_ID"] = fixtures["oid4vp_issuer_profile_id"]
+        environment["OIDF_MARTY_ISSUER_DID"] = fixtures["oid4vp_issuer_did"]
         environment.update(
             {
                 "CONFORMANCE_SERVER": "https://localhost.emobix.co.uk:8443/",

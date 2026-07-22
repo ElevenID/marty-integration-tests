@@ -270,6 +270,7 @@ async def dtc_vp_policy(
         policy["id"]
     )
     policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
+    policy["_request_object_issuer_did"] = dtc_request_object_issuer_profile["issuer_did"]
     return policy
 
 
@@ -290,6 +291,7 @@ async def dtc_identity_vp_policy(
         policy["id"]
     )
     policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
+    policy["_request_object_issuer_did"] = dtc_request_object_issuer_profile["issuer_did"]
     return policy
 
 
@@ -375,6 +377,7 @@ class TestDtcWalletAuthorizationRequest:
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
             issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
+            issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
 
         assert "instance_id" in flow
@@ -393,6 +396,7 @@ class TestDtcWalletAuthorizationRequest:
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
             issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
+            issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
         auth_req = await authenticated_gateway_client.get_verification_request(
             flow["instance_id"]
@@ -437,6 +441,7 @@ class TestDtcWalletPresentation:
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
             issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
+            issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
 
@@ -503,6 +508,7 @@ class TestDtcWalletPresentation:
             presentation_policy_id=dtc_identity_vp_policy["id"],
             organization_id=dtc_identity_vp_policy["organization_id"],
             issuer_profile_id=dtc_identity_vp_policy["_request_object_issuer_profile_id"],
+            issuer_did=dtc_identity_vp_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
 
@@ -612,6 +618,7 @@ class TestDtcWalletEndToEnd:
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
             issuer_profile_id=dtc_request_object_issuer_profile["id"],
+            issuer_did=dtc_request_object_issuer_profile["issuer_did"],
         )
         instance_id = flow["instance_id"]
         logger.info("[DTC E2E] Verification flow started: %s", instance_id)

@@ -567,7 +567,14 @@ class OID4VCIWalletClient:
         # 3. Get token
         token_data = await self.request_token()
 
-        # 4. Request credential for each configuration
+        # 4. Obtain the proof nonce from the issuer's nonce endpoint. OID4VCI
+        # Final no longer returns c_nonce from the token endpoint, and the
+        # credential endpoint requires a holder proof bound to a fresh nonce.
+        # This is wallet proof-of-possession; issuer credential signing remains
+        # selected through the credential template's issuer profile and DID.
+        await self.request_nonce()
+
+        # 5. Request credential for each configuration
         config_ids = offer.get("credential_configuration_ids", [])
         if not config_ids and self.issuer_metadata:
             config_ids = list(

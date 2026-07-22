@@ -528,18 +528,19 @@ def bootstrap(
             w3c=w3c,
             request=request,
         )
+        profile_payload = issuer_profile_payload(
+            organization_id,
+            signing_service,
+            gateway_url=gateway_url,
+            w3c=w3c,
+            run_id=run_id,
+        )
         created_issuer_profile = request(
             gateway_url,
             session_id,
             f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
             method="POST",
-            json_body=issuer_profile_payload(
-                organization_id,
-                signing_service,
-                gateway_url=gateway_url,
-                w3c=w3c,
-                run_id=run_id,
-            ),
+            json_body=profile_payload,
         )
         issuer_profile_id = issuer_profile_response_id(created_issuer_profile)
         created_compliance_profile = request(
@@ -630,6 +631,7 @@ def bootstrap(
             result["oid4vp_policy_id"] = policy_ids["presentation"]
         result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
         result[f"{prefix}_issuer_profile_id"] = issuer_profile_id
+        result[f"{prefix}_issuer_did"] = profile_payload["issuer_did"]
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c:
             assert oidf_signer_public_jwk is not None
