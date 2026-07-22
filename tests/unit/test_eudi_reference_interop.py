@@ -263,6 +263,19 @@ def test_eudi_failure_categories_recognize_gateway_client_status() -> None:
     assert categories == ["http-422", "signing-service-resolution"]
 
 
+def test_eudi_failure_categories_identify_verifier_contract_without_values() -> None:
+    categories = eudi.classify_eudi_failure_text(
+        "HTTP 400 invalid_request: DCQL vct_values did not match; token=must-not-be-reported"
+    )
+
+    assert categories == [
+        "http-400",
+        "verifier-invalid-request",
+        "verifier-dcql",
+        "verifier-vct",
+    ]
+
+
 @pytest.mark.parametrize(
     ("diagnostic", "category"),
     [
