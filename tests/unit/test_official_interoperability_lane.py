@@ -503,6 +503,15 @@ def test_public_readiness_timeout_reports_only_service_states(monkeypatch: pytes
     assert "secret-looking-detail" not in message
 
 
+def test_public_proxy_diagnostics_are_fixed_categories_only() -> None:
+    classes = lane.classify_public_proxy_diagnostics(
+        "connect() failed (111: Connection refused) while connecting to upstream; "
+        "upstream timed out; token=must-not-be-reported"
+    )
+
+    assert classes == ["upstream-connect", "upstream-timeout"]
+
+
 def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
