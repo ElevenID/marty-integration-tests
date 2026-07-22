@@ -186,12 +186,8 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "invalid-nonce": re.compile(r"(?i)\berror=invalid_nonce\b"),
     "invalid-proof": re.compile(r"(?i)\berror=invalid_proof\b"),
     "invalid-token": re.compile(r"(?i)\berror=invalid_token\b"),
-    "unknown-credential-configuration": re.compile(
-        r"(?i)\berror=unknown_credential_configuration\b"
-    ),
-    "unsupported-credential-format": re.compile(
-        r"(?i)\berror=unsupported_credential_format\b"
-    ),
+    "unknown-credential-configuration": re.compile(r"(?i)\berror=unknown_credential_configuration\b"),
+    "unsupported-credential-format": re.compile(r"(?i)\berror=unsupported_credential_format\b"),
     "connectivity": re.compile(
         r"(?i)(?:connection refused|connect timeout|read timeout|name or service not known|dns)"
     ),
@@ -207,6 +203,13 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "sd-jwt": re.compile(r"(?i)(?:sd[-_ ]jwt|selective disclosure)"),
     "mdoc": re.compile(r"(?i)(?:mso_mdoc|mdoc|device response)"),
     "wallet-kit": re.compile(r"(?i)(?:wallet[_ -]?kit|official library)"),
+    "signing-service-resolution": re.compile(r"(?i)/v1/signing-keys/config/resolve\b"),
+    "issuer-profile-provisioning": re.compile(r"(?i)/v1/signing-keys/issuer-profiles\b"),
+    "credential-template-provisioning": re.compile(r"(?i)/v1/credential-templates\b"),
+    "verification-flow-start": re.compile(r"(?i)/v1/flows/verify\b"),
+    "wallet-offer-resolution": re.compile(r"(?i)/issuance/resolve-offer\b"),
+    "wallet-preauthorized-issuance": re.compile(r"(?i)/issuance/pre-auth\b"),
+    "wallet-presentation": re.compile(r"(?i)/presentation/(?:submit|direct-post|build-vp-token)\b"),
 }
 
 

@@ -528,6 +528,32 @@ def test_public_proxy_diagnostics_are_fixed_categories_only() -> None:
     assert classes == ["upstream-connect", "upstream-timeout"]
 
 
+def test_eudi_runtime_diagnostics_are_fixed_categories_only() -> None:
+    classes = lane.classify_eudi_runtime_diagnostics(
+        "SSLHandshakeException: PKIX path building failed; CredentialIssuerMetadata secret=must-not-be-reported"
+    )
+
+    assert classes == ["tls-trust", "metadata-deserialization"]
+
+
+def test_eudi_runtime_diagnostic_never_prints_private_log_text(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log = tmp_path / "compose.log"
+    log.write_text(
+        "UnknownHostException host.private token=must-not-be-reported",
+        encoding="utf-8",
+    )
+
+    lane.emit_eudi_runtime_diagnostic(log)
+
+    output = capsys.readouterr().err
+    assert "hostname-resolution" in output
+    assert "host.private" not in output
+    assert "must-not-be-reported" not in output
+
+
 def test_public_proxy_diagnostic_selects_exact_compose_service(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

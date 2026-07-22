@@ -260,6 +260,26 @@ def test_eudi_junit_failure_summary_classifies_safe_oid4vci_error_codes(
     ]
 
 
+def test_eudi_junit_failure_summary_classifies_safe_operation_only(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "junit.xml"
+    report.write_text(
+        '<testsuites><testsuite><testcase classname="suite" name="case">'
+        '<error message="POST /v1/signing-keys/issuer-profiles failed: secret=private"/>'
+        "</testcase></testsuite></testsuites>",
+        encoding="utf-8",
+    )
+
+    summary = eudi.junit_failure_summary(report)
+
+    assert summary[0]["categories"] == [
+        "issuer-profile-or-did",
+        "issuer-profile-provisioning",
+    ]
+    assert "private" not in json.dumps(summary)
+
+
 @pytest.mark.parametrize(
     ("cases", "message"),
     [
