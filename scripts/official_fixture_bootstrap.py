@@ -62,6 +62,8 @@ def signing_service_request_payload(
     }
     if key_purpose == "vc_jwt_issuer":
         payload["credential_format"] = "jwt_vc_json" if w3c else "dc+sd-jwt"
+    elif key_purpose == "mdoc_dsc":
+        payload["credential_format"] = "mso_mdoc"
     return payload
 
 
@@ -416,29 +418,38 @@ def bootstrap_eudi(
     template identifiers; KMS service and key references never cross into the
     issuance request path.
     """
-    custody_service = resolve_signing_service(
-        gateway_url,
-        session_id,
-        organization_id=organization_id,
-        w3c=False,
-        request=request,
+    def provision_profile(label: str, key_purpose: str) -> tuple[str, str]:
+        custody_service = resolve_signing_service(
+            gateway_url,
+            session_id,
+            organization_id=organization_id,
+            w3c=False,
+            key_purpose=key_purpose,
+            request=request,
+        )
+        payload = issuer_profile_payload(
+            organization_id,
+            custody_service,
+            gateway_url=gateway_url,
+            w3c=False,
+            run_id=run_id,
+            label=label,
+            key_purpose=key_purpose,
+        )
+        created = request(
+            gateway_url,
+            session_id,
+            f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
+            method="POST",
+            json_body=payload,
+        )
+        return issuer_profile_response_id(created), payload["issuer_did"]
+
+    issuer_profile_id, issuer_did = provision_profile("EUDI SD-JWT", "vc_jwt_issuer")
+    request_profile_id, request_issuer_did = provision_profile(
+        "EUDI OID4VP request",
+        "oid4vp_request_signing",
     )
-    profile_payload = issuer_profile_payload(
-        organization_id,
-        custody_service,
-        gateway_url=gateway_url,
-        w3c=False,
-        run_id=run_id,
-        label="EUDI SD-JWT",
-    )
-    created_profile = request(
-        gateway_url,
-        session_id,
-        f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
-        method="POST",
-        json_body=profile_payload,
-    )
-    issuer_profile_id = issuer_profile_response_id(created_profile)
 
     created_compliance = request(
         gateway_url,
@@ -473,7 +484,9 @@ def bootstrap_eudi(
     result = {
         "organization_id": organization_id,
         "eudi_issuer_profile_id": issuer_profile_id,
-        "eudi_issuer_did": profile_payload["issuer_did"],
+        "eudi_issuer_did": issuer_did,
+        "eudi_request_issuer_profile_id": request_profile_id,
+        "eudi_request_issuer_did": request_issuer_did,
         "eudi_compliance_profile_id": compliance_profile_id,
         "eudi_revocation_profile_id": revocation_profile_id,
     }

@@ -658,6 +658,8 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
             "organization_id": "org-1",
             "eudi_issuer_profile_id": "profile-1",
             "eudi_issuer_did": "did:web:marty.test:orgs:org-1",
+            "eudi_request_issuer_profile_id": "request-profile-1",
+            "eudi_request_issuer_did": "did:web:marty.test:orgs:org-1",
             "eudi_passport_template_id": "passport-1",
             "eudi_mdl_template_id": "mdl-1",
             "eudi_open_badge_template_id": "badge-1",
@@ -707,8 +709,10 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     assert suite_environment["VERIFIER_X509_CERT_PEM"] == "certificate-chain"
     assert suite_environment["TEST_ORG_ID"] == "org-1"
     assert suite_environment["EUDI_TEST_OPEN_BADGE_TEMPLATE_ID"] == "badge-1"
-    assert "eudi_issuer_profile_id" not in suite_environment
-    assert "eudi_issuer_did" not in suite_environment
+    assert suite_environment["EUDI_TEST_ISSUER_PROFILE_ID"] == "profile-1"
+    assert suite_environment["EUDI_TEST_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
+    assert suite_environment["EUDI_TEST_REQUEST_ISSUER_PROFILE_ID"] == "request-profile-1"
+    assert suite_environment["EUDI_TEST_REQUEST_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
     assert not any("KMS" in name or "KEY_REFERENCE" in name for name in suite_environment)
 
 

@@ -59,6 +59,38 @@ def _decode_jwt_payload(token: str) -> dict:
         return {}
 
 
+def dcql_query_for_sd_jwt(
+    credential: str,
+    *,
+    requested_claims: list[str],
+    query_id: str = "sd-jwt-query",
+) -> dict[str, Any]:
+    """Build DCQL from the VCT actually signed into an issued SD-JWT VC.
+
+    Decoding here is only discovery for the verifier request. The official
+    verifier remains responsible for signature, disclosure, holder-binding,
+    and DCQL validation. Binding the query to the issued VCT prevents a test
+    fixture hostname from silently replacing the production credential type.
+    """
+    issuer_jwt = credential.split("~", 1)[0]
+    payload = _decode_jwt_payload(issuer_jwt)
+    vct = payload.get("vct")
+    if not isinstance(vct, str) or not vct.strip() or not urlsplit(vct).scheme:
+        raise ValueError("issued SD-JWT VC must contain an absolute vct URI")
+    if not query_id or not requested_claims or any(not claim for claim in requested_claims):
+        raise ValueError("DCQL query requires an id and non-empty claim names")
+    return {
+        "credentials": [
+            {
+                "id": query_id,
+                "format": "dc+sd-jwt",
+                "meta": {"vct_values": [vct]},
+                "claims": [{"path": [claim]} for claim in requested_claims],
+            }
+        ]
+    }
+
+
 def _int_to_b64url(n: int, length: int) -> str:
     return _b64url_encode(n.to_bytes(length, "big"))
 

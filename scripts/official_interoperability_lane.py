@@ -873,6 +873,10 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
         suite_environment.update(
             {
                 "TEST_ORG_ID": fixtures["organization_id"],
+                "EUDI_TEST_ISSUER_PROFILE_ID": fixtures["eudi_issuer_profile_id"],
+                "EUDI_TEST_ISSUER_DID": fixtures["eudi_issuer_did"],
+                "EUDI_TEST_REQUEST_ISSUER_PROFILE_ID": fixtures["eudi_request_issuer_profile_id"],
+                "EUDI_TEST_REQUEST_ISSUER_DID": fixtures["eudi_request_issuer_did"],
                 "EUDI_TEST_PASSPORT_TEMPLATE_ID": fixtures["eudi_passport_template_id"],
                 "EUDI_TEST_MDL_TEMPLATE_ID": fixtures["eudi_mdl_template_id"],
                 "EUDI_TEST_OPEN_BADGE_TEMPLATE_ID": fixtures["eudi_open_badge_template_id"],

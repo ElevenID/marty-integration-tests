@@ -105,38 +105,15 @@ def dtc_test_org() -> dict[str, str]:
 
 @pytest.fixture
 async def dtc_request_object_issuer_profile(
-    authenticated_gateway_client: GatewayClient,
     dtc_test_org,
 ):
-    """Create the tenant-local DID identity that signs OID4VP Request Objects."""
-    service = None
-    resolution_error: Exception | None = None
-    for organization_id in (dtc_test_org["id"], None):
-        try:
-            resolved = await authenticated_gateway_client.resolve_signing_service(
-                organization_id=organization_id,
-                key_purpose="oid4vp_request_signing",
-                algorithm="ES256",
-            )
-            candidate = resolved.get("service")
-            if isinstance(candidate, dict) and candidate.get("id"):
-                service = candidate
-                break
-        except Exception as exc:  # Capability absence is surfaced by the public API.
-            resolution_error = exc
-    if not isinstance(service, dict) or not service.get("id"):
-        raise RuntimeError(f"No OID4VP Request Object signer is available: {resolution_error}")
-    domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
-    domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
-    return await authenticated_gateway_client.create_issuer_profile(
-        organization_id=dtc_test_org["id"],
-        name="EUDI DTC Request Object issuer",
-        issuer_did=f"did:web:{domain.replace('/', ':')}:orgs:{dtc_test_org['id']}",
-        signing_service_id=str(service["id"]),
-        signing_key_reference=str(service.get("key_reference") or "") or None,
-        key_purpose="oid4vp_request_signing",
-        status="active",
-    )
+    """Select the pre-provisioned DID profile that signs request objects."""
+    profile_id = os.environ.get("EUDI_TEST_REQUEST_ISSUER_PROFILE_ID", "").strip()
+    issuer_did = os.environ.get("EUDI_TEST_REQUEST_ISSUER_DID", "").strip()
+    if not profile_id or not issuer_did:
+        raise RuntimeError("EUDI request-object issuer profile identity is required")
+    assert issuer_did.endswith(f":orgs:{dtc_test_org['id']}")
+    return {"id": profile_id, "issuer_did": issuer_did}
 
 
 @pytest.fixture
