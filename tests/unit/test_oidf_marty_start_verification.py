@@ -36,6 +36,23 @@ def test_flow_body_selects_post_only_for_the_official_signed_post_module(
     }
 
 
+def test_flow_body_selects_post_for_the_haip_module_with_official_variant_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
+    monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
+    payload = {
+        "test_id": "module-1",
+        "test_name": (
+            "oid4vp-1final-verifier-request-uri-method-post"
+            "[client_id_prefix=x509_hash][request_method=request_uri_signed][vp_profile=haip]"
+        ),
+        "request_method": "request_uri_signed",
+    }
+
+    assert oidf_start.flow_body(payload)["request_uri_method"] == "post"
+
+
 @pytest.mark.parametrize(
     ("test_name", "request_method"),
     [

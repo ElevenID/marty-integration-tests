@@ -191,6 +191,11 @@ def policy_payload(
         "organization_id": organization_id,
         "name": f"Official {label} {run_id}",
         "purpose": f"Disposable {label} official-suite verification",
+        # The OIDF verifier plans exercise holder-bound SD-JWT
+        # presentations. Activating holder binding makes the ordinary policy
+        # service supply the authorization request's audience and nonce to
+        # marty-core, which validates the complete KB-JWT.
+        "holder_binding": {"required": not w3c},
         "credential_requirements": [
             {
                 "credential_template_id": template_id,
@@ -283,9 +288,7 @@ def resolve_signing_service(
     failure: RuntimeError | None = None
     for candidate_organization in (organization_id, None):
         query = (
-            f"?{urlencode({'organization_id': candidate_organization})}"
-            if candidate_organization is not None
-            else ""
+            f"?{urlencode({'organization_id': candidate_organization})}" if candidate_organization is not None else ""
         )
         try:
             resolved = request(

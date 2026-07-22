@@ -133,6 +133,17 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
         "family_name",
         "birthdate",
     ]
+    assert policy["holder_binding"] == {"required": True}
+
+
+def test_w3c_fixture_does_not_claim_holder_binding_before_data_integrity_support() -> None:
+    policy = fixtures.policy_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        "template-1",
+        w3c=True,
+        run_id="run-1",
+    )
+    assert policy["holder_binding"] == {"required": False}
 
 
 def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_path: Path) -> None:

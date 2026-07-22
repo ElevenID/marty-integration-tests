@@ -53,6 +53,7 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
     profile = os.environ.get("OIDF_MARTY_VERIFIER_PROFILE", "standard")
     if profile not in {"standard", "haip"}:
         raise ValueError("OIDF_MARTY_VERIFIER_PROFILE must be standard or haip")
+    module_name = payload["test_name"].partition("[")[0]
     return {
         "presentation_policy_id": required_env("OIDF_MARTY_PRESENTATION_POLICY_ID"),
         "trust_profile_id": os.environ.get("OIDF_MARTY_TRUST_PROFILE_ID") or None,
@@ -63,9 +64,7 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         # modules remain GET, and the standard url_query plan remains a
         # transport adaptation rather than being silently forced to POST.
         "request_uri_method": (
-            "post"
-            if request_method == "request_uri_signed" and payload["test_name"] == REQUEST_URI_METHOD_POST_TEST
-            else "get"
+            "post" if request_method == "request_uri_signed" and module_name == REQUEST_URI_METHOD_POST_TEST else "get"
         ),
     }
 
