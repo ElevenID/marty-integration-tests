@@ -39,8 +39,23 @@ object WalletIssuanceService {
      * publishing credential offers, endpoints, tokens, or issuer identifiers.
      */
     internal fun offerResolutionErrorCode(exception: Throwable): String {
-        val offerError = (exception as? CredentialOfferRequestException)?.error
-            ?: return "offer-resolution-unclassified"
+        val causes = generateSequence(exception) { it.cause }.toList()
+        val offerError = causes
+            .filterIsInstance<CredentialOfferRequestException>()
+            .firstOrNull()
+            ?.error
+
+        if (offerError == null) {
+            val classes = causes.mapNotNull { it::class.simpleName }.toSet()
+            return when {
+                "UnableToResolveCredentialIssuerMetadata" in classes ||
+                    "NonParseableCredentialIssuerMetadata" in classes ->
+                    classifyMetadataFailure(exception, "issuer")
+                "UnableToResolveAuthorizationServerMetadata" in classes ->
+                    classifyMetadataFailure(exception, "authorization-server")
+                else -> "offer-resolution-unclassified"
+            }
+        }
 
         return when (offerError) {
             is CredentialOfferRequestError.NonParsableCredentialOfferEndpointUrl ->
