@@ -116,10 +116,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
       REDIS_URL: redis://redis:6379
-      # The issuer URL is a public protocol value, not an internal service URL.
-      # Local CI defaults to the Compose gateway; an official conformance run
-      # supplies the externally reachable gateway address.
-      ISSUER_BASE_URL: ${ISSUER_BASE_URL:-http://gateway:8000}
+      # The issuer URL is a public protocol identifier, never an internal
+      # service address. Official lanes override this with their TLS bridge.
+      ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
       # Service names in this artifact stack are intentionally explicit. The
@@ -202,6 +201,9 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile-service:8004
       ISSUANCE_SERVICE_URL: http://issuance-service:8005
+      # OAuth Authorization Server metadata and Credential Issuer metadata
+      # must advertise the same externally reachable HTTPS identifier.
+      ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       # Must match the issuer's internal management key above. It is injected
       # only after the gateway's normal authentication/authorization checks.
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
