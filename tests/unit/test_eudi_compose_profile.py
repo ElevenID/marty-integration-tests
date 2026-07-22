@@ -22,3 +22,16 @@ def test_eudi_conformance_uses_tls_public_services() -> None:
     assert "loads the generated CA, exact endpoints" in guide
     assert "Explicit endpoint" in guide
     assert "must exactly match" in guide
+
+
+def test_eudi_verifier_keystore_uses_an_ephemeral_read_only_volume() -> None:
+    compose = (ROOT / "conformance" / "eudi-reference.compose.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "eudi-verifier-material-init:" in compose
+    assert "service_completed_successfully" in compose
+    assert "chmod 0444 /output/keystore.jks" in compose
+    assert "eudi_verifier_material:/certs:ro" in compose
+    assert "EUDI_VERIFIER_KEYSTORE_FILE" in compose
+    assert "EUDI_VERIFIER_KEYSTORE_FILE:?set the disposable verifier keystore}:/certs" not in compose

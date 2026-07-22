@@ -185,17 +185,20 @@ def policy_payload(
     w3c: bool,
     run_id: str,
 ) -> dict[str, object]:
-    claims = ("givenName", "familyName", "birthDate") if w3c else ("given_name", "family_name", "birthdate")
+    # The W3C verifier suite supplies standards-conforming generic credentials,
+    # not Marty's product-specific identity schema. Its disposable policy gates
+    # cryptographic validity and holder binding; OIDF keeps its PID claim gates.
+    claims = () if w3c else ("given_name", "family_name", "birthdate")
     label = "W3C VC v2" if w3c else "OID4VP SD-JWT"
     return {
         "organization_id": organization_id,
         "name": f"Official {label} {run_id}",
         "purpose": f"Disposable {label} official-suite verification",
-        # The OIDF verifier plans exercise holder-bound SD-JWT
-        # presentations. Activating holder binding makes the ordinary policy
-        # service supply the authorization request's audience and nonce to
-        # marty-core, which validates the complete KB-JWT.
-        "holder_binding": {"required": not w3c},
+        # Both the OIDF plans and W3C Data Integrity presentations are holder
+        # bound. Activating holder binding makes the ordinary policy service
+        # supply the expected audience/domain and nonce/challenge to marty-core
+        # instead of weakening the disposable fixture path.
+        "holder_binding": {"required": True},
         "credential_requirements": [
             {
                 "credential_template_id": template_id,

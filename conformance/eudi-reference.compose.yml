@@ -75,6 +75,21 @@ services:
       retries: 12
     restart: "no"
 
+  # Generated private-key material is intentionally owner-only on the host.
+  # The upstream Paketo image runs as a different non-root UID, so a direct
+  # bind can surface as FileNotFoundException (permission denied) on Linux.
+  # Copy into an isolated, project-scoped volume without weakening host modes.
+  eudi-verifier-material-init:
+    image: docker.io/library/alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+    command: ["sh", "-ec", "cp /input/keystore.jks /output/keystore.jks && chmod 0444 /output/keystore.jks"]
+    volumes:
+      - type: bind
+        source: ${EUDI_VERIFIER_KEYSTORE_FILE:?set the disposable verifier keystore}
+        target: /input/keystore.jks
+        read_only: true
+      - eudi_verifier_material:/output
+    restart: "no"
+
   eudi-verifier:
     image: ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint@sha256:0687ad0bf9c315d64d7cdae1751c8795c2410848f2299adeaaf1c39305366711
     # Keep Paketo sizing inside a deterministic cgroup while leaving enough
@@ -97,8 +112,11 @@ services:
       VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_PASSWORD: ${EUDI_VERIFIER_KEYSTORE_PASSWORD:?set the disposable verifier keystore password}
       VERIFIER_ACCESS_CERTIFICATE_ALIAS: ${EUDI_VERIFIER_KEYSTORE_ALIAS:?set the disposable verifier key alias}
       VERIFIER_ACCESS_CERTIFICATE_PASSWORD: ${EUDI_VERIFIER_KEY_PASSWORD:?set the disposable verifier key password}
+    depends_on:
+      eudi-verifier-material-init:
+        condition: service_completed_successfully
     volumes:
-      - ${EUDI_VERIFIER_KEYSTORE_FILE:?set the disposable verifier keystore}:/certs/keystore.jks:ro
+      - eudi_verifier_material:/certs:ro
     restart: "no"
 
   eudi-verifier-tls:
@@ -155,3 +173,6 @@ networks:
   marty_oidf_bridge:
     name: ${OIDF_MARTY_BRIDGE_NETWORK:?set to <MARTY_CONFORMANCE_PROJECT>_oidf-runner}
     external: true
+
+volumes:
+  eudi_verifier_material:
