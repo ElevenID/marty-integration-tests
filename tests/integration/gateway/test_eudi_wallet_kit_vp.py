@@ -785,7 +785,7 @@ class TestOID4VPSdJwtPresentation:
             credential=credential,
             audience=client_id,
             nonce=nonce,
-            format="dc+sd-jwt",
+            credential_format="dc+sd-jwt",
         )
         assert vp_token, "VP token is empty"
         assert "~" in vp_token, "VP token should contain SD-JWT disclosures"
@@ -843,7 +843,7 @@ class TestOID4VPSdJwtPresentation:
             credential=credential,
             audience=auth_req["client_id"],
             nonce=auth_req["nonce"],
-            format="dc+sd-jwt",
+            credential_format="dc+sd-jwt",
         )
 
         presentation_submission = _presentation_submission_for_request(
@@ -1005,7 +1005,7 @@ class TestMDocPresentation:
             credential=credential,
             audience=auth_req["client_id"],
             nonce=auth_req["nonce"],
-            format="mso_mdoc",
+            credential_format="mso_mdoc",
         )
 
         presentation_submission = _presentation_submission_for_request(
