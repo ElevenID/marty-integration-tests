@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -74,18 +75,14 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert result["oid4vp_policy_id"] == "policy-1"
     assert result["oid4vp_credential_issuer_profile_id"] == "credential-issuer-1"
     assert result["oid4vp_issuer_profile_id"] == "request-issuer-1"
-    assert result["oid4vp_issuer_did"] == (
-        f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}"
-    )
+    assert result["oid4vp_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
     assert result["oid4vp_compliance_profile_id"] == "compliance-1"
     assert result["oid4vp_revocation_profile_id"] == "revocation-1"
     assert result["oid4vp_trust_profile_id"] == "trust-1"
     assert result["w3c_compliance_profile_id"] == "compliance-2"
     assert result["w3c_revocation_profile_id"] == "revocation-2"
     assert result["w3c_issuer_profile_id"] == "issuer-2"
-    assert result["w3c_issuer_did"] == (
-        f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}"
-    )
+    assert result["w3c_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
     assert result["w3c_credential_policy_id"] == "policy-2"
     assert result["w3c_presentation_policy_id"] == "policy-3"
     assert "w3c_policy_id" not in result
@@ -163,12 +160,27 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     assert policy["holder_binding"] == {"required": True}
 
 
-def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates() -> None:
+def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, str, dict | None]] = []
+    monkeypatch.setattr(
+        fixtures,
+        "create_disposable_issuer_certificate_chain",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            leaf_pem="leaf-certificate",
+            chain_pem="issuer-certificate",
+        ),
+    )
     responses = iter(
         [
             {"service": {"id": "managed-service", "key_reference": "managed-key"}},
             {"profile": {"id": "issuer-profile"}},
+            {"public_jwk": PUBLIC_SIGNING_JWK},
+            {
+                "issuer_profile_id": "issuer-profile",
+                "certificate_chain_length": 2,
+            },
             {"service": {"id": "request-service", "key_reference": "request-key"}},
             {"profile": {"id": "request-profile"}},
             {"id": "compliance-profile"},
@@ -217,13 +229,22 @@ def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates() -> None:
     assert profile_body["issuer_did"] == result["eudi_issuer_did"]
     assert profile_body["signing_service_id"] == "managed-service"
     assert profile_body["signing_key_reference"] == "managed-key"
-    request_profile_body = calls[3][2]
+    assert calls[2][0].startswith("/v1/signing-keys/issuer-profiles/issuer-profile/public-identity?")
+    assert calls[2][1] == "GET"
+    assert calls[2][2] is None
+    assert calls[3][0].startswith("/v1/signing-keys/issuer-profiles/issuer-profile/certificate?")
+    assert calls[3][1] == "PUT"
+    assert calls[3][2] == {
+        "cert_pem": "leaf-certificate",
+        "cert_chain_pem": "issuer-certificate",
+    }
+    request_profile_body = calls[5][2]
     assert request_profile_body is not None
     assert request_profile_body["issuer_did"] == result["eudi_request_issuer_did"]
     assert request_profile_body["signing_service_id"] == "request-service"
     assert request_profile_body["signing_key_reference"] == "request-key"
     assert request_profile_body["key_purpose"] == "oid4vp_request_signing"
-    for _path, _method, body in calls[7:]:
+    for _path, _method, body in calls[9:]:
         assert body is not None
         assert body["issuer_profile_id"] == "issuer-profile"
         assert "signing_service_id" not in body

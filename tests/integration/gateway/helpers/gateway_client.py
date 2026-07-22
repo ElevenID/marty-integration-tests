@@ -21,16 +21,17 @@ logger = logging.getLogger(__name__)
 
 class GatewayClientError(Exception):
     """Base exception for gateway client errors"""
+
     pass
 
 
 class GatewayClient:
     """HTTP client for Gateway API integration tests"""
-    
+
     def __init__(self, base_url: Optional[str] = None, timeout: float = 90.0):
         """
         Initialize gateway client.
-        
+
         Args:
             base_url: Gateway base URL (defaults to GATEWAY_URL env var or localhost:8000)
             timeout: Request timeout in seconds
@@ -44,17 +45,17 @@ class GatewayClient:
         )
         self._auth_token: Optional[str] = None
         self._session_id: Optional[str] = None
-        
+
     async def __aenter__(self):
         return self
-        
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
-        
+
     async def close(self):
         """Close the HTTP client"""
         await self.client.aclose()
-        
+
     def set_session(self, session_id: str) -> None:
         """
         Set the gateway session cookie on this client.
@@ -102,7 +103,7 @@ class GatewayClient:
         if self._auth_token:
             headers["Authorization"] = f"Bearer {self._auth_token}"
         return headers
-        
+
     async def _request(
         self,
         method: str,
@@ -113,17 +114,17 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Make HTTP request and handle errors.
-        
+
         Args:
             method: HTTP method
             path: API path (e.g., "/v1/organizations")
             json: JSON body
             params: Query parameters
             headers: Additional request headers merged with the client defaults
-            
+
         Returns:
             Response JSON data
-            
+
         Raises:
             GatewayClientError: On request failure
         """
@@ -149,28 +150,26 @@ class GatewayClient:
                 return {"text": response.text} if response.text else {}
         except httpx.HTTPStatusError as e:
             error_detail = e.response.text
-            raise GatewayClientError(
-                f"{method} {path} failed with {e.response.status_code}: {error_detail}"
-            ) from e
+            raise GatewayClientError(f"{method} {path} failed with {e.response.status_code}: {error_detail}") from e
         except httpx.RequestError as e:
             raise GatewayClientError(f"Request to {path} failed: {e}") from e
-            
+
     # =============================================================================
     # Health & Status
     # =============================================================================
-    
+
     async def health_check(self) -> Dict[str, Any]:
         """Check gateway health"""
         return await self._request("GET", "/health")
-        
+
     async def check_services_health(self) -> Dict[str, Any]:
         """Check health of all backend services"""
         return await self._request("GET", "/health/services")
-        
+
     # =============================================================================
     # Organization Management
     # =============================================================================
-    
+
     async def create_organization(
         self,
         name: str,
@@ -179,11 +178,11 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Create a new organization.
-        
+
         Args:
             name: Organization name (unique identifier)
             display_name: Human-readable display name
-            
+
         Returns:
             Organization object with id, name, created_at, etc.
         """
@@ -194,11 +193,11 @@ class GatewayClient:
             "/v1/organizations",
             json=body,
         )
-        
+
     async def get_organization(self, org_id: str) -> Dict[str, Any]:
         """Get organization by ID"""
         return await self._request("GET", f"/v1/organizations/{org_id}")
-        
+
     async def list_organizations(self) -> List[Dict[str, Any]]:
         """List all organizations"""
         return await self._request("GET", "/v1/organizations")
@@ -218,11 +217,11 @@ class GatewayClient:
     async def delete_organization(self, org_id: str) -> None:
         """Delete an organization."""
         await self._request("DELETE", f"/v1/organizations/{org_id}")
-        
+
     # =============================================================================
     # Trust Profiles
     # =============================================================================
-    
+
     async def create_trust_profile(
         self,
         organization_id: str,
@@ -234,7 +233,7 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Create a trust profile.
-        
+
         Args:
             organization_id: Organization ID
             name: Trust profile name
@@ -242,7 +241,7 @@ class GatewayClient:
             trust_sources: List of trust source configurations
             trust_frameworks: List of trust framework identifiers
             revocation_check_enabled: Whether to check revocation status
-            
+
         Returns:
             Trust profile object
         """
@@ -260,11 +259,11 @@ class GatewayClient:
             "/v1/trust-profiles",
             json=payload,
         )
-        
+
     async def get_trust_profile(self, profile_id: str) -> Dict[str, Any]:
         """Get trust profile by ID"""
         return await self._request("GET", f"/v1/trust-profiles/{profile_id}")
-        
+
     async def list_trust_profiles(self, organization_id: str) -> List[Dict[str, Any]]:
         """List trust profiles for an organization"""
         return await self._request(
@@ -288,11 +287,11 @@ class GatewayClient:
     async def delete_trust_profile(self, profile_id: str) -> None:
         """Delete a trust profile."""
         await self._request("DELETE", f"/v1/trust-profiles/{profile_id}")
-        
+
     # =============================================================================
     # Credential Templates
     # =============================================================================
-    
+
     async def create_credential_template(
         self,
         organization_id: str,
@@ -319,7 +318,7 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Create a credential template (master issuance configuration).
-        
+
         Args:
             organization_id: Organization ID
             name: Template name
@@ -341,7 +340,7 @@ class GatewayClient:
                 'ietf_sd_jwt', 'w3c_vcdm_v2_jwt_vc'). Server default: 'w3c_vcdm_v2_sd_jwt'.
             wallet_configs: Per-wallet deep-link configs, e.g.
                 [{"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://"}]
-            
+
         Returns:
             Credential template object
         """
@@ -354,12 +353,12 @@ class GatewayClient:
             "claims": claims or [],
             "auto_generate_artifacts": auto_generate_artifacts,
         }
-        
+
         if compliance_profile is not None:
             payload["compliance_profile"] = compliance_profile
         if compliance_profile_id:
             payload["compliance_profile_id"] = compliance_profile_id
-        
+
         # Add optional fields
         if application_template_id:
             payload["application_template_id"] = application_template_id
@@ -391,18 +390,18 @@ class GatewayClient:
             "/v1/credential-templates",
             json=payload,
         )
-        
+
     async def get_credential_template(self, template_id: str) -> Dict[str, Any]:
         """Get credential template by ID"""
         return await self._request("GET", f"/v1/credential-templates/{template_id}")
-    
+
     async def validate_credential_template_artifacts(self, template_id: str) -> Dict[str, Any]:
         """Validate cryptographic artifacts for a credential template."""
         return await self._request(
             "POST",
             f"/v1/credential-templates/{template_id}/validate-artifacts",
         )
-        
+
     async def list_credential_templates(
         self,
         organization_id: str,
@@ -429,11 +428,11 @@ class GatewayClient:
     async def delete_credential_template(self, template_id: str) -> None:
         """Delete a credential template."""
         await self._request("DELETE", f"/v1/credential-templates/{template_id}")
-    
+
     # =============================================================================
     # Compliance Profiles
     # =============================================================================
-    
+
     async def create_compliance_profile(
         self,
         organization_id: str,
@@ -446,7 +445,7 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Create a compliance profile.
-        
+
         Args:
             organization_id: Organization ID
             name: Profile name
@@ -455,7 +454,7 @@ class GatewayClient:
             frameworks: List of regulatory frameworks
             trust_profile_constraints: Trust profile constraint object
             system_profile: Whether this is a system-provided profile
-            
+
         Returns:
             Compliance profile object
         """
@@ -474,11 +473,11 @@ class GatewayClient:
             "/v1/compliance-profiles",
             json=payload,
         )
-    
+
     async def get_compliance_profile(self, profile_id: str) -> Dict[str, Any]:
         """Get compliance profile by ID"""
         return await self._request("GET", f"/v1/compliance-profiles/{profile_id}")
-    
+
     async def list_compliance_profiles(
         self,
         organization_id: str,
@@ -505,11 +504,11 @@ class GatewayClient:
     async def delete_compliance_profile(self, profile_id: str) -> None:
         """Delete a compliance profile."""
         await self._request("DELETE", f"/v1/compliance-profiles/{profile_id}")
-        
+
     # =============================================================================
     # Presentation Policies
     # =============================================================================
-    
+
     async def create_presentation_policy(
         self,
         organization_id: str,
@@ -522,7 +521,7 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Create a presentation policy.
-        
+
         Args:
             organization_id: Organization ID
             name: Policy name
@@ -531,7 +530,7 @@ class GatewayClient:
             prefer_predicates: Whether to prefer ZK predicate proofs
             fallback_policy: Optional fallback policy ID
             supported_circuits: Optional list of supported ZK circuits
-            
+
         Returns:
             Presentation policy object
         """
@@ -552,15 +551,15 @@ class GatewayClient:
             "/v1/presentation-policies",
             json=body,
         )
-        
+
     async def get_presentation_policy(self, policy_id: str) -> Dict[str, Any]:
         """Get presentation policy by ID"""
         return await self._request("GET", f"/v1/presentation-policies/{policy_id}")
-    
+
     async def activate_presentation_policy(self, policy_id: str) -> Dict[str, Any]:
         """Activate a presentation policy"""
         return await self._request("POST", f"/v1/presentation-policies/{policy_id}/activate")
-        
+
     async def list_presentation_policies(
         self,
         organization_id: str,
@@ -587,7 +586,7 @@ class GatewayClient:
     async def delete_presentation_policy(self, policy_id: str) -> None:
         """Delete a presentation policy."""
         await self._request("DELETE", f"/v1/presentation-policies/{policy_id}")
-        
+
     async def evaluate_presentation(
         self,
         policy_id: str,
@@ -596,12 +595,12 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Evaluate a presentation against a policy (stateless verification).
-        
+
         Args:
             policy_id: Presentation policy ID
             vp_token: VP token (JWT or other format)
             nonce: Optional nonce for freshness
-            
+
         Returns:
             Evaluation result with decision, verified_claims, etc.
         """
@@ -610,11 +609,11 @@ class GatewayClient:
             f"/v1/presentation-policies/{policy_id}/evaluate",
             json={"vp_token": vp_token, "nonce": nonce},
         )
-        
+
     # =============================================================================
     # Application Templates & Applications
     # =============================================================================
-    
+
     async def create_application_template(
         self,
         organization_id: str,
@@ -630,7 +629,7 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Create an application template (user-facing workflow definition).
-        
+
         Args:
             organization_id: Organization ID
             name: Template name
@@ -642,7 +641,7 @@ class GatewayClient:
             application_validity_days: How long applications remain valid
             notifications: Notification configuration
             ui_config: UI/UX customization
-            
+
         Returns:
             Application template object
         """
@@ -655,25 +654,25 @@ class GatewayClient:
             "approval_strategy": approval_strategy,
             "application_validity_days": application_validity_days,
         }
-        
+
         if credential_template_id:
             payload["credential_template_id"] = credential_template_id
-        
+
         if notifications:
             payload["notifications"] = notifications
         if ui_config:
             payload["ui_config"] = ui_config
-        
+
         return await self._request(
             "POST",
             "/v1/application-templates",
             json=payload,
         )
-        
+
     async def get_application_template(self, template_id: str) -> Dict[str, Any]:
         """Get application template by ID"""
         return await self._request("GET", f"/v1/application-templates/{template_id}")
-        
+
     async def list_application_templates(
         self,
         organization_id: str,
@@ -684,7 +683,7 @@ class GatewayClient:
             "/v1/application-templates",
             params={"organization_id": organization_id},
         )
-        
+
     async def create_application(
         self,
         application_template_id: str,
@@ -692,11 +691,11 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Create an application.
-        
+
         Args:
             application_template_id: Application template ID
             applicant_data: Applicant information (name, dob, etc.)
-            
+
         Returns:
             Application object with status="pending"
         """
@@ -708,11 +707,11 @@ class GatewayClient:
                 "applicant_data": applicant_data,
             },
         )
-        
+
     async def get_application(self, application_id: str) -> Dict[str, Any]:
         """Get application by ID"""
         return await self._request("GET", f"/v1/applications/{application_id}")
-        
+
     async def list_applications(
         self,
         organization_id: str,
@@ -723,7 +722,7 @@ class GatewayClient:
         if status:
             params["status"] = status
         return await self._request("GET", "/v1/applications", params=params)
-        
+
     async def submit_evidence(
         self,
         application_id: str,
@@ -731,11 +730,11 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Submit evidence for an application.
-        
+
         Args:
             application_id: Application ID
             evidence: Evidence data (e.g., {"portrait": "base64..."})
-            
+
         Returns:
             Updated application object
         """
@@ -744,8 +743,10 @@ class GatewayClient:
             f"/v1/applications/{application_id}/submit-evidence",
             json=evidence,
         )
-        
-    async def approve_application(self, application_id: str, review_notes: str | None = None, reviewer_id: str | None = None) -> Dict[str, Any]:
+
+    async def approve_application(
+        self, application_id: str, review_notes: str | None = None, reviewer_id: str | None = None
+    ) -> Dict[str, Any]:
         """Approve an application (triggers credential issuance)"""
         body = {}
         if review_notes:
@@ -753,20 +754,20 @@ class GatewayClient:
         if reviewer_id:
             body["reviewer_id"] = reviewer_id
         return await self._request("POST", f"/v1/applications/{application_id}/approve", json=body)
-        
-    async def reject_application(self, application_id: str, review_notes: str | None = None, reviewer_id: str | None = None) -> Dict[str, Any]:
+
+    async def reject_application(
+        self, application_id: str, review_notes: str | None = None, reviewer_id: str | None = None
+    ) -> Dict[str, Any]:
         """Reject an application"""
-        body = {
-            "review_notes": review_notes or "Application rejected"
-        }
+        body = {"review_notes": review_notes or "Application rejected"}
         if reviewer_id:
             body["reviewer_id"] = reviewer_id
         return await self._request("POST", f"/v1/applications/{application_id}/reject", json=body)
-        
+
     # =============================================================================
     # Credential Issuance
     # =============================================================================
-    
+
     async def issue_credential(
         self,
         organization_id: str,
@@ -778,7 +779,7 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Issue a credential directly (without application).
-        
+
         Args:
             organization_id: Organization ID
             credential_template_id: Template ID
@@ -786,7 +787,7 @@ class GatewayClient:
             subject_did: Optional subject DID
             holder_did: Optional holder DID (DIDComm v2 push delivery)
             application_id: Optional application ID
-            
+
         Returns:
             Issuance object with credential data
         """
@@ -800,11 +801,11 @@ class GatewayClient:
         if holder_did:
             payload["holder_did"] = holder_did
         return await self._request("POST", "/v1/issuance", json=payload)
-        
+
     async def get_issuance(self, issuance_id: str) -> Dict[str, Any]:
         """Get issuance record by ID"""
         return await self._request("GET", f"/v1/issuance/{issuance_id}")
-        
+
     async def list_issuances(
         self,
         organization_id: str,
@@ -988,11 +989,11 @@ class GatewayClient:
         if universal_resolver_url:
             payload["universal_resolver_url"] = universal_resolver_url
         return await self._request("POST", "/v1/issuance/didcomm/deliver", json=payload)
-        
+
     # =============================================================================
     # Verification Flows (Async Wallet Interaction)
     # =============================================================================
-    
+
     async def start_verification_flow(
         self,
         presentation_policy_id: str,
@@ -1006,7 +1007,7 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Start a verification flow (creates QR code for wallet).
-        
+
         Args:
             presentation_policy_id: Policy defining what to request
             trust_profile_id: Optional trust profile
@@ -1016,7 +1017,7 @@ class GatewayClient:
             issuer_did: Expected DID owned by the selected issuer profile
             oid4vp_profile: Optional production verifier profile selection
             request_uri_method: Optional signed request-object retrieval method
-            
+
         Returns:
             Flow instance with instance_id, request_uri, qr_code_data
         """
@@ -1043,13 +1044,9 @@ class GatewayClient:
             "POST",
             "/v1/flows/verify",
             json=payload,
-            headers=(
-                {"X-Organization-ID": organization_id}
-                if organization_id
-                else None
-            ),
+            headers=({"X-Organization-ID": organization_id} if organization_id else None),
         )
-        
+
     async def get_verification_request(self, instance_id: str) -> Dict[str, Any]:
         """Get verification request object (wallet fetches this)"""
         # This endpoint returns a JWT (application/oauth-authz-req+jwt), not JSON
@@ -1060,21 +1057,21 @@ class GatewayClient:
                 headers=self._get_headers(),
             )
             response.raise_for_status()
-            
+
             # Check content type
             content_type = response.headers.get("content-type", "")
             if "jwt" in content_type or not content_type.startswith("application/json"):
                 # It's a JWT - decode the payload (middle part)
                 jwt_token = response.text
                 # JWT format: header.payload.signature
-                parts = jwt_token.split('.')
+                parts = jwt_token.split(".")
                 if len(parts) == 3:
                     # Decode the payload (add padding if needed)
                     payload_b64 = parts[1]
                     # Add padding if needed
                     padding = 4 - len(payload_b64) % 4
                     if padding != 4:
-                        payload_b64 += '=' * padding
+                        payload_b64 += "=" * padding
                     payload_bytes = base64.urlsafe_b64decode(payload_b64)
                     decoded = json.loads(payload_bytes)
                     return decoded
@@ -1090,7 +1087,7 @@ class GatewayClient:
             ) from e
         except httpx.RequestError as e:
             raise GatewayClientError(f"Request to /v1/flows/instances/{instance_id}/request failed: {e}") from e
-        
+
     async def submit_verification(
         self,
         instance_id: str,
@@ -1098,11 +1095,11 @@ class GatewayClient:
     ) -> Dict[str, Any]:
         """
         Submit VP token to complete verification flow.
-        
+
         Args:
             instance_id: Flow instance ID
             vp_token: VP token from wallet
-            
+
         Returns:
             Verification result
         """
@@ -1111,15 +1108,15 @@ class GatewayClient:
             f"/v1/flows/instances/{instance_id}/submit",
             json={"vp_token": vp_token},
         )
-        
+
     async def get_verification_result(self, instance_id: str) -> Dict[str, Any]:
         """Get verification flow result"""
         return await self._request("GET", f"/v1/flows/instances/{instance_id}")
-        
+
     # =============================================================================
     # Flow Definitions & Instances
     # =============================================================================
-    
+
     async def create_flow_definition(
         self,
         organization_id: str,
@@ -1146,7 +1143,7 @@ class GatewayClient:
                 "presentation_policy_id": presentation_policy_id,
             },
         )
-        
+
     async def get_flow_definition(self, flow_def_id: str) -> Dict[str, Any]:
         """Get flow definition by ID"""
         return await self._request("GET", f"/v1/flows/definitions/{flow_def_id}")
@@ -1154,7 +1151,7 @@ class GatewayClient:
     async def activate_flow_definition(self, flow_def_id: str) -> Dict[str, Any]:
         """Activate a flow definition"""
         return await self._request("POST", f"/v1/flows/definitions/{flow_def_id}/activate")
-        
+
     async def list_flow_definitions(
         self,
         organization_id: str,
@@ -1181,7 +1178,7 @@ class GatewayClient:
     async def delete_flow_definition(self, flow_def_id: str) -> None:
         """Delete a flow definition."""
         await self._request("DELETE", f"/v1/flows/definitions/{flow_def_id}")
-        
+
     async def start_flow_instance(
         self,
         flow_definition_id: str,
@@ -1198,15 +1195,15 @@ class GatewayClient:
                 "initial_context": initial_context or {},
             },
         )
-        
+
     async def get_flow_instance(self, instance_id: str) -> Dict[str, Any]:
         """Get flow instance by ID"""
         return await self._request("GET", f"/v1/flows/instances/{instance_id}")
-    
+
     # =============================================================================
     # Deployment Profiles
     # =============================================================================
-    
+
     async def create_deployment_profile(
         self,
         organization_id: str,
@@ -1243,11 +1240,11 @@ class GatewayClient:
             "/v1/deployment-profiles",
             json=payload,
         )
-    
+
     async def get_deployment_profile(self, profile_id: str) -> Dict[str, Any]:
         """Get deployment profile by ID."""
         return await self._request("GET", f"/v1/deployment-profiles/{profile_id}")
-    
+
     async def list_deployment_profiles(
         self,
         organization_id: str,
@@ -1258,7 +1255,7 @@ class GatewayClient:
             "/v1/deployment-profiles",
             params={"organization_id": organization_id},
         )
-    
+
     async def update_deployment_profile(
         self,
         profile_id: str,
@@ -1270,29 +1267,29 @@ class GatewayClient:
             f"/v1/deployment-profiles/{profile_id}",
             json=updates,
         )
-    
+
     async def delete_deployment_profile(self, profile_id: str) -> None:
         """Delete a deployment profile."""
         await self._request("DELETE", f"/v1/deployment-profiles/{profile_id}")
-    
+
     async def activate_deployment_profile(self, profile_id: str) -> Dict[str, Any]:
         """Activate a deployment profile."""
         return await self._request(
             "POST",
             f"/v1/deployment-profiles/{profile_id}/activate",
         )
-    
+
     async def generate_deployment_profile_api_key(self, profile_id: str) -> Dict[str, Any]:
         """Generate API key for deployment profile."""
         return await self._request(
             "POST",
             f"/v1/deployment-profiles/{profile_id}/generate-api-key",
         )
-    
+
     # =============================================================================
     # Lanes (nested under Deployment Profiles)
     # =============================================================================
-    
+
     async def create_lane(
         self,
         profile_id: Optional[str] = None,
@@ -1316,21 +1313,21 @@ class GatewayClient:
                 "metadata": metadata or {},
             },
         )
-    
+
     async def get_lane(self, profile_id: str, lane_id: str) -> Dict[str, Any]:
         """Get lane by ID."""
         return await self._request(
             "GET",
             f"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
         )
-    
+
     async def list_lanes(self, profile_id: str) -> List[Dict[str, Any]]:
         """List lanes for a deployment profile."""
         return await self._request(
             "GET",
             f"/v1/deployment-profiles/{profile_id}/lanes",
         )
-    
+
     async def update_lane(
         self,
         profile_id: str,
@@ -1343,14 +1340,14 @@ class GatewayClient:
             f"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
             json=updates,
         )
-    
+
     async def delete_lane(self, profile_id: str, lane_id: str) -> None:
         """Delete a lane."""
         await self._request(
             "DELETE",
             f"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
         )
-    
+
     async def assign_device_to_lane(
         self,
         profile_id: str,
@@ -1471,6 +1468,40 @@ class GatewayClient:
             params={"organization_id": organization_id},
         )
 
+    async def get_issuer_profile_public_identity(
+        self,
+        *,
+        issuer_profile_id: str,
+        organization_id: str,
+    ) -> Dict[str, Any]:
+        """Resolve public DID/key material without exposing KMS coordinates."""
+
+        return await self._request(
+            "GET",
+            f"/v1/signing-keys/issuer-profiles/{issuer_profile_id}/public-identity",
+            params={"organization_id": organization_id},
+        )
+
+    async def store_issuer_profile_certificate(
+        self,
+        *,
+        issuer_profile_id: str,
+        organization_id: str,
+        cert_pem: str,
+        cert_chain_pem: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Attach a certificate to the profile's DID key, never a caller-selected KMS key."""
+
+        body: Dict[str, Any] = {"cert_pem": cert_pem}
+        if cert_chain_pem is not None:
+            body["cert_chain_pem"] = cert_chain_pem
+        return await self._request(
+            "PUT",
+            f"/v1/signing-keys/issuer-profiles/{issuer_profile_id}/certificate",
+            json=body,
+            params={"organization_id": organization_id},
+        )
+
     async def create_issuer_profile(
         self,
         *,
@@ -1499,7 +1530,7 @@ class GatewayClient:
             params={"organization_id": organization_id},
         )
         return response.get("profile", response)
-    
+
     # =============================================================================
     # Revocation
     # =============================================================================
@@ -1583,7 +1614,7 @@ class GatewayClient:
             "DELETE",
             f"/v1/revocation-profiles/{profile_id}",
         )
-    
+
     async def revoke_credential(
         self,
         issuance_id: str,
@@ -1595,7 +1626,7 @@ class GatewayClient:
             f"/v1/issuance/{issuance_id}/revoke",
             json={"reason": reason or "Test revocation"},
         )
-    
+
     async def get_revocation_status(self, issuance_id: str) -> Dict[str, Any]:
         """Get revocation status for a credential."""
         return await self._request(
