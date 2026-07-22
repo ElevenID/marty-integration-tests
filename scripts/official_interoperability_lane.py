@@ -791,8 +791,20 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
         return 1
     try:
         wait_for_public_stack(environment)
+        fixtures = bootstrap_fixtures(args, environment, mode="eudi")
         suite_environment = dict(environment)
         suite_environment.update(load_verifier_environment(args.haip_material))
+        # The runner selects only organization-scoped templates. Each template
+        # is bound to an issuer profile whose DID is the signing identity; KMS
+        # service and key references remain private profile-administration data.
+        suite_environment.update(
+            {
+                "TEST_ORG_ID": fixtures["organization_id"],
+                "EUDI_TEST_PASSPORT_TEMPLATE_ID": fixtures["eudi_passport_template_id"],
+                "EUDI_TEST_MDL_TEMPLATE_ID": fixtures["eudi_mdl_template_id"],
+                "EUDI_TEST_OPEN_BADGE_TEMPLATE_ID": fixtures["eudi_open_badge_template_id"],
+            }
+        )
         return run(
             [
                 sys.executable,

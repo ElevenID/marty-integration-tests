@@ -66,8 +66,14 @@ def issuer_profile_payload(
     gateway_url: str,
     w3c: bool,
     run_id: str,
+    label: str | None = None,
 ) -> dict[str, str]:
-    """Build a disposable active issuer identity backed by a resolved KMS key."""
+    """Provision an issuer profile whose private key remains in managed custody.
+
+    The service and key references are profile-administration inputs only. The
+    conformance runners never receive them: issuance selects the resulting
+    issuer profile, and the profile's DID is the signing identity.
+    """
     service_id = signing_service.get("id")
     key_reference = signing_service.get("key_reference")
     if not isinstance(service_id, str) or not IDENTIFIER.fullmatch(service_id):
@@ -77,9 +83,9 @@ def issuer_profile_payload(
     domain = urlparse(gateway_url).hostname
     if not domain:
         raise ValueError("gateway URL has no hostname for the disposable issuer DID")
-    label = "W3C VC Data Model v2" if w3c else "OID4VP SD-JWT"
+    profile_label = label or ("W3C VC Data Model v2" if w3c else "OID4VP SD-JWT")
     return {
-        "name": f"Official {label} issuer {run_id}",
+        "name": f"Official {profile_label} issuer {run_id}",
         "issuer_did": f"did:web:{domain}:orgs:{organization_id}",
         "signing_service_id": service_id,
         "signing_key_reference": key_reference,
@@ -88,11 +94,78 @@ def issuer_profile_payload(
     }
 
 
+def eudi_compliance_profile_payload(organization_id: str, *, run_id: str) -> dict[str, object]:
+    """Build the shared EUDI SD-JWT compliance profile for disposable fixtures."""
+    return {
+        "organization_id": organization_id,
+        "name": f"Official EUDI SD-JWT {run_id}",
+        "compliance_code": "EUDI_PID",
+        "credential_format": "sd_jwt_vc",
+        "frameworks": ["eudi"],
+        "system_profile": False,
+    }
+
+
+def eudi_template_payload(
+    organization_id: str,
+    compliance_profile_id: str,
+    issuer_profile_id: str,
+    revocation_profile_id: str,
+    *,
+    credential_type: str,
+    gateway_url: str,
+    run_id: str,
+) -> dict[str, object]:
+    """Build one production-shaped EUDI SD-JWT credential template.
+
+    The template binds the issuer profile. It intentionally contains no KMS
+    service or key reference, so issuance can only sign as the profile's DID.
+    """
+    if credential_type not in {"Passport", "MobileDrivingLicense", "OpenBadge"}:
+        raise ValueError("unsupported EUDI fixture credential type")
+    gateway_origin = gateway_url.rstrip("/")
+    properties: dict[str, object] = {
+        "given_name": {"type": "string"},
+        "family_name": {"type": "string"},
+        "date_of_birth": {"type": "string", "format": "full-date"},
+        "test_id": {"type": "string"},
+        "source": {"type": "string"},
+        "wallet_profile": {"type": "string"},
+    }
+    claims = [
+        {"name": "given_name", "display_name": "Given Name", "required": True},
+        {"name": "family_name", "display_name": "Family Name", "required": True},
+        {"name": "date_of_birth", "display_name": "Date of Birth", "required": True},
+    ]
+    if credential_type == "Passport":
+        properties["document_number"] = {"type": "string"}
+        claims.append({"name": "document_number", "display_name": "Document Number", "required": False})
+    return {
+        "organization_id": organization_id,
+        "name": f"Official EUDI {credential_type} {run_id}",
+        "credential_type": credential_type,
+        "vct": f"{gateway_origin}/credentials/{credential_type}",
+        "supported_formats": ["sd_jwt_vc"],
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "compliance_profile_id": compliance_profile_id,
+        "issuer_profile_id": issuer_profile_id,
+        "revocation_profile_id": revocation_profile_id,
+        "schema_uri": {
+            "type": "object",
+            "properties": properties,
+            "required": ["given_name", "family_name", "date_of_birth"],
+        },
+        "claims": claims,
+        "auto_generate_artifacts": True,
+    }
+
+
 def revocation_profile_payload(
     organization_id: str,
     *,
     w3c: bool,
     run_id: str,
+    label: str | None = None,
 ) -> dict[str, object]:
     """Build a disposable, standards-shaped revocation dependency.
 
@@ -100,10 +173,10 @@ def revocation_profile_payload(
     revocation policy is bound to them.  The official-suite fixtures must use
     that same lifecycle, rather than weakening the production issuance guard.
     """
-    label = "W3C VC Data Model v2" if w3c else "OID4VP SD-JWT"
+    profile_label = label or ("W3C VC Data Model v2" if w3c else "OID4VP SD-JWT")
     return {
         "organization_id": organization_id,
-        "name": f"Official {label} revocation {run_id}",
+        "name": f"Official {profile_label} revocation {run_id}",
         "description": "Disposable status-list dependency for official interoperability evidence",
         "revocation_mechanism": ["BITSTRING_STATUS_LIST"],
         "mechanism_priority": ["BITSTRING_STATUS_LIST"],
@@ -191,18 +264,10 @@ def policy_payload(
     # requires at least one requested-claim entry, so use credentialSubject.id as
     # an optional structural claim. This preserves cryptographic and holder-
     # binding validation without inventing a claim that VCDM v2 does not require.
-    claims = (
-        (("id", False),)
-        if w3c
-        else tuple((claim, True) for claim in ("given_name", "family_name", "birthdate"))
-    )
+    claims = (("id", False),) if w3c else tuple((claim, True) for claim in ("given_name", "family_name", "birthdate"))
     if not w3c and not presentation:
         raise ValueError("OID4VP fixtures require a presentation policy")
-    label = (
-        f"W3C VC v2 {'presentation' if presentation else 'credential'}"
-        if w3c
-        else "OID4VP SD-JWT"
-    )
+    label = f"W3C VC v2 {'presentation' if presentation else 'credential'}" if w3c else "OID4VP SD-JWT"
     return {
         "organization_id": organization_id,
         "name": f"Official {label} {run_id}",
@@ -216,11 +281,7 @@ def policy_payload(
                 "credential_template_id": template_id,
                 "display_name": label,
                 "credential_payload_format": (
-                    "w3c_vcdm_v2_di"
-                    if w3c and presentation
-                    else "w3c_vcdm_v2_jwt_vc"
-                    if w3c
-                    else "w3c_vcdm_v2_sd_jwt"
+                    "w3c_vcdm_v2_di" if w3c and presentation else "w3c_vcdm_v2_jwt_vc" if w3c else "w3c_vcdm_v2_sd_jwt"
                 ),
                 "requested_claims": [
                     {
@@ -329,6 +390,109 @@ def resolve_signing_service(
     raise RuntimeError(f"no public KMS signing service is available: {failure}")
 
 
+def bootstrap_eudi(
+    gateway_url: str,
+    session_id: str,
+    *,
+    organization_id: str,
+    run_id: str,
+    request: Callable[..., object],
+) -> dict[str, str]:
+    """Create EUDI fixtures while keeping custody details behind the profile.
+
+    This function performs profile administration through the public API. Its
+    returned runner contract contains only organization, issuer identity, and
+    template identifiers; KMS service and key references never cross into the
+    issuance request path.
+    """
+    custody_service = resolve_signing_service(
+        gateway_url,
+        session_id,
+        organization_id=organization_id,
+        w3c=False,
+        request=request,
+    )
+    profile_payload = issuer_profile_payload(
+        organization_id,
+        custody_service,
+        gateway_url=gateway_url,
+        w3c=False,
+        run_id=run_id,
+        label="EUDI SD-JWT",
+    )
+    created_profile = request(
+        gateway_url,
+        session_id,
+        f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
+        method="POST",
+        json_body=profile_payload,
+    )
+    issuer_profile_id = issuer_profile_response_id(created_profile)
+
+    created_compliance = request(
+        gateway_url,
+        session_id,
+        "/v1/compliance-profiles",
+        method="POST",
+        json_body=eudi_compliance_profile_payload(organization_id, run_id=run_id),
+    )
+    compliance_profile_id = response_id(created_compliance, "EUDI compliance profile")
+    created_revocation = request(
+        gateway_url,
+        session_id,
+        "/v1/revocation-profiles",
+        method="POST",
+        json_body=revocation_profile_payload(
+            organization_id,
+            w3c=False,
+            run_id=run_id,
+            label="EUDI SD-JWT",
+        ),
+    )
+    revocation_profile_id = response_id(created_revocation, "EUDI revocation profile")
+    activated_revocation = request(
+        gateway_url,
+        session_id,
+        f"/v1/revocation-profiles/{revocation_profile_id}/activate",
+        method="POST",
+    )
+    if response_id(activated_revocation, "activated EUDI revocation profile") != revocation_profile_id:
+        raise RuntimeError("activated EUDI revocation profile id changed unexpectedly")
+
+    result = {
+        "organization_id": organization_id,
+        "eudi_issuer_profile_id": issuer_profile_id,
+        "eudi_issuer_did": profile_payload["issuer_did"],
+        "eudi_compliance_profile_id": compliance_profile_id,
+        "eudi_revocation_profile_id": revocation_profile_id,
+    }
+    for name, credential_type in (
+        ("passport", "Passport"),
+        ("mdl", "MobileDrivingLicense"),
+        ("open_badge", "OpenBadge"),
+    ):
+        created_template = request(
+            gateway_url,
+            session_id,
+            "/v1/credential-templates",
+            method="POST",
+            json_body=eudi_template_payload(
+                organization_id,
+                compliance_profile_id,
+                issuer_profile_id,
+                revocation_profile_id,
+                credential_type=credential_type,
+                gateway_url=gateway_url,
+                run_id=run_id,
+            ),
+        )
+        result[f"eudi_{name}_template_id"] = response_id(
+            created_template,
+            f"EUDI {name} credential template",
+        )
+    return result
+
+
 def bootstrap(
     gateway_url: str,
     session_id: str,
@@ -345,6 +509,14 @@ def bootstrap(
         raise ValueError("organization id contains unsupported characters")
     if mode in {"oid4vp", "all"} and oidf_signer_public_jwk is None:
         raise ValueError("OID4VP fixture bootstrap requires the official runner public signing JWK")
+    if mode == "eudi":
+        return bootstrap_eudi(
+            gateway_url,
+            session_id,
+            organization_id=organization_id,
+            run_id=run_id,
+            request=request,
+        )
     result = {"organization_id": organization_id}
     targets = (False, True) if mode == "all" else (mode == "w3c",)
     for w3c in targets:
@@ -500,7 +672,7 @@ def write_private_json(path: Path, value: object) -> None:
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument("--mode", choices=("oid4vp", "w3c", "all"), required=True)
+    result.add_argument("--mode", choices=("oid4vp", "w3c", "eudi", "all"), required=True)
     result.add_argument("--gateway-url", default=os.environ.get("OIDF_MARTY_GATEWAY_URL"))
     result.add_argument(
         "--organization-id", default=os.environ.get("MARTY_CONFORMANCE_ORGANIZATION_ID", DEFAULT_ORGANIZATION)
