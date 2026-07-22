@@ -608,6 +608,18 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
     monkeypatch.setattr(
         lane,
+        "bootstrap_fixtures",
+        lambda *_args, **_kwargs: {
+            "organization_id": "org-1",
+            "eudi_issuer_profile_id": "profile-1",
+            "eudi_issuer_did": "did:web:marty.test:orgs:org-1",
+            "eudi_passport_template_id": "passport-1",
+            "eudi_mdl_template_id": "mdl-1",
+            "eudi_open_badge_template_id": "badge-1",
+        },
+    )
+    monkeypatch.setattr(
+        lane,
         "load_verifier_environment",
         lambda _path: {
             "VERIFIER_X509_CERT_PEM": "certificate-chain",
@@ -648,6 +660,11 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     assert all("VERIFIER_X509_CERT_PEM" not in item for item in lifecycle_environments)
     assert suite_environment[lane.OID4VP_TRUST_ANCHOR_FILE_ENV] == "/haip/request-object-root.pem"
     assert suite_environment["VERIFIER_X509_CERT_PEM"] == "certificate-chain"
+    assert suite_environment["TEST_ORG_ID"] == "org-1"
+    assert suite_environment["EUDI_TEST_OPEN_BADGE_TEMPLATE_ID"] == "badge-1"
+    assert "eudi_issuer_profile_id" not in suite_environment
+    assert "eudi_issuer_did" not in suite_environment
+    assert not any("KMS" in name or "KEY_REFERENCE" in name for name in suite_environment)
 
 
 def test_w3c_lane_cleans_up_a_partial_initial_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -66,13 +66,21 @@ GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 EUDI_VERIFIER_URL = os.getenv("EUDI_VERIFIER_URL", "http://localhost:8090")
 EUDI_WALLET_TESTER_URL = os.getenv("EUDI_WALLET_TESTER_URL", "http://localhost:5050")
 
-# Template IDs (from seed data)
+# The official lane injects disposable template IDs created through the public
+# API. Defaults remain only for the older opt-in local developer environment.
 TEMPLATES = {
-    "passport": "40000000-0000-0000-0000-000000000001",
-    "mDL": "40000000-0000-0000-0000-000000000002",
+    "passport": os.getenv(
+        "EUDI_TEST_PASSPORT_TEMPLATE_ID",
+        "40000000-0000-0000-0000-000000000001",
+    ),
+    "mDL": os.getenv("EUDI_TEST_MDL_TEMPLATE_ID", "40000000-0000-0000-0000-000000000002"),
     "access_badge": "40000000-0000-0000-0000-000000000005",
-    "open_badge": "40000000-0000-0000-0000-000000000007",
+    "open_badge": os.getenv(
+        "EUDI_TEST_OPEN_BADGE_TEMPLATE_ID",
+        "40000000-0000-0000-0000-000000000007",
+    ),
 }
+VCT_ORIGIN = os.getenv("EUDI_TEST_VCT_ORIGIN", GATEWAY_URL).rstrip("/")
 
 TEST_CLAIMS = {
     "given_name": "EUDI",
@@ -911,6 +919,7 @@ class TestSelectiveDisclosure:
                 "id": "sd-jwt-query",
                 "format": "dc+sd-jwt",
                 "meta": {"vct_values": [
+                    f"{VCT_ORIGIN}/credentials/OpenBadge",
                     "https://marty.example/credentials/open_badge",
                     "https://beta.elevenidllc.com/credentials/open_badge",
                     "urn:credential:open_badge",

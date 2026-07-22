@@ -104,13 +104,9 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[16][2]["holder_binding"] == {"required": False}
     requirement = calls[16][2]["credential_requirements"][0]
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
-    assert requirement["requested_claims"] == [
-        {"claim_name": "id", "display_name": "id", "required": False}
-    ]
+    assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
     assert calls[18][2]["holder_binding"] == {"required": True}
-    assert calls[18][2]["credential_requirements"][0]["credential_payload_format"] == (
-        "w3c_vcdm_v2_di"
-    )
+    assert calls[18][2]["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
 
 def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
@@ -150,6 +146,63 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     assert policy["holder_binding"] == {"required": True}
 
 
+def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates() -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+    responses = iter(
+        [
+            {"service": {"id": "managed-service", "key_reference": "managed-key"}},
+            {"profile": {"id": "issuer-profile"}},
+            {"id": "compliance-profile"},
+            {"id": "revocation-profile"},
+            {"id": "revocation-profile"},
+            {"id": "passport-template"},
+            {"id": "mdl-template"},
+            {"id": "open-badge-template"},
+        ]
+    )
+
+    def request(
+        _gateway: str,
+        _session: str,
+        path: str,
+        *,
+        method: str,
+        json_body: dict | None = None,
+    ) -> object:
+        calls.append((path, method, json_body))
+        return next(responses)
+
+    result = fixtures.bootstrap(
+        "https://marty.test",
+        "real-session",
+        organization_id=fixtures.DEFAULT_ORGANIZATION,
+        run_id="run-1",
+        mode="eudi",
+        request=request,
+    )
+
+    assert result == {
+        "organization_id": fixtures.DEFAULT_ORGANIZATION,
+        "eudi_issuer_profile_id": "issuer-profile",
+        "eudi_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
+        "eudi_compliance_profile_id": "compliance-profile",
+        "eudi_revocation_profile_id": "revocation-profile",
+        "eudi_passport_template_id": "passport-template",
+        "eudi_mdl_template_id": "mdl-template",
+        "eudi_open_badge_template_id": "open-badge-template",
+    }
+    profile_body = calls[1][2]
+    assert profile_body is not None
+    assert profile_body["issuer_did"] == result["eudi_issuer_did"]
+    assert profile_body["signing_service_id"] == "managed-service"
+    assert profile_body["signing_key_reference"] == "managed-key"
+    for _path, _method, body in calls[5:]:
+        assert body is not None
+        assert body["issuer_profile_id"] == "issuer-profile"
+        assert "signing_service_id" not in body
+        assert "signing_key_reference" not in body
+
+
 def test_w3c_fixture_separates_credential_and_presentation_verification() -> None:
     credential_policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,
@@ -168,13 +221,9 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     assert credential_policy["holder_binding"] == {"required": False}
     credential_requirement = credential_policy["credential_requirements"][0]
     assert credential_requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
-    assert credential_requirement["requested_claims"] == [
-        {"claim_name": "id", "display_name": "id", "required": False}
-    ]
+    assert credential_requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
     assert presentation_policy["holder_binding"] == {"required": True}
-    assert presentation_policy["credential_requirements"][0]["credential_payload_format"] == (
-        "w3c_vcdm_v2_di"
-    )
+    assert presentation_policy["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
 
 def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_path: Path) -> None:
