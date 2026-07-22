@@ -59,6 +59,11 @@ EUDI_STARTUP_PATTERNS = {
     "jvm-memory-exhaustion": re.compile(
         r"OutOfMemoryError|unable to create native thread|Cannot reserve", re.IGNORECASE
     ),
+    "jvm-memory-direct-buffer": re.compile(r"OutOfMemoryError: Direct buffer memory", re.IGNORECASE),
+    "jvm-memory-heap": re.compile(r"OutOfMemoryError: Java heap space", re.IGNORECASE),
+    "jvm-memory-metaspace": re.compile(r"OutOfMemoryError: Metaspace", re.IGNORECASE),
+    "jvm-memory-native-thread": re.compile(r"unable to create native thread", re.IGNORECASE),
+    "jvm-memory-reservation": re.compile(r"Cannot reserve", re.IGNORECASE),
 }
 
 
