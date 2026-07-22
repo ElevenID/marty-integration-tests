@@ -307,6 +307,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         sys.executable,
         "scripts/run-test-plan.py",
         "--no-parallel",
+        "--verbose",
         "--export-dir",
         str(output),
         "--expected-failures-file",
