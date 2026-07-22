@@ -56,6 +56,24 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
         r"(?i)(?:CredentialIssuerMetadata|issuer metadata|JsonDecodingException|"
         r"MissingFieldException|SerializationException)"
     ),
+    "metadata-missing-required-field": re.compile(r"(?i)(?:MissingFieldException|field\b[^\n]{0,80}\bis required)"),
+    "metadata-json-type-mismatch": re.compile(
+        r"(?i)(?:JsonDecodingException|unexpected JSON token|expected\b[^\n]{0,80}\bbut had)"
+    ),
+    "metadata-field-credential-configurations-supported": re.compile(
+        r"(?i)credential_configurations_supported"
+    ),
+    "metadata-field-credential-definition": re.compile(r"(?i)credential_definition"),
+    "metadata-field-cryptographic-binding-methods": re.compile(
+        r"(?i)cryptographic_binding_methods_supported"
+    ),
+    "metadata-field-proof-types": re.compile(r"(?i)proof_types_supported"),
+    "metadata-field-signing-algorithms": re.compile(
+        r"(?i)credential_signing_alg_values_supported"
+    ),
+    "metadata-field-claims": re.compile(r"(?i)(?:\bclaims\b|credentialSubject)"),
+    "metadata-field-doctype": re.compile(r"(?i)\bdoctype\b"),
+    "metadata-field-vct": re.compile(r"(?i)\bvct\b"),
     "credential-offer": re.compile(r"(?i)(?:credential[_ -]?offer|CredentialOffer|resolveOffer)"),
     "invalid-proof": re.compile(r"(?i)(?:invalid_proof|proof validation failed)"),
     "invalid-nonce": re.compile(r"(?i)(?:invalid_nonce|nonce validation failed)"),
@@ -65,6 +83,12 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
     "issuer-profile": re.compile(r"(?i)(?:issuer[_ -]?profile|issuer DID|remote sign|signing service)"),
     "upstream-http-4xx": re.compile(r"(?i)(?:status(?: code)?[=: ]+4\d\d\b|HTTP(?:/\S+)?\s+4\d\d\b)"),
     "upstream-http-5xx": re.compile(r"(?i)(?:status(?: code)?[=: ]+5\d\d\b|HTTP(?:/\S+)?\s+5\d\d\b)"),
+    "verifier-invalid-request": re.compile(r"(?i)\binvalid_request\b"),
+    "verifier-invalid-vp-token": re.compile(r"(?i)\binvalid_(?:vp|presentation)(?:_token)?\b"),
+    "verifier-presentation-submission": re.compile(r"(?i)presentation_submission"),
+    "verifier-dcql": re.compile(r"(?i)\bdcql\b"),
+    "verifier-vct": re.compile(r"(?i)\bvct(?:_values)?\b"),
+    "verifier-key-binding": re.compile(r"(?i)(?:key binding|kb-jwt|kb_jwt)"),
 }
 STACK_ENV_KEYS = {
     "MARTY_UI_IMAGE",

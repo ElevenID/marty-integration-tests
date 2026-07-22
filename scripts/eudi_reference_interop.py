@@ -250,6 +250,12 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
         r"(?i)(?:issuer|authorization-server)-metadata-hostname-resolution-failed\b"
     ),
     "wallet-connection-failed": re.compile(r"(?i)(?:issuer|authorization-server)-metadata-connection-failed\b"),
+    "verifier-invalid-request": re.compile(r"(?i)\binvalid_request\b"),
+    "verifier-invalid-vp-token": re.compile(r"(?i)\binvalid_(?:vp|presentation)(?:_token)?\b"),
+    "verifier-presentation-submission": re.compile(r"(?i)presentation_submission"),
+    "verifier-dcql": re.compile(r"(?i)\bdcql\b"),
+    "verifier-vct": re.compile(r"(?i)\bvct(?:_values)?\b"),
+    "verifier-key-binding": re.compile(r"(?i)(?:key binding|kb-jwt|kb_jwt)"),
 }
 
 

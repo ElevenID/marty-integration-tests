@@ -536,6 +536,20 @@ def test_eudi_runtime_diagnostics_are_fixed_categories_only() -> None:
     assert classes == ["tls-trust", "metadata-deserialization"]
 
 
+def test_eudi_runtime_diagnostics_identify_allowlisted_metadata_boundary_without_values() -> None:
+    classes = lane.classify_eudi_runtime_diagnostics(
+        "JsonDecodingException: Unexpected JSON token at credential_configurations_supported."
+        "MobileDrivingLicense.proof_types_supported secret=must-not-be-reported"
+    )
+
+    assert classes == [
+        "metadata-deserialization",
+        "metadata-json-type-mismatch",
+        "metadata-field-credential-configurations-supported",
+        "metadata-field-proof-types",
+    ]
+
+
 def test_eudi_runtime_diagnostic_never_prints_private_log_text(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
