@@ -65,6 +65,13 @@ object WalletIssuanceService {
             .mapNotNull { it::class.simpleName }
             .toSet()
         val detail = when {
+            // Prefer the transport root cause over the library's outer
+            // UnableToFetch wrapper so a CI run remains directly actionable.
+            "SSLHandshakeException" in classes || "CertPathBuilderException" in classes ->
+                "tls-trust-failed"
+            "UnknownHostException" in classes -> "hostname-resolution-failed"
+            "ConnectException" in classes || "HttpConnectTimeoutException" in classes ->
+                "connection-failed"
             "UnableToFetchCredentialIssuerMetadata" in classes -> "fetch-failed"
             "NonParseableCredentialIssuerMetadata" in classes -> "json-invalid"
             "InvalidCredentialIssuerId" in classes -> "issuer-id-invalid"
@@ -82,11 +89,6 @@ object WalletIssuanceService {
             "CredentialRequestEncryptionMustExistIfCredentialResponseEncryptionExists" in classes ->
                 "request-encryption-metadata-missing"
             "InvalidBatchSize" in classes -> "batch-size-invalid"
-            "SSLHandshakeException" in classes || "CertPathBuilderException" in classes ->
-                "tls-trust-failed"
-            "UnknownHostException" in classes -> "hostname-resolution-failed"
-            "ConnectException" in classes || "HttpConnectTimeoutException" in classes ->
-                "connection-failed"
             else -> "resolution-failed"
         }
         return "$boundary-metadata-$detail"
