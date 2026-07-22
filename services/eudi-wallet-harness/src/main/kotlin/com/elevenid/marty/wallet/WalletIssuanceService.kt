@@ -90,7 +90,8 @@ object WalletIssuanceService {
             "ConnectException" in classes || "HttpConnectTimeoutException" in classes ->
                 "connection-failed"
             "UnableToFetchCredentialIssuerMetadata" in classes -> "fetch-failed"
-            "NonParseableCredentialIssuerMetadata" in classes -> "json-invalid"
+            "NonParseableCredentialIssuerMetadata" in classes ->
+                metadataJsonFailureCode(messages)
             "InvalidCredentialIssuerId" in classes -> "issuer-id-invalid"
             "InvalidAuthorizationServer" in classes -> "authorization-server-url-invalid"
             "InvalidCredentialEndpoint" in classes -> "credential-endpoint-invalid"
@@ -109,6 +110,31 @@ object WalletIssuanceService {
             else -> "resolution-failed"
         }
         return "$boundary-metadata-$detail"
+    }
+
+    /**
+     * Preserve only the schema field named by kotlinx.serialization. Values,
+     * URLs, configuration identifiers, and JSON fragments must never cross
+     * the public test-facade boundary.
+     */
+    private fun metadataJsonFailureCode(messages: List<String>): String {
+        val knownFields = listOf(
+            "credential_configurations_supported" to "credential-configurations-supported",
+            "credential_signing_alg_values_supported" to "credential-signing-algorithms",
+            "cryptographic_binding_methods_supported" to "binding-methods",
+            "proof_types_supported" to "proof-types",
+            "credential_definition" to "credential-definition",
+            "credential_metadata" to "credential-metadata",
+            "authorization_servers" to "authorization-servers",
+            "display" to "display",
+            "claims" to "claims",
+            "doctype" to "doctype",
+            "vct" to "vct",
+        )
+        val field = knownFields.firstOrNull { (wireName, _) ->
+            messages.any { it.contains(wireName, ignoreCase = true) }
+        }?.second
+        return field?.let { "json-invalid-$it" } ?: "json-invalid"
     }
 
     private data class HolderProofMaterial(

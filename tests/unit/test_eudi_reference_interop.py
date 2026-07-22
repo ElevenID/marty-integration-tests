@@ -301,6 +301,31 @@ def test_eudi_failure_categories_recognize_public_safe_wallet_codes(
     assert category in categories
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "category"),
+    [
+        (
+            "issuer-metadata-json-invalid-credential-signing-algorithms",
+            "metadata-json-field-credential-signing-algorithms",
+        ),
+        (
+            "issuer-metadata-json-invalid-credential-metadata",
+            "metadata-json-field-credential-metadata",
+        ),
+        ("issuer-metadata-json-invalid-proof-types", "metadata-json-field-proof-types"),
+        ("issuer-metadata-json-invalid-doctype", "metadata-json-field-doctype"),
+    ],
+)
+def test_eudi_failure_categories_reveal_only_the_invalid_metadata_field(
+    diagnostic: str,
+    category: str,
+) -> None:
+    categories = eudi.classify_eudi_failure_text(diagnostic)
+
+    assert "issuer-metadata-json-invalid" in categories
+    assert category in categories
+
+
 def test_eudi_junit_failure_summary_classifies_safe_oid4vci_error_codes(
     tmp_path: Path,
 ) -> None:

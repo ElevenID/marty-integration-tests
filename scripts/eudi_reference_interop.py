@@ -225,6 +225,31 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "offer-fetch-failed": re.compile(r"(?i)offer-fetch-failed\b"),
     "issuer-metadata-fetch-failed": re.compile(r"(?i)issuer-metadata-fetch-failed\b"),
     "issuer-metadata-json-invalid": re.compile(r"(?i)issuer-metadata-json-invalid\b"),
+    "metadata-json-field-credential-configurations": re.compile(
+        r"(?i)issuer-metadata-json-invalid-credential-configurations-supported\b"
+    ),
+    "metadata-json-field-credential-signing-algorithms": re.compile(
+        r"(?i)issuer-metadata-json-invalid-credential-signing-algorithms\b"
+    ),
+    "metadata-json-field-binding-methods": re.compile(
+        r"(?i)issuer-metadata-json-invalid-binding-methods\b"
+    ),
+    "metadata-json-field-proof-types": re.compile(
+        r"(?i)issuer-metadata-json-invalid-proof-types\b"
+    ),
+    "metadata-json-field-credential-definition": re.compile(
+        r"(?i)issuer-metadata-json-invalid-credential-definition\b"
+    ),
+    "metadata-json-field-credential-metadata": re.compile(
+        r"(?i)issuer-metadata-json-invalid-credential-metadata\b"
+    ),
+    "metadata-json-field-authorization-servers": re.compile(
+        r"(?i)issuer-metadata-json-invalid-authorization-servers\b"
+    ),
+    "metadata-json-field-display": re.compile(r"(?i)issuer-metadata-json-invalid-display\b"),
+    "metadata-json-field-claims": re.compile(r"(?i)issuer-metadata-json-invalid-claims\b"),
+    "metadata-json-field-doctype": re.compile(r"(?i)issuer-metadata-json-invalid-doctype\b"),
+    "metadata-json-field-vct": re.compile(r"(?i)issuer-metadata-json-invalid-vct\b"),
     "issuer-metadata-field-invalid": re.compile(
         r"(?i)issuer-metadata-(?:issuer-id|authorization-server-url|credential-endpoint|nonce-endpoint|"
         r"deferred-endpoint|notification-endpoint|credential-configuration|batch-size)-invalid\b"
