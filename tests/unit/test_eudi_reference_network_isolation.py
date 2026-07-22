@@ -40,6 +40,8 @@ def test_eudi_reference_wallets_only_reach_marty_through_the_tls_bridge() -> Non
 
 def test_eudi_reference_services_use_real_ca_and_access_certificate_contracts() -> None:
     compose = (ROOT / "conformance" / "eudi-reference.compose.yml").read_text(encoding="utf-8")
+    verifier = service_block(compose, "eudi-verifier", "eudi-verifier-tls")
+    wallet_kit = service_block(compose, "eudi-wallet-kit", "networks")
 
     assert "REQUESTS_CA_BUNDLE: /certs/root-ca.pem" in compose
     assert "service_url: ${EUDI_WALLET_TESTER_PUBLIC_URL" in compose
@@ -56,6 +58,8 @@ def test_eudi_reference_services_use_real_ca_and_access_certificate_contracts() 
     assert "urllib.request.urlopen('http://127.0.0.1:5000/'" in compose
     assert compose.count('["CMD", "nginx", "-t"]') == 2
     assert compose.count("${EUDI_CONFORMANCE_CONFIG_ROOT:-./eudi-reference}") == 2
+    assert "mem_limit: 768m" in verifier
+    assert "mem_limit: 768m" in wallet_kit
 
 
 def test_wallet_harness_has_no_trust_all_tls_path() -> None:

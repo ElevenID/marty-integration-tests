@@ -51,6 +51,9 @@ def test_workflow_installs_only_frozen_verified_tooling() -> None:
     requirements = [line for line in lock.splitlines() if line and not line.startswith(("#", " "))]
     assert requirements
     assert all("==" in requirement for requirement in requirements)
+    # The pinned OIDF runner's scripts/requirements.txt imports pyparsing in
+    # test_plan_parser.py before any official module can be created.
+    assert any(requirement.startswith("pyparsing==") for requirement in requirements)
     assert "--hash=sha256:" in lock
 
 
