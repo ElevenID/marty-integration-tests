@@ -102,7 +102,10 @@ def write_local_config(path: Path, adapter_base_url: str) -> None:
         f"      endpoint: '{base}/credentials/verify', tags: ['vc2.0', 'EnvelopingProof'],\n"
         "      supports: { vc: ['2.0'] } }],\n"
         "    vpVerifiers: [{ id: 'marty-vp-verifier',\n"
-        f"      endpoint: '{base}/presentations/verify', tags: ['vc2.0', 'EnvelopingProof'],\n"
+        # Marty verifies the official suite's eddsa-rdfc-2022 VPs through its
+        # Data Integrity path. Do not claim the distinct JWT enveloping-proof
+        # VP capability until that representation is supported end to end.
+        f"      endpoint: '{base}/presentations/verify', tags: ['vc2.0'],\n"
         "      supports: { vc: ['2.0'] } }]\n"
         "  }]\n};\n",
         encoding="utf-8",

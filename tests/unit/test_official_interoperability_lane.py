@@ -190,7 +190,8 @@ def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(
         lambda *_args, **_kwargs: {
             "organization_id": "organization",
             "w3c_template_id": "template",
-            "w3c_policy_id": "policy",
+            "w3c_credential_policy_id": "credential-policy",
+            "w3c_presentation_policy_id": "presentation-policy",
         },
     )
     monkeypatch.setattr(lane, "emit_w3c_issuance_diagnostic", diagnostics.append)
@@ -562,7 +563,8 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
         lambda *_args, **_kwargs: {
             "organization_id": "00000000-0000-0000-0000-000000000001",
             "w3c_template_id": "00000000-0000-0000-0000-000000000002",
-            "w3c_policy_id": "00000000-0000-0000-0000-000000000003",
+            "w3c_credential_policy_id": "00000000-0000-0000-0000-000000000003",
+            "w3c_presentation_policy_id": "00000000-0000-0000-0000-000000000004",
         },
     )
     args = type(

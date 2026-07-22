@@ -44,6 +44,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "template-2"},
             {"id": "policy-2"},
             {"id": "policy-2"},
+            {"id": "policy-3"},
+            {"id": "policy-3"},
         ]
     )
 
@@ -75,7 +77,9 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert result["w3c_compliance_profile_id"] == "compliance-2"
     assert result["w3c_revocation_profile_id"] == "revocation-2"
     assert result["w3c_issuer_profile_id"] == "issuer-2"
-    assert result["w3c_policy_id"] == "policy-2"
+    assert result["w3c_credential_policy_id"] == "policy-2"
+    assert result["w3c_presentation_policy_id"] == "policy-3"
+    assert "w3c_policy_id" not in result
     assert calls[0][0].startswith("/v1/signing-keys/config/resolve?")
     assert calls[0][2] == {
         "credential_format": "dc+sd-jwt",
@@ -97,12 +101,16 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[9][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
     assert calls[15][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
-    assert calls[16][2]["holder_binding"] == {"required": True}
+    assert calls[16][2]["holder_binding"] == {"required": False}
     requirement = calls[16][2]["credential_requirements"][0]
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
     assert requirement["requested_claims"] == [
         {"claim_name": "id", "display_name": "id", "required": False}
     ]
+    assert calls[18][2]["holder_binding"] == {"required": True}
+    assert calls[18][2]["credential_requirements"][0]["credential_payload_format"] == (
+        "w3c_vcdm_v2_di"
+    )
 
 
 def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
@@ -142,19 +150,31 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     assert policy["holder_binding"] == {"required": True}
 
 
-def test_w3c_fixture_requires_data_integrity_holder_binding() -> None:
-    policy = fixtures.policy_payload(
+def test_w3c_fixture_separates_credential_and_presentation_verification() -> None:
+    credential_policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,
         "template-1",
         w3c=True,
         run_id="run-1",
+        presentation=False,
     )
-    assert policy["holder_binding"] == {"required": True}
-    requirement = policy["credential_requirements"][0]
-    assert requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
-    assert requirement["requested_claims"] == [
+    presentation_policy = fixtures.policy_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        "template-1",
+        w3c=True,
+        run_id="run-1",
+        presentation=True,
+    )
+    assert credential_policy["holder_binding"] == {"required": False}
+    credential_requirement = credential_policy["credential_requirements"][0]
+    assert credential_requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert credential_requirement["requested_claims"] == [
         {"claim_name": "id", "display_name": "id", "required": False}
     ]
+    assert presentation_policy["holder_binding"] == {"required": True}
+    assert presentation_policy["credential_requirements"][0]["credential_payload_format"] == (
+        "w3c_vcdm_v2_di"
+    )
 
 
 def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_path: Path) -> None:

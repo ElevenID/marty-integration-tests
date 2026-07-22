@@ -398,18 +398,20 @@ matching verifier signing certificate and the official trust anchor.
 
 `w3c-vc-data-model-v2.json` pins the official W3C test-suite revision and
 records the present proof-format boundary. A disposable stack enables the
-adapter only with `W3C_VC_TEST_ADAPTER=1` and assigns an active fixture policy
-through `W3C_VC_TEST_POLICY_ID`. The adapter has VC-API-shaped
+adapter only with `W3C_VC_TEST_ADAPTER=1` and assigns separate active fixture
+policies through `W3C_VC_TEST_CREDENTIAL_POLICY_ID` and
+`W3C_VC_TEST_PRESENTATION_POLICY_ID`. The credential policy verifies JWT VCs
+without presentation holder binding. The presentation policy verifies Data
+Integrity VPs with the official challenge and domain. The adapter has VC-API-shaped
 `/credentials/verify` and `/presentations/verify` endpoints, but forwards
 supported serialized credentials to the normal Marty presentation-policy
 evaluator. It never uses the inline evaluator because that endpoint is for
 ad-hoc policy simulation rather than an interoperability assertion.
 
-The current W3C Data Integrity `eddsa-rdfc-2022` suite is explicitly excluded
-in the manifest: Marty does not implement that proof suite yet. The adapter
-returns a clear unsupported-serialization error instead of a false success.
-Review the named exclusion on its date; add the official suite’s Data
-Integrity modules only with real proof verification.
+Marty's `eddsa-rdfc-2022` verification remains on the normal presentation-policy
+path backed by marty-core. The W3C registration advertises the enveloping-proof
+capability for JWT VCs and the Data Integrity capability for VPs; it does not
+claim the separate JWT enveloping-proof VP representation.
 
 ```bash
 python scripts/w3c_vc_conformance.py validate
