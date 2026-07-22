@@ -57,14 +57,29 @@ EUDI_STARTUP_PATTERNS = {
         r"Application run failed|BeanCreationException|APPLICATION FAILED TO START", re.IGNORECASE
     ),
     "jvm-memory-exhaustion": re.compile(
-        r"OutOfMemoryError|unable to create native thread|Cannot reserve", re.IGNORECASE
+        r"^(?:Caused by:\s+)?(?:java\.lang\.)?OutOfMemoryError:|unable to create native thread|Cannot reserve",
+        re.IGNORECASE | re.MULTILINE,
     ),
-    "jvm-memory-direct-buffer": re.compile(r"OutOfMemoryError: Direct buffer memory", re.IGNORECASE),
-    "jvm-memory-heap": re.compile(r"OutOfMemoryError: Java heap space", re.IGNORECASE),
-    "jvm-memory-metaspace": re.compile(r"OutOfMemoryError: Metaspace", re.IGNORECASE),
+    "jvm-memory-direct-buffer": re.compile(
+        r"^(?:Caused by:\s+)?(?:java\.lang\.)?OutOfMemoryError: Direct buffer memory",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    "jvm-memory-heap": re.compile(
+        r"^(?:Caused by:\s+)?(?:java\.lang\.)?OutOfMemoryError: (?:Java heap space|GC overhead limit exceeded)",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    "jvm-memory-metaspace": re.compile(
+        r"^(?:Caused by:\s+)?(?:java\.lang\.)?OutOfMemoryError: (?:Metaspace|Compressed class space)",
+        re.IGNORECASE | re.MULTILINE,
+    ),
     "jvm-memory-native-thread": re.compile(r"unable to create native thread", re.IGNORECASE),
     "jvm-memory-reservation": re.compile(r"Cannot reserve", re.IGNORECASE),
 }
+EUDI_ROOT_EXCEPTION = re.compile(
+    r"^Caused by:\s+(?:[A-Za-z_$][\w$]*\.)*([A-Za-z_$][\w$]*(?:Exception|Error))(?::|$)",
+    re.MULTILINE,
+)
+EUDI_APPLICATION_STARTED = re.compile(r"\bStarted\s+VerifierEndpointApplicationKt\b")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -380,6 +395,12 @@ def emit_eudi_startup_diagnostic(project: str, environment: dict[str, str]) -> N
         if logs.returncode == 0:
             combined = f"{logs.stdout}\n{logs.stderr}"
             categories.update(name for name, pattern in EUDI_STARTUP_PATTERNS.items() if pattern.search(combined))
+            categories.update(
+                "root-exception-" + re.sub(r"[^a-z0-9]+", "-", match.group(1).lower()).strip("-")
+                for match in EUDI_ROOT_EXCEPTION.finditer(combined)
+            )
+            if EUDI_APPLICATION_STARTED.search(combined):
+                categories.add("application-started-before-exit")
         else:
             categories.add("logs-unavailable")
     if oom_killed is True:
