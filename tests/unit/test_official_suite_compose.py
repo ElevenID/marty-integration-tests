@@ -493,7 +493,15 @@ def test_eudi_failure_is_classified_before_teardown(
         if " inspect " in f" {rendered} ":
             return subprocess.CompletedProcess(command, 0, '{"ExitCode":1,"OOMKilled":false}\n', "")
         if " logs " in f" {rendered} ":
-            return subprocess.CompletedProcess(command, 0, "APPLICATION FAILED TO START: password was incorrect", "")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                (
+                    "APPLICATION FAILED TO START: password was incorrect\n"
+                    "Caused by: java.security.UnrecoverableKeyException: password was incorrect"
+                ),
+                "",
+            )
         raise AssertionError(f"unexpected diagnostic command: {rendered}")
 
     monkeypatch.setattr(lifecycle, "run", fake_run)
@@ -517,8 +525,42 @@ def test_eudi_failure_is_classified_before_teardown(
     stderr = capsys.readouterr().err
     assert "exit-code=1" in stderr
     assert "oom-killed=false" in stderr
-    assert "categories=access-certificate-password,application-startup" in stderr
+    assert (
+        "categories=access-certificate-password,application-startup,root-exception-unrecoverablekeyexception" in stderr
+    )
     assert "password was incorrect" not in stderr
+
+
+def test_eudi_diagnostic_does_not_treat_exit_on_oom_option_as_an_oom(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_subprocess_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        rendered = " ".join(command)
+        if " ps " in f" {rendered} ":
+            return subprocess.CompletedProcess(command, 0, "verifier-id\n", "")
+        if " inspect " in f" {rendered} ":
+            return subprocess.CompletedProcess(command, 0, '{"ExitCode":1,"OOMKilled":false}\n', "")
+        if " logs " in f" {rendered} ":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                (
+                    "Picked up JAVA_TOOL_OPTIONS: -XX:+ExitOnOutOfMemoryError\n"
+                    "Application run failed\n"
+                    "Caused by: java.lang.IllegalArgumentException: redacted configuration detail"
+                ),
+                "",
+            )
+        raise AssertionError(f"unexpected diagnostic command: {rendered}")
+
+    monkeypatch.setattr(lifecycle.subprocess, "run", fake_subprocess_run)
+    lifecycle.emit_eudi_startup_diagnostic("eudi-project", {})
+
+    stderr = capsys.readouterr().err
+    assert "application-startup" in stderr
+    assert "root-exception-illegalargumentexception" in stderr
+    assert "jvm-memory" not in stderr
+    assert "redacted configuration detail" not in stderr
 
 
 def test_down_always_runs_eudi_oidf_then_marty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
