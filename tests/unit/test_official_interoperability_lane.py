@@ -171,6 +171,7 @@ def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
     assert "session_id=<redacted>" in output
     assert "routine startup complete" not in output
     assert any(command[-1].endswith("=presentation-policy") for command in calls if command[1] == "ps")
+    assert ["docker", "logs", "--tail", "2000", "issuance-container"] in calls
 
 
 def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(

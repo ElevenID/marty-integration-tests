@@ -387,7 +387,11 @@ def emit_w3c_issuance_diagnostic(run_id: str) -> None:
         if not container:
             continue
         logs = subprocess.run(
-            ["docker", "logs", "--tail", "300", container],
+            # The official suite deliberately exercises many negative vectors.
+            # Keep a broad in-memory window so an early, valid-credential
+            # failure category is not displaced by later expected rejections;
+            # only the final bounded set of redacted error lines is printed.
+            ["docker", "logs", "--tail", "2000", container],
             capture_output=True,
             text=True,
             check=False,
