@@ -239,6 +239,27 @@ def test_eudi_junit_failure_summary_emits_only_fixed_actionable_categories(
     assert "token" not in serialized
 
 
+def test_eudi_junit_failure_summary_classifies_safe_oid4vci_error_codes(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "junit.xml"
+    report.write_text(
+        '<testsuites><testsuite><testcase classname="eudi.wallet" name="test_issue">'
+        '<failure message="OID4VCI credential failed: status=400 error=invalid_proof"/>'
+        "</testcase></testsuite></testsuites>",
+        encoding="utf-8",
+    )
+
+    assert eudi.junit_failure_summary(report) == [
+        {
+            "classname": "eudi.wallet",
+            "testcase": "test_issue",
+            "outcomes": ["failure"],
+            "categories": ["http-400", "invalid-proof"],
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("cases", "message"),
     [

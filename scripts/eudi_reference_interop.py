@@ -181,6 +181,17 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "http-500": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+500\b|500\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b500\b)"),
     "http-502": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+502\b|502\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b502\b)"),
     "http-503": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+503\b|503\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b503\b)"),
+    "invalid-credential-request": re.compile(r"(?i)\berror=invalid_credential_request\b"),
+    "invalid-grant": re.compile(r"(?i)\berror=invalid_grant\b"),
+    "invalid-nonce": re.compile(r"(?i)\berror=invalid_nonce\b"),
+    "invalid-proof": re.compile(r"(?i)\berror=invalid_proof\b"),
+    "invalid-token": re.compile(r"(?i)\berror=invalid_token\b"),
+    "unknown-credential-configuration": re.compile(
+        r"(?i)\berror=unknown_credential_configuration\b"
+    ),
+    "unsupported-credential-format": re.compile(
+        r"(?i)\berror=unsupported_credential_format\b"
+    ),
     "connectivity": re.compile(
         r"(?i)(?:connection refused|connect timeout|read timeout|name or service not known|dns)"
     ),
