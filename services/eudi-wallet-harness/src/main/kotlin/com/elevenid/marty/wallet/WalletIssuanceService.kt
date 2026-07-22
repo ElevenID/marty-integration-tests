@@ -26,6 +26,72 @@ import java.security.interfaces.ECPrivateKey
 object WalletIssuanceService {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    /**
+     * Reduce the official library's nested failures to a stable, public-safe
+     * diagnostic code. The complete exception remains in the private service
+     * log, while CI evidence can identify the failed protocol boundary without
+     * publishing credential offers, endpoints, tokens, or issuer identifiers.
+     */
+    internal fun offerResolutionErrorCode(exception: Throwable): String {
+        val offerError = (exception as? CredentialOfferRequestException)?.error
+            ?: return "offer-resolution-unclassified"
+
+        return when (offerError) {
+            is CredentialOfferRequestError.NonParsableCredentialOfferEndpointUrl ->
+                "offer-endpoint-url-invalid"
+            is CredentialOfferRequestValidationError.OneOfCredentialOfferOrCredentialOfferUri ->
+                "offer-parameter-selection-invalid"
+            is CredentialOfferRequestValidationError.InvalidCredentialOfferUri ->
+                "offer-reference-url-invalid"
+            is CredentialOfferRequestError.UnableToFetchCredentialOffer ->
+                "offer-fetch-failed"
+            is CredentialOfferRequestError.NonParseableCredentialOffer ->
+                "offer-json-invalid"
+            is CredentialOfferRequestValidationError.InvalidCredentialIssuerId ->
+                "offer-issuer-id-invalid"
+            is CredentialOfferRequestValidationError.InvalidCredentials ->
+                "offer-credential-configuration-invalid"
+            is CredentialOfferRequestValidationError.InvalidGrants ->
+                "offer-grants-invalid"
+            is CredentialOfferRequestError.UnableToResolveCredentialIssuerMetadata ->
+                classifyMetadataFailure(offerError.reason, "issuer")
+            is CredentialOfferRequestError.UnableToResolveAuthorizationServerMetadata ->
+                classifyMetadataFailure(offerError.reason, "authorization-server")
+        }
+    }
+
+    private fun classifyMetadataFailure(reason: Throwable, boundary: String): String {
+        val classes = generateSequence(reason) { it.cause }
+            .mapNotNull { it::class.simpleName }
+            .toSet()
+        val detail = when {
+            "UnableToFetchCredentialIssuerMetadata" in classes -> "fetch-failed"
+            "NonParseableCredentialIssuerMetadata" in classes -> "json-invalid"
+            "InvalidCredentialIssuerId" in classes -> "issuer-id-invalid"
+            "InvalidAuthorizationServer" in classes -> "authorization-server-url-invalid"
+            "InvalidCredentialEndpoint" in classes -> "credential-endpoint-invalid"
+            "InvalidNonceEndpoint" in classes -> "nonce-endpoint-invalid"
+            "InvalidDeferredCredentialEndpoint" in classes -> "deferred-endpoint-invalid"
+            "InvalidNotificationEndpoint" in classes -> "notification-endpoint-invalid"
+            "InvalidCredentialsSupported" in classes -> "credential-configuration-invalid"
+            "CredentialsSupportedRequired" in classes -> "credential-configurations-empty"
+            "CredentialResponseEncryptionAlgorithmsRequired" in classes ->
+                "response-encryption-algorithms-missing"
+            "CredentialResponseAsymmetricEncryptionAlgorithmsRequired" in classes ->
+                "response-encryption-asymmetric-algorithms-missing"
+            "CredentialRequestEncryptionMustExistIfCredentialResponseEncryptionExists" in classes ->
+                "request-encryption-metadata-missing"
+            "InvalidBatchSize" in classes -> "batch-size-invalid"
+            "SSLHandshakeException" in classes || "CertPathBuilderException" in classes ->
+                "tls-trust-failed"
+            "UnknownHostException" in classes -> "hostname-resolution-failed"
+            "ConnectException" in classes || "HttpConnectTimeoutException" in classes ->
+                "connection-failed"
+            else -> "resolution-failed"
+        }
+        return "$boundary-metadata-$detail"
+    }
+
     private data class HolderProofMaterial(
         val proofs: ProofsSpecification,
         val privateKey: ECKey,
@@ -128,7 +194,7 @@ object WalletIssuanceService {
                     log.error("Offer resolution failed", e)
                     OfferResolutionResult(
                         success = false,
-                        error = "${e::class.simpleName}: ${e.message}",
+                        error = offerResolutionErrorCode(e),
                     )
                 }
             }
@@ -256,7 +322,7 @@ object WalletIssuanceService {
                 log.error("Pre-auth issuance failed", e)
                 IssuanceResult(
                     success = false,
-                    error = "${e::class.simpleName}: ${e.message}",
+                    error = offerResolutionErrorCode(e),
                 )
             }
         }
