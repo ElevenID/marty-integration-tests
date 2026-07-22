@@ -106,6 +106,7 @@ def write_local_config(path: Path, adapter_base_url: str) -> None:
         # Data Integrity path. Do not claim the distinct JWT enveloping-proof
         # VP capability until that representation is supported end to end.
         f"      endpoint: '{base}/presentations/verify', tags: ['vc2.0'],\n"
+        "      options: { domain: 'github.com/w3c/vc-data-model-2.0-test-suite' },\n"
         "      supports: { vc: ['2.0'] } }]\n"
         "  }]\n};\n",
         encoding="utf-8",
