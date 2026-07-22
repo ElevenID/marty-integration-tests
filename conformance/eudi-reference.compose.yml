@@ -77,11 +77,12 @@ services:
 
   eudi-verifier:
     image: ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint@sha256:0687ad0bf9c315d64d7cdae1751c8795c2410848f2299adeaaf1c39305366711
-    # The Paketo launcher otherwise sizes its heap against the whole hosted
-    # runner, competing with the production Marty stack and wallet harness.
-    # 768 MiB yields a ~333 MiB heap and is sufficient for the pinned verifier.
-    mem_limit: 768m
+    # Keep Paketo sizing inside a deterministic cgroup while leaving enough
+    # native memory for Spring startup on GitHub's hosted kernel. Limiting the
+    # visible processors also prevents the JVM from creating host-sized pools.
+    mem_limit: 1g
     environment:
+      JAVA_TOOL_OPTIONS: "-XX:ActiveProcessorCount=2 -Xss512k"
       SERVER_PORT: "8080"
       VERIFIER_PUBLICURL: ${EUDI_VERIFIER_PUBLIC_URL:?set the verifier HTTPS URL}
       VERIFIER_REQUESTJWT_EMBED: "ByReference"
