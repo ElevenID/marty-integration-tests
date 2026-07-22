@@ -215,6 +215,31 @@ def junit_required_evidence(
     return {evidence_id: observed[evidence_id] for evidence_id in sorted(observed)}
 
 
+def junit_failure_summary(path: Path) -> list[dict[str, object]]:
+    """Return safe test identities and outcome classes, never failure text/output."""
+    root = ElementTree.parse(path).getroot()
+    failures: list[dict[str, object]] = []
+    for testcase in root.iter():
+        if _xml_local_name(testcase.tag) != "testcase":
+            continue
+        outcomes = sorted(
+            {
+                _xml_local_name(node.tag)
+                for node in testcase
+                if _xml_local_name(node.tag) in {"failure", "error", "skipped"}
+            }
+        )
+        if outcomes:
+            failures.append(
+                {
+                    "classname": testcase.attrib.get("classname", ""),
+                    "testcase": testcase.attrib.get("name", ""),
+                    "outcomes": outcomes,
+                }
+            )
+    return failures
+
+
 def stack_manifest_metadata(path: Path) -> dict:
     """Return immutable Marty deployment provenance for a conformance run."""
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -274,6 +299,7 @@ def write_evidence(
     stack_manifest: Path | None = None,
     request_object_trust: dict[str, object] | None = None,
     observed_evidence: dict[str, dict[str, str]] | None = None,
+    failure_summary: list[dict[str, object]] | None = None,
 ) -> None:
     observed_evidence = observed_evidence or {}
     required_ids = set(manifest["required_evidence"])
@@ -293,6 +319,7 @@ def write_evidence(
         "coverage": manifest["coverage"],
         "required_evidence": manifest["required_evidence"],
         "observed_evidence": observed_evidence,
+        "failure_summary": failure_summary or [],
         "compatibility_only": manifest.get("compatibility_only", {}),
         "planned_coverage": manifest.get("planned_coverage", {}),
         "limitations": manifest.get("limitations", {}),
@@ -409,10 +436,12 @@ def run(args: argparse.Namespace) -> int:
     result = completed.returncode
     skipped = 0
     observed_evidence: dict[str, dict[str, str]] = {}
+    failure_summary: list[dict[str, object]] = []
     detail = completed.stdout + completed.stderr
     try:
         junit_path = output / "junit.xml"
         skipped = junit_skip_count(junit_path)
+        failure_summary = junit_failure_summary(junit_path)
         observed_evidence = junit_required_evidence(
             junit_path,
             set(manifest["required_evidence"]),
@@ -424,6 +453,9 @@ def run(args: argparse.Namespace) -> int:
         result = 1
         detail += f"\nEUDI evidence failure: {skipped} test(s) were skipped.\n"
     (output / "runner.log").write_text(detail, encoding="utf-8")
+    if failure_summary:
+        print("EUDI failing tests (names and outcome classes only):", file=sys.stderr)
+        print(json.dumps(failure_summary, sort_keys=True), file=sys.stderr)
     write_evidence(
         output,
         manifest,
@@ -433,6 +465,7 @@ def run(args: argparse.Namespace) -> int:
         stack_manifest,
         request_object_trust,
         observed_evidence,
+        failure_summary,
     )
     return result
 

@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("official_suite_compose", ROOT / "scripts" / "official_suite_compose.py")
@@ -47,6 +48,18 @@ def action(command: list[str]) -> str:
 def haip_material(tmp_path: Path, name: str) -> Path:
     output = tmp_path / name
     haip.generate_material(output, gateway_url="https://verifier.example:8443")
+    key = ec.generate_private_key(ec.SECP256R1())
+    numbers = key.public_key().public_numbers()
+    haip.issue_verifier_certificate(
+        output,
+        {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": haip._base64url(numbers.x.to_bytes(32, "big")),
+            "y": haip._base64url(numbers.y.to_bytes(32, "big")),
+        },
+        gateway_url="https://verifier.example:8443",
+    )
     return output
 
 
@@ -278,9 +291,38 @@ def test_generated_haip_material_is_wired_to_marty(tmp_path: Path) -> None:
     material = haip_material(tmp_path, "generated")
     environment: dict[str, str] = {}
     lifecycle.configure_haip_environment(environment, material)
-    assert environment["VERIFIER_SIGNING_KEY_PEM"] == (material / haip.KEY_FILE).read_text(encoding="ascii")
     assert environment["VERIFIER_X509_CERT_PEM"] == (material / haip.CERTIFICATE_FILE).read_text(encoding="ascii")
     assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str((material / haip.TRUST_ANCHOR_FILE).resolve())
+
+
+def test_haip_stage_certifies_only_the_live_issuer_profile_public_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    material = tmp_path / "prepared"
+    haip.generate_material(material, gateway_url="https://verifier.example:8443")
+    profile_key = ec.generate_private_key(ec.SECP256R1())
+    numbers = profile_key.public_key().public_numbers()
+    identity = {
+        "issuer_profile_id": "ip-live",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": haip._base64url(numbers.x.to_bytes(32, "big")),
+            "y": haip._base64url(numbers.y.to_bytes(32, "big")),
+        },
+    }
+    monkeypatch.setattr(lifecycle, "resolve_issuer_profile_identity", lambda *_args: identity)
+    args = type("Args", (), {"haip_material": material, "eudi": False})()
+    environment = {"OIDF_PUBLIC_BASE_URL": "https://verifier.example:8443"}
+
+    lifecycle.stage_haip_profile_certificate(args, {}, environment)
+
+    assert "VERIFIER_X509_CERT_PEM" in environment
+    certificate = haip.PEM_CERTIFICATE.findall(environment["VERIFIER_X509_CERT_PEM"].encode("ascii"))[0]
+    leaf = haip.x509.load_pem_x509_certificate(certificate)
+    assert leaf.public_key().public_numbers() == profile_key.public_key().public_numbers()
+    assert not (material / haip.AUTHORITY_KEY_FILE).exists()
 
 
 def test_generated_haip_material_replaces_the_unrelated_tls_root(tmp_path: Path) -> None:
@@ -334,28 +376,18 @@ def test_child_environment_keeps_haip_root_separate_after_eudi_merge(
     assert sha256(haip_root.read_bytes()).digest() != sha256(tls_ca.read_bytes()).digest()
 
 
-def test_external_haip_pem_pair_takes_precedence(tmp_path: Path) -> None:
+def test_external_haip_certificate_takes_precedence(tmp_path: Path) -> None:
     generated = haip_material(tmp_path, "generated")
     external = haip_material(tmp_path, "external")
-    signing_key = (external / haip.KEY_FILE).read_text(encoding="ascii")
     certificate = (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii")
-    environment = {
-        "VERIFIER_SIGNING_KEY_PEM": signing_key,
-        "VERIFIER_X509_CERT_PEM": certificate,
-    }
+    environment = {"VERIFIER_X509_CERT_PEM": certificate}
     lifecycle.configure_haip_environment(environment, generated)
-    assert environment == {
-        "VERIFIER_SIGNING_KEY_PEM": signing_key,
-        "VERIFIER_X509_CERT_PEM": certificate,
-    }
+    assert environment == {"VERIFIER_X509_CERT_PEM": certificate}
 
 
 def test_external_haip_eudi_run_requires_and_validates_separate_trust_anchor(tmp_path: Path) -> None:
     external = haip_material(tmp_path, "external-eudi")
-    environment = {
-        "VERIFIER_SIGNING_KEY_PEM": (external / haip.KEY_FILE).read_text(encoding="ascii"),
-        "VERIFIER_X509_CERT_PEM": (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii"),
-    }
+    environment = {"VERIFIER_X509_CERT_PEM": (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii")}
     with pytest.raises(ValueError, match=haip.OID4VP_TRUST_ANCHOR_FILE_ENV):
         lifecycle.configure_haip_environment(environment, None, require_request_object_trust=True)
 
@@ -368,7 +400,6 @@ def test_external_haip_eudi_run_rejects_untrusted_root(tmp_path: Path) -> None:
     external = haip_material(tmp_path, "external")
     unrelated = haip_material(tmp_path, "unrelated")
     environment = {
-        "VERIFIER_SIGNING_KEY_PEM": (external / haip.KEY_FILE).read_text(encoding="ascii"),
         "VERIFIER_X509_CERT_PEM": (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii"),
         haip.OID4VP_TRUST_ANCHOR_FILE_ENV: str(unrelated / haip.TRUST_ANCHOR_FILE),
     }
@@ -386,7 +417,6 @@ def test_external_haip_eudi_run_accepts_multiple_approved_roots(tmp_path: Path) 
         encoding="ascii",
     )
     environment = {
-        "VERIFIER_SIGNING_KEY_PEM": (external / haip.KEY_FILE).read_text(encoding="ascii"),
         "VERIFIER_X509_CERT_PEM": (external / haip.CERTIFICATE_FILE).read_text(encoding="ascii"),
         haip.OID4VP_TRUST_ANCHOR_FILE_ENV: str(approved_roots),
     }
@@ -394,12 +424,12 @@ def test_external_haip_eudi_run_accepts_multiple_approved_roots(tmp_path: Path) 
     assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str(approved_roots.resolve())
 
 
-def test_haip_rejects_a_partial_external_pair(tmp_path: Path) -> None:
+def test_haip_rejects_legacy_direct_signing_key_input(tmp_path: Path) -> None:
     material = haip_material(tmp_path, "generated")
     environment = {
-        "VERIFIER_SIGNING_KEY_PEM": (material / haip.KEY_FILE).read_text(encoding="ascii"),
+        "VERIFIER_" + "SIGNING_KEY_PEM": "legacy-private-material",
     }
-    with pytest.raises(ValueError, match="set both"):
+    with pytest.raises(ValueError, match="unsupported"):
         lifecycle.configure_haip_environment(environment, material)
 
 
@@ -417,6 +447,11 @@ def test_eudi_can_enable_haip_without_joining_the_oidf_runner_project(
     monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
     monkeypatch.setattr(lifecycle, "run", lambda command, _environment: calls.append(command) or 0)
     monkeypatch.setattr(lifecycle, "wait_for_eudi_readiness", lambda _environment: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "stage_haip_profile_certificate",
+        lambda _args, _projects, environment: environment.update({"VERIFIER_X509_CERT_PEM": "test-public-certificate"}),
+    )
 
     result = lifecycle.main(
         [
@@ -433,9 +468,11 @@ def test_eudi_can_enable_haip_without_joining_the_oidf_runner_project(
     )
 
     assert result == 0
-    assert [component(command) for command in calls] == ["marty", "eudi"]
-    assert "--haip" in calls[0]
-    assert child_options["require_haip"] is True
+    assert [component(command) for command in calls] == ["marty", "marty", "eudi"]
+    assert "--haip" not in calls[0]
+    assert "--haip" in calls[1]
+    assert "--resume" in calls[1]
+    assert child_options["require_haip"] is False
     assert child_options["require_eudi"] is True
 
 
