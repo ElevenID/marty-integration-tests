@@ -186,9 +186,15 @@ def policy_payload(
     run_id: str,
 ) -> dict[str, object]:
     # The W3C verifier suite supplies standards-conforming generic credentials,
-    # not Marty's product-specific identity schema. Its disposable policy gates
-    # cryptographic validity and holder binding; OIDF keeps its PID claim gates.
-    claims = () if w3c else ("given_name", "family_name", "birthdate")
+    # not Marty's product-specific identity schema. Marty's policy schema still
+    # requires at least one requested-claim entry, so use credentialSubject.id as
+    # an optional structural claim. This preserves cryptographic and holder-
+    # binding validation without inventing a claim that VCDM v2 does not require.
+    claims = (
+        (("id", False),)
+        if w3c
+        else tuple((claim, True) for claim in ("given_name", "family_name", "birthdate"))
+    )
     label = "W3C VC v2" if w3c else "OID4VP SD-JWT"
     return {
         "organization_id": organization_id,
@@ -203,13 +209,16 @@ def policy_payload(
             {
                 "credential_template_id": template_id,
                 "display_name": label,
+                "credential_payload_format": (
+                    "w3c_vcdm_v2_jwt_vc" if w3c else "w3c_vcdm_v2_sd_jwt"
+                ),
                 "requested_claims": [
                     {
                         "claim_name": claim,
                         "display_name": claim,
-                        "required": True,
+                        "required": required,
                     }
-                    for claim in claims
+                    for claim, required in claims
                 ],
             }
         ],
