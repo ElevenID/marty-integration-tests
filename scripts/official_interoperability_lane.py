@@ -36,6 +36,12 @@ INITIALIZER_SECRET = re.compile(
 W3C_DIAGNOSTIC_LINE = re.compile(
     r"(?i)(?:credential creation failed|credential status allocation|exception|traceback|error|failed)"
 )
+PROXY_DIAGNOSTIC_CLASSES = {
+    "dns-resolution": re.compile(r"(?i)(?:host not found|could not be resolved)"),
+    "upstream-connect": re.compile(r"(?i)(?:connect\(\) failed|connection refused)"),
+    "upstream-timeout": re.compile(r"(?i)(?:upstream timed out|connection timed out)"),
+    "no-live-upstream": re.compile(r"(?i)no live upstreams"),
+}
 STACK_ENV_KEYS = {
     "MARTY_UI_IMAGE",
     "MARTY_SERVICES_IMAGE",
@@ -391,6 +397,34 @@ def emit_w3c_issuance_diagnostic(run_id: str) -> None:
         print(f"--- end {service} W3C issuance diagnostic ---", flush=True)
 
 
+def classify_public_proxy_diagnostics(text: str) -> list[str]:
+    """Return fixed, non-sensitive categories for TLS-proxy upstream errors."""
+    return [
+        name
+        for name, pattern in PROXY_DIAGNOSTIC_CLASSES.items()
+        if pattern.search(text)
+    ]
+
+
+def emit_public_proxy_diagnostic(launcher: Path, project: str, environment: dict[str, str]) -> None:
+    """Classify proxy failures before Compose teardown without publishing logs."""
+    completed = subprocess.run(
+        [sys.executable, str(launcher), "--project", project, "logs"],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    classes = classify_public_proxy_diagnostics(completed.stdout + completed.stderr)
+    if classes:
+        print(
+            "--- public TLS proxy diagnostic (redacted) ---\n"
+            + ", ".join(classes)
+            + "\n--- end public TLS proxy diagnostic ---",
+            flush=True,
+        )
+
+
 def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, poll: float = 3) -> None:
     """Wait for the released gateway's real readiness boundary over verified TLS."""
     origin = environment["OIDF_MARTY_GATEWAY_URL"]
@@ -692,6 +726,10 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
         if result:
             emit_w3c_issuance_diagnostic(args.run_id)
         return result
+    except RuntimeError as error:
+        if "public TLS endpoint" in str(error):
+            emit_public_proxy_diagnostic(launcher, project, environment)
+        raise
     finally:
         down = [*base]
         if include_w3c:
