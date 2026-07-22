@@ -43,6 +43,29 @@ PROXY_DIAGNOSTIC_CLASSES = {
     "upstream-timeout": re.compile(r"(?i)(?:upstream timed out|connection timed out)"),
     "no-live-upstream": re.compile(r"(?i)no live upstreams"),
 }
+EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
+    "tls-trust": re.compile(
+        r"(?i)(?:PKIX path building failed|SSLHandshakeException|"
+        r"certificate verify failed|unable to find valid certification path)"
+    ),
+    "hostname-resolution": re.compile(
+        r"(?i)(?:UnknownHostException|name or service not known|temporary failure in name resolution)"
+    ),
+    "connect-failure": re.compile(r"(?i)(?:connection refused|ConnectException|connect timed out)"),
+    "metadata-deserialization": re.compile(
+        r"(?i)(?:CredentialIssuerMetadata|issuer metadata|JsonDecodingException|"
+        r"MissingFieldException|SerializationException)"
+    ),
+    "credential-offer": re.compile(r"(?i)(?:credential[_ -]?offer|CredentialOffer|resolveOffer)"),
+    "invalid-proof": re.compile(r"(?i)(?:invalid_proof|proof validation failed)"),
+    "invalid-nonce": re.compile(r"(?i)(?:invalid_nonce|nonce validation failed)"),
+    "unsupported-format": re.compile(
+        r"(?i)(?:unsupported_credential_format|unsupported credential format|UnsupportedFormat)"
+    ),
+    "issuer-profile": re.compile(r"(?i)(?:issuer[_ -]?profile|issuer DID|remote sign|signing service)"),
+    "upstream-http-4xx": re.compile(r"(?i)(?:status(?: code)?[=: ]+4\d\d\b|HTTP(?:/\S+)?\s+4\d\d\b)"),
+    "upstream-http-5xx": re.compile(r"(?i)(?:status(?: code)?[=: ]+5\d\d\b|HTTP(?:/\S+)?\s+5\d\d\b)"),
+}
 STACK_ENV_KEYS = {
     "MARTY_UI_IMAGE",
     "MARTY_SERVICES_IMAGE",
@@ -411,6 +434,25 @@ def emit_w3c_issuance_diagnostic(run_id: str) -> None:
 def classify_public_proxy_diagnostics(text: str) -> list[str]:
     """Return fixed, non-sensitive categories for TLS-proxy upstream errors."""
     return [name for name, pattern in PROXY_DIAGNOSTIC_CLASSES.items() if pattern.search(text)]
+
+
+def classify_eudi_runtime_diagnostics(text: str) -> list[str]:
+    """Return fixed EUDI runtime categories without exposing source log text."""
+    categories = [name for name, pattern in EUDI_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)]
+    return categories or ["unclassified-runtime-failure"]
+
+
+def emit_eudi_runtime_diagnostic(path: Path) -> None:
+    """Print only allowlisted classes from the private Compose log."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        categories = ["runtime-log-unavailable"]
+    else:
+        categories = classify_eudi_runtime_diagnostics(text)
+    print("--- EUDI runtime diagnostic (redacted) ---", file=sys.stderr)
+    print(f"categories={','.join(categories)}", file=sys.stderr)
+    print("--- end EUDI runtime diagnostic ---", file=sys.stderr)
 
 
 def emit_public_proxy_diagnostic(project: str, environment: dict[str, str]) -> None:
@@ -795,6 +837,7 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     if not started:
         emit_keycloak_initializer_diagnostic(args.run_id)
         return 1
+    result = 1
     try:
         wait_for_public_stack(environment)
         fixtures = bootstrap_fixtures(args, environment, mode="eudi")
@@ -811,7 +854,7 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "EUDI_TEST_OPEN_BADGE_TEMPLATE_ID": fixtures["eudi_open_badge_template_id"],
             }
         )
-        return run(
+        result = run(
             [
                 sys.executable,
                 str(ROOT / "scripts" / "eudi_reference_interop.py"),
@@ -832,12 +875,16 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
             suite_environment,
         )
     finally:
+        compose_log = args.output_dir / "private" / "compose.log"
         run(
             compose_command(args, "logs", eudi=True, haip=True),
             environment,
-            capture=args.output_dir / "private" / "compose.log",
+            capture=compose_log,
         )
+        if result:
+            emit_eudi_runtime_diagnostic(compose_log)
         run(compose_command(args, "down", eudi=True, haip=True), environment)
+    return result
 
 
 def parser() -> argparse.ArgumentParser:
