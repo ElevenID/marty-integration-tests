@@ -27,7 +27,9 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     responses = iter(
         [
             {"service": {"id": "service-1", "key_reference": "issuer-es256"}},
-            {"profile": {"id": "issuer-1"}},
+            {"profile": {"id": "credential-issuer-1"}},
+            {"service": {"id": "request-service-1", "key_reference": "request-es256"}},
+            {"profile": {"id": "request-issuer-1"}},
             {"id": "compliance-1"},
             {"id": "revocation-1"},
             {"id": "revocation-1"},
@@ -70,7 +72,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
         request=request,
     )
     assert result["oid4vp_policy_id"] == "policy-1"
-    assert result["oid4vp_issuer_profile_id"] == "issuer-1"
+    assert result["oid4vp_credential_issuer_profile_id"] == "credential-issuer-1"
+    assert result["oid4vp_issuer_profile_id"] == "request-issuer-1"
     assert result["oid4vp_issuer_did"] == (
         f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}"
     )
@@ -93,26 +96,34 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
         "algorithm": "ES256",
     }
     assert calls[1][0].startswith("/v1/signing-keys/issuer-profiles?")
-    assert calls[2][0] == "/v1/compliance-profiles"
-    assert calls[3][0] == "/v1/revocation-profiles"
-    assert calls[4][0] == "/v1/revocation-profiles/revocation-1/activate"
-    assert calls[5][0] == "/v1/credential-templates"
-    assert calls[5][2]["compliance_profile_id"] == "compliance-1"
-    assert calls[5][2]["issuer_profile_id"] == "issuer-1"
-    assert calls[5][2]["revocation_profile_id"] == "revocation-1"
-    assert "compliance_profile" not in calls[5][2]
-    assert calls[6][0] == "/v1/presentation-policies"
-    assert calls[7][0] == "/v1/presentation-policies/policy-1/activate"
-    assert calls[8][0] == "/v1/trust-profiles"
-    assert calls[9][0] == "/v1/trust-profiles/trust-1/activate"
+    assert calls[1][2]["key_purpose"] == "vc_jwt_issuer"
+    assert calls[2][0].startswith("/v1/signing-keys/config/resolve?")
+    assert calls[2][2] == {
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256",
+    }
+    assert calls[3][0].startswith("/v1/signing-keys/issuer-profiles?")
+    assert calls[3][2]["key_purpose"] == "oid4vp_request_signing"
+    assert calls[4][0] == "/v1/compliance-profiles"
+    assert calls[5][0] == "/v1/revocation-profiles"
+    assert calls[6][0] == "/v1/revocation-profiles/revocation-1/activate"
+    assert calls[7][0] == "/v1/credential-templates"
+    assert calls[7][2]["compliance_profile_id"] == "compliance-1"
+    assert calls[7][2]["issuer_profile_id"] == "credential-issuer-1"
+    assert calls[7][2]["revocation_profile_id"] == "revocation-1"
+    assert "compliance_profile" not in calls[7][2]
+    assert calls[8][0] == "/v1/presentation-policies"
+    assert calls[9][0] == "/v1/presentation-policies/policy-1/activate"
+    assert calls[10][0] == "/v1/trust-profiles"
+    assert calls[11][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
-    assert calls[15][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
-    assert calls[16][2]["holder_binding"] == {"required": False}
-    requirement = calls[16][2]["credential_requirements"][0]
+    assert calls[17][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert calls[18][2]["holder_binding"] == {"required": False}
+    requirement = calls[18][2]["credential_requirements"][0]
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[18][2]["holder_binding"] == {"required": True}
-    assert calls[18][2]["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
+    assert calls[20][2]["holder_binding"] == {"required": True}
+    assert calls[20][2]["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
 
 def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
@@ -270,6 +281,8 @@ def test_bootstrap_rejects_invalid_public_api_identifier() -> None:
         [
             {"service": {"id": "service-1", "key_reference": "issuer-es256"}},
             {"profile": {"id": "issuer-1"}},
+            {"service": {"id": "request-service", "key_reference": "request-es256"}},
+            {"profile": {"id": "request-profile"}},
             {"id": "compliance-1"},
             {"id": "revocation-1"},
             {"id": "revocation-1"},

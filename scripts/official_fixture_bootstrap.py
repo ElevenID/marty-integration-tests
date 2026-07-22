@@ -50,13 +50,19 @@ def compliance_profile_payload(organization_id: str, *, w3c: bool, run_id: str) 
     }
 
 
-def signing_service_request_payload(*, w3c: bool) -> dict[str, str]:
-    """Request the configured production signing service for the credential family."""
-    return {
-        "credential_format": "jwt_vc_json" if w3c else "dc+sd-jwt",
-        "key_purpose": "vc_jwt_issuer",
+def signing_service_request_payload(
+    *,
+    w3c: bool,
+    key_purpose: str = "vc_jwt_issuer",
+) -> dict[str, str]:
+    """Request the configured production signer for one profile purpose."""
+    payload = {
+        "key_purpose": key_purpose,
         "algorithm": "ES256",
     }
+    if key_purpose == "vc_jwt_issuer":
+        payload["credential_format"] = "jwt_vc_json" if w3c else "dc+sd-jwt"
+    return payload
 
 
 def issuer_profile_payload(
@@ -67,6 +73,7 @@ def issuer_profile_payload(
     w3c: bool,
     run_id: str,
     label: str | None = None,
+    key_purpose: str = "vc_jwt_issuer",
 ) -> dict[str, str]:
     """Provision an issuer profile whose private key remains in managed custody.
 
@@ -89,7 +96,7 @@ def issuer_profile_payload(
         "issuer_did": f"did:web:{domain}:orgs:{organization_id}",
         "signing_service_id": service_id,
         "signing_key_reference": key_reference,
-        "key_purpose": "vc_jwt_issuer",
+        "key_purpose": key_purpose,
         "status": "active",
     }
 
@@ -360,6 +367,7 @@ def resolve_signing_service(
     *,
     organization_id: str,
     w3c: bool,
+    key_purpose: str = "vc_jwt_issuer",
     request: Callable[..., object],
 ) -> dict[str, object]:
     """Resolve a KMS signing service through the gateway, with global fallback.
@@ -379,7 +387,10 @@ def resolve_signing_service(
                 session_id,
                 f"/v1/signing-keys/config/resolve{query}",
                 method="POST",
-                json_body=signing_service_request_payload(w3c=w3c),
+                json_body=signing_service_request_payload(
+                    w3c=w3c,
+                    key_purpose=key_purpose,
+                ),
             )
         except RuntimeError as exc:
             failure = exc
@@ -542,7 +553,35 @@ def bootstrap(
             method="POST",
             json_body=profile_payload,
         )
-        issuer_profile_id = issuer_profile_response_id(created_issuer_profile)
+        credential_issuer_profile_id = issuer_profile_response_id(created_issuer_profile)
+        request_profile_payload: dict[str, str] | None = None
+        request_issuer_profile_id: str | None = None
+        if not w3c:
+            request_signing_service = resolve_signing_service(
+                gateway_url,
+                session_id,
+                organization_id=organization_id,
+                w3c=False,
+                key_purpose="oid4vp_request_signing",
+                request=request,
+            )
+            request_profile_payload = issuer_profile_payload(
+                organization_id,
+                request_signing_service,
+                gateway_url=gateway_url,
+                w3c=False,
+                run_id=run_id,
+                label="OID4VP Request Object",
+                key_purpose="oid4vp_request_signing",
+            )
+            created_request_profile = request(
+                gateway_url,
+                session_id,
+                f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
+                method="POST",
+                json_body=request_profile_payload,
+            )
+            request_issuer_profile_id = issuer_profile_response_id(created_request_profile)
         created_compliance_profile = request(
             gateway_url,
             session_id,
@@ -589,7 +628,7 @@ def bootstrap(
             json_body=template_payload(
                 organization_id,
                 compliance_profile_id,
-                issuer_profile_id,
+                credential_issuer_profile_id,
                 revocation_profile_id,
                 w3c=w3c,
                 run_id=run_id,
@@ -630,8 +669,15 @@ def bootstrap(
         else:
             result["oid4vp_policy_id"] = policy_ids["presentation"]
         result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
-        result[f"{prefix}_issuer_profile_id"] = issuer_profile_id
-        result[f"{prefix}_issuer_did"] = profile_payload["issuer_did"]
+        if w3c:
+            result["w3c_issuer_profile_id"] = credential_issuer_profile_id
+            result["w3c_issuer_did"] = profile_payload["issuer_did"]
+        else:
+            assert request_profile_payload is not None
+            assert request_issuer_profile_id is not None
+            result["oid4vp_credential_issuer_profile_id"] = credential_issuer_profile_id
+            result["oid4vp_issuer_profile_id"] = request_issuer_profile_id
+            result["oid4vp_issuer_did"] = request_profile_payload["issuer_did"]
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c:
             assert oidf_signer_public_jwk is not None
