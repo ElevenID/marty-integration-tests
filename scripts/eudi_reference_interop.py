@@ -171,16 +171,24 @@ def _xml_local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def _http_status_pattern(code: int) -> re.Pattern[str]:
+    label = "Client" if code < 500 else "Server"
+    return re.compile(
+        rf"(?i)(?:HTTP(?:/\S+)?\s+{code}\b|{code}\s+{label}\s+Error|"
+        rf"failed\s+with\s+{code}\b|status(?:_code)?[^\n]{{0,24}}\b{code}\b)"
+    )
+
+
 EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
-    "http-400": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+400\b|400\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b400\b)"),
-    "http-401": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+401\b|401\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b401\b)"),
-    "http-403": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+403\b|403\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b403\b)"),
-    "http-404": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+404\b|404\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b404\b)"),
-    "http-409": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+409\b|409\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b409\b)"),
-    "http-422": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+422\b|422\s+Client\s+Error|status(?:_code)?[^\n]{0,24}\b422\b)"),
-    "http-500": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+500\b|500\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b500\b)"),
-    "http-502": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+502\b|502\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b502\b)"),
-    "http-503": re.compile(r"(?i)(?:HTTP(?:/\S+)?\s+503\b|503\s+Server\s+Error|status(?:_code)?[^\n]{0,24}\b503\b)"),
+    "http-400": _http_status_pattern(400),
+    "http-401": _http_status_pattern(401),
+    "http-403": _http_status_pattern(403),
+    "http-404": _http_status_pattern(404),
+    "http-409": _http_status_pattern(409),
+    "http-422": _http_status_pattern(422),
+    "http-500": _http_status_pattern(500),
+    "http-502": _http_status_pattern(502),
+    "http-503": _http_status_pattern(503),
     "invalid-credential-request": re.compile(r"(?i)\berror=invalid_credential_request\b"),
     "invalid-grant": re.compile(r"(?i)\berror=invalid_grant\b"),
     "invalid-nonce": re.compile(r"(?i)\berror=invalid_nonce\b"),

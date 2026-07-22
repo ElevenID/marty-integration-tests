@@ -239,6 +239,14 @@ def test_eudi_junit_failure_summary_emits_only_fixed_actionable_categories(
     assert "token" not in serialized
 
 
+def test_eudi_failure_categories_recognize_gateway_client_status() -> None:
+    categories = eudi.classify_eudi_failure_text(
+        "POST /v1/signing-keys/config/resolve failed with 422: private detail"
+    )
+
+    assert categories == ["http-422", "signing-service-resolution"]
+
+
 def test_eudi_junit_failure_summary_classifies_safe_oid4vci_error_codes(
     tmp_path: Path,
 ) -> None:
