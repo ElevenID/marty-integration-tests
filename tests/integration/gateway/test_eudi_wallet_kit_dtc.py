@@ -66,6 +66,8 @@ def _presentation_submission_for_request(
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 EUDI_WALLET_KIT_URL = os.getenv("EUDI_WALLET_KIT_URL", "http://localhost:9090")
+DEFAULT_ORG_ID = "22222222-2222-2222-2222-222222222222"
+ORG_ID = os.getenv("TEST_ORG_ID", DEFAULT_ORG_ID)
 
 # ---------------------------------------------------------------------------
 # Skip unless EUDI tests are explicitly enabled
@@ -91,13 +93,14 @@ async def wallet_kit() -> EUDIWalletKitClient:
 
 
 @pytest.fixture
-async def dtc_test_org(authenticated_gateway_client: GatewayClient):
-    """Create a test organization for DTC wallet tests."""
-    org = await authenticated_gateway_client.create_organization(
-        name=f"eudi-dtc-{uuid.uuid4().hex[:6]}",
-        display_name="EUDI DTC Wallet Test Org",
-    )
-    return org
+def dtc_test_org() -> dict[str, str]:
+    """Use the lane organization that owns the managed signing services.
+
+    DTC document and request-object signing remain isolated behind separate
+    issuer profiles and asserted DIDs; the test never signs against KMS
+    coordinates directly.
+    """
+    return {"id": ORG_ID}
 
 
 @pytest.fixture

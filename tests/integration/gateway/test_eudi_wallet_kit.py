@@ -33,7 +33,6 @@ RUN_EUDI_TESTS           Gate for EUDI tests             (default: false)
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import uuid
@@ -84,13 +83,15 @@ async def wallet_kit() -> EUDIWalletKitClient:
 
 
 @pytest.fixture
-async def eudi_test_org(authenticated_gateway_client: GatewayClient):
-    """Create a test organization for EUDI wallet kit tests."""
-    org = await authenticated_gateway_client.create_organization(
-        name=f"eudi-wk-{uuid.uuid4().hex[:6]}",
-        display_name="EUDI Wallet Kit Test Org",
-    )
-    return org
+def eudi_test_org() -> dict[str, str]:
+    """Use the organization provisioned with the official-lane signing services.
+
+    Issuer profiles are tenant-owned identities.  A KMS service from one
+    organization must never be attached to a profile in another organization.
+    The lane bootstrap supplies ``TEST_ORG_ID`` and provisions all signing
+    through issuer profiles and their asserted DIDs in that organization.
+    """
+    return {"id": ORG_ID}
 
 
 @pytest.fixture

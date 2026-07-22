@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 EUDI_WALLET_KIT_URL = os.getenv("EUDI_WALLET_KIT_URL", "http://localhost:9090")
+DEFAULT_ORG_ID = "22222222-2222-2222-2222-222222222222"
+ORG_ID = os.getenv("TEST_ORG_ID", DEFAULT_ORG_ID)
 
 MDL_CLAIMS = {
     "given_name": "Erika",
@@ -136,13 +138,14 @@ async def wallet_kit() -> EUDIWalletKitClient:
 
 
 @pytest.fixture
-async def vp_test_org(authenticated_gateway_client: GatewayClient):
-    """Create a test organization for VP tests."""
-    org = await authenticated_gateway_client.create_organization(
-        name=f"eudi-vp-{uuid.uuid4().hex[:6]}",
-        display_name="EUDI VP Test Org",
-    )
-    return org
+def vp_test_org() -> dict[str, str]:
+    """Use the lane organization that owns the managed signing services.
+
+    The tests still create purpose-specific issuer profiles and assert their
+    DIDs.  Only profile administration sees the KMS service binding; every
+    request-object and credential signing operation goes through the profile.
+    """
+    return {"id": ORG_ID}
 
 
 async def _resolve_signing_service(
