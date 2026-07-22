@@ -352,16 +352,22 @@ def emit_keycloak_initializer_diagnostic(run_id: str) -> None:
 
 
 def emit_w3c_issuance_diagnostic(run_id: str) -> None:
-    """Print a tightly scoped, redacted failure slice before W3C teardown.
+    """Print a tightly scoped, redacted W3C failure slice before teardown.
 
     The official W3C client deliberately reports only an HTTP status for a
     failed VC-API call.  When a released production service rejects an
-    issuance request, this preserves the relevant service error without
+    issuance or verification request, this preserves the relevant service error without
     exposing the full Compose environment, request headers, credentials, or
     private test material.
     """
     project = f"marty-conformance-{run_id}"
-    for service in ("gateway", "issuance", "revocation-profile", "credential-template"):
+    for service in (
+        "gateway",
+        "issuance",
+        "presentation-policy",
+        "revocation-profile",
+        "credential-template",
+    ):
         lookup = subprocess.run(
             [
                 "docker",
@@ -400,11 +406,7 @@ def emit_w3c_issuance_diagnostic(run_id: str) -> None:
 
 def classify_public_proxy_diagnostics(text: str) -> list[str]:
     """Return fixed, non-sensitive categories for TLS-proxy upstream errors."""
-    return [
-        name
-        for name, pattern in PROXY_DIAGNOSTIC_CLASSES.items()
-        if pattern.search(text)
-    ]
+    return [name for name, pattern in PROXY_DIAGNOSTIC_CLASSES.items() if pattern.search(text)]
 
 
 def emit_public_proxy_diagnostic(project: str, environment: dict[str, str]) -> None:
@@ -525,8 +527,7 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
             last_detail = f"HTTP {status_code}; non-JSON readiness response"
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                "released Marty stack did not become ready through its public TLS endpoint "
-                f"({last_detail})"
+                f"released Marty stack did not become ready through its public TLS endpoint ({last_detail})"
             )
         time.sleep(poll)
 
@@ -734,9 +735,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "W3C_VC_TEST_ORGANIZATION_ID": fixtures["organization_id"],
                 "W3C_VC_TEST_TEMPLATE_ID": fixtures["w3c_template_id"],
                 "W3C_VC_TEST_CREDENTIAL_POLICY_ID": fixtures["w3c_credential_policy_id"],
-                "W3C_VC_TEST_PRESENTATION_POLICY_ID": fixtures[
-                    "w3c_presentation_policy_id"
-                ],
+                "W3C_VC_TEST_PRESENTATION_POLICY_ID": fixtures["w3c_presentation_policy_id"],
             }
         )
         include_w3c = True

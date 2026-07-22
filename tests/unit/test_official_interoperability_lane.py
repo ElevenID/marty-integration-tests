@@ -149,7 +149,10 @@ def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
             self.stdout = stdout
             self.stderr = stderr
 
+    calls: list[list[str]] = []
+
     def docker(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
         if command[1] == "ps":
             return Result("issuance-container\n" if command[-1].endswith("=issuance") else "")
         return Result(
@@ -167,6 +170,7 @@ def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
     assert "opaque-cookie" not in output
     assert "session_id=<redacted>" in output
     assert "routine startup complete" not in output
+    assert any(command[-1].endswith("=presentation-policy") for command in calls if command[1] == "ps")
 
 
 def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(
