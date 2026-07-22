@@ -97,6 +97,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[9][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
     assert calls[15][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert calls[16][2]["holder_binding"] == {"required": True}
+    assert calls[16][2]["credential_requirements"][0]["requested_claims"] == []
 
 
 def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
@@ -136,14 +138,14 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     assert policy["holder_binding"] == {"required": True}
 
 
-def test_w3c_fixture_does_not_claim_holder_binding_before_data_integrity_support() -> None:
+def test_w3c_fixture_requires_data_integrity_holder_binding() -> None:
     policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,
         "template-1",
         w3c=True,
         run_id="run-1",
     )
-    assert policy["holder_binding"] == {"required": False}
+    assert policy["holder_binding"] == {"required": True}
 
 
 def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_path: Path) -> None:
