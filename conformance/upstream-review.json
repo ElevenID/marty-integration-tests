@@ -1,0 +1,26 @@
+{
+  "observed_at": "2026-07-19T23:36:36.782499+00:00",
+  "schema": "elevenid.official-suite-upstream-review/v1",
+  "upstreams": {
+    "eudi_verifier_endpoint": {
+      "latest_commit": "de66a3e311ed413838de240affef4511072b8687",
+      "pinned_commit": "de66a3e311ed413838de240affef4511072b8687"
+    },
+    "eudi_wallet_kit": {
+      "latest_commit": "f07f06834264313e53fa4852fc824fd2d7e5f5d4",
+      "pinned_commit": "ff2af51189e6e9f014d6c7eab65690f99652457e"
+    },
+    "eudi_wallet_tester": {
+      "latest_commit": "7605672f5a4b22c5f867490cd9b4889e1ec5f748",
+      "pinned_commit": "7605672f5a4b22c5f867490cd9b4889e1ec5f748"
+    },
+    "oidf": {
+      "latest_release": "release-v5.2.0",
+      "pinned_release": "release-v5.2.0"
+    },
+    "w3c_vc_data_model_v2": {
+      "latest_commit": "1db599924e6601555933550e0e65925a6abbd0a8",
+      "pinned_commit": "1db599924e6601555933550e0e65925a6abbd0a8"
+    }
+  }
+}
