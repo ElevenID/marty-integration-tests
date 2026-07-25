@@ -298,6 +298,7 @@ def test_eudi_failure_categories_expose_only_reference_verifier_reason_codes(
     [
         ("offer-json-invalid", "offer-document-invalid"),
         ("offer-resolution-illegal-state-exception", "offer-resolution-failure-class"),
+        ("offer-resolution-null-pointer-exception", "offer-resolution-null-pointer-exception"),
         ("offer-resolution-json-decoding-exception", "offer-resolution-json-decoding"),
         ("offer-resolution-serialization-exception", "offer-resolution-serialization"),
         ("offer-resolution-illegal-argument-exception", "offer-resolution-illegal-argument"),

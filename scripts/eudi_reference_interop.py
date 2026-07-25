@@ -306,6 +306,13 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
 def classify_eudi_failure_text(text: str) -> list[str]:
     """Return fixed public categories without returning any source text."""
     categories = [category for category, pattern in EUDI_FAILURE_DIAGNOSTIC_PATTERNS.items() if pattern.search(text)]
+    # The wallet facade constructs this value exclusively from a JVM exception
+    # class name, normalizes it to a bounded lowercase slug, and never includes
+    # an exception message or protocol value. Preserve that safe class category
+    # so official-library drift remains actionable in sanitized CI evidence.
+    root_class = re.search(r"(?i)\boffer-resolution-([a-z][a-z0-9-]{0,79})\b", text)
+    if root_class:
+        categories.append(f"offer-resolution-{root_class.group(1).lower()}")
     return categories or ["unclassified"]
 
 
