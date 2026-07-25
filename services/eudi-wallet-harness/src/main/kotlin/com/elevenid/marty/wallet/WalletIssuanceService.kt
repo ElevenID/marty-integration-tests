@@ -55,6 +55,15 @@ object WalletIssuanceService {
             ?.takeIf { it.isNotEmpty() }
             ?: "unclassified"
 
+    private fun issuanceFailureSlug(exception: Throwable): String {
+        val protocolError = (exception as? CredentialIssuanceError.IssuanceRequestFailed)
+            ?.error
+            ?.takeIf { Regex("[a-z][a-z0-9_]{0,63}").matches(it) }
+            ?.replace('_', '-')
+        val errorClass = failureClassSlug(exception)
+        return protocolError?.let { "$errorClass-$it" } ?: errorClass
+    }
+
     /**
      * Reduce the official library's nested failures to a stable, public-safe
      * diagnostic code. The complete exception remains in the private service
@@ -250,7 +259,7 @@ object WalletIssuanceService {
         return if (staged == null) {
             stagedOfferResolutionErrorCode(exception)
         } else {
-            "issuance-${staged.stage}-${failureClassSlug(staged.cause ?: staged)}"
+            "issuance-${staged.stage}-${issuanceFailureSlug(staged.cause ?: staged)}"
         }
     }
 

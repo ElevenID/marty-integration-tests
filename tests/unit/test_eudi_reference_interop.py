@@ -94,6 +94,7 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert 'issuanceStage("authorization")' in issuance_source
     assert 'issuanceStage("credential-request")' in issuance_source
     assert 'IssuanceStageException("credential-outcome", outcome.error)' in issuance_source
+    assert 'Regex("[a-z][a-z0-9_]{0,63}")' in issuance_source
     official_tests = "\n".join(
         (ROOT / "tests" / "integration" / "gateway" / path).read_text(encoding="utf-8")
         for path in ("test_eudi_wallet_kit.py", "test_eudi_wallet_kit_vp.py")
