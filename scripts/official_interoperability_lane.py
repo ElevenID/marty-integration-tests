@@ -869,8 +869,8 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
         suite_environment.update(load_verifier_environment(args.haip_material))
         # The runner selects only organization-scoped templates. Each template
         # is bound to an issuer profile and its DID, which together are the
-        # runtime signing interface. Managed key custody and backend references
-        # remain private profile-administration data.
+        # runtime signing interface. KMS custody and backend references remain
+        # private profile-administration data and are never runtime inputs.
         suite_environment.update(
             {
                 "TEST_ORG_ID": fixtures["organization_id"],

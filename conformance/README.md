@@ -315,12 +315,13 @@ material is never overwritten, and standard output contains only paths,
 public certificate fingerprints, validity, and configuration digests. Do not
 commit the generated directory or upload it as an artifact.
 
-For a financed certification run, provision the approved signing key in managed
+For a financed certification run, provision the approved signing key in KMS
 custody, bind it to the active issuer profile and DID verification method, and
 provide only its externally issued `VERIFIER_X509_CERT_PEM` plus the approved
 trust anchor file. The external certificate takes precedence over disposable
-issuance, but request objects still traverse the identical issuer-profile
-signing path. Direct private-key environment input is rejected.
+issuance, but request objects still traverse the identical issuer-profile and
+DID signing path; callers never invoke KMS directly. Direct private-key
+environment input is rejected.
 
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
@@ -485,8 +486,8 @@ official reports remain job-local and expire with the runner.
 
 The EUDI lane also generates a separate disposable HAIP verifier chain. The
 leaf certifies Marty's issuer-profile DID key. The profile and its DID are the
-signing interface; the profile internally uses its managed-custody backend to
-sign the production JAR, while
+signing interface; the profile internally uses its KMS custody backend to sign
+the production JAR, while
 the wallet harness receives only that chain's root through the read-only
 `EUDI_OID4VP_TRUST_ANCHOR_FILE` mount. This root is deliberately different
 from the disposable TLS CA. The official EUDI OID4VP library must resolve an
@@ -498,11 +499,11 @@ For mdoc issuance, the harness asks the normal gateway API for the selected
 issuer profile's DID public key, issues a short-lived document-signer
 certificate for that key under a disposable test CA, stores the public chain
 through the normal issuer-profile certificate API, and republishes JWKS. The
-managed private key never enters the test process. The independent evidence
-parser verifies the resulting COSE signature, X.509 chain, MSO validity,
-digest coverage, CBOR types, and issuance claims. An externally managed DSC
-chain can replace the disposable chain later without changing the gateway,
-issuer-profile, DID, issuance, or wallet paths exercised by the lane.
+KMS-custodied private key never enters the test process. The independent
+evidence parser verifies the resulting COSE signature, X.509 chain, MSO
+validity, digest coverage, CBOR types, and issuance claims. An externally
+managed DSC chain can replace the disposable chain later without changing the
+gateway, issuer-profile, DID, issuance, or wallet paths exercised by the lane.
 
 The public summary is also bound to stable, versioned JUnit evidence IDs for
 end-to-end SD-JWT issuance/presentation, cryptographically validated mdoc
