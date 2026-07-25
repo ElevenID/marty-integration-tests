@@ -51,6 +51,11 @@ def test_eudi_reference_services_use_real_ca_and_access_certificate_contracts() 
     assert "VERIFIER_ACCESS_CERTIFICATE_SIGNING_ALGORITHM" in compose
     assert "VERIFIER_CLIENTIDPREFIX" in compose
     assert "VERIFIER_ORIGINALCLIENTID" in compose
+    assert "VERIFIER_ATTESTATIONCLASSIFICATIONS" in verifier
+    assert '"${OIDF_PUBLIC_BASE_URL:' in verifier
+    assert '/credentials/OpenBadge"' in verifier
+    assert "signing_service_id" not in verifier
+    assert "signing_key_reference" not in verifier
     assert "-Djavax.net.ssl.trustStoreType=JKS" in compose
     assert "${EUDI_OID4VP_TRUST_ANCHOR_FILE:?" in compose
     assert ":/oid4vp-trust/anchors.pem:ro" in compose

@@ -53,7 +53,21 @@ object WalletIssuanceService {
                     classifyMetadataFailure(exception, "issuer")
                 "UnableToResolveAuthorizationServerMetadata" in classes ->
                     classifyMetadataFailure(exception, "authorization-server")
-                else -> "offer-resolution-unclassified"
+                else -> {
+                    // Exception class names are safe to publish and make an
+                    // otherwise opaque CI failure actionable without exposing
+                    // offers, endpoints, tokens, identifiers, or messages.
+                    val rootClass = causes.lastOrNull()
+                        ?.javaClass
+                        ?.simpleName
+                        ?.replace(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+                        ?.lowercase()
+                        ?.replace(Regex("[^a-z0-9-]"), "-")
+                        ?.trim('-')
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: "unclassified"
+                    "offer-resolution-$rootClass"
+                }
             }
         }
 

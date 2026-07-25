@@ -31,13 +31,15 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Dict
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-import httpx
 import pytest
 
-from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
+from .helpers.eudi_wallet_kit_client import (
+    EUDIWalletHarnessError,
+    EUDIWalletKitClient,
+)
 from .helpers.gateway_client import GatewayClient
 from .helpers.mdoc_evidence import validate_issuer_signed_mdoc
 from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
@@ -77,7 +79,7 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 
 
-def _decode_jwt_payload(jwt_str: str) -> Dict[str, Any]:
+def _decode_jwt_payload(jwt_str: str) -> dict[str, Any]:
     """Decode a JWT's payload (no verification) for test inspection."""
     parts = jwt_str.strip().split(".")
     if len(parts) != 3:
@@ -101,7 +103,7 @@ def _extract_request_uri(openid4vp_uri: str) -> str:
 
 
 def _presentation_submission_for_request(
-    auth_req: Dict[str, Any],
+    auth_req: dict[str, Any],
     credential_format: str,
 ) -> str | None:
     """Build Presentation Exchange metadata only when the request actually uses PE."""
@@ -155,7 +157,7 @@ async def _resolve_signing_service(
     credential_format: str | None,
     key_purpose: str,
     algorithm: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Resolve the production signing service, allowing the configured fallback scope."""
     service = None
     resolution_error: Exception | None = None
@@ -186,8 +188,8 @@ async def _issuer_profile(
     key_purpose: str,
     algorithm: str,
     name: str,
-    service: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
+    service: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create an issuer profile backed by Marty's configured signing service."""
     if service is None:
         service = await _resolve_signing_service(
@@ -391,7 +393,7 @@ async def issued_sd_jwt_credential(
     wallet_kit: EUDIWalletKitClient,
     vp_test_org,
     sd_jwt_dl_template,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Issue an SD-JWT VC via Marty and receive it through the EUDI wallet harness.
 
     Returns a dict with keys: credential, format, issuance_result.
@@ -429,7 +431,7 @@ async def issued_mdoc_credential(
     wallet_kit: EUDIWalletKitClient,
     vp_test_org,
     mdl_mdoc_template,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Issue an mDoc mDL via Marty and receive it through the EUDI wallet harness."""
     mdoc_claims = {
         "given_name": "Erika",
@@ -730,14 +732,13 @@ class TestOID4VPSdJwtPresentation:
             "evidence_id",
             "eudi.sd-jwt.missing-holder-binding-key.v1",
         )
-        with pytest.raises(httpx.HTTPStatusError) as failure:
+        with pytest.raises(EUDIWalletHarnessError, match="HTTP 422") as failure:
             await wallet_kit.build_vp_token(
                 credential="unbound.header.signature~",
                 audience="did:web:verifier.example",
                 nonce="negative-holder-binding-test",
             )
-        assert failure.value.response.status_code == 422
-        assert failure.value.response.json()["error"] == "missing_holder_binding_key"
+        assert "wallet-harness-missing-holder-binding-key" in str(failure.value)
 
     @pytest.mark.asyncio
     async def test_sd_jwt_vp_direct_post(

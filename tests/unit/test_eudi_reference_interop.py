@@ -256,9 +256,7 @@ def test_eudi_junit_failure_summary_emits_only_fixed_actionable_categories(
 
 
 def test_eudi_failure_categories_recognize_gateway_client_status() -> None:
-    categories = eudi.classify_eudi_failure_text(
-        "POST /v1/signing-keys/config/resolve failed with 422: private detail"
-    )
+    categories = eudi.classify_eudi_failure_text("POST /v1/signing-keys/config/resolve failed with 422: private detail")
 
     assert categories == ["http-422", "signing-service-resolution"]
 
@@ -279,7 +277,27 @@ def test_eudi_failure_categories_identify_verifier_contract_without_values() -> 
 @pytest.mark.parametrize(
     ("diagnostic", "category"),
     [
+        ("ContainsInvalidJwt", "verifier-sd-jwt-invalid-jwt"),
+        ("IsMissingHolderPublicKey", "verifier-holder-key-missing"),
+        ("IssuerCertificateIsNotTrusted", "verifier-issuer-certificate-untrusted"),
+        ("UnableToLookupDID", "verifier-issuer-did-unresolved"),
+        ("TypeMetadataResolutionFailure", "verifier-type-metadata-failure"),
+        ("StatusCheckFailed", "verifier-status-failure"),
+        ("UnexpectedError", "verifier-unexpected-error"),
+    ],
+)
+def test_eudi_failure_categories_expose_only_reference_verifier_reason_codes(
+    diagnostic: str,
+    category: str,
+) -> None:
+    assert category in eudi.classify_eudi_failure_text(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "category"),
+    [
         ("offer-json-invalid", "offer-document-invalid"),
+        ("offer-resolution-illegal-state-exception", "offer-resolution-failure-class"),
         ("issuer-metadata-json-invalid", "issuer-metadata-json-invalid"),
         ("issuer-metadata-credential-configurations-empty", "issuer-metadata-configurations-empty"),
         ("authorization-server-metadata-resolution-failed", "authorization-server-metadata-failed"),

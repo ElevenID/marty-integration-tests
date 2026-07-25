@@ -223,6 +223,7 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     ),
     "offer-document-invalid": re.compile(r"(?i)offer-(?:json|issuer-id|credential-configuration|grants)-invalid\b"),
     "offer-fetch-failed": re.compile(r"(?i)offer-fetch-failed\b"),
+    "offer-resolution-failure-class": re.compile(r"(?i)offer-resolution-[a-z0-9-]+\b"),
     "issuer-metadata-fetch-failed": re.compile(r"(?i)issuer-metadata-fetch-failed\b"),
     "issuer-metadata-json-invalid": re.compile(r"(?i)issuer-metadata-json-invalid\b"),
     "metadata-json-field-credential-configurations": re.compile(
@@ -231,18 +232,12 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "metadata-json-field-credential-signing-algorithms": re.compile(
         r"(?i)issuer-metadata-json-invalid-credential-signing-algorithms\b"
     ),
-    "metadata-json-field-binding-methods": re.compile(
-        r"(?i)issuer-metadata-json-invalid-binding-methods\b"
-    ),
-    "metadata-json-field-proof-types": re.compile(
-        r"(?i)issuer-metadata-json-invalid-proof-types\b"
-    ),
+    "metadata-json-field-binding-methods": re.compile(r"(?i)issuer-metadata-json-invalid-binding-methods\b"),
+    "metadata-json-field-proof-types": re.compile(r"(?i)issuer-metadata-json-invalid-proof-types\b"),
     "metadata-json-field-credential-definition": re.compile(
         r"(?i)issuer-metadata-json-invalid-credential-definition\b"
     ),
-    "metadata-json-field-credential-metadata": re.compile(
-        r"(?i)issuer-metadata-json-invalid-credential-metadata\b"
-    ),
+    "metadata-json-field-credential-metadata": re.compile(r"(?i)issuer-metadata-json-invalid-credential-metadata\b"),
     "metadata-json-field-authorization-servers": re.compile(
         r"(?i)issuer-metadata-json-invalid-authorization-servers\b"
     ),
@@ -262,15 +257,9 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "wallet-tls-certificate-validity-failed": re.compile(
         r"(?i)(?:issuer|authorization-server)-metadata-tls-certificate-validity-failed\b"
     ),
-    "wallet-tls-hostname-mismatch": re.compile(
-        r"(?i)(?:issuer|authorization-server)-metadata-tls-hostname-mismatch\b"
-    ),
-    "wallet-tls-truststore-empty": re.compile(
-        r"(?i)(?:issuer|authorization-server)-metadata-tls-truststore-empty\b"
-    ),
-    "wallet-tls-handshake-failed": re.compile(
-        r"(?i)(?:issuer|authorization-server)-metadata-tls-handshake-failed\b"
-    ),
+    "wallet-tls-hostname-mismatch": re.compile(r"(?i)(?:issuer|authorization-server)-metadata-tls-hostname-mismatch\b"),
+    "wallet-tls-truststore-empty": re.compile(r"(?i)(?:issuer|authorization-server)-metadata-tls-truststore-empty\b"),
+    "wallet-tls-handshake-failed": re.compile(r"(?i)(?:issuer|authorization-server)-metadata-tls-handshake-failed\b"),
     "wallet-hostname-resolution-failed": re.compile(
         r"(?i)(?:issuer|authorization-server)-metadata-hostname-resolution-failed\b"
     ),
@@ -281,6 +270,25 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "verifier-dcql": re.compile(r"(?i)\bdcql\b"),
     "verifier-vct": re.compile(r"(?i)\bvct(?:_values)?\b"),
     "verifier-key-binding": re.compile(r"(?i)(?:key binding|kb-jwt|kb_jwt)"),
+    "verifier-sd-jwt-unparsable": re.compile(r"(?i)\bIsUnparsable\b"),
+    "verifier-sd-jwt-invalid-jwt": re.compile(r"(?i)\bContainsInvalidJwt\b"),
+    "verifier-holder-key-missing": re.compile(r"(?i)\bIsMissingHolderPublicKey\b"),
+    "verifier-holder-key-unsupported": re.compile(r"(?i)\bUnsupportedHolderPublicKey\b"),
+    "verifier-key-binding-invalid": re.compile(r"(?i)\bContainsInvalidKeyBindingJwt\b"),
+    "verifier-key-binding-missing": re.compile(r"(?i)\bIsMissingKeyBindingJwt\b"),
+    "verifier-disclosures-invalid": re.compile(
+        r"(?i)\b(?:ContainsInvalidDisclosures|ContainsNonUniqueDigests|"
+        r"ContainsNonUniqueDisclosures|ContainsDisclosuresWithNoDigests)\b"
+    ),
+    "verifier-issuer-method-unsupported": re.compile(r"(?i)\bUnsupportedVerificationMethod\b"),
+    "verifier-issuer-metadata-unresolved": re.compile(r"(?i)\bUnableToResolveIssuerMetadata\b"),
+    "verifier-issuer-certificate-untrusted": re.compile(r"(?i)\bIssuerCertificateIsNotTrusted\b"),
+    "verifier-issuer-did-unresolved": re.compile(r"(?i)\b(?:UnableToLookupDID|UnableToDetermineVerificationMethod)\b"),
+    "verifier-type-metadata-failure": re.compile(
+        r"(?i)\b(?:TypeMetadataValidationFailure|TypeMetadataResolutionFailure)\b"
+    ),
+    "verifier-status-failure": re.compile(r"(?i)\b(?:StatusCheckFailed|StatusNotValid)\b"),
+    "verifier-unexpected-error": re.compile(r"(?i)\bUnexpectedError\b"),
 }
 
 
