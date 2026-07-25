@@ -110,6 +110,9 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
     "mdoc-assemble": re.compile(
         r"(?i)(?:oid4vci_assemble_mdoc|mDoc assembl|COSE serialization failed|issuer_auth CBOR)"
     ),
+    "mdoc-credential-id-mismatch": re.compile(
+        r"(?i)remote credential builder changed the reserved credential ID"
+    ),
     "upstream-http-4xx": re.compile(r"(?i)(?:status(?: code)?[=: ]+4\d\d\b|HTTP(?:/\S+)?\s+4\d\d\b)"),
     "upstream-http-5xx": re.compile(r"(?i)(?:status(?: code)?[=: ]+5\d\d\b|HTTP(?:/\S+)?\s+5\d\d\b)"),
     "verifier-invalid-request": re.compile(r"(?i)\binvalid_request\b"),

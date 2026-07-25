@@ -572,6 +572,10 @@ def test_eudi_runtime_diagnostics_identify_allowlisted_metadata_boundary_without
         ("mDoc claims must be a JSON object", "mdoc-claims"),
         ("oid4vci_prepare_mdoc failed with secret", "mdoc-prepare"),
         ("COSE serialization failed: secret", "mdoc-assemble"),
+        (
+            "Remote credential builder changed the reserved credential ID",
+            "mdoc-credential-id-mismatch",
+        ),
     ],
 )
 def test_eudi_runtime_diagnostics_identify_safe_mdoc_stage(
