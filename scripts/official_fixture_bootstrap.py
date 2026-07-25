@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).parent))
 from oidf_marty_public_login import authenticated_json_request
 from oidf_marty_start_verification import gateway_session_id, https_url
+
 from tests.integration.gateway.helpers.mdoc_test_certificate import (
     create_disposable_issuer_certificate_chain,
 )
@@ -367,6 +369,30 @@ def issuer_profile_response_id(value: object) -> str:
     return response_id(value.get("profile", value), "issuer profile")
 
 
+def resolve_new_profile_public_identity(
+    gateway_url: str,
+    session_id: str,
+    *,
+    organization_id: str,
+    profile_id: str,
+    request: Callable[..., object],
+    attempts: int = 10,
+) -> object:
+    """Wait briefly for a newly created profile's public DID key to be visible."""
+    path = (
+        f"/v1/signing-keys/issuer-profiles/{profile_id}/public-identity?"
+        f"{urlencode({'organization_id': organization_id})}"
+    )
+    for attempt in range(attempts):
+        try:
+            return request(gateway_url, session_id, path, method="GET")
+        except RuntimeError as exc:
+            if "HTTP 404" not in str(exc) or attempt + 1 == attempts:
+                raise
+            time.sleep(1)
+    raise AssertionError("issuer-profile visibility retry exhausted unexpectedly")
+
+
 def resolve_signing_service(
     gateway_url: str,
     session_id: str,
@@ -455,14 +481,12 @@ def bootstrap_eudi(
         )
         profile_id = issuer_profile_response_id(created)
         if attach_certificate:
-            identity = request(
+            identity = resolve_new_profile_public_identity(
                 gateway_url,
                 session_id,
-                (
-                    f"/v1/signing-keys/issuer-profiles/{profile_id}/public-identity?"
-                    f"{urlencode({'organization_id': organization_id})}"
-                ),
-                method="GET",
+                organization_id=organization_id,
+                profile_id=profile_id,
+                request=request,
             )
             public_jwk = identity.get("public_jwk") if isinstance(identity, dict) else None
             if not isinstance(public_jwk, dict):
