@@ -5,10 +5,13 @@ import com.nimbusds.jose.jwk.gen.ECKeyGenerator
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import org.multipaz.cbor.Bstr
 import org.multipaz.cbor.Cbor
+import org.multipaz.cbor.Tagged
 import org.multipaz.cbor.buildCborMap
-import org.multipaz.cbor.putCborArray
+import org.multipaz.cbor.putCborMap
 import org.multipaz.cose.Cose
+import org.multipaz.cose.CoseSign1
 import org.multipaz.crypto.Algorithm
 import org.multipaz.crypto.EcPrivateKey
 import org.multipaz.crypto.SignatureVerificationException
@@ -25,22 +28,32 @@ class WalletPresentationServiceTest {
         runBlocking {
             val holderKey = ECKeyGenerator(Curve.P_256).generate()
             val issuerSigned = buildCborMap {
-                put("opaque", "issuer-signed-data")
-            }
-            val issuedResponse = buildCborMap {
-                put("version", "1.0")
-                putCborArray("documents") {
-                    add(
-                        buildCborMap {
-                            put("docType", MDL_DOC_TYPE)
-                            put("issuerSigned", issuerSigned)
-                        },
-                    )
+                putCborMap("nameSpaces") {
+                    put("opaque", "issuer-signed-data")
                 }
-                put("status", 0)
+                put(
+                    "issuerAuth",
+                    CoseSign1(
+                        protectedHeaders = emptyMap(),
+                        unprotectedHeaders = emptyMap(),
+                        signature = byteArrayOf(1, 2, 3),
+                        payload = Cbor.encode(
+                            Tagged(
+                                Tagged.ENCODED_CBOR,
+                                Bstr(
+                                    Cbor.encode(
+                                        buildCborMap {
+                                            put("docType", MDL_DOC_TYPE)
+                                        },
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ).toDataItem(),
+                )
             }
             val issuedCompact = Base64.getUrlEncoder().withoutPadding()
-                .encodeToString(Cbor.encode(issuedResponse))
+                .encodeToString(Cbor.encode(issuerSigned))
 
             val presentedCompact = WalletPresentationService.buildMdocDeviceResponse(
                 issuedCredentialCompact = issuedCompact,

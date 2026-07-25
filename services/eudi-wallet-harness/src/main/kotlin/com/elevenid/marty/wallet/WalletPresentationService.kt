@@ -338,17 +338,30 @@ object WalletPresentationService {
         require(nonce.isNotBlank()) { "The OpenID4VP nonce is required" }
         require(responseUri.isNotBlank()) { "The OpenID4VP response URI is required" }
 
-        val issuedResponse = Cbor.decode(decodeBase64Url(issuedCredentialCompact))
-        require(issuedResponse["status"].asNumber == 0L) {
-            "The issued mdoc is not a successful DeviceResponse"
+        val issuedCredential = Cbor.decode(decodeBase64Url(issuedCredentialCompact))
+        val issuerSigned = if (
+            issuedCredential.hasKey("nameSpaces") &&
+            issuedCredential.hasKey("issuerAuth")
+        ) {
+            // OID4VCI returns the ISO IssuerSigned structure as the credential.
+            issuedCredential
+        } else {
+            // Retain compatibility with a previously wrapped DeviceResponse,
+            // while never treating that wrapper as holder authentication.
+            require(issuedCredential["status"].asNumber == 0L) {
+                "The issued mdoc is not a successful credential"
+            }
+            val issuedDocuments = issuedCredential["documents"].asArray
+            require(issuedDocuments.size == 1) {
+                "The wallet harness requires exactly one issued mdoc document"
+            }
+            issuedDocuments.single()["issuerSigned"]
         }
-        val issuedDocuments = issuedResponse["documents"].asArray
-        require(issuedDocuments.size == 1) {
-            "The wallet harness requires exactly one issued mdoc document"
+        val issuerAuthPayload = requireNotNull(issuerSigned["issuerAuth"].asCoseSign1.payload) {
+            "The issued mdoc issuerAuth must contain MobileSecurityObjectBytes"
         }
-        val issuedDocument = issuedDocuments.single()
-        val docType = issuedDocument["docType"].asTstr
-        val issuerSigned = issuedDocument["issuerSigned"]
+        val mobileSecurityObject = Cbor.decode(issuerAuthPayload).asTaggedEncodedCbor
+        val docType = mobileSecurityObject["docType"].asTstr
 
         // ISO 18013-7 / OpenID4VP handover used by the EUDI reference wallet:
         //   HandoverInfo = [clientId, nonce, JWKThumbprint/null, responseUri]
