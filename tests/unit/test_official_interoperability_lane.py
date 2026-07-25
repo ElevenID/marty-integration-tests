@@ -550,6 +550,37 @@ def test_eudi_runtime_diagnostics_identify_allowlisted_metadata_boundary_without
     ]
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "category"),
+    [
+        ("Active issuer profile not found. secret=must-not-escape", "issuer-profile-not-found"),
+        (
+            "Issuer profile has an incomplete signing identity binding. secret=must-not-escape",
+            "issuer-profile-binding-incomplete",
+        ),
+        (
+            "Issuer-profile signer returned a different DID verification method",
+            "issuer-profile-identity-mismatch",
+        ),
+        ("Signing algorithm must match the issuer profile binding.", "issuer-profile-algorithm-mismatch"),
+        ("No mDoc namespace mapping is defined for doctype secret", "mdoc-namespace"),
+        ("_mdoc_x5c[0] is not valid base64-encoded DER secret", "mdoc-certificate-chain"),
+        ("Remote signing service returned no mDoc signature", "mdoc-signature-missing"),
+        ("Invalid ES256 P1363 signature length for remote mDoc signing", "mdoc-signature-length"),
+        ("Unsupported remote mDoc signature encoding secret", "mdoc-signature-encoding"),
+        ("Remote mDoc signature is not valid DER ECDSA", "mdoc-signature-der"),
+        ("mDoc claims must be a JSON object", "mdoc-claims"),
+        ("oid4vci_prepare_mdoc failed with secret", "mdoc-prepare"),
+        ("COSE serialization failed: secret", "mdoc-assemble"),
+    ],
+)
+def test_eudi_runtime_diagnostics_identify_safe_mdoc_stage(
+    diagnostic: str,
+    category: str,
+) -> None:
+    assert category in lane.classify_eudi_runtime_diagnostics(diagnostic)
+
+
 def test_eudi_runtime_diagnostic_never_prints_private_log_text(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
