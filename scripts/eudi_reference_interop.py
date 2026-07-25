@@ -223,6 +223,17 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     ),
     "offer-document-invalid": re.compile(r"(?i)offer-(?:json|issuer-id|credential-configuration|grants)-invalid\b"),
     "offer-fetch-failed": re.compile(r"(?i)offer-fetch-failed\b"),
+    # These are fixed, value-free JVM exception classes emitted by the wallet
+    # facade. Keep them ahead of the general class so official-library drift is
+    # actionable without publishing exception messages or protocol material.
+    "offer-resolution-json-decoding": re.compile(r"(?i)\boffer-resolution-json-decoding-exception\b"),
+    "offer-resolution-serialization": re.compile(r"(?i)\boffer-resolution-serialization-exception\b"),
+    "offer-resolution-illegal-argument": re.compile(r"(?i)\boffer-resolution-illegal-argument-exception\b"),
+    "offer-resolution-illegal-state": re.compile(r"(?i)\boffer-resolution-illegal-state-exception\b"),
+    "offer-resolution-class-cast": re.compile(r"(?i)\boffer-resolution-class-cast-exception\b"),
+    "offer-resolution-metadata": re.compile(
+        r"(?i)\boffer-resolution-(?:credential-issuer|authorization-server)-metadata-resolution-exception\b"
+    ),
     "offer-resolution-failure-class": re.compile(r"(?i)offer-resolution-[a-z0-9-]+\b"),
     "issuer-metadata-fetch-failed": re.compile(r"(?i)issuer-metadata-fetch-failed\b"),
     "issuer-metadata-json-invalid": re.compile(r"(?i)issuer-metadata-json-invalid\b"),

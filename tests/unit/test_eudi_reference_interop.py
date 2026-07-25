@@ -298,6 +298,19 @@ def test_eudi_failure_categories_expose_only_reference_verifier_reason_codes(
     [
         ("offer-json-invalid", "offer-document-invalid"),
         ("offer-resolution-illegal-state-exception", "offer-resolution-failure-class"),
+        ("offer-resolution-json-decoding-exception", "offer-resolution-json-decoding"),
+        ("offer-resolution-serialization-exception", "offer-resolution-serialization"),
+        ("offer-resolution-illegal-argument-exception", "offer-resolution-illegal-argument"),
+        ("offer-resolution-illegal-state-exception", "offer-resolution-illegal-state"),
+        ("offer-resolution-class-cast-exception", "offer-resolution-class-cast"),
+        (
+            "offer-resolution-credential-issuer-metadata-resolution-exception",
+            "offer-resolution-metadata",
+        ),
+        (
+            "offer-resolution-authorization-server-metadata-resolution-exception",
+            "offer-resolution-metadata",
+        ),
         ("issuer-metadata-json-invalid", "issuer-metadata-json-invalid"),
         ("issuer-metadata-credential-configurations-empty", "issuer-metadata-configurations-empty"),
         ("authorization-server-metadata-resolution-failed", "authorization-server-metadata-failed"),
