@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.0.21"
-    kotlin("plugin.serialization") version "2.0.21"
+    kotlin("jvm") version "2.2.21"
+    kotlin("plugin.serialization") version "2.2.21"
     application
 }
 
@@ -24,18 +24,19 @@ dependencies {
     implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vp-kt:0.12.3")
     // EUDI SD-JWT (for decoding issued credentials)
     implementation("eu.europa.ec.eudi:eudi-lib-jvm-sdjwt-kt:0.18.0")
+    implementation("org.multipaz:multipaz-jvm:0.99.0")
 
     // Ktor server — exposes HTTP API for test orchestration
-    implementation("io.ktor:ktor-server-core:3.0.3")
-    implementation("io.ktor:ktor-server-netty:3.0.3")
-    implementation("io.ktor:ktor-server-content-negotiation:3.0.3")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:3.0.3")
-    implementation("io.ktor:ktor-server-status-pages:3.0.3")
+    implementation("io.ktor:ktor-server-core:3.3.3")
+    implementation("io.ktor:ktor-server-netty:3.3.3")
+    implementation("io.ktor:ktor-server-content-negotiation:3.3.3")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:3.3.3")
+    implementation("io.ktor:ktor-server-status-pages:3.3.3")
 
     // Ktor client — used by EUDI libs for HTTP
-    implementation("io.ktor:ktor-client-java:3.0.3")
-    implementation("io.ktor:ktor-client-content-negotiation:3.0.3")
-    implementation("io.ktor:ktor-client-logging:3.0.3")
+    implementation("io.ktor:ktor-client-java:3.3.3")
+    implementation("io.ktor:ktor-client-content-negotiation:3.3.3")
+    implementation("io.ktor:ktor-client-logging:3.3.3")
 
     // Nimbus JOSE+JWT (transitive, but explicit for crypto operations)
     implementation("com.nimbusds:nimbus-jose-jwt:10.0.2")
@@ -43,10 +44,12 @@ dependencies {
     implementation("org.bouncycastle:bcpkix-jdk18on:1.79")
 
     // Kotlinx serialization
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
     // SLF4J logging
     implementation("ch.qos.logback:logback-classic:1.5.15")
+
+    testImplementation(kotlin("test"))
 }
 
 application {

@@ -21,19 +21,19 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "@sha256:" in manifest["components"]["wallet_tester"]["image"]
     assert "@sha256:" in manifest["components"]["verifier_endpoint"]["image"]
     assert manifest["coverage"]["issuance"] == ["sd_jwt_vc", "mso_mdoc"]
-    assert manifest["coverage"]["presentation"] == ["sd_jwt_vc"]
+    assert manifest["coverage"]["presentation"] == ["sd_jwt_vc", "mso_mdoc"]
     assert manifest["coverage"]["request_object_trust"] == ["signed_jar_x509_hash_pkix"]
     assert manifest["coverage"]["response_mode"] == ["direct_post.jwt"]
     assert manifest["coverage"]["negative"] == ["missing_holder_binding_key"]
     assert set(manifest["required_evidence"]) == set(eudi.REQUIRED_EVIDENCE_CLAIMS)
-    assert manifest["compatibility_only"]["presentation"] == ["mso_mdoc"]
+    assert manifest["compatibility_only"] == {}
     assert "replayed_response" in manifest["planned_coverage"]["negative"]
-    assert manifest["limitations"]["mso_mdoc_presentation"]["status"] == "not_officially_exercised"
     libraries = manifest["components"]["wallet_kit"]["libraries"]
     assert {name: value["version"] for name, value in libraries.items()} == {
         "oid4vp": "0.12.3",
         "oid4vci": "0.9.1",
         "sd_jwt": "0.18.0",
+        "mdoc": "0.99.0",
     }
     assert all(value["maven_coordinate"].endswith(value["version"]) for value in libraries.values())
     build = manifest["components"]["wallet_kit"]["build"]

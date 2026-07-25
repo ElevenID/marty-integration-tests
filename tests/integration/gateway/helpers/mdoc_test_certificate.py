@@ -1,8 +1,8 @@
 """Disposable document-signer certificate material for interoperability tests.
 
-The leaf certificate wraps the public key exported by the production signing
-service.  Its private key remains in OpenBao/KMS; only the disposable test CA
-private key exists in the test process.
+The leaf certificate wraps the public key resolved from the issuer profile's
+DID verification method. The profile keeps its private key in managed KMS
+custody; only the disposable test CA private key exists in the test process.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def create_disposable_issuer_certificate_chain(
     profile_label: str = "issuer",
     now: datetime | None = None,
 ) -> MdocCertificateMaterial:
-    """Issue a short-lived certificate for a profile's real KMS public key."""
+    """Issue a short-lived certificate for an issuer profile's DID public key."""
     checked_at = (now or datetime.now(UTC)).astimezone(UTC)
     signer_public_key = p256_public_key_from_jwk(jwk)
     ca_private_key = ec.generate_private_key(ec.SECP256R1())

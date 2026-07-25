@@ -195,19 +195,23 @@ class EUDIWalletKitClient:
         audience: str,
         nonce: str,
         credential_format: str = "dc+sd-jwt",
+        response_uri: str | None = None,
     ) -> str:
         """Build a VP token (SD-JWT with KB-JWT) without submitting it.
 
         Returns the compact VP token string.
         """
+        body: dict[str, Any] = {
+            "credential": credential,
+            "audience": audience,
+            "nonce": nonce,
+            "format": credential_format,
+        }
+        if response_uri is not None:
+            body["responseUri"] = response_uri
         resp = await self.client.post(
             "/presentation/build-vp-token",
-            json={
-                "credential": credential,
-                "audience": audience,
-                "nonce": nonce,
-                "format": credential_format,
-            },
+            json=body,
         )
         _raise_for_status_safely(resp)
         return resp.json()["vpToken"]

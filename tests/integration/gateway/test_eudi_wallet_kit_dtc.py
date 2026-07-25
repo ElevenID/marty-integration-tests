@@ -423,55 +423,25 @@ class TestDtcWalletPresentation:
             issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
-        instance_id = flow["instance_id"]
+        request_uri = flow.get("request_uri", "")
+        assert request_uri.startswith("openid4vp://"), request_uri
 
-        # Parse authorization request
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
-        nonce = auth_req["nonce"]
-        client_id = auth_req["client_id"]
-        response_uri = auth_req["response_uri"]
-        state = auth_req.get("state", instance_id)
-
-        logger.info(
-            "[DTC VP] Auth request: client_id=%s, nonce=%s",
-            client_id, nonce,
-        )
-
-        # Build mDoc VP token via wallet harness
-        vp_token = await wallet_kit.build_vp_token(
+        result = await wallet_kit.submit_presentation(
+            authorization_request_uri=request_uri,
             credential=credential,
-            audience=client_id,
-            nonce=nonce,
-            credential_format="mso_mdoc",
-        )
-        assert vp_token, "VP token is empty"
-        logger.info("[DTC VP] VP token built: length=%d", len(vp_token))
-
-        presentation_submission = _presentation_submission_for_request(
-            auth_req,
-            "mso_mdoc",
-        )
-
-        # Direct-post to Marty's verifier endpoint
-        result = await wallet_kit.direct_post_presentation(
-            response_uri=response_uri,
-            vp_token=vp_token,
-            presentation_submission=presentation_submission,
-            state=state,
         )
 
         logger.info(
-            "[DTC VP] Direct-post result: success=%s, status=%s",
+            "[DTC VP] Official resolve/dispatch result: success=%s, mode=%s",
             result.get("success"),
-            result.get("responseStatus"),
+            result.get("responseMode"),
         )
 
         assert result["success"], (
-            f"DTC VP direct-post failed: status={result.get('responseStatus')}, "
-            f"body={(result.get('responseBody') or '')[:500]}"
+            f"DTC VP official presentation failed: {result.get('error')}"
         )
+        assert result["responseMode"] == "direct_post"
+        assert result["verifierAccepted"] is True
 
     @pytest.mark.asyncio
     async def test_dtc_identity_only_presentation(
@@ -490,35 +460,18 @@ class TestDtcWalletPresentation:
             issuer_profile_id=dtc_identity_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_identity_vp_policy["_request_object_issuer_did"],
         )
-        instance_id = flow["instance_id"]
+        request_uri = flow.get("request_uri", "")
+        assert request_uri.startswith("openid4vp://"), request_uri
 
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
-
-        vp_token = await wallet_kit.build_vp_token(
+        result = await wallet_kit.submit_presentation(
+            authorization_request_uri=request_uri,
             credential=credential,
-            audience=auth_req["client_id"],
-            nonce=auth_req["nonce"],
-            credential_format="mso_mdoc",
-        )
-
-        presentation_submission = _presentation_submission_for_request(
-            auth_req,
-            "mso_mdoc",
-        )
-
-        result = await wallet_kit.direct_post_presentation(
-            response_uri=auth_req["response_uri"],
-            vp_token=vp_token,
-            presentation_submission=presentation_submission,
-            state=auth_req.get("state", instance_id),
         )
 
         assert result["success"], (
-            f"DTC identity-only VP failed: status={result.get('responseStatus')}, "
-            f"body={(result.get('responseBody') or '')[:500]}"
+            f"DTC identity-only VP failed: {result.get('error')}"
         )
+        assert result["verifierAccepted"] is True
         logger.info("[DTC VP] Identity-only presentation accepted")
 
 
@@ -603,40 +556,21 @@ class TestDtcWalletEndToEnd:
         instance_id = flow["instance_id"]
         logger.info("[DTC E2E] Verification flow started: %s", instance_id)
 
-        # 6. Parse authorization request
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            instance_id
-        )
-        assert auth_req.get("response_type") == "vp_token"
-        assert auth_req.get("nonce")
-
-        # 7. Build mDoc VP token via wallet harness
-        vp_token = await wallet_kit.build_vp_token(
+        # 6. Resolve, build the ISO DeviceResponse, and dispatch through the
+        # official EUDI OID4VP library.
+        request_uri = flow.get("request_uri", "")
+        assert request_uri.startswith("openid4vp://"), request_uri
+        post_result = await wallet_kit.submit_presentation(
+            authorization_request_uri=request_uri,
             credential=credential,
-            audience=auth_req["client_id"],
-            nonce=auth_req["nonce"],
-            credential_format="mso_mdoc",
-        )
-        logger.info("[DTC E2E] VP token built: length=%d", len(vp_token))
-
-        # 8. Direct-post to verifier
-        presentation_submission = _presentation_submission_for_request(
-            auth_req,
-            "mso_mdoc",
-        )
-
-        post_result = await wallet_kit.direct_post_presentation(
-            response_uri=auth_req["response_uri"],
-            vp_token=vp_token,
-            presentation_submission=presentation_submission,
-            state=auth_req.get("state", instance_id),
         )
         assert post_result["success"], (
-            f"DTC VP direct-post failed: {(post_result.get('responseBody') or '')[:500]}"
+            f"DTC VP official presentation failed: {post_result.get('error')}"
         )
+        assert post_result["verifierAccepted"] is True
         logger.info("[DTC E2E] VP token accepted by verifier")
 
-        # 9. Check verification result
+        # 7. Check verification result
         result = await authenticated_gateway_client.get_verification_result(
             instance_id
         )

@@ -29,8 +29,10 @@ OCI_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+:[a-zA-Z0-9._-]+@sha256:[0-9a
 EUDI_HAIP_EVIDENCE_ID = "eudi.oid4vp.haip.resolve-dispatch.v1"
 EUDI_HOLDER_BINDING_EVIDENCE_ID = "eudi.sd-jwt.missing-holder-binding-key.v1"
 EUDI_MDOC_ISSUANCE_EVIDENCE_ID = "eudi.oid4vci.mdoc-issuance.v1"
+EUDI_MDOC_PRESENTATION_EVIDENCE_ID = "eudi.oid4vp.mdoc-device-response.v1"
 REQUIRED_EVIDENCE_CLAIMS = {
     EUDI_MDOC_ISSUANCE_EVIDENCE_ID: frozenset({"issuance:mso_mdoc"}),
+    EUDI_MDOC_PRESENTATION_EVIDENCE_ID: frozenset({"presentation:mso_mdoc"}),
     EUDI_HAIP_EVIDENCE_ID: frozenset(
         {
             "issuance:sd_jwt_vc",
@@ -84,29 +86,33 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         if not OCI_IMAGE.fullmatch(build.get(name, "")):
             raise ValueError(f"wallet_kit {name} must be pinned by sha256 digest")
     libraries = wallet_kit.get("libraries", {})
-    if set(libraries) != {"oid4vp", "oid4vci", "sd_jwt"}:
-        raise ValueError("wallet_kit must record the OID4VP, OID4VCI, and SD-JWT libraries")
+    if set(libraries) != {"oid4vp", "oid4vci", "sd_jwt", "mdoc"}:
+        raise ValueError("wallet_kit must record the OID4VP, OID4VCI, SD-JWT, and mdoc libraries")
     for name, library in libraries.items():
-        if not library.get("repository", "").startswith("https://github.com/eu-digital-identity-wallet/"):
-            raise ValueError(f"wallet_kit {name} must point to an official EUDI repository")
+        expected_repository = (
+            "https://github.com/openwallet-foundation/"
+            if name == "mdoc"
+            else "https://github.com/eu-digital-identity-wallet/"
+        )
+        if not library.get("repository", "").startswith(expected_repository):
+            raise ValueError(f"wallet_kit {name} must point to its official upstream repository")
         if not SHA.fullmatch(library.get("commit", "")):
             raise ValueError(f"wallet_kit {name} must pin a full commit SHA")
         version = library.get("version", "")
         coordinate = library.get("maven_coordinate", "")
-        if library.get("release") != f"v{version}" or coordinate.rsplit(":", 1)[-1] != version:
+        expected_release = version if name == "mdoc" else f"v{version}"
+        if library.get("release") != expected_release or coordinate.rsplit(":", 1)[-1] != version:
             raise ValueError(f"wallet_kit {name} release and Maven coordinate must match its version")
     coverage = data.get("coverage", {})
     declared_coverage_claims = coverage_claims(coverage)
     if not {"sd_jwt_vc", "mso_mdoc"} <= set(coverage.get("issuance", [])):
         raise ValueError("EUDI issuance coverage must include SD-JWT VC and mdoc")
-    if "sd_jwt_vc" not in coverage.get("presentation", []):
-        raise ValueError("EUDI official-library presentation coverage must include SD-JWT VC")
+    if not {"sd_jwt_vc", "mso_mdoc"} <= set(coverage.get("presentation", [])):
+        raise ValueError("EUDI official-library presentation coverage must include SD-JWT VC and mdoc")
     if "signed_jar_x509_hash_pkix" not in coverage.get("request_object_trust", []):
         raise ValueError("EUDI presentation coverage must prove signed-JAR x509_hash PKIX trust")
     if "direct_post.jwt" not in coverage.get("response_mode", []):
         raise ValueError("EUDI presentation coverage must prove encrypted direct_post.jwt")
-    if "mso_mdoc" in coverage.get("presentation", []):
-        raise ValueError("mDoc cannot be claimed until an ISO device response is exercised")
     unsupported_negative_claims = {
         "replayed_response",
         "invalid_signature",
@@ -141,8 +147,8 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
             details.append("multiply-bound coverage: " + ", ".join(multiply_bound))
         raise ValueError("EUDI coverage and stable evidence claims must be a bijection (" + "; ".join(details) + ")")
     limitations = data.get("limitations", {})
-    if not {"mso_mdoc_presentation", "oid4vp_negative_vectors"} <= set(limitations):
-        raise ValueError("EUDI manifest must record current presentation limitations")
+    if "oid4vp_negative_vectors" not in limitations:
+        raise ValueError("EUDI manifest must record current negative-vector limitations")
     return data
 
 

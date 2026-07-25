@@ -38,6 +38,7 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
         "eudi_wallet_kit_oid4vp",
         "eudi_wallet_kit_oid4vci",
         "eudi_wallet_kit_sd_jwt",
+        "eudi_wallet_kit_mdoc",
     }
     assert observation["upstreams"]["oidf"] == {
         "pinned_release": "release-v5.2.0",

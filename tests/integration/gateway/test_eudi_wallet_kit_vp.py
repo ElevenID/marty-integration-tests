@@ -979,8 +979,10 @@ class TestMDocPresentation:
         wallet_kit: EUDIWalletKitClient,
         issued_mdoc_credential,
         vp_mdoc_policy,
+        record_property,
     ):
         """Issue mDoc mDL, present to verifier via OID4VP direct-post."""
+        record_property("evidence_id", "eudi.oid4vp.mdoc-device-response.v1")
         credential = issued_mdoc_credential["credential"]
 
         flow = await authenticated_gateway_client.start_verification_flow(
@@ -989,40 +991,25 @@ class TestMDocPresentation:
             issuer_profile_id=vp_mdoc_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_mdoc_policy["_request_object_issuer_did"],
         )
-        instance_id = flow["instance_id"]
+        request_uri = flow.get("request_uri", "")
+        assert request_uri.startswith("openid4vp://"), request_uri
 
-        auth_req = await authenticated_gateway_client.get_verification_request(instance_id)
-
-        # For mDoc, the VP token is the raw credential (no KB-JWT wrapping)
-        vp_token = await wallet_kit.build_vp_token(
+        result = await wallet_kit.submit_presentation(
+            authorization_request_uri=request_uri,
             credential=credential,
-            audience=auth_req["client_id"],
-            nonce=auth_req["nonce"],
-            credential_format="mso_mdoc",
-        )
-
-        presentation_submission = _presentation_submission_for_request(
-            auth_req,
-            "mso_mdoc",
-        )
-
-        result = await wallet_kit.direct_post_presentation(
-            response_uri=auth_req["response_uri"],
-            vp_token=vp_token,
-            presentation_submission=presentation_submission,
-            state=auth_req.get("state", instance_id),
         )
 
         logger.info(
-            "[mDoc VP] Direct-post result: success=%s, status=%s",
+            "[mDoc VP] Official resolve/dispatch result: success=%s, mode=%s",
             result.get("success"),
-            result.get("responseStatus"),
+            result.get("responseMode"),
         )
 
         assert result["success"], (
-            f"mDoc VP direct-post failed: status={result.get('responseStatus')}, "
-            f"body={(result.get('responseBody') or '')[:500]}"
+            f"mDoc VP official presentation failed: {result.get('error')}"
         )
+        assert result["responseMode"] == "direct_post"
+        assert result["verifierAccepted"] is True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
