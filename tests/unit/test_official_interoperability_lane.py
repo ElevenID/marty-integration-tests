@@ -573,7 +573,7 @@ def test_eudi_runtime_diagnostics_identify_allowlisted_metadata_boundary_without
         ("oid4vci_prepare_mdoc failed with secret", "mdoc-prepare"),
         ("COSE serialization failed: secret", "mdoc-assemble"),
         (
-            "Remote credential builder changed the reserved credential ID",
+            "Issuer-profile credential builder changed the reserved credential ID",
             "mdoc-credential-id-mismatch",
         ),
     ],
