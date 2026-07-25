@@ -87,6 +87,9 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert 'System.getProperty("javax.net.ssl.trustStore")' in issuance_source
     assert "TrustManagerFactory.getDefaultAlgorithm()" in issuance_source
     assert "sslContext(tlsContext)" in issuance_source
+    assert "CredentialOfferRequestResolver(httpClient, vciConfig.issuerMetadataPolicy)" in issuance_source
+    assert 'OfferResolutionStageException("resolver", exception)' in issuance_source
+    assert 'OfferResolutionStageException("issuer-construction", exception)' in issuance_source
     official_tests = "\n".join(
         (ROOT / "tests" / "integration" / "gateway" / path).read_text(encoding="utf-8")
         for path in ("test_eudi_wallet_kit.py", "test_eudi_wallet_kit_vp.py")

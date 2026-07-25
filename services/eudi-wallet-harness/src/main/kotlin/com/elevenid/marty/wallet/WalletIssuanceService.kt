@@ -16,6 +16,7 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.cookies.*
 import io.ktor.client.plugins.logging.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -32,6 +33,11 @@ import javax.net.ssl.TrustManagerFactory
 object WalletIssuanceService {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    private class OfferResolutionStageException(
+        val stage: String,
+        cause: Throwable,
+    ) : RuntimeException(cause)
+
     /**
      * Reduce the official library's nested failures to a stable, public-safe
      * diagnostic code. The complete exception remains in the private service
@@ -47,6 +53,10 @@ object WalletIssuanceService {
 
         if (offerError == null) {
             val classes = causes.mapNotNull { it::class.simpleName }.toSet()
+            val stage = causes
+                .filterIsInstance<OfferResolutionStageException>()
+                .firstOrNull()
+                ?.stage
             return when {
                 "UnableToResolveCredentialIssuerMetadata" in classes ||
                     "NonParseableCredentialIssuerMetadata" in classes ->
@@ -66,7 +76,7 @@ object WalletIssuanceService {
                         ?.trim('-')
                         ?.takeIf { it.isNotEmpty() }
                         ?: "unclassified"
-                    "offer-resolution-$rootClass"
+                    "offer-resolution-${stage?.let { "$it-" }.orEmpty()}$rootClass"
                 }
             }
         }
@@ -187,6 +197,27 @@ object WalletIssuanceService {
         issuerMetadataPolicy = IssuerMetadataPolicy.IgnoreSigned,
     )
 
+    private suspend fun makeIssuer(
+        credentialOfferUri: String,
+        httpClient: HttpClient,
+    ): Issuer {
+        val offer = try {
+            CredentialOfferRequestResolver(httpClient, vciConfig.issuerMetadataPolicy)
+                .resolve(credentialOfferUri)
+                .getOrThrow()
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            throw OfferResolutionStageException("resolver", exception)
+        }
+
+        return try {
+            Issuer.make(vciConfig, offer, httpClient).getOrThrow()
+        } catch (exception: Exception) {
+            if (exception is CancellationException) throw exception
+            throw OfferResolutionStageException("issuer-construction", exception)
+        }
+    }
+
     private fun configuredTlsContext(): SSLContext? {
         val trustStorePath = System.getProperty("javax.net.ssl.trustStore")
             ?.trim()
@@ -280,7 +311,7 @@ object WalletIssuanceService {
         coroutineScope {
             createHttpClient().use { httpClient ->
                 try {
-                    val issuer = Issuer.make(vciConfig, credentialOfferUri, httpClient).getOrThrow()
+                    val issuer = makeIssuer(credentialOfferUri, httpClient)
                     val offer = issuer.credentialOffer
                     val meta = offer.credentialIssuerMetadata
 
@@ -326,7 +357,7 @@ object WalletIssuanceService {
             try {
                 // Step 1: Resolve offer
                 log.info("Resolving credential offer through the public issuer endpoint")
-                val issuer = Issuer.make(vciConfig, credentialOfferUri, httpClient).getOrThrow()
+                val issuer = makeIssuer(credentialOfferUri, httpClient)
                 val offer = issuer.credentialOffer
                 val meta = offer.credentialIssuerMetadata
 
