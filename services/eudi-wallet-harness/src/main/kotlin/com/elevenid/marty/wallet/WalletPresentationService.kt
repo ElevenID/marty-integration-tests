@@ -183,6 +183,7 @@ object WalletPresentationService {
         credentialCompact: String,
     ): PresentationResult = coroutineScope {
         createHttpClient().use { httpClient ->
+            var stage = "resolve"
             try {
                 val openId4Vp = createOpenId4Vp(httpClient)
                 val request = when (val resolution = openId4Vp.resolveRequestUri(authorizationRequestUri)) {
@@ -192,8 +193,10 @@ object WalletPresentationService {
                     )
                 }
 
+                stage = "query"
                 val credentialQuery = request.query.credentials.value.singleOrNull()
                     ?: error("The harness currently requires exactly one DCQL credential query")
+                stage = "build-${credentialQuery.format.value.replace(Regex("[^a-zA-Z0-9]+"), "-").lowercase()}"
                 val vpToken = when (credentialQuery.format.value) {
                     "dc+sd-jwt" -> buildSdJwtVpToken(
                         sdJwtCompact = credentialCompact,
@@ -229,6 +232,7 @@ object WalletPresentationService {
                     EncryptionParameters.DiffieHellman(Base64URL.encode(apu))
                 }
 
+                stage = "dispatch"
                 when (val outcome = openId4Vp.dispatch(request, consensus, encryptionParameters)) {
                     is DispatchOutcome.VerifierResponse.Accepted -> PresentationResult(
                         success = true,
@@ -253,10 +257,35 @@ object WalletPresentationService {
                 log.error("Official OID4VP presentation flow failed", e)
                 PresentationResult(
                     success = false,
-                    error = "${e::class.simpleName}: ${e.message}",
+                    error = presentationErrorCode(e, stage),
                 )
             }
         }
+    }
+
+    /**
+     * Return a public-safe protocol stage and root exception class. Full
+     * exception messages remain only in the job-local service log.
+     */
+    internal fun presentationErrorCode(exception: Throwable, stage: String): String {
+        val safeStage = stage
+            .lowercase()
+            .replace(Regex("[^a-z0-9-]"), "-")
+            .trim('-')
+            .take(48)
+            .ifEmpty { "unknown" }
+        val errorClass = generateSequence(exception) { it.cause }
+            .lastOrNull()
+            ?.javaClass
+            ?.simpleName
+            ?.replace(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+            ?.lowercase()
+            ?.replace(Regex("[^a-z0-9-]"), "-")
+            ?.trim('-')
+            ?.take(80)
+            ?.takeIf(String::isNotEmpty)
+            ?: "unclassified"
+        return "presentation-$safeStage-$errorClass"
     }
 
     /**

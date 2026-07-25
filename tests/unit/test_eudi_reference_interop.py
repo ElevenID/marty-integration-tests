@@ -282,6 +282,19 @@ def test_eudi_failure_categories_identify_verifier_contract_without_values() -> 
     ]
 
 
+def test_eudi_failure_categories_expose_only_presentation_stage_and_class() -> None:
+    categories = eudi.classify_eudi_failure_text(
+        "presentation-build-mso-mdoc-illegal-argument-exception token=must-not-escape"
+    )
+
+    assert categories == [
+        "mdoc",
+        "presentation-failure-class",
+        "presentation-build-mso-mdoc-illegal-argument-exception",
+    ]
+    assert "must-not-escape" not in json.dumps(categories)
+
+
 @pytest.mark.parametrize(
     ("diagnostic", "category"),
     [

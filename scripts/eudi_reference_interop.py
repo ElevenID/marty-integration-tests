@@ -224,6 +224,9 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "wallet-offer-resolution": re.compile(r"(?i)/issuance/resolve-offer\b"),
     "wallet-preauthorized-issuance": re.compile(r"(?i)/issuance/pre-auth\b"),
     "wallet-presentation": re.compile(r"(?i)/presentation/(?:submit|direct-post|build-vp-token)\b"),
+    "presentation-failure-class": re.compile(
+        r"(?i)\bpresentation-(?:resolve|query|build-[a-z0-9-]+|dispatch)-[a-z0-9-]+\b"
+    ),
     "offer-parameter-invalid": re.compile(
         r"(?i)offer-(?:endpoint-url|parameter-selection|reference-url)-(?:invalid)\b"
     ),
@@ -332,6 +335,12 @@ def classify_eudi_failure_text(text: str) -> list[str]:
         categories.append(
             f"issuance-{issuance_class.group(1).lower()}-{issuance_class.group(2).lower()}"
         )
+    presentation_class = re.search(
+        r"(?i)\b(presentation-(?:resolve|query|build-[a-z0-9-]+|dispatch)-[a-z0-9-]+)\b",
+        text,
+    )
+    if presentation_class:
+        categories.append(presentation_class.group(1).lower())
     return categories or ["unclassified"]
 
 

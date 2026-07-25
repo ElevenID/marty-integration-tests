@@ -150,6 +150,24 @@ class WalletPresentationServiceTest {
         }
     }
 
+    @Test
+    fun `presentation diagnostics expose only stage and root exception class`() {
+        val code = WalletPresentationService.presentationErrorCode(
+            IllegalStateException(
+                "must not escape",
+                IllegalArgumentException("credential and DID must not escape"),
+            ),
+            "build-mso_mdoc",
+        )
+
+        assertEquals(
+            "presentation-build-mso-mdoc-illegal-argument-exception",
+            code,
+        )
+        assertEquals(false, code.contains("credential"))
+        assertEquals(false, code.contains("did"))
+    }
+
     private companion object {
         const val MDL_DOC_TYPE = "org.iso.18013.5.1.mDL"
         const val AUDIENCE = "x509_hash:verifier.example"
