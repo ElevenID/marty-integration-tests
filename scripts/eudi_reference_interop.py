@@ -235,6 +235,10 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
         r"(?i)\boffer-resolution-(?:credential-issuer|authorization-server)-metadata-resolution-exception\b"
     ),
     "offer-resolution-failure-class": re.compile(r"(?i)offer-resolution-[a-z0-9-]+\b"),
+    "issuance-failure-class": re.compile(
+        r"(?i)\bissuance-(?:authorization|holder-proof|credential-request|credential-outcome|deferred-query|"
+        r"credential-storage)-[a-z0-9-]+\b"
+    ),
     "issuer-metadata-fetch-failed": re.compile(r"(?i)issuer-metadata-fetch-failed\b"),
     "issuer-metadata-json-invalid": re.compile(r"(?i)issuer-metadata-json-invalid\b"),
     "metadata-json-field-credential-configurations": re.compile(
@@ -313,6 +317,15 @@ def classify_eudi_failure_text(text: str) -> list[str]:
     root_class = re.search(r"(?i)\boffer-resolution-([a-z][a-z0-9-]{0,79})\b", text)
     if root_class:
         categories.append(f"offer-resolution-{root_class.group(1).lower()}")
+    issuance_class = re.search(
+        r"(?i)\bissuance-(authorization|holder-proof|credential-request|credential-outcome|deferred-query|"
+        r"credential-storage)-([a-z][a-z0-9-]{0,79})\b",
+        text,
+    )
+    if issuance_class:
+        categories.append(
+            f"issuance-{issuance_class.group(1).lower()}-{issuance_class.group(2).lower()}"
+        )
     return categories or ["unclassified"]
 
 

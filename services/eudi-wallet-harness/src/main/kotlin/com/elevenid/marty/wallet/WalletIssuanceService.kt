@@ -38,6 +38,23 @@ object WalletIssuanceService {
         cause: Throwable,
     ) : RuntimeException(cause)
 
+    private class IssuanceStageException(
+        val stage: String,
+        cause: Throwable,
+    ) : RuntimeException(cause)
+
+    private fun failureClassSlug(exception: Throwable): String =
+        generateSequence(exception) { it.cause }
+            .lastOrNull()
+            ?.javaClass
+            ?.simpleName
+            ?.replace(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+            ?.lowercase()
+            ?.replace(Regex("[^a-z0-9-]"), "-")
+            ?.trim('-')
+            ?.takeIf { it.isNotEmpty() }
+            ?: "unclassified"
+
     /**
      * Reduce the official library's nested failures to a stable, public-safe
      * diagnostic code. The complete exception remains in the private service
@@ -66,15 +83,7 @@ object WalletIssuanceService {
                     // Exception class names are safe to publish and make an
                     // otherwise opaque CI failure actionable without exposing
                     // offers, endpoints, tokens, identifiers, or messages.
-                    val rootClass = causes.lastOrNull()
-                        ?.javaClass
-                        ?.simpleName
-                        ?.replace(Regex("([a-z0-9])([A-Z])"), "$1-$2")
-                        ?.lowercase()
-                        ?.replace(Regex("[^a-z0-9-]"), "-")
-                        ?.trim('-')
-                        ?.takeIf { it.isNotEmpty() }
-                        ?: "unclassified"
+                    val rootClass = failureClassSlug(exception)
                     "offer-resolution-${stage?.let { "$it-" }.orEmpty()}$rootClass"
                 }
             }
@@ -223,6 +232,26 @@ object WalletIssuanceService {
             staged?.cause ?: exception,
             stage = staged?.stage,
         )
+    }
+
+    private suspend fun <T> issuanceStage(
+        stage: String,
+        block: suspend () -> T,
+    ): T =
+        try {
+            block()
+        } catch (exception: Throwable) {
+            if (exception is CancellationException || exception is Error) throw exception
+            throw IssuanceStageException(stage, exception)
+        }
+
+    private fun preAuthorizedIssuanceErrorCode(exception: Exception): String {
+        val staged = exception as? IssuanceStageException
+        return if (staged == null) {
+            stagedOfferResolutionErrorCode(exception)
+        } else {
+            "issuance-${staged.stage}-${failureClassSlug(staged.cause ?: staged)}"
+        }
     }
 
     private fun configuredTlsContext(): SSLContext? {
@@ -381,8 +410,10 @@ object WalletIssuanceService {
 
                 // Step 2: Authorize
                 log.info("Authorizing with pre-authorized code (txCode=${txCode != null})")
-                val authorized = with(issuer) {
-                    authorizeWithPreAuthorizationCode(txCode).getOrThrow()
+                val authorized = issuanceStage("authorization") {
+                    with(issuer) {
+                        authorizeWithPreAuthorizationCode(txCode).getOrThrow()
+                    }
                 }
                 log.info("Authorization successful")
 
@@ -395,10 +426,14 @@ object WalletIssuanceService {
                     val requestPayload = IssuanceRequestPayload.ConfigurationBased(credCfgId)
 
                     // Generate P-256 proof signer (same as EUDI Reference Wallet)
-                    val holderProof = createP256ProofSigner()
+                    val holderProof = issuanceStage("holder-proof") {
+                        createP256ProofSigner()
+                    }
 
-                    val (updatedAuth, outcome) = with(issuer) {
-                        currentAuth.request(requestPayload, holderProof.proofs).getOrThrow()
+                    val (updatedAuth, outcome) = issuanceStage("credential-request") {
+                        with(issuer) {
+                            currentAuth.request(requestPayload, holderProof.proofs).getOrThrow()
+                        }
                     }
                     currentAuth = updatedAuth
 
@@ -451,9 +486,7 @@ object WalletIssuanceService {
                             }
                         }
                         is SubmissionOutcome.Failed -> {
-                            throw RuntimeException(
-                                "Credential request failed for ${credCfgId.value}: ${outcome.error.message}"
-                            )
+                            throw IssuanceStageException("credential-outcome", outcome.error)
                         }
                     }
                 }
@@ -468,7 +501,7 @@ object WalletIssuanceService {
                 log.error("Pre-auth issuance failed", e)
                 IssuanceResult(
                     success = false,
-                    error = stagedOfferResolutionErrorCode(e),
+                    error = preAuthorizedIssuanceErrorCode(e),
                 )
             }
         }

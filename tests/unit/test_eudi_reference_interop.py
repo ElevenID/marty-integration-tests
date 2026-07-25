@@ -91,6 +91,9 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert 'OfferResolutionStageException("resolver", exception)' in issuance_source
     assert 'OfferResolutionStageException("issuer-construction", exception)' in issuance_source
     assert "stage = staged?.stage" in issuance_source
+    assert 'issuanceStage("authorization")' in issuance_source
+    assert 'issuanceStage("credential-request")' in issuance_source
+    assert 'IssuanceStageException("credential-outcome", outcome.error)' in issuance_source
     official_tests = "\n".join(
         (ROOT / "tests" / "integration" / "gateway" / path).read_text(encoding="utf-8")
         for path in ("test_eudi_wallet_kit.py", "test_eudi_wallet_kit_vp.py")
@@ -303,6 +306,11 @@ def test_eudi_failure_categories_expose_only_reference_verifier_reason_codes(
         ("offer-json-invalid", "offer-document-invalid"),
         ("offer-resolution-illegal-state-exception", "offer-resolution-failure-class"),
         ("offer-resolution-null-pointer-exception", "offer-resolution-null-pointer-exception"),
+        ("issuance-credential-outcome-response-unparsable", "issuance-failure-class"),
+        (
+            "issuance-credential-outcome-response-unparsable",
+            "issuance-credential-outcome-response-unparsable",
+        ),
         ("offer-resolution-json-decoding-exception", "offer-resolution-json-decoding"),
         ("offer-resolution-serialization-exception", "offer-resolution-serialization"),
         ("offer-resolution-illegal-argument-exception", "offer-resolution-illegal-argument"),
