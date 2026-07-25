@@ -44,7 +44,10 @@ object WalletIssuanceService {
      * log, while CI evidence can identify the failed protocol boundary without
      * publishing credential offers, endpoints, tokens, or issuer identifiers.
      */
-    internal fun offerResolutionErrorCode(exception: Throwable): String {
+    internal fun offerResolutionErrorCode(
+        exception: Throwable,
+        stage: String? = null,
+    ): String {
         val causes = generateSequence(exception) { it.cause }.toList()
         val offerError = causes
             .filterIsInstance<CredentialOfferRequestException>()
@@ -53,10 +56,6 @@ object WalletIssuanceService {
 
         if (offerError == null) {
             val classes = causes.mapNotNull { it::class.simpleName }.toSet()
-            val stage = causes
-                .filterIsInstance<OfferResolutionStageException>()
-                .firstOrNull()
-                ?.stage
             return when {
                 "UnableToResolveCredentialIssuerMetadata" in classes ||
                     "NonParseableCredentialIssuerMetadata" in classes ->
@@ -218,6 +217,14 @@ object WalletIssuanceService {
         }
     }
 
+    private fun stagedOfferResolutionErrorCode(exception: Exception): String {
+        val staged = exception as? OfferResolutionStageException
+        return offerResolutionErrorCode(
+            staged?.cause ?: exception,
+            stage = staged?.stage,
+        )
+    }
+
     private fun configuredTlsContext(): SSLContext? {
         val trustStorePath = System.getProperty("javax.net.ssl.trustStore")
             ?.trim()
@@ -333,7 +340,7 @@ object WalletIssuanceService {
                     log.error("Offer resolution failed", e)
                     OfferResolutionResult(
                         success = false,
-                        error = offerResolutionErrorCode(e),
+                        error = stagedOfferResolutionErrorCode(e),
                     )
                 }
             }
@@ -461,7 +468,7 @@ object WalletIssuanceService {
                 log.error("Pre-auth issuance failed", e)
                 IssuanceResult(
                     success = false,
-                    error = offerResolutionErrorCode(e),
+                    error = stagedOfferResolutionErrorCode(e),
                 )
             }
         }

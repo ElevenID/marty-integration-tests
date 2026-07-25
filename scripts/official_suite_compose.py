@@ -128,7 +128,7 @@ def configure_haip_environment(
     legacy_key_variable = "VERIFIER_" + "SIGNING_KEY_PEM"
     if environment.get(legacy_key_variable, "").strip():
         raise ValueError(
-            "direct verifier signing-key input is unsupported; Marty signs through its issuer profile and KMS"
+            "direct verifier signing-key input is unsupported; Marty signs as the issuer profile's DID"
         )
     certificate = environment.get("VERIFIER_X509_CERT_PEM", "")
     has_certificate = bool(certificate.strip())
