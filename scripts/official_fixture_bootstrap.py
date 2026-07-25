@@ -92,7 +92,7 @@ def issuer_profile_payload(
     if not isinstance(service_id, str) or not IDENTIFIER.fullmatch(service_id):
         raise RuntimeError("public signing-service resolution returned an invalid service id")
     if not isinstance(key_reference, str) or not key_reference:
-        raise RuntimeError("public signing-service resolution returned no KMS key reference")
+        raise RuntimeError("issuer-profile backing service returned no managed key reference")
     domain = urlparse(gateway_url).hostname
     if not domain:
         raise ValueError("gateway URL has no hostname for the disposable issuer DID")
@@ -376,11 +376,11 @@ def resolve_signing_service(
     key_purpose: str = "vc_jwt_issuer",
     request: Callable[..., object],
 ) -> dict[str, object]:
-    """Resolve a KMS signing service through the gateway, with global fallback.
+    """Resolve the managed backend used only to provision an issuer profile.
 
     The fallback is still a public gateway call.  It supports stacks that
-    register a shared managed service while retaining the issuer profile in
-    the disposable test organization.
+    register a shared managed service while retaining the issuer profile and
+    DID as the sole runtime signing interface in the disposable organization.
     """
     failure: RuntimeError | None = None
     for candidate_organization in (organization_id, None):
@@ -404,7 +404,7 @@ def resolve_signing_service(
         if isinstance(resolved, dict) and isinstance(resolved.get("service"), dict):
             return resolved["service"]
         raise RuntimeError("public signing-service resolution returned no service object")
-    raise RuntimeError(f"no public KMS signing service is available: {failure}")
+    raise RuntimeError(f"no managed issuer-profile backing service is available: {failure}")
 
 
 def bootstrap_eudi(

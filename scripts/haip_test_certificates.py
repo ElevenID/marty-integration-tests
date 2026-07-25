@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a disposable HAIP trust root and certify Marty's KMS-backed DID key.
+"""Prepare a disposable HAIP trust root and certify Marty's issuer-profile DID key.
 
 Marty request objects are signed through an issuer profile. This helper never
 creates or receives that private key: after Marty starts, it issues a short-lived
