@@ -373,7 +373,6 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
             "oid4vp_template_id": "template-1",
             "oid4vp_policy_id": "policy-1",
             "oid4vp_trust_profile_id": "trust-1",
-            "oid4vp_issuer_profile_id": "issuer-profile-1",
             "oid4vp_issuer_did": "did:web:marty.test:orgs:org-1",
         },
     )
@@ -395,7 +394,7 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
     assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "policy-1"
     assert suite_environment["OIDF_MARTY_TRUST_PROFILE_ID"] == "trust-1"
-    assert suite_environment["OIDF_MARTY_ISSUER_PROFILE_ID"] == "issuer-profile-1"
+    assert "OIDF_MARTY_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
 
 
@@ -691,9 +690,7 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
         "bootstrap_fixtures",
         lambda *_args, **_kwargs: {
             "organization_id": "org-1",
-            "eudi_issuer_profile_id": "profile-1",
             "eudi_issuer_did": "did:web:marty.test:orgs:org-1",
-            "eudi_request_issuer_profile_id": "request-profile-1",
             "eudi_request_issuer_did": "did:web:marty.test:orgs:org-1",
             "eudi_passport_template_id": "passport-1",
             "eudi_mdl_template_id": "mdl-1",
@@ -744,9 +741,9 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     assert suite_environment["VERIFIER_X509_CERT_PEM"] == "certificate-chain"
     assert suite_environment["TEST_ORG_ID"] == "org-1"
     assert suite_environment["EUDI_TEST_OPEN_BADGE_TEMPLATE_ID"] == "badge-1"
-    assert suite_environment["EUDI_TEST_ISSUER_PROFILE_ID"] == "profile-1"
+    assert "EUDI_TEST_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["EUDI_TEST_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
-    assert suite_environment["EUDI_TEST_REQUEST_ISSUER_PROFILE_ID"] == "request-profile-1"
+    assert "EUDI_TEST_REQUEST_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["EUDI_TEST_REQUEST_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
     assert not any("KMS" in name or "KEY_REFERENCE" in name for name in suite_environment)
 

@@ -124,7 +124,7 @@ def eudi_compliance_profile_payload(organization_id: str, *, run_id: str) -> dic
 def eudi_template_payload(
     organization_id: str,
     compliance_profile_id: str,
-    issuer_profile_id: str,
+    issuer_did: str,
     revocation_profile_id: str,
     *,
     credential_type: str,
@@ -133,9 +133,8 @@ def eudi_template_payload(
 ) -> dict[str, object]:
     """Build one production-shaped EUDI SD-JWT credential template.
 
-    The template binds the issuer profile. It intentionally contains no
-    custody-service or key reference, so issuance can only request signing as
-    the profile's DID and selected verification method.
+    The public template binds only the issuer DID. The gateway resolves its
+    authorized profile and custody service inside the organization boundary.
     """
     if credential_type not in {"Passport", "MobileDrivingLicense", "OpenBadge"}:
         raise ValueError("unsupported EUDI fixture credential type")
@@ -164,7 +163,7 @@ def eudi_template_payload(
         "supported_formats": ["sd_jwt_vc"],
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "compliance_profile_id": compliance_profile_id,
-        "issuer_profile_id": issuer_profile_id,
+        "issuer_did": issuer_did,
         "revocation_profile_id": revocation_profile_id,
         "schema_uri": {
             "type": "object",
@@ -204,7 +203,7 @@ def revocation_profile_payload(
 def template_payload(
     organization_id: str,
     compliance_profile_id: str,
-    issuer_profile_id: str,
+    issuer_did: str,
     revocation_profile_id: str,
     *,
     w3c: bool,
@@ -231,7 +230,7 @@ def template_payload(
                 "ldp_vc" if data_integrity else "w3c_vcdm_v2_jwt_vc"
             ),
             "compliance_profile_id": compliance_profile_id,
-            "issuer_profile_id": issuer_profile_id,
+            "issuer_did": issuer_did,
             "revocation_profile_id": revocation_profile_id,
             "schema_uri": {
                 "type": "object",
@@ -259,7 +258,7 @@ def template_payload(
         "supported_formats": ["sd_jwt_vc"],
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "compliance_profile_id": compliance_profile_id,
-        "issuer_profile_id": issuer_profile_id,
+        "issuer_did": issuer_did,
         "revocation_profile_id": revocation_profile_id,
         "schema_uri": {
             "type": "object",
@@ -572,9 +571,7 @@ def bootstrap_eudi(
 
     result = {
         "organization_id": organization_id,
-        "eudi_issuer_profile_id": issuer_profile_id,
         "eudi_issuer_did": issuer_did,
-        "eudi_request_issuer_profile_id": request_profile_id,
         "eudi_request_issuer_did": request_issuer_did,
         "eudi_compliance_profile_id": compliance_profile_id,
         "eudi_revocation_profile_id": revocation_profile_id,
@@ -592,7 +589,7 @@ def bootstrap_eudi(
             json_body=eudi_template_payload(
                 organization_id,
                 compliance_profile_id,
-                issuer_profile_id,
+                issuer_did,
                 revocation_profile_id,
                 credential_type=credential_type,
                 gateway_url=gateway_url,
@@ -730,7 +727,7 @@ def bootstrap(
             json_body=template_payload(
                 organization_id,
                 compliance_profile_id,
-                credential_issuer_profile_id,
+                profile_payload["issuer_did"],
                 revocation_profile_id,
                 w3c=w3c,
                 run_id=run_id,
@@ -747,7 +744,7 @@ def bootstrap(
                 json_body=template_payload(
                     organization_id,
                     compliance_profile_id,
-                    credential_issuer_profile_id,
+                    profile_payload["issuer_did"],
                     revocation_profile_id,
                     w3c=True,
                     run_id=run_id,
@@ -794,13 +791,10 @@ def bootstrap(
             result["oid4vp_policy_id"] = policy_ids["presentation"]
         result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
         if w3c:
-            result["w3c_issuer_profile_id"] = credential_issuer_profile_id
             result["w3c_issuer_did"] = profile_payload["issuer_did"]
         else:
             assert request_profile_payload is not None
             assert request_issuer_profile_id is not None
-            result["oid4vp_credential_issuer_profile_id"] = credential_issuer_profile_id
-            result["oid4vp_issuer_profile_id"] = request_issuer_profile_id
             result["oid4vp_issuer_did"] = request_profile_payload["issuer_did"]
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c:

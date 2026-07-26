@@ -114,12 +114,11 @@ async def dtc_request_object_issuer_profile(
     dtc_test_org,
 ):
     """Select the pre-provisioned DID profile that signs request objects."""
-    profile_id = os.environ.get("EUDI_TEST_REQUEST_ISSUER_PROFILE_ID", "").strip()
     issuer_did = os.environ.get("EUDI_TEST_REQUEST_ISSUER_DID", "").strip()
-    if not profile_id or not issuer_did:
-        raise RuntimeError("EUDI request-object issuer profile identity is required")
+    if not issuer_did:
+        raise RuntimeError("EUDI request-object issuer DID is required")
     assert issuer_did.endswith(f":orgs:{dtc_test_org['id']}")
-    return {"id": profile_id, "issuer_did": issuer_did}
+    return {"issuer_did": issuer_did}
 
 
 @pytest.fixture
@@ -208,7 +207,7 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
         revocation = await authenticated_gateway_client.activate_revocation_profile(revocation["id"])
     return {
         "compliance_profile_id": compliance["id"],
-        "issuer_profile_id": issuer["id"],
+        "issuer_did": issuer["issuer_did"],
         "trust_profile_id": trust_profile["id"],
         "revocation_profile_id": revocation["id"],
     }
@@ -228,7 +227,7 @@ async def dtc_mdoc_template(
     )
     template_data.update(
         {
-            "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
+            "issuer_did": dtc_mdoc_resources["issuer_did"],
             "trust_profile_id": dtc_mdoc_resources["trust_profile_id"],
             "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
         }
@@ -312,7 +311,6 @@ async def dtc_vp_policy(
     }
     policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
-    policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = dtc_request_object_issuer_profile["issuer_did"]
     policy["_trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
     return policy
@@ -344,7 +342,6 @@ async def dtc_identity_vp_policy(
     }
     policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
-    policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = dtc_request_object_issuer_profile["issuer_did"]
     policy["_trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
     return policy
@@ -434,7 +431,6 @@ class TestDtcWalletAuthorizationRequest:
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
             trust_profile_id=dtc_vp_policy["_trust_profile_id"],
-            issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
 
@@ -454,7 +450,6 @@ class TestDtcWalletAuthorizationRequest:
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
             trust_profile_id=dtc_vp_policy["_trust_profile_id"],
-            issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
         auth_req = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
@@ -499,7 +494,6 @@ class TestDtcWalletPresentation:
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
             trust_profile_id=dtc_vp_policy["_trust_profile_id"],
-            issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
         request_uri = flow.get("request_uri", "")
@@ -546,7 +540,6 @@ class TestDtcWalletPresentation:
             presentation_policy_id=dtc_identity_vp_policy["id"],
             organization_id=dtc_identity_vp_policy["organization_id"],
             trust_profile_id=dtc_identity_vp_policy["_trust_profile_id"],
-            issuer_profile_id=dtc_identity_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_identity_vp_policy["_request_object_issuer_did"],
         )
         request_uri = flow.get("request_uri", "")
@@ -604,7 +597,7 @@ class TestDtcWalletEndToEnd:
         )
         template_data.update(
             {
-                "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
+                "issuer_did": dtc_mdoc_resources["issuer_did"],
                 "trust_profile_id": dtc_mdoc_resources["trust_profile_id"],
                 "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
             }
@@ -658,7 +651,6 @@ class TestDtcWalletEndToEnd:
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
             trust_profile_id=dtc_mdoc_resources["trust_profile_id"],
-            issuer_profile_id=dtc_request_object_issuer_profile["id"],
             issuer_did=dtc_request_object_issuer_profile["issuer_did"],
         )
         instance_id = flow["instance_id"]

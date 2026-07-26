@@ -10,6 +10,35 @@ from tests.integration.gateway.helpers.gateway_client import GatewayClient
 
 
 @pytest.mark.asyncio
+async def test_credential_template_with_did_never_sends_custody_selectors() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(return_value={"id": "template-1"})
+    client._request = request
+
+    try:
+        await client.create_credential_template(
+            organization_id="org-1",
+            name="DID-first template",
+            credential_type="EmployeeBadge",
+            compliance_profile_id="compliance-1",
+            issuer_did="did:web:issuer.example",
+            issuer_profile_id="legacy-profile",
+            issuer_key_id="provider-key",
+            issuer_key_algorithm="ES256",
+            issuer_certificate_chain_pem="legacy-certificate",
+        )
+    finally:
+        await client.close()
+
+    payload = request.await_args.kwargs["json"]
+    assert payload["issuer_did"] == "did:web:issuer.example"
+    assert "issuer_profile_id" not in payload
+    assert "issuer_key_id" not in payload
+    assert "issuer_key_algorithm" not in payload
+    assert "issuer_certificate_chain_pem" not in payload
+
+
+@pytest.mark.asyncio
 async def test_start_verification_flow_sends_selected_organization_header() -> None:
     client = GatewayClient("https://gateway.example")
     request = AsyncMock(return_value={"instance_id": "flow-1"})
@@ -21,7 +50,6 @@ async def test_start_verification_flow_sends_selected_organization_header() -> N
             trust_profile_id="trust-1",
             expiry_minutes=10,
             organization_id="org-1",
-            issuer_profile_id="request-object-profile-1",
             issuer_did="did:web:verifier.example",
         )
     finally:
@@ -36,7 +64,6 @@ async def test_start_verification_flow_sends_selected_organization_header() -> N
             "trust_profile_id": "trust-1",
             "expiry_minutes": 10,
             "organization_id": "org-1",
-            "issuer_profile_id": "request-object-profile-1",
             "issuer_did": "did:web:verifier.example",
         },
         headers={"X-Organization-ID": "org-1"},
@@ -53,6 +80,7 @@ async def test_start_verification_flow_can_select_the_production_haip_transport(
         await client.start_verification_flow(
             presentation_policy_id="policy-1",
             organization_id="org-1",
+            issuer_did="did:web:verifier.example",
             oid4vp_profile="haip",
             request_uri_method="get",
         )
@@ -67,6 +95,7 @@ async def test_start_verification_flow_can_select_the_production_haip_transport(
             "trust_profile_id": None,
             "expiry_minutes": 15,
             "organization_id": "org-1",
+            "issuer_did": "did:web:verifier.example",
             "oid4vp_profile": "haip",
             "request_uri_method": "get",
         },

@@ -450,19 +450,19 @@ def resolve_issuer_profile_identity(
     print("+", subprocess.list2cmdline(command), flush=True)
     completed = subprocess.run(command, capture_output=True, text=True, check=False, env=environment)
     if completed.returncode:
-        detail = completed.stderr.strip() or "issuer-profile identity command failed"
-        raise ValueError(f"could not resolve Marty issuer profile: {detail}")
+        detail = completed.stderr.strip() or "issuer DID identity command failed"
+        raise ValueError(f"could not resolve Marty issuer DID: {detail}")
     try:
         identity = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise ValueError("Marty issuer-profile identity command returned invalid JSON") from exc
+        raise ValueError("Marty issuer DID identity command returned invalid JSON") from exc
     if (
         not isinstance(identity, dict)
-        or not isinstance(identity.get("issuer_profile_id"), str)
-        or not identity.get("issuer_profile_id")
+        or not isinstance(identity.get("issuer_did"), str)
+        or not identity.get("issuer_did")
         or not isinstance(identity.get("public_jwk"), dict)
     ):
-        raise ValueError("Marty issuer-profile identity command returned no public JWK")
+        raise ValueError("Marty issuer DID identity command returned no public JWK")
     return identity
 
 
@@ -480,7 +480,12 @@ def stage_haip_profile_certificate(
         identity["public_jwk"],
         gateway_url=environment["OIDF_PUBLIC_BASE_URL"],
     )
-    print(json.dumps({"haip_certificate": report, "issuer_profile_id": identity["issuer_profile_id"]}, sort_keys=True))
+    print(
+        json.dumps(
+            {"haip_certificate": report, "issuer_did": identity["issuer_did"]},
+            sort_keys=True,
+        )
+    )
     configure_haip_environment(
         environment,
         args.haip_material,

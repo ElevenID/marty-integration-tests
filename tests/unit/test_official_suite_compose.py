@@ -304,7 +304,7 @@ def test_haip_stage_certifies_only_the_live_issuer_profile_public_key(
     profile_key = ec.generate_private_key(ec.SECP256R1())
     numbers = profile_key.public_key().public_numbers()
     identity = {
-        "issuer_profile_id": "ip-live",
+        "issuer_did": "did:web:verifier.example",
         "public_jwk": {
             "kty": "EC",
             "crv": "P-256",

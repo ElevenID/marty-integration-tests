@@ -74,15 +74,15 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
         request=request,
     )
     assert result["oid4vp_policy_id"] == "policy-1"
-    assert result["oid4vp_credential_issuer_profile_id"] == "credential-issuer-1"
-    assert result["oid4vp_issuer_profile_id"] == "request-issuer-1"
+    assert "oid4vp_credential_issuer_profile_id" not in result
+    assert "oid4vp_issuer_profile_id" not in result
     assert result["oid4vp_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
     assert result["oid4vp_compliance_profile_id"] == "compliance-1"
     assert result["oid4vp_revocation_profile_id"] == "revocation-1"
     assert result["oid4vp_trust_profile_id"] == "trust-1"
     assert result["w3c_compliance_profile_id"] == "compliance-2"
     assert result["w3c_revocation_profile_id"] == "revocation-2"
-    assert result["w3c_issuer_profile_id"] == "issuer-2"
+    assert "w3c_issuer_profile_id" not in result
     assert result["w3c_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
     assert result["w3c_template_id"] == "template-2"
     assert result["w3c_presentation_template_id"] == "template-3"
@@ -109,7 +109,10 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[6][0] == "/v1/revocation-profiles/revocation-1/activate"
     assert calls[7][0] == "/v1/credential-templates"
     assert calls[7][2]["compliance_profile_id"] == "compliance-1"
-    assert calls[7][2]["issuer_profile_id"] == "credential-issuer-1"
+    assert calls[7][2]["issuer_did"] == (
+        f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}"
+    )
+    assert "issuer_profile_id" not in calls[7][2]
     assert calls[7][2]["revocation_profile_id"] == "revocation-1"
     assert "compliance_profile" not in calls[7][2]
     assert calls[8][0] == "/v1/presentation-policies"
@@ -134,7 +137,7 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     template = fixtures.template_payload(
         fixtures.DEFAULT_ORGANIZATION,
         "compliance-1",
-        "issuer-1",
+        "did:web:issuer.example.com",
         "revocation-1",
         w3c=False,
         run_id="run-1",
@@ -148,7 +151,8 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
         "birthdate",
     ]
     assert template["compliance_profile_id"] == "compliance-1"
-    assert template["issuer_profile_id"] == "issuer-1"
+    assert template["issuer_did"] == "did:web:issuer.example.com"
+    assert "issuer_profile_id" not in template
     assert template["revocation_profile_id"] == "revocation-1"
     assert "compliance_profile" not in template
 
@@ -221,9 +225,7 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
 
     assert result == {
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
-        "eudi_issuer_profile_id": "issuer-profile",
         "eudi_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
-        "eudi_request_issuer_profile_id": "request-profile",
         "eudi_request_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
         "eudi_compliance_profile_id": "compliance-profile",
         "eudi_revocation_profile_id": "revocation-profile",
@@ -253,7 +255,8 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
     assert request_profile_body["key_purpose"] == "oid4vp_request_signing"
     for _path, _method, body in calls[9:]:
         assert body is not None
-        assert body["issuer_profile_id"] == "issuer-profile"
+        assert body["issuer_did"] == result["eudi_issuer_did"]
+        assert "issuer_profile_id" not in body
         assert "signing_service_id" not in body
         assert "signing_key_reference" not in body
 
@@ -325,7 +328,7 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     credential_template = fixtures.template_payload(
         fixtures.DEFAULT_ORGANIZATION,
         "compliance-1",
-        "issuer-1",
+        "did:web:issuer.example.com",
         "revocation-1",
         w3c=True,
         run_id="run-1",
@@ -333,7 +336,7 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     presentation_template = fixtures.template_payload(
         fixtures.DEFAULT_ORGANIZATION,
         "compliance-1",
-        "issuer-1",
+        "did:web:issuer.example.com",
         "revocation-1",
         w3c=True,
         run_id="run-1",
@@ -357,9 +360,10 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     assert credential_template["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
     assert presentation_template["supported_formats"] == ["ldp_vc"]
     assert presentation_template["credential_payload_format"] == "ldp_vc"
-    assert credential_template["issuer_profile_id"] == "issuer-1"
-    assert presentation_template["issuer_profile_id"] == "issuer-1"
+    assert credential_template["issuer_did"] == "did:web:issuer.example.com"
+    assert presentation_template["issuer_did"] == "did:web:issuer.example.com"
     for template in (credential_template, presentation_template):
+        assert "issuer_profile_id" not in template
         assert "signing_service_id" not in template
         assert "signing_key_reference" not in template
     assert credential_policy["holder_binding"] == {"required": False}

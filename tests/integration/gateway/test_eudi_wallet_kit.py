@@ -184,7 +184,7 @@ async def open_badge_template(
             {"name": "date_of_birth", "type": "string", "display_name": "Date of Birth"},
         ],
         compliance_profile_id=eudi_sd_jwt_compliance_profile["id"],
-        issuer_profile_id=eudi_sd_jwt_issuer_profile["id"],
+        issuer_did=eudi_sd_jwt_issuer_profile["issuer_did"],
         revocation_profile_id=eudi_revocation_profile["id"],
     )
 
@@ -210,7 +210,7 @@ async def passport_template(
             {"name": "date_of_birth", "type": "string", "display_name": "Date of Birth"},
         ],
         compliance_profile_id=eudi_sd_jwt_compliance_profile["id"],
-        issuer_profile_id=eudi_sd_jwt_issuer_profile["id"],
+        issuer_did=eudi_sd_jwt_issuer_profile["issuer_did"],
         revocation_profile_id=eudi_revocation_profile["id"],
     )
 
