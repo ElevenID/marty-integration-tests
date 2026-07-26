@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import base64
-from types import MappingProxyType
 import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Any
 
 import cbor2
@@ -17,8 +17,10 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.x509.oid import NameOID
 
-from tests.integration.gateway.helpers.mdoc_evidence import validate_issuer_signed_mdoc
-from tests.integration.gateway.helpers.mdoc_evidence import _require_map
+from tests.integration.gateway.helpers.mdoc_evidence import (
+    _require_map,
+    validate_issuer_signed_mdoc,
+)
 
 DOC_TYPE = "org.iso.18013.5.1.mDL"
 NAMESPACE = "org.iso.18013.5.1"
@@ -30,7 +32,7 @@ CLAIMS = {
 }
 
 
-def _encoded_mdoc() -> str:
+def _encoded_mdoc(*, tag_mobile_security_object: bool = True) -> str:
     key = ec.generate_private_key(ec.SECP256R1())
     ca_key = ec.generate_private_key(ec.SECP256R1())
     issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "EUDI test document CA")])
@@ -73,7 +75,7 @@ def _encoded_mdoc() -> str:
         items.append(cbor2.CBORTag(24, item_bytes))
         digests[digest_id] = hashlib.sha256(item_bytes).digest()
 
-    mso = cbor2.dumps(
+    encoded_mso = cbor2.dumps(
         {
             "version": "1.0",
             "digestAlgorithm": "SHA-256",
@@ -86,6 +88,11 @@ def _encoded_mdoc() -> str:
             },
         }
     )
+    mso_bytes = (
+        cbor2.dumps(cbor2.CBORTag(24, encoded_mso))
+        if tag_mobile_security_object
+        else encoded_mso
+    )
     protected = cbor2.dumps(
         {
             1: -7,
@@ -95,13 +102,13 @@ def _encoded_mdoc() -> str:
             ],
         }
     )
-    to_be_signed = cbor2.dumps(["Signature1", protected, b"", mso])
+    to_be_signed = cbor2.dumps(["Signature1", protected, b"", mso_bytes])
     signature_der = key.sign(to_be_signed, ec.ECDSA(hashes.SHA256()))
     r, s = decode_dss_signature(signature_der)
     signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
     issuer_signed = {
         "nameSpaces": {NAMESPACE: items},
-        "issuerAuth": cbor2.CBORTag(18, [protected, {}, mso, signature]),
+        "issuerAuth": cbor2.CBORTag(18, [protected, {}, mso_bytes, signature]),
     }
     return base64.urlsafe_b64encode(cbor2.dumps(issuer_signed)).rstrip(b"=").decode("ascii")
 
@@ -160,6 +167,11 @@ def test_opaque_long_text_cannot_satisfy_mdoc_evidence() -> None:
     opaque = base64.urlsafe_b64encode(cbor2.dumps("x" * 1000)).decode("ascii")
     with pytest.raises(ValueError, match="IssuerSigned"):
         _validate(opaque)
+
+
+def test_legacy_raw_mso_payload_cannot_satisfy_mdoc_evidence() -> None:
+    with pytest.raises(ValueError, match="MobileSecurityObjectBytes must be tag-24"):
+        _validate(_encoded_mdoc(tag_mobile_security_object=False))
 
 
 def test_tampered_mdoc_signature_cannot_satisfy_evidence() -> None:
