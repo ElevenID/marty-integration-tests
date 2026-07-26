@@ -52,6 +52,38 @@ def test_safe_harness_error_rejects_unrecognized_error_text() -> None:
     assert "must-not-escape" not in str(captured.value)
 
 
+def test_safe_harness_error_preserves_only_bounded_jvm_failure_class() -> None:
+    response = _response(
+        500,
+        {
+            "error": "IllegalStateException",
+            "message": "offer=https://must-not-escape.example",
+            "stackTrace": "credential=must-not-escape",
+        },
+    )
+
+    with pytest.raises(EUDIWalletHarnessError) as captured:
+        _raise_for_status_safely(response)
+
+    assert str(captured.value) == ("EUDI wallet harness HTTP 500: wallet-harness-illegal-state-exception")
+    assert "must-not-escape" not in str(captured.value)
+
+
+def test_safe_harness_error_rejects_unbounded_error_label() -> None:
+    response = _response(
+        500,
+        {
+            "error": "secret-offer-value",
+            "message": "must-not-escape",
+        },
+    )
+
+    with pytest.raises(EUDIWalletHarnessError) as captured:
+        _raise_for_status_safely(response)
+
+    assert str(captured.value) == ("EUDI wallet harness HTTP 500: wallet-harness-unclassified")
+
+
 def test_safe_harness_error_preserves_allowlisted_holder_binding_code() -> None:
     response = _response(
         422,

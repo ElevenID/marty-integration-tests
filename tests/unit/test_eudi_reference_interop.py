@@ -295,6 +295,16 @@ def test_eudi_failure_categories_expose_only_presentation_stage_and_class() -> N
     assert "must-not-escape" not in json.dumps(categories)
 
 
+def test_eudi_failure_categories_expose_only_bounded_harness_class() -> None:
+    categories = eudi.classify_eudi_failure_text(
+        "EUDI wallet harness HTTP 500: wallet-harness-illegal-state-exception token=must-not-escape"
+    )
+
+    assert "wallet-harness-failure-class" in categories
+    assert "wallet-harness-illegal-state-exception" in categories
+    assert "must-not-escape" not in json.dumps(categories)
+
+
 @pytest.mark.parametrize(
     ("diagnostic", "category"),
     [
