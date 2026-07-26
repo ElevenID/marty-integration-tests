@@ -516,10 +516,19 @@ class TestDtcWalletPresentation:
             result.get("responseMode"),
         )
 
+        verification = None
+        if result.get("success") is not True:
+            with eudi_stage("dtc-presentation-verification-result"):
+                verification = (
+                    await authenticated_gateway_client.get_verification_result(
+                        flow["instance_id"]
+                    )
+                )
         require_presentation_accepted(
             result,
             stage="dtc-presentation",
             expected_mode="direct_post",
+            verification_result=verification,
         )
 
     @pytest.mark.asyncio
@@ -548,9 +557,18 @@ class TestDtcWalletPresentation:
             credential=credential,
         )
 
+        verification = None
+        if result.get("success") is not True:
+            with eudi_stage("dtc-identity-presentation-verification-result"):
+                verification = (
+                    await authenticated_gateway_client.get_verification_result(
+                        flow["instance_id"]
+                    )
+                )
         require_presentation_accepted(
             result,
             stage="dtc-identity-presentation",
+            verification_result=verification,
         )
         logger.info("[DTC VP] Identity-only presentation accepted")
 
@@ -654,14 +672,28 @@ class TestDtcWalletEndToEnd:
             authorization_request_uri=request_uri,
             credential=credential,
         )
+        verification = None
+        if post_result.get("success") is not True:
+            with eudi_stage("dtc-lifecycle-presentation-verification-result"):
+                verification = (
+                    await authenticated_gateway_client.get_verification_result(
+                        instance_id
+                    )
+                )
         require_presentation_accepted(
             post_result,
             stage="dtc-lifecycle-presentation",
+            verification_result=verification,
         )
         logger.info("[DTC E2E] VP token accepted by verifier")
 
         # 7. Check verification result
-        result = await authenticated_gateway_client.get_verification_result(instance_id)
+        result = (
+            verification
+            or await authenticated_gateway_client.get_verification_result(
+                instance_id
+            )
+        )
         logger.info("[DTC E2E] Verification result: status=%s", result.get("status"))
 
         status = result.get("status", "").upper()
