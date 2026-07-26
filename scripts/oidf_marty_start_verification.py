@@ -47,9 +47,11 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("OIDF module test_id is required")
     if not isinstance(payload.get("test_name"), str) or not payload["test_name"]:
         raise ValueError("OIDF module test_name is required")
-    request_method = payload.get("request_method", "url_query")
-    if request_method not in {"url_query", "request_uri_signed"}:
-        raise ValueError("OIDF request method is unsupported")
+    request_method = payload.get("request_method", "request_uri_signed")
+    if request_method != "request_uri_signed":
+        raise ValueError(
+            "Marty supports native signed request_uri transport; URL-query adaptation is prohibited"
+        )
     profile = os.environ.get("OIDF_MARTY_VERIFIER_PROFILE", "standard")
     if profile not in {"standard", "haip"}:
         raise ValueError("OIDF_MARTY_VERIFIER_PROFILE must be standard or haip")
@@ -64,10 +66,9 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         "oid4vp_profile": profile,
         # Select POST retrieval only for the official module that verifies
         # the OID4VP 5.10 wallet_nonce round trip.  The ordinary signed-JAR
-        # modules remain GET, and the standard url_query plan remains a
-        # transport adaptation rather than being silently forced to POST.
+        # modules remain GET.
         "request_uri_method": (
-            "post" if request_method == "request_uri_signed" and module_name == REQUEST_URI_METHOD_POST_TEST else "get"
+            "post" if module_name == REQUEST_URI_METHOD_POST_TEST else "get"
         ),
     }
 

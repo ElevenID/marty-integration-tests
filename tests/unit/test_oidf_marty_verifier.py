@@ -144,32 +144,21 @@ def test_signed_get_rejects_outer_and_signed_client_id_mismatch(monkeypatch: pyt
         )
 
 
-def test_standard_url_query_does_not_inherit_signed_transport_parameters(
+def test_url_query_transport_adaptation_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[str] = []
     monkeypatch.setattr(
         oidf_verifier,
-        "decode_request_object",
-        lambda *_args, **_kwargs: {"client_id": "signed-client", "nonce": "nonce-1"},
+        "request_json",
+        lambda *_args, **_kwargs: pytest.fail("rejected transport must not call either endpoint"),
     )
-
-    def request(url: str, **_kwargs: object) -> tuple[int, object]:
-        calls.append(url)
-        return 200, {}
-
-    monkeypatch.setattr(oidf_verifier, "request_json", request)
-    oidf_verifier.call_mock_wallet(
-        "https://runner.example/authorize",
-        "https://marty.example/request.jwt",
-        request_method="url_query",
-        conformance_insecure=False,
-        outer_parameters={"client_id": "outer-client", "request_uri_method": "post"},
-    )
-
-    query = parse_qs(urlparse(calls[0]).query)
-    assert query == {"client_id": ["signed-client"], "nonce": ["nonce-1"]}
-    assert "request_uri_method" not in query
+    with pytest.raises(ValueError, match="rewriting a signed request object"):
+        oidf_verifier.call_mock_wallet(
+            "https://runner.example/authorize",
+            "https://marty.example/request.jwt",
+            request_method="url_query",
+            conformance_insecure=False,
+        )
 
 
 def configure_main(

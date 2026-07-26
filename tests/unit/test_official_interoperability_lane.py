@@ -297,16 +297,18 @@ def test_stack_binding_rejects_a_deployed_image_not_in_evidence(tmp_path: Path) 
         lane.validate_stack_binding(manifest, metadata, environment)
 
 
-def test_standard_verifier_config_reuses_only_generated_signing_jwk(tmp_path: Path) -> None:
+def test_standard_verifier_config_reuses_generated_wallet_key_and_request_trust(
+    tmp_path: Path,
+) -> None:
     source = {
         "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},
-        "client": {"request_object_trust_anchor_pem": "not-for-final"},
+        "client": {"request_object_trust_anchor_pem": "test-root"},
     }
     (tmp_path / "marty-verifier-haip.json").write_text(json.dumps(source), encoding="utf-8")
     destination = lane.standard_verifier_config(tmp_path, "https://marty.test")
     config = json.loads(destination.read_text(encoding="utf-8"))
     assert config["verifier"]["profile"] == "oid4vp-1.0-final"
-    assert "client" not in config
+    assert config["client"]["request_object_trust_anchor_pem"] == "test-root"
 
 
 def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(
@@ -430,10 +432,13 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     suite_environment: dict[str, str] = {}
+    compose_commands: list[list[str]] = []
 
     def fake_run(command: list[str], environment: dict[str, str], **_kwargs: object) -> int:
         if "oidf_conformance.py" in " ".join(command):
             suite_environment.update(environment)
+        elif "official_suite_compose.py" in " ".join(command):
+            compose_commands.append(command)
         return 0
 
     monkeypatch.setattr(lane, "run", fake_run)
@@ -469,6 +474,9 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert suite_environment["OIDF_MARTY_TRUST_PROFILE_ID"] == "trust-1"
     assert "OIDF_MARTY_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
+    assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "request_uri_signed"
+    assert compose_commands
+    assert all("--haip" in command for command in compose_commands)
 
 
 def test_old_release_fails_before_any_compose_command(tmp_path: Path) -> None:

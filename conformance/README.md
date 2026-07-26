@@ -112,7 +112,7 @@ test wallet or a verification bypass. The command named by
   "test_id": "official-module-id",
   "test_name": "oid4vp-1final-verifier-happy-flow",
   "authorization_endpoint": "https://oidf.test.example/test/.../authorize",
-  "request_method": "url_query"
+  "request_method": "request_uri_signed"
 }
 ```
 
@@ -344,9 +344,9 @@ export OIDF_MARTY_GATEWAY_URL=https://stack.test.example
 export OIDF_MARTY_OPERATOR_EMAIL=conformance@elevenid.dev
 export OIDF_MARTY_OPERATOR_PASSWORD="$(read_secret oidf-disposable-operator-password)"
 export OIDF_MARTY_PRESENTATION_POLICY_ID="$(read_secret oidf-disposable-policy-id)"
-export OIDF_VERIFIER_REQUEST_METHOD=url_query
-# The OID4VP Final baseline uses the standard redirect_uri client-ID prefix.
-export OID4VP_CLIENT_ID_PREFIX=redirect_uri
+export OIDF_VERIFIER_REQUEST_METHOD=request_uri_signed
+# Signed request objects use a certificate-bound client identifier.
+export OID4VP_CLIENT_ID_PREFIX=x509_hash
 python scripts/oidf_conformance.py run \
   --runner /opt/openid-conformance-suite \
   --profile oid4vp-verifier \
@@ -357,13 +357,12 @@ python scripts/oidf_conformance.py run \
   --interaction-script scripts/oidf_marty_verifier.py
 ```
 
-The standard verifier plan asks the official wallet to receive a URL-query
-authorization request. Marty production emits a signed `request_uri` instead,
-so this lane fetches that normal signed JAR over public TLS and adapts its
-claims into the official runner's URL-query input. Authentication, policy
-selection, request generation, and callback processing all use production
-paths, but the front-channel transport is adapted and must not be represented
-as transport-identical URL-query evidence.
+The standard verifier plan exercises Marty's native signed `request_uri`
+transport with the OIDF runner's `request_uri_signed` and `x509_hash`
+variants. The interaction bridge forwards the original public request URI and
+client identifier; it never decodes the JAR into a different front-channel
+transport. URL-query authorization requests are not currently a supported
+Marty production transport and are not claimed or synthesized by this suite.
 
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
@@ -377,8 +376,7 @@ adapter selects production `request_uri_method=post`. The interaction bridge
 forwards that original outer parameter and does not pre-fetch the POST-only
 URI. The official mock wallet creates `wallet_nonce`, POSTs it to Marty's
 ordinary public request endpoint, and verifies the returned signed JAR carries
-the same nonce. Other signed-request modules keep GET retrieval, and the
-standard URL-query plan is not forced into this behavior.
+the same nonce. Other signed-request modules keep GET retrieval.
 
 The EUDI wallet harness receives that request-object root through the read-only
 file named by `EUDI_OID4VP_TRUST_ANCHOR_FILE` and validates Marty's JAR `x5c`

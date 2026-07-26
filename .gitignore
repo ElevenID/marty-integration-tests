@@ -33,6 +33,7 @@ htmlcov/
 .hypothesis/
 reports/ui-contracts/
 reports/oidf/
+/work/
 target/
 **/.gradle/
 diag-*/

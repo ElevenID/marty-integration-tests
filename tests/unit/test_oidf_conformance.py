@@ -24,7 +24,8 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     verifier = manifest["profiles"]["oid4vp-verifier"]
     assert verifier["configuration_example"] == "conformance/marty-verifier.example.json"
     assert "oid4vp-1final-verifier-test-plan" in verifier["test_plan"]
-    assert "[request_method=url_query]" in verifier["test_plan"]
+    assert "[request_method=request_uri_signed]" in verifier["test_plan"]
+    assert "[client_id_prefix=x509_hash]" in verifier["test_plan"]
     haip = manifest["profiles"]["oid4vp-haip-verifier"]
     assert "oid4vp-1final-verifier-haip-test-plan" in haip["test_plan"]
     assert "[response_mode=direct_post.jwt]" in haip["test_plan"]
@@ -131,6 +132,7 @@ def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
         json.dumps(
             {
                 "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},
+                "client": {"request_object_trust_anchor_pem": "test-root"},
                 "verifier": {
                     "gateway_url": "https://conformance.example.test",
                     "profile": "oid4vp-1.0-final",
@@ -181,7 +183,7 @@ def test_evidence_records_non_secret_provenance(tmp_path: Path, monkeypatch: pyt
     assert "private" not in (output / "evidence.json").read_text(encoding="utf-8")
 
 
-def test_haip_requires_a_runner_trust_anchor(tmp_path: Path) -> None:
+def test_signed_request_uri_requires_a_runner_trust_anchor(tmp_path: Path) -> None:
     config = tmp_path / "verifier.json"
     config.write_text(
         json.dumps(
@@ -219,7 +221,7 @@ def test_active_profile_does_not_need_pre_activation_switch() -> None:
 
 def test_verifier_interaction_environment_matches_the_official_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "standard")
-    monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "url_query")
+    monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "request_uri_signed")
     oidf.validate_verifier_interaction_environment("oid4vp-verifier")
 
     monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")

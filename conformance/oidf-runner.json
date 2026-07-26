@@ -15,10 +15,10 @@
     },
     "oid4vp-verifier": {
       "status": "planned",
-      "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=sd_jwt_vc][response_mode=direct_post][request_method=url_query][client_id_prefix=redirect_uri]",
+      "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=sd_jwt_vc][response_mode=direct_post][request_method=request_uri_signed][client_id_prefix=x509_hash]",
       "configuration_example": "conformance/marty-verifier.example.json",
       "target": "Marty's public verifier URL through the gateway",
-      "reason": "Enable only after the production-like flow-start command and the official runner adapter pass every module."
+      "reason": "Enable only after Marty's native signed request_uri flow passes every module without transport adaptation."
     },
     "oid4vp-haip-verifier": {
       "status": "planned",

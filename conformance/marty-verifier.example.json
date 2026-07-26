@@ -8,6 +8,9 @@
       "d": "REPLACE_WITH_OIDF_TEST_SIGNING_KEY_D"
     }
   },
+  "client": {
+    "request_object_trust_anchor_pem": "REPLACE_WITH_VERIFIER_REQUEST_OBJECT_TRUST_ANCHOR_PEM"
+  },
   "verifier": {
     "gateway_url": "https://REPLACE_WITH_MARTY_GATEWAY",
     "profile": "oid4vp-1.0-final"

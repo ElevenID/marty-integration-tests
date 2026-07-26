@@ -362,10 +362,14 @@ def standard_verifier_config(haip_material: Path, gateway_url: str) -> Path:
     signing_jwk = data.get("credential", {}).get("signing_jwk")
     if not isinstance(signing_jwk, dict) or not all(signing_jwk.get(name) for name in ("kty", "crv", "x", "y", "d")):
         raise ValueError("HAIP material contains no complete official-wallet signing JWK")
+    trust_anchor = data.get("client", {}).get("request_object_trust_anchor_pem")
+    if not isinstance(trust_anchor, str) or not trust_anchor.strip():
+        raise ValueError("verifier material contains no request-object trust anchor")
     write_private_json(
         destination,
         {
             "credential": {"signing_jwk": signing_jwk},
+            "client": {"request_object_trust_anchor_pem": trust_anchor},
             "verifier": {"gateway_url": gateway_url, "profile": "oid4vp-1.0-final"},
         },
     )
@@ -803,7 +807,12 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
 
 def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     haip = args.lane == "haip"
-    up = compose_command(args, "up", oidf=True, haip=haip)
+    # Both verifier plans exercise Marty's native signed request_uri. The
+    # x509_hash client identifier therefore requires a short-lived certificate
+    # over the issuer profile's public DID key even when response encryption is
+    # the standard direct_post mode. Request signing still happens only through
+    # the issuer profile and managed custody.
+    up = compose_command(args, "up", oidf=True, haip=True)
     started = run(up, environment) == 0
     if not started:
         emit_keycloak_initializer_diagnostic(args.run_id)
@@ -823,7 +832,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "OIDF_CONFORMANCE_INSECURE_TLS": "1",
                 "OIDF_VERIFIER_COMMAND": str((ROOT / "scripts" / "oidf_marty_start_verification.py").resolve()),
                 "OIDF_MARTY_VERIFIER_PROFILE": "haip" if haip else "standard",
-                "OIDF_VERIFIER_REQUEST_METHOD": "request_uri_signed" if haip else "url_query",
+                "OIDF_VERIFIER_REQUEST_METHOD": "request_uri_signed",
             }
         )
         config = (
@@ -855,11 +864,11 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         )
     finally:
         run(
-            compose_command(args, "logs", oidf=True, haip=haip),
+            compose_command(args, "logs", oidf=True, haip=True),
             environment,
             capture=args.output_dir / "private" / "compose.log",
         )
-        run(compose_command(args, "down", oidf=True, haip=haip), environment)
+        run(compose_command(args, "down", oidf=True, haip=True), environment)
 
 
 def run_oid4vci_issuer(
