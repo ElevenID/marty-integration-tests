@@ -30,6 +30,9 @@ EUDI_HAIP_EVIDENCE_ID = "eudi.oid4vp.haip.resolve-dispatch.v1"
 EUDI_HOLDER_BINDING_EVIDENCE_ID = "eudi.sd-jwt.missing-holder-binding-key.v1"
 EUDI_MDOC_ISSUANCE_EVIDENCE_ID = "eudi.oid4vci.mdoc-issuance.v1"
 EUDI_MDOC_PRESENTATION_EVIDENCE_ID = "eudi.oid4vp.mdoc-device-response.v1"
+EUDI_REPLAY_EVIDENCE_ID = "eudi.oid4vp.replayed-response.v1"
+EUDI_INVALID_SIGNATURE_EVIDENCE_ID = "eudi.oid4vp.invalid-signature.v1"
+EUDI_EXPIRED_REQUEST_EVIDENCE_ID = "eudi.oid4vp.expired-request.v1"
 REQUIRED_EVIDENCE_CLAIMS = {
     EUDI_MDOC_ISSUANCE_EVIDENCE_ID: frozenset({"issuance:mso_mdoc"}),
     EUDI_MDOC_PRESENTATION_EVIDENCE_ID: frozenset({"presentation:mso_mdoc"}),
@@ -42,6 +45,9 @@ REQUIRED_EVIDENCE_CLAIMS = {
         }
     ),
     EUDI_HOLDER_BINDING_EVIDENCE_ID: frozenset({"negative:missing_holder_binding_key"}),
+    EUDI_REPLAY_EVIDENCE_ID: frozenset({"negative:replayed_response"}),
+    EUDI_INVALID_SIGNATURE_EVIDENCE_ID: frozenset({"negative:invalid_signature"}),
+    EUDI_EXPIRED_REQUEST_EVIDENCE_ID: frozenset({"negative:expired_request"}),
 }
 
 
@@ -113,14 +119,17 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         raise ValueError("EUDI presentation coverage must prove signed-JAR x509_hash PKIX trust")
     if "direct_post.jwt" not in coverage.get("response_mode", []):
         raise ValueError("EUDI presentation coverage must prove encrypted direct_post.jwt")
-    unsupported_negative_claims = {
+    required_negative_claims = {
         "replayed_response",
         "invalid_signature",
-        "expired_or_invalid_request",
-    } & set(coverage.get("negative", []))
-    if unsupported_negative_claims:
+        "expired_request",
+        "missing_holder_binding_key",
+    }
+    missing_negative_claims = required_negative_claims - set(coverage.get("negative", []))
+    if missing_negative_claims:
         raise ValueError(
-            "EUDI negative coverage contains planned-only claims: " + ", ".join(sorted(unsupported_negative_claims))
+            "EUDI negative coverage is incomplete: "
+            + ", ".join(sorted(missing_negative_claims))
         )
     required_evidence = data.get("required_evidence")
     if not isinstance(required_evidence, dict) or set(required_evidence) != set(REQUIRED_EVIDENCE_CLAIMS):
@@ -146,9 +155,15 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         if multiply_bound:
             details.append("multiply-bound coverage: " + ", ".join(multiply_bound))
         raise ValueError("EUDI coverage and stable evidence claims must be a bijection (" + "; ".join(details) + ")")
-    limitations = data.get("limitations", {})
-    if "oid4vp_negative_vectors" not in limitations:
-        raise ValueError("EUDI manifest must record current negative-vector limitations")
+    compatibility = data.get("compatibility_only", {})
+    mutation = compatibility.get("negative_response_mutation", {})
+    if set(mutation.get("evidence", [])) != {
+        EUDI_REPLAY_EVIDENCE_ID,
+        EUDI_INVALID_SIGNATURE_EVIDENCE_ID,
+    }:
+        raise ValueError(
+            "EUDI manifest must disclose replay and signature mutation methodology"
+        )
     return data
 
 
