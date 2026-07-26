@@ -224,6 +224,7 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "wallet-offer-resolution": re.compile(r"(?i)/issuance/resolve-offer\b"),
     "wallet-preauthorized-issuance": re.compile(r"(?i)/issuance/pre-auth\b"),
     "wallet-presentation": re.compile(r"(?i)/presentation/(?:submit|direct-post|build-vp-token)\b"),
+    "wallet-harness-failure-class": re.compile(r"(?i)\bwallet-harness-[a-z][a-z0-9-]{0,79}(?:exception|error)\b"),
     "presentation-failure-class": re.compile(
         r"(?i)\bpresentation-(?:resolve|query|build-[a-z0-9-]+|dispatch)-[a-z0-9-]+\b"
     ),
@@ -332,15 +333,19 @@ def classify_eudi_failure_text(text: str) -> list[str]:
         text,
     )
     if issuance_class:
-        categories.append(
-            f"issuance-{issuance_class.group(1).lower()}-{issuance_class.group(2).lower()}"
-        )
+        categories.append(f"issuance-{issuance_class.group(1).lower()}-{issuance_class.group(2).lower()}")
     presentation_class = re.search(
         r"(?i)\b(presentation-(?:resolve|query|build-[a-z0-9-]+|dispatch)-[a-z0-9-]+)\b",
         text,
     )
     if presentation_class:
         categories.append(presentation_class.group(1).lower())
+    harness_class = re.search(
+        r"(?i)\b(wallet-harness-[a-z][a-z0-9-]{0,79}(?:exception|error))\b",
+        text,
+    )
+    if harness_class:
+        categories.append(harness_class.group(1).lower())
     return categories or ["unclassified"]
 
 

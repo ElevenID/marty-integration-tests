@@ -12,6 +12,7 @@ Reference Wallet mobile application.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -40,6 +41,7 @@ _SAFE_METADATA_FIELDS = {
     "doctype": "doctype",
     "vct": "vct",
 }
+_SAFE_JVM_FAILURE_CLASS = re.compile(r"^[A-Z][A-Za-z0-9]{0,63}(?:Exception|Error)$")
 
 
 class EUDIWalletHarnessError(RuntimeError):
@@ -63,6 +65,11 @@ def _raise_for_status_safely(response: httpx.Response) -> None:
             error_class = _SAFE_HARNESS_ERROR_CODES[candidate]
         elif candidate in _SAFE_HARNESS_ERROR_CLASSES:
             error_class = candidate
+        elif _SAFE_JVM_FAILURE_CLASS.fullmatch(candidate):
+            # The facade populates ``error`` from Throwable::class.simpleName.
+            # Preserve that bounded code-owned class, but never its message,
+            # stack trace, URL, credential offer, or protocol values.
+            error_class = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", candidate).lower()
         diagnostic_text = "\n".join(str(body.get(key) or "") for key in ("message", "stackTrace"))
 
     field = next(
