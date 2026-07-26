@@ -27,7 +27,7 @@ from haip_test_certificates import (  # noqa: E402
     load_verifier_environment,
 )
 
-LANES = {"oid4vp-final", "haip", "w3c-v2", "eudi"}
+LANES = {"oid4vci-issuer", "oid4vp-final", "haip", "w3c-v2", "eudi"}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -372,6 +372,44 @@ def standard_verifier_config(haip_material: Path, gateway_url: str) -> Path:
     return destination
 
 
+def oid4vci_issuer_config(
+    output_dir: Path,
+    gateway_url: str,
+    fixtures: dict[str, str],
+) -> tuple[Path, Path]:
+    """Write the official runner config and fixed public issuance request."""
+    private_dir = output_dir / "private"
+    config = private_dir / "marty-issuer.json"
+    request = private_dir / "marty-issuer-request.json"
+    write_private_json(
+        config,
+        {
+            "description": "Disposable Marty OID4VCI issuer under official test",
+            "vci": {
+                "credential_issuer_url": (
+                    f"{gateway_url}/org/{fixtures['organization_id']}"
+                ),
+                "authorization_server": gateway_url,
+                "credential_configuration_id": fixtures["oid4vci_template_id"],
+                "credential_proof_type_hint": "jwt",
+            },
+            "client_attestation": {"key_attestation_jwks": {"keys": []}},
+        },
+    )
+    write_private_json(
+        request,
+        {
+            "claims": {
+                "given_name": "Conformance",
+                "family_name": "Test",
+                "email": "conformance@example.test",
+                "employee_id": "oidf-conformance",
+            }
+        },
+    )
+    return config, request
+
+
 def run(command: list[str], environment: dict[str, str], *, capture: Path | None = None) -> int:
     print("+", subprocess.list2cmdline(command), flush=True)
     if capture is None:
@@ -710,7 +748,9 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         )
     if args.lane == "haip" and "--haip" not in launcher.read_text(encoding="utf-8"):
         raise ValueError("released marty-ui conformance launcher does not support --haip")
-    if args.lane in {"oid4vp-final", "haip"} and (args.oidf_runner is None or not args.oidf_runner.is_dir()):
+    if args.lane in {"oid4vci-issuer", "oid4vp-final", "haip"} and (
+        args.oidf_runner is None or not args.oidf_runner.is_dir()
+    ):
         raise ValueError(f"{args.lane} requires the exact pinned OIDF runner checkout")
     if args.lane == "w3c-v2" and (args.w3c_suite is None or not args.w3c_suite.is_dir()):
         raise ValueError("w3c-v2 requires the exact pinned W3C suite checkout")
@@ -820,6 +860,71 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             capture=args.output_dir / "private" / "compose.log",
         )
         run(compose_command(args, "down", oidf=True, haip=haip), environment)
+
+
+def run_oid4vci_issuer(
+    args: argparse.Namespace,
+    environment: dict[str, str],
+) -> int:
+    """Run the active official issuer plan against the public Marty boundary."""
+    started = run(compose_command(args, "up", oidf=True), environment) == 0
+    if not started:
+        emit_keycloak_initializer_diagnostic(args.run_id)
+        return 1
+    try:
+        wait_for_public_stack(environment)
+        fixtures = bootstrap_fixtures(args, environment, mode="oid4vci")
+        config, issuance_request = oid4vci_issuer_config(
+            args.output_dir,
+            environment["OIDF_MARTY_GATEWAY_URL"],
+            fixtures,
+        )
+        suite_environment = dict(environment)
+        suite_environment.update(
+            {
+                "CONFORMANCE_SERVER": "https://localhost.emobix.co.uk:8443/",
+                "CONFORMANCE_SERVER_MTLS": "https://localhost.emobix.co.uk:8443/",
+                "CONFORMANCE_DEV_MODE": "1",
+                "OIDF_CONFORMANCE_RESOLVE_IP": "127.0.0.1",
+                "OIDF_CONFORMANCE_INSECURE_TLS": "1",
+                "OIDF_ISSUANCE_COMMAND": str(
+                    (ROOT / "scripts" / "oidf_marty_public_issuance.py").resolve()
+                ),
+                "OIDF_ISSUANCE_REQUEST": str(issuance_request),
+                "OIDF_MARTY_ORGANIZATION_ID": fixtures["organization_id"],
+                "OIDF_MARTY_CREDENTIAL_TEMPLATE_ID": fixtures[
+                    "oid4vci_template_id"
+                ],
+                "OIDF_MARTY_ISSUER_DID": fixtures["oid4vci_issuer_did"],
+            }
+        )
+        return run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "oidf_conformance.py"),
+                "run",
+                "--runner",
+                str(args.oidf_runner),
+                "--profile",
+                "oid4vci-issuer",
+                "--config",
+                str(config),
+                "--stack-manifest",
+                str(args.stack_manifest),
+                "--output-dir",
+                str(args.output_dir / "raw" / "oid4vci-issuer"),
+                "--interaction-script",
+                str(ROOT / "scripts" / "oidf_marty_offer.py"),
+            ],
+            suite_environment,
+        )
+    finally:
+        run(
+            compose_command(args, "logs", oidf=True),
+            environment,
+            capture=args.output_dir / "private" / "compose.log",
+        )
+        run(compose_command(args, "down", oidf=True), environment)
 
 
 def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
@@ -974,6 +1079,8 @@ def main(argv: list[str] | None = None) -> int:
     args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     environment, _metadata = base_environment(args)
+    if args.lane == "oid4vci-issuer":
+        return run_oid4vci_issuer(args, environment)
     if args.lane in {"oid4vp-final", "haip"}:
         return run_oidf(args, environment)
     if args.lane == "w3c-v2":

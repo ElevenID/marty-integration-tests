@@ -22,7 +22,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urljoin
 from urllib.request import Request, urlopen
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REQUEST = ROOT / "conformance" / "marty-issuer.offer-request.example.json"
 
@@ -130,6 +129,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tx-code", default=os.environ.get("OIDF_TX_CODE", "000000"))
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--insecure", action="store_true", default=os.environ.get("OIDF_INSECURE_TLS") == "1")
+    parser.add_argument(
+        "--conformance-insecure",
+        action="store_true",
+        default=os.environ.get("OIDF_CONFORMANCE_INSECURE_TLS") == "1",
+        help="skip TLS verification only for the isolated upstream runner",
+    )
+    parser.add_argument(
+        "--issuance-insecure",
+        action="store_true",
+        default=os.environ.get("OIDF_ISSUANCE_INSECURE_TLS") == "1",
+        help="skip TLS verification only for a disposable issuer endpoint",
+    )
     return parser.parse_args()
 
 
@@ -141,7 +152,14 @@ def main() -> int:
         raise ValueError("CONFORMANCE_SERVER must be set")
     if not args.request.is_file():
         raise ValueError(f"issuance request is missing: {args.request}")
-    if not wait_for_interaction(args.server, args.test_id, insecure=args.insecure, timeout=args.timeout):
+    conformance_insecure = args.insecure or args.conformance_insecure
+    issuance_insecure = args.insecure or args.issuance_insecure
+    if not wait_for_interaction(
+        args.server,
+        args.test_id,
+        insecure=conformance_insecure,
+        timeout=args.timeout,
+    ):
         print(f"OIDF module {args.test_id} ({args.test_name}) finished without issuer interaction")
         return 0
     payload = json.loads(args.request.read_text(encoding="utf-8"))
@@ -150,9 +168,20 @@ def main() -> int:
     offer_uri = (
         command_credential_offer(args.issuance_command, payload)
         if args.issuance_command is not None
-        else credential_offer_uri(args.issuance_url, args.api_key, payload, insecure=args.insecure)
+        else credential_offer_uri(
+            args.issuance_url,
+            args.api_key,
+            payload,
+            insecure=issuance_insecure,
+        )
     )
-    deliver_offer(args.server, args.test_id, offer_uri, args.tx_code, insecure=args.insecure)
+    deliver_offer(
+        args.server,
+        args.test_id,
+        offer_uri,
+        args.tx_code,
+        insecure=conformance_insecure,
+    )
     print(f"Delivered Marty credential offer to OIDF module {args.test_id} ({args.test_name})")
     return 0
 

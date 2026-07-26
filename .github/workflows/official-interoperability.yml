@@ -12,6 +12,7 @@ on:
         default: all
         options:
           - all
+          - oid4vci-issuer
           - oid4vp-final
           - haip
           - w3c-v2
@@ -42,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: ${{ fromJSON((github.event_name == 'schedule' || inputs.lane == 'all') && '["oid4vp-final","haip","w3c-v2","eudi"]' || format('["{0}"]', inputs.lane)) }}
+        lane: ${{ fromJSON((github.event_name == 'schedule' || inputs.lane == 'all') && '["oid4vci-issuer","oid4vp-final","haip","w3c-v2","eudi"]' || format('["{0}"]', inputs.lane)) }}
     env:
       PYTHONUNBUFFERED: "1"
       OFFICIAL_SUITE_RUN_ID: ${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -103,7 +104,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout exact OIDF runner
-        if: matrix.lane == 'oid4vp-final' || matrix.lane == 'haip'
+        if: matrix.lane == 'oid4vci-issuer' || matrix.lane == 'oid4vp-final' || matrix.lane == 'haip'
         run: python scripts/official_suite_checkout.py --suite oidf --output work/oidf-runner
 
       - name: Checkout exact W3C suite

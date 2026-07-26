@@ -29,7 +29,13 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 OFFICIAL_OIDF_ISSUER_DOMAIN = "localhost.emobix.co.uk"
 
 
-def compliance_profile_payload(organization_id: str, *, w3c: bool, run_id: str) -> dict[str, object]:
+def compliance_profile_payload(
+    organization_id: str,
+    *,
+    w3c: bool,
+    run_id: str,
+    oid4vci: bool = False,
+) -> dict[str, object]:
     """Build the public API resource a credential template must reference.
 
     The production credential-template API deliberately accepts only a profile
@@ -46,12 +52,13 @@ def compliance_profile_payload(organization_id: str, *, w3c: bool, run_id: str) 
             "frameworks": ["w3c_vc"],
             "system_profile": False,
         }
+    protocol_name = "OID4VCI" if oid4vci else "OID4VP"
     return {
         "organization_id": organization_id,
-        "name": f"Official OID4VP SD-JWT {run_id}",
-        "compliance_code": "OID4VP_FINAL",
+        "name": f"Official {protocol_name} SD-JWT {run_id}",
+        "compliance_code": f"{protocol_name}_FINAL",
         "credential_format": "sd_jwt_vc",
-        "frameworks": ["openid4vp"],
+        "frameworks": [protocol_name.lower()],
         "system_profile": False,
     }
 
@@ -630,7 +637,8 @@ def bootstrap(
     result = {"organization_id": organization_id}
     targets = (False, True) if mode == "all" else (mode == "w3c",)
     for w3c in targets:
-        prefix = "w3c" if w3c else "oid4vp"
+        oid4vci = mode == "oid4vci"
+        prefix = "w3c" if w3c else ("oid4vci" if oid4vci else "oid4vp")
         signing_service = resolve_signing_service(
             gateway_url,
             session_id,
@@ -644,6 +652,7 @@ def bootstrap(
             gateway_url=gateway_url,
             w3c=w3c,
             run_id=run_id,
+            label="OID4VCI SD-JWT" if oid4vci else None,
         )
         created_issuer_profile = request(
             gateway_url,
@@ -652,10 +661,10 @@ def bootstrap(
             method="POST",
             json_body=profile_payload,
         )
-        credential_issuer_profile_id = issuer_profile_response_id(created_issuer_profile)
+        issuer_profile_response_id(created_issuer_profile)
         request_profile_payload: dict[str, str] | None = None
         request_issuer_profile_id: str | None = None
-        if not w3c:
+        if not w3c and not oid4vci:
             request_signing_service = resolve_signing_service(
                 gateway_url,
                 session_id,
@@ -686,7 +695,12 @@ def bootstrap(
             session_id,
             "/v1/compliance-profiles",
             method="POST",
-            json_body=compliance_profile_payload(organization_id, w3c=w3c, run_id=run_id),
+            json_body=compliance_profile_payload(
+                organization_id,
+                w3c=w3c,
+                run_id=run_id,
+                oid4vci=oid4vci,
+            ),
         )
         compliance_profile_id = response_id(
             created_compliance_profile,
@@ -734,6 +748,20 @@ def bootstrap(
             ),
         )
         template_id = response_id(created_template, f"{prefix} credential template")
+        if oid4vci:
+            activated_template = request(
+                gateway_url,
+                session_id,
+                f"/v1/credential-templates/{template_id}/activate",
+                method="POST",
+            )
+            if response_id(
+                activated_template,
+                "activated OID4VCI credential template",
+            ) != template_id:
+                raise RuntimeError(
+                    "activated OID4VCI credential template id changed unexpectedly"
+                )
         presentation_template_id = template_id
         if w3c:
             created_presentation_template = request(
@@ -755,7 +783,11 @@ def bootstrap(
                 created_presentation_template,
                 f"{prefix} presentation template",
             )
-        policy_roles = ("credential", "presentation") if w3c else ("presentation",)
+        policy_roles = (
+            ("credential", "presentation")
+            if w3c
+            else (() if oid4vci else ("presentation",))
+        )
         policy_ids: dict[str, str] = {}
         for role in policy_roles:
             created_policy = request(
@@ -787,17 +819,19 @@ def bootstrap(
             result["w3c_presentation_template_id"] = presentation_template_id
             result["w3c_credential_policy_id"] = policy_ids["credential"]
             result["w3c_presentation_policy_id"] = policy_ids["presentation"]
-        else:
+        elif not oid4vci:
             result["oid4vp_policy_id"] = policy_ids["presentation"]
         result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
         if w3c:
             result["w3c_issuer_did"] = profile_payload["issuer_did"]
+        elif oid4vci:
+            result["oid4vci_issuer_did"] = profile_payload["issuer_did"]
         else:
             assert request_profile_payload is not None
             assert request_issuer_profile_id is not None
             result["oid4vp_issuer_did"] = request_profile_payload["issuer_did"]
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
-        if not w3c:
+        if not w3c and not oid4vci:
             assert oidf_signer_public_jwk is not None
             created_trust_profile = request(
                 gateway_url,
@@ -838,7 +872,11 @@ def write_private_json(path: Path, value: object) -> None:
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument("--mode", choices=("oid4vp", "w3c", "eudi", "all"), required=True)
+    result.add_argument(
+        "--mode",
+        choices=("oid4vci", "oid4vp", "w3c", "eudi", "all"),
+        required=True,
+    )
     result.add_argument("--gateway-url", default=os.environ.get("OIDF_MARTY_GATEWAY_URL"))
     result.add_argument(
         "--organization-id", default=os.environ.get("MARTY_CONFORMANCE_ORGANIZATION_ID", DEFAULT_ORGANIZATION)

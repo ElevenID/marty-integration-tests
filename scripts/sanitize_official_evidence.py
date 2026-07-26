@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 SCHEMA = "elevenid.sanitized-official-interop/v1"
-LANES = {"oid4vp-final", "haip", "w3c-v2", "eudi"}
+LANES = {"oid4vci-issuer", "oid4vp-final", "haip", "w3c-v2", "eudi"}
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SENSITIVE_KEY = re.compile(
     r"(?:^|_)(?:authorization|cookie|password|secret|session|signing_jwk|private_key|access_token|refresh_token)(?:$|_)",

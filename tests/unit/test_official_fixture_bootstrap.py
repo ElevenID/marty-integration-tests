@@ -23,6 +23,66 @@ PUBLIC_SIGNING_JWK = {
 }
 
 
+def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+    responses = iter(
+        [
+            {"service": {"id": "service-1", "key_reference": "issuer-es256"}},
+            {"profile": {"id": "issuer-profile-1"}},
+            {"id": "compliance-1"},
+            {"id": "revocation-1"},
+            {"id": "revocation-1"},
+            {"id": "template-1"},
+            {"id": "template-1"},
+        ]
+    )
+
+    def request(
+        _gateway: str,
+        _session: str,
+        path: str,
+        *,
+        method: str,
+        json_body: dict | None = None,
+    ) -> object:
+        calls.append((path, method, json_body))
+        return next(responses)
+
+    result = fixtures.bootstrap(
+        "https://marty.test",
+        "real-session",
+        organization_id=fixtures.DEFAULT_ORGANIZATION,
+        run_id="run-1",
+        mode="oid4vci",
+        request=request,
+    )
+
+    issuer_did = f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}"
+    assert result == {
+        "organization_id": fixtures.DEFAULT_ORGANIZATION,
+        "oid4vci_template_id": "template-1",
+        "oid4vci_compliance_profile_id": "compliance-1",
+        "oid4vci_issuer_did": issuer_did,
+        "oid4vci_revocation_profile_id": "revocation-1",
+    }
+    paths = [path for path, _method, _body in calls]
+    assert paths[0].startswith("/v1/signing-keys/config/resolve?")
+    assert paths[1].startswith("/v1/signing-keys/issuer-profiles?")
+    assert paths[2:] == [
+        "/v1/compliance-profiles",
+        "/v1/revocation-profiles",
+        "/v1/revocation-profiles/revocation-1/activate",
+        "/v1/credential-templates",
+        "/v1/credential-templates/template-1/activate",
+    ]
+    template = calls[-2][2]
+    assert template is not None
+    assert template["issuer_did"] == issuer_did
+    assert "issuer_profile_id" not in template
+    assert not any(path.startswith("/v1/presentation-policies") for path, _method, _body in calls)
+    assert not any(path.startswith("/v1/trust-profiles") for path, _method, _body in calls)
+
+
 def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     calls: list[tuple[str, str, dict | None]] = []
     responses = iter(
