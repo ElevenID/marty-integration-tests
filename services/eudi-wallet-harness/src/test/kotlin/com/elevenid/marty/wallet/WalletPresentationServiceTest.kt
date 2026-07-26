@@ -9,12 +9,13 @@ import org.multipaz.cbor.Bstr
 import org.multipaz.cbor.Cbor
 import org.multipaz.cbor.Tagged
 import org.multipaz.cbor.buildCborMap
-import org.multipaz.cbor.putCborMap
 import org.multipaz.cose.Cose
 import org.multipaz.cose.CoseSign1
 import org.multipaz.crypto.Algorithm
 import org.multipaz.crypto.EcPrivateKey
 import org.multipaz.crypto.SignatureVerificationException
+import org.multipaz.mdoc.issuersigned.buildIssuerNamespaces
+import org.multipaz.mdoc.response.DeviceResponse
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -28,9 +29,7 @@ class WalletPresentationServiceTest {
         runBlocking {
             val holderKey = ECKeyGenerator(Curve.P_256).generate()
             val issuerSigned = buildCborMap {
-                putCborMap("nameSpaces") {
-                    put("opaque", "issuer-signed-data")
-                }
+                put("nameSpaces", buildIssuerNamespaces {}.toDataItem())
                 put(
                     "issuerAuth",
                     CoseSign1(
@@ -65,7 +64,10 @@ class WalletPresentationServiceTest {
             )
 
             val presented = Cbor.decode(Base64.getUrlDecoder().decode(presentedCompact))
+            val parsedReferenceResponse = DeviceResponse.fromDataItem(presented)
             val document = presented["documents"].asArray.single()
+            assertEquals("1.0", parsedReferenceResponse.version)
+            assertEquals(DeviceResponse.STATUS_OK, parsedReferenceResponse.status)
             assertEquals("1.0", presented["version"].asTstr)
             assertEquals(0L, presented["status"].asNumber)
             assertEquals(MDL_DOC_TYPE, document["docType"].asTstr)

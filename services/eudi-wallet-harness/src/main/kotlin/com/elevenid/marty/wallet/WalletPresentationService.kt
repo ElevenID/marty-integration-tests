@@ -61,14 +61,14 @@ import org.multipaz.cbor.Simple
 import org.multipaz.cbor.Tagged
 import org.multipaz.cbor.addCborArray
 import org.multipaz.cbor.buildCborArray
-import org.multipaz.cbor.buildCborMap
-import org.multipaz.cbor.putCborArray
-import org.multipaz.cbor.putCborMap
-import org.multipaz.cose.Cose
 import org.multipaz.crypto.Algorithm as MultipazAlgorithm
 import org.multipaz.crypto.AsymmetricKey
 import org.multipaz.crypto.Crypto
 import org.multipaz.crypto.EcPrivateKey
+import org.multipaz.mdoc.devicesigned.buildDeviceNamespaces
+import org.multipaz.mdoc.issuersigned.IssuerNamespaces
+import org.multipaz.mdoc.issuersigned.buildIssuerNamespaces
+import org.multipaz.mdoc.response.DeviceResponse
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.URLDecoder
@@ -388,48 +388,39 @@ object WalletPresentationService {
                 responseUri = responseUri,
                 responseEncryptionJwkThumbprint = responseEncryptionJwkThumbprint,
             )
-            stage = "build-device-authentication"
-            val deviceNamespaces = Cbor.encode(buildCborMap {})
-            val deviceAuthenticationBytes = mdocDeviceAuthenticationBytes(
-                sessionTranscript = sessionTranscript,
-                docType = docType,
-                deviceNamespaces = deviceNamespaces,
-            )
             stage = "load-holder-key"
             val multipazPrivateKey = EcPrivateKey.fromJwk(
                 Json.parseToJsonElement(holderKey.toJSONString()).jsonObject,
             )
-            stage = "sign-device-authentication"
-            val deviceSignature = Cose.coseSign1Sign(
-                signingKey = AsymmetricKey.anonymous(multipazPrivateKey),
-                message = deviceAuthenticationBytes,
-                includeMessageInPayload = false,
-                protectedHeaders = emptyMap(),
-                unprotectedHeaders = emptyMap(),
-            )
+            stage = "decode-issuer-namespaces"
+            val issuerNamespaces = issuerSigned.getOrNull("nameSpaces")?.let {
+                IssuerNamespaces.fromDataItem(it)
+            } ?: buildIssuerNamespaces {}
+            val issuerAuth = issuerSigned["issuerAuth"].asCoseSign1
 
+            /*
+             * Use Multipaz's ISO model and builder rather than hand-assembling
+             * the CBOR maps. Besides keeping this path aligned with the EUDI
+             * reference wallet, the builder records the COSE algorithm in the
+             * protected header and emits the exact DeviceResponse CDDL shape
+             * consumed by independent ISO 18013-5 implementations.
+             */
             stage = "assemble-device-response"
-            val document = buildCborMap {
-                put("docType", docType)
-                put("issuerSigned", issuerSigned)
-                putCborMap("deviceSigned") {
-                    put(
-                        "nameSpaces",
-                        Tagged(Tagged.ENCODED_CBOR, Bstr(deviceNamespaces)),
-                    )
-                    putCborMap("deviceAuth") {
-                        put("deviceSignature", deviceSignature.toDataItem())
-                    }
-                }
-            }
-            val deviceResponse = buildCborMap {
-                put("version", "1.0")
-                putCborArray("documents") {
-                    add(document)
-                }
-                put("status", 0)
-            }
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(Cbor.encode(deviceResponse))
+            val builder = DeviceResponse.Builder(
+                sessionTranscript = Cbor.decode(sessionTranscript),
+                status = DeviceResponse.STATUS_OK,
+                version = "1.0",
+            )
+            builder.addDocument(
+                docType = docType,
+                issuerAuth = issuerAuth,
+                issuerNamespaces = issuerNamespaces,
+                deviceNamespaces = buildDeviceNamespaces {},
+                deviceKey = AsymmetricKey.anonymous(multipazPrivateKey),
+            )
+            val deviceResponse = builder.build()
+            return Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(Cbor.encode(deviceResponse.toDataItem()))
         } catch (exception: MdocPresentationStageException) {
             throw exception
         } catch (exception: Exception) {
