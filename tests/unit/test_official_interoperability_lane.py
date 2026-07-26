@@ -352,6 +352,79 @@ def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(
     assert captured[captured.index("--oidf-runner-config") + 1] == str(haip_material / "marty-verifier-haip.json")
 
 
+def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> None:
+    config, request = lane.oid4vci_issuer_config(
+        tmp_path,
+        "https://marty.test",
+        {
+            "organization_id": "org-1",
+            "oid4vci_template_id": "template-1",
+            "oid4vci_issuer_did": "did:web:marty.test:orgs:org-1",
+        },
+    )
+
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data["vci"] == {
+        "credential_issuer_url": "https://marty.test/org/org-1",
+        "authorization_server": "https://marty.test",
+        "credential_configuration_id": "template-1",
+        "credential_proof_type_hint": "jwt",
+    }
+    assert json.loads(request.read_text(encoding="utf-8"))["claims"]["employee_id"] == "oidf-conformance"
+
+
+def test_oid4vci_lane_runs_official_plan_through_public_issuance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    official_command: list[str] = []
+    suite_environment: dict[str, str] = {}
+
+    def fake_run(
+        command: list[str],
+        environment: dict[str, str],
+        **_kwargs: object,
+    ) -> int:
+        if "oidf_conformance.py" in " ".join(command):
+            official_command.extend(command)
+            suite_environment.update(environment)
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(
+        lane,
+        "bootstrap_fixtures",
+        lambda *_args, **_kwargs: {
+            "organization_id": "org-1",
+            "oid4vci_template_id": "template-1",
+            "oid4vci_issuer_did": "did:web:marty.test:orgs:org-1",
+        },
+    )
+    args = SimpleNamespace(
+        lane="oid4vci-issuer",
+        marty_ui=tmp_path / "marty-ui",
+        run_id="run-1",
+        oidf_runner=tmp_path / "runner",
+        output_dir=tmp_path / "output",
+        stack_manifest=tmp_path / "stack-manifest.json",
+    )
+
+    assert (
+        lane.run_oid4vci_issuer(
+            args,
+            {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+        )
+        == 0
+    )
+    assert official_command[official_command.index("--profile") + 1] == "oid4vci-issuer"
+    assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
+    assert suite_environment["OIDF_MARTY_CREDENTIAL_TEMPLATE_ID"] == "template-1"
+    assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
+    assert suite_environment["OIDF_ISSUANCE_COMMAND"].endswith("oidf_marty_public_issuance.py")
+    assert "OIDF_ISSUANCE_API_KEY" not in suite_environment
+
+
 def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -27,6 +27,15 @@ and URLs, so they are retained as a private CI artifact and are not committed.
 
 ## Run the official issuer plan
 
+The `oid4vci-issuer` lane is part of the monthly
+`official-interoperability.yml` matrix and is also available through manual
+dispatch. It starts the pinned OIDF runner and an attested disposable Marty
+stack, provisions the issuer through the public gateway, completes the normal
+public OIDC operator login, creates every offer through `POST /v1/issuance`,
+and submits no profile, KMS, service, or key selector. Paid certification can
+reuse the same lane, runner commit, production images, and evidence format
+when financing is approved.
+
 Install and start a pinned copy of the official suite following its upstream
 instructions. The runner checkout must be at the commit recorded in
 `oidf-runner.json`; the helper refuses a different revision.
@@ -62,8 +71,8 @@ results.
 export CONFORMANCE_SERVER=https://oidf.test.example
 export OIDF_ISSUANCE_URL=https://stack.test.example/v1/issuance/initiate
 export OIDF_ISSUANCE_API_KEY="$(read_secret oidf-issuance-api-key)"
-# Set only for a disposable development TLS endpoint.
-export OIDF_INSECURE_TLS=1
+# Set only for a disposable development issuer TLS endpoint.
+export OIDF_ISSUANCE_INSECURE_TLS=1
 python scripts/oidf_conformance.py run \
   --runner /opt/openid-conformance-suite \
   --profile oid4vci-issuer \
@@ -75,7 +84,10 @@ python scripts/oidf_conformance.py run \
 `marty-issuer.offer-request.example.json` contains only disposable fixture
 claims. Override `OIDF_ISSUANCE_REQUEST` with a secure environment-specific
 request when template identifiers differ. The adapter accepts TLS normally;
-`OIDF_INSECURE_TLS=1` is intentionally limited to a disposable local stack.
+`OIDF_ISSUANCE_INSECURE_TLS=1` is intentionally limited to a disposable local
+issuer. The scheduled lane trusts the generated Marty CA and relaxes TLS only
+for the isolated local OIDF runner through
+`OIDF_CONFORMANCE_INSECURE_TLS=1`.
 Do not put the issuance URL, API key, or generated offers in repository files,
 logs, or exported evidence.
 
