@@ -307,7 +307,7 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
             organization_id=vp_test_org["id"],
         )
         assert len(published_identity.get("x5c") or []) == 2
-    with eudi_stage("mdoc-trust-and-status"):
+    with eudi_stage("mdoc-trust-profile-create"):
         trust_profile = await authenticated_gateway_client.create_trust_profile(
             organization_id=vp_test_org["id"],
             name=f"EUDI VP mDoc trust ({uuid.uuid4().hex[:6]})",
@@ -322,12 +322,15 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
             ],
             revocation_check_enabled=False,
         )
+    with eudi_stage("mdoc-trust-profile-activate"):
         trust_profile = await authenticated_gateway_client.activate_trust_profile(trust_profile["id"])
+    with eudi_stage("mdoc-revocation-profile-create"):
         revocation = await authenticated_gateway_client.create_revocation_profile(
             organization_id=vp_test_org["id"],
             name="EUDI VP mDoc status list",
             revocation_mechanism=["STATUS_LIST_2021"],
         )
+    with eudi_stage("mdoc-revocation-profile-activate"):
         revocation = await authenticated_gateway_client.activate_revocation_profile(revocation["id"])
     logger.info(
         "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer profile %s; verifier trust profile %s",

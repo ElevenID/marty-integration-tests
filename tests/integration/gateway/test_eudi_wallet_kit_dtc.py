@@ -181,7 +181,7 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
             cert_chain_pem=certificate.chain_pem,
         )
         assert stored.get("ok") is True
-    with eudi_stage("dtc-trust-and-status"):
+    with eudi_stage("dtc-trust-profile-create"):
         trust_profile = await authenticated_gateway_client.create_trust_profile(
             organization_id=dtc_test_org["id"],
             name=f"EUDI DTC trust ({uuid.uuid4().hex[:6]})",
@@ -196,12 +196,15 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
             ],
             revocation_check_enabled=False,
         )
+    with eudi_stage("dtc-trust-profile-activate"):
         trust_profile = await authenticated_gateway_client.activate_trust_profile(trust_profile["id"])
+    with eudi_stage("dtc-revocation-profile-create"):
         revocation = await authenticated_gateway_client.create_revocation_profile(
             organization_id=dtc_test_org["id"],
             name="EUDI DTC status list",
             revocation_mechanism=["STATUS_LIST_2021"],
         )
+    with eudi_stage("dtc-revocation-profile-activate"):
         revocation = await authenticated_gateway_client.activate_revocation_profile(revocation["id"])
     return {
         "compliance_profile_id": compliance["id"],
