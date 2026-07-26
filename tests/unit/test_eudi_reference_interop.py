@@ -305,6 +305,16 @@ def test_eudi_failure_categories_expose_only_bounded_harness_class() -> None:
     assert "must-not-escape" not in json.dumps(categories)
 
 
+def test_eudi_failure_categories_expose_only_bounded_fixture_stage() -> None:
+    categories = eudi.classify_eudi_failure_text(
+        "EUDIInteropStageError: eudi-stage-mdoc-issuer-profile token=must-not-escape"
+    )
+
+    assert "eudi-fixture-stage" in categories
+    assert "eudi-stage-mdoc-issuer-profile" in categories
+    assert "must-not-escape" not in json.dumps(categories)
+
+
 @pytest.mark.parametrize(
     ("diagnostic", "category"),
     [

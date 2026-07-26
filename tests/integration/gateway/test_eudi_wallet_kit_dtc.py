@@ -35,6 +35,7 @@ from typing import Any, Dict
 
 import pytest
 
+from .helpers.eudi_stage import eudi_stage
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
 from .helpers.gateway_client import GatewayClient
 from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
@@ -53,13 +54,16 @@ def _presentation_submission_for_request(
         return None
 
     descriptor_id = pd.get("input_descriptors", [{}])[0].get("id", "0")
-    return json.dumps({
-        "id": str(uuid.uuid4()),
-        "definition_id": pd.get("id", str(uuid.uuid4())),
-        "descriptor_map": [
-            {"id": descriptor_id, "format": credential_format, "path": "$"},
-        ],
-    })
+    return json.dumps(
+        {
+            "id": str(uuid.uuid4()),
+            "definition_id": pd.get("id", str(uuid.uuid4())),
+            "descriptor_map": [
+                {"id": descriptor_id, "format": credential_format, "path": "$"},
+            ],
+        }
+    )
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -85,6 +89,7 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 async def wallet_kit() -> EUDIWalletKitClient:
@@ -120,86 +125,84 @@ async def dtc_request_object_issuer_profile(
 @pytest.fixture
 async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_test_org):
     """Create the separately managed mDoc resources required by the public API."""
-    compliance = await authenticated_gateway_client.create_compliance_profile(
-        organization_id=dtc_test_org["id"],
-        name="EUDI DTC mDoc",
-        compliance_code="ICAO_DTC",
-        credential_format="mso_mdoc",
-        frameworks=["icao_doc_9303"],
-    )
-    service = None
-    resolution_error: Exception | None = None
-    for organization_id in (dtc_test_org["id"], None):
-        try:
-            resolved = await authenticated_gateway_client.resolve_signing_service(
-                organization_id=organization_id,
-                credential_format="mso_mdoc",
-                key_purpose="mdoc_dsc",
-                algorithm="ES256",
-            )
-            candidate = resolved.get("service")
-            if isinstance(candidate, dict) and candidate.get("id"):
-                service = candidate
-                break
-        except Exception as exc:  # Capability absence is surfaced by the public API.
-            resolution_error = exc
-    if not isinstance(service, dict) or not service.get("id"):
-        raise RuntimeError(f"No mDoc document signer is available: {resolution_error}")
-    domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
-    domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
-    issuer = await authenticated_gateway_client.create_issuer_profile(
-        organization_id=dtc_test_org["id"],
-        name="EUDI DTC document signer",
-        issuer_did=f"did:web:{domain.replace('/', ':')}:orgs:{dtc_test_org['id']}",
-        signing_service_id=str(service["id"]),
-        signing_key_reference=str(service.get("key_reference") or "") or None,
-        key_purpose="mdoc_dsc",
-        status="active",
-    )
-    identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
-        issuer_profile_id=issuer["id"],
-        organization_id=dtc_test_org["id"],
-    )
-    public_jwk = identity.get("public_jwk")
-    if not isinstance(public_jwk, dict):
-        raise RuntimeError("Gateway did not return the DTC issuer profile public JWK")
-    certificate = create_disposable_mdoc_certificate_chain(
-        public_jwk,
-        organization_id=dtc_test_org["id"],
-    )
-    stored = await authenticated_gateway_client.store_issuer_profile_certificate(
-        issuer_profile_id=issuer["id"],
-        organization_id=dtc_test_org["id"],
-        cert_pem=certificate.leaf_pem,
-        cert_chain_pem=certificate.chain_pem,
-    )
-    assert stored.get("ok") is True
-    trust_profile = await authenticated_gateway_client.create_trust_profile(
-        organization_id=dtc_test_org["id"],
-        name=f"EUDI DTC trust ({uuid.uuid4().hex[:6]})",
-        trust_sources=[
-            {
-                "name": "Disposable DTC test CSCA",
-                "source_type": "ROOT_CA",
-                "certificate_pem": certificate.trust_anchor_pem,
-                "description": (
-                    "Ephemeral trust anchor for the production-path EUDI "
-                    "DTC interoperability lane"
-                ),
-                "enabled": True,
-            }
-        ],
-        revocation_check_enabled=False,
-    )
-    trust_profile = await authenticated_gateway_client.activate_trust_profile(
-        trust_profile["id"]
-    )
-    revocation = await authenticated_gateway_client.create_revocation_profile(
-        organization_id=dtc_test_org["id"],
-        name="EUDI DTC status list",
-        revocation_mechanism=["STATUS_LIST_2021"],
-    )
-    revocation = await authenticated_gateway_client.activate_revocation_profile(revocation["id"])
+    with eudi_stage("dtc-compliance-profile"):
+        compliance = await authenticated_gateway_client.create_compliance_profile(
+            organization_id=dtc_test_org["id"],
+            name="EUDI DTC mDoc",
+            compliance_code="ICAO_DTC",
+            credential_format="mso_mdoc",
+            frameworks=["icao_doc_9303"],
+        )
+    with eudi_stage("dtc-issuer-profile"):
+        service = None
+        for organization_id in (dtc_test_org["id"], None):
+            try:
+                resolved = await authenticated_gateway_client.resolve_signing_service(
+                    organization_id=organization_id,
+                    credential_format="mso_mdoc",
+                    key_purpose="mdoc_dsc",
+                    algorithm="ES256",
+                )
+                candidate = resolved.get("service")
+                if isinstance(candidate, dict) and candidate.get("id"):
+                    service = candidate
+                    break
+            except Exception:
+                continue
+        if not isinstance(service, dict) or not service.get("id"):
+            raise RuntimeError("mDoc document signer is unavailable")
+        domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
+        domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
+        issuer = await authenticated_gateway_client.create_issuer_profile(
+            organization_id=dtc_test_org["id"],
+            name="EUDI DTC document signer",
+            issuer_did=f"did:web:{domain.replace('/', ':')}:orgs:{dtc_test_org['id']}",
+            signing_service_id=str(service["id"]),
+            signing_key_reference=str(service.get("key_reference") or "") or None,
+            key_purpose="mdoc_dsc",
+            status="active",
+        )
+    with eudi_stage("dtc-issuer-certificate"):
+        identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
+            issuer_profile_id=issuer["id"],
+            organization_id=dtc_test_org["id"],
+        )
+        public_jwk = identity.get("public_jwk")
+        if not isinstance(public_jwk, dict):
+            raise RuntimeError("issuer profile public identity is incomplete")
+        certificate = create_disposable_mdoc_certificate_chain(
+            public_jwk,
+            organization_id=dtc_test_org["id"],
+        )
+        stored = await authenticated_gateway_client.store_issuer_profile_certificate(
+            issuer_profile_id=issuer["id"],
+            organization_id=dtc_test_org["id"],
+            cert_pem=certificate.leaf_pem,
+            cert_chain_pem=certificate.chain_pem,
+        )
+        assert stored.get("ok") is True
+    with eudi_stage("dtc-trust-and-status"):
+        trust_profile = await authenticated_gateway_client.create_trust_profile(
+            organization_id=dtc_test_org["id"],
+            name=f"EUDI DTC trust ({uuid.uuid4().hex[:6]})",
+            trust_sources=[
+                {
+                    "name": "Disposable DTC test CSCA",
+                    "source_type": "ROOT_CA",
+                    "certificate_pem": certificate.trust_anchor_pem,
+                    "description": ("Ephemeral trust anchor for the production-path EUDI DTC interoperability lane"),
+                    "enabled": True,
+                }
+            ],
+            revocation_check_enabled=False,
+        )
+        trust_profile = await authenticated_gateway_client.activate_trust_profile(trust_profile["id"])
+        revocation = await authenticated_gateway_client.create_revocation_profile(
+            organization_id=dtc_test_org["id"],
+            name="EUDI DTC status list",
+            revocation_mechanism=["STATUS_LIST_2021"],
+        )
+        revocation = await authenticated_gateway_client.activate_revocation_profile(revocation["id"])
     return {
         "compliance_profile_id": compliance["id"],
         "issuer_profile_id": issuer["id"],
@@ -220,12 +223,15 @@ async def dtc_mdoc_template(
         name=f"DTC Wallet Test ({uuid.uuid4().hex[:6]})",
         compliance_profile_id=dtc_mdoc_resources["compliance_profile_id"],
     )
-    template_data.update({
-        "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
-        "trust_profile_id": dtc_mdoc_resources["trust_profile_id"],
-        "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
-    })
-    return await authenticated_gateway_client.create_credential_template(**template_data)
+    template_data.update(
+        {
+            "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
+            "trust_profile_id": dtc_mdoc_resources["trust_profile_id"],
+            "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
+        }
+    )
+    with eudi_stage("dtc-credential-template"):
+        return await authenticated_gateway_client.create_credential_template(**template_data)
 
 
 @pytest.fixture
@@ -247,18 +253,20 @@ async def issued_dtc_credential(
         document_number="PMB09A5929",
     )
 
-    result = await authenticated_gateway_client.issue_credential(
-        organization_id=dtc_test_org["id"],
-        credential_template_id=dtc_mdoc_template["id"],
-        claims=claims,
-    )
+    with eudi_stage("dtc-credential-offer"):
+        result = await authenticated_gateway_client.issue_credential(
+            organization_id=dtc_test_org["id"],
+            credential_template_id=dtc_mdoc_template["id"],
+            claims=claims,
+        )
     offer_uri = result["credential_offer_uri"]
     logger.info("[DTC] Credential offer created: %s", offer_uri[:100])
 
     # Wallet picks up the offer via OID4VCI pre-authorized flow
-    issuance = await wallet_kit.run_preauth_issuance(offer_uri)
-    assert issuance["success"], f"DTC issuance failed: {issuance.get('error')}"
-    assert issuance["credentialCount"] >= 1
+    with eudi_stage("dtc-wallet-receipt"):
+        issuance = await wallet_kit.run_preauth_issuance(offer_uri)
+        assert issuance["success"], f"DTC issuance failed: {issuance.get('error')}"
+        assert issuance["credentialCount"] >= 1
 
     cred = issuance["credentials"][0]
     logger.info(
@@ -279,6 +287,7 @@ async def issued_dtc_credential(
 async def dtc_vp_policy(
     authenticated_gateway_client: GatewayClient,
     dtc_test_org,
+    dtc_mdoc_resources,
     dtc_mdoc_template,
     dtc_request_object_issuer_profile,
 ):
@@ -299,9 +308,7 @@ async def dtc_vp_policy(
         },
     }
     policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
-    policy = await authenticated_gateway_client.activate_presentation_policy(
-        policy["id"]
-    )
+    policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = dtc_request_object_issuer_profile["issuer_did"]
     policy["_trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
@@ -333,9 +340,7 @@ async def dtc_identity_vp_policy(
         },
     }
     policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
-    policy = await authenticated_gateway_client.activate_presentation_policy(
-        policy["id"]
-    )
+    policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = dtc_request_object_issuer_profile["issuer_did"]
     policy["_trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
@@ -345,6 +350,7 @@ async def dtc_identity_vp_policy(
 # ═══════════════════════════════════════════════════════════════════════════
 # DTC Issuance via EUDI Wallet Kit
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestDtcWalletIssuance:
     """Verify DTC credential issuance via OID4VCI with EUDI Wallet Kit.
@@ -410,6 +416,7 @@ class TestDtcWalletIssuance:
 # DTC OID4VP Authorization Request
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestDtcWalletAuthorizationRequest:
     """Verify OID4VP authorization request structure for DTC verification."""
 
@@ -447,9 +454,7 @@ class TestDtcWalletAuthorizationRequest:
             issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            flow["instance_id"]
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
 
         pd = auth_req.get("presentation_definition")
         dcql = auth_req.get("dcql_query")
@@ -466,6 +471,7 @@ class TestDtcWalletAuthorizationRequest:
 # ═══════════════════════════════════════════════════════════════════════════
 # DTC Presentation via EUDI Wallet Kit
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestDtcWalletPresentation:
     """Full OID4VP flow for DTC: issue mDoc → present to verifier.
@@ -507,9 +513,7 @@ class TestDtcWalletPresentation:
             result.get("responseMode"),
         )
 
-        assert result["success"], (
-            f"DTC VP official presentation failed: {result.get('error')}"
-        )
+        assert result["success"], f"DTC VP official presentation failed: {result.get('error')}"
         assert result["responseMode"] == "direct_post"
         assert result["verifierAccepted"] is True
 
@@ -539,9 +543,7 @@ class TestDtcWalletPresentation:
             credential=credential,
         )
 
-        assert result["success"], (
-            f"DTC identity-only VP failed: {result.get('error')}"
-        )
+        assert result["success"], f"DTC identity-only VP failed: {result.get('error')}"
         assert result["verifierAccepted"] is True
         logger.info("[DTC VP] Identity-only presentation accepted")
 
@@ -549,6 +551,7 @@ class TestDtcWalletPresentation:
 # ═══════════════════════════════════════════════════════════════════════════
 # End-to-End: DTC Issue + Present + Verify
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestDtcWalletEndToEnd:
     """Full DTC lifecycle: issuance → wallet presentation → verification.
@@ -574,14 +577,14 @@ class TestDtcWalletEndToEnd:
             name=f"DTC E2E ({uuid.uuid4().hex[:6]})",
             compliance_profile_id=dtc_mdoc_resources["compliance_profile_id"],
         )
-        template_data.update({
-            "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
-            "trust_profile_id": dtc_mdoc_resources["trust_profile_id"],
-            "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
-        })
-        template = await authenticated_gateway_client.create_credential_template(
-            **template_data
+        template_data.update(
+            {
+                "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
+                "trust_profile_id": dtc_mdoc_resources["trust_profile_id"],
+                "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
+            }
         )
+        template = await authenticated_gateway_client.create_credential_template(**template_data)
         logger.info("[DTC E2E] Template created: %s", template["id"])
 
         # 2. Issue DTC credential
@@ -621,12 +624,8 @@ class TestDtcWalletEndToEnd:
                 "replay_detection_required": True,
             },
         }
-        policy = await authenticated_gateway_client.create_presentation_policy(
-            **policy_data
-        )
-        policy = await authenticated_gateway_client.activate_presentation_policy(
-            policy["id"]
-        )
+        policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
+        policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
         logger.info("[DTC E2E] Verification policy activated: %s", policy["id"])
 
         # 5. Start OID4VP verification flow
@@ -648,24 +647,20 @@ class TestDtcWalletEndToEnd:
             authorization_request_uri=request_uri,
             credential=credential,
         )
-        assert post_result["success"], (
-            f"DTC VP official presentation failed: {post_result.get('error')}"
-        )
+        assert post_result["success"], f"DTC VP official presentation failed: {post_result.get('error')}"
         assert post_result["verifierAccepted"] is True
         logger.info("[DTC E2E] VP token accepted by verifier")
 
         # 7. Check verification result
-        result = await authenticated_gateway_client.get_verification_result(
-            instance_id
-        )
+        result = await authenticated_gateway_client.get_verification_result(instance_id)
         logger.info("[DTC E2E] Verification result: status=%s", result.get("status"))
 
         status = result.get("status", "").upper()
         assert status in (
-            "COMPLETED", "VERIFIED", "SUCCESS", "APPROVED",
+            "COMPLETED",
+            "VERIFIED",
+            "SUCCESS",
+            "APPROVED",
         ), f"Unexpected final status: {status} — result: {json.dumps(result)[:500]}"
 
-        logger.info(
-            "[DTC E2E] ✓ Full DTC passport lifecycle passed: "
-            "issue → wallet receive → present → verify"
-        )
+        logger.info("[DTC E2E] ✓ Full DTC passport lifecycle passed: issue → wallet receive → present → verify")
