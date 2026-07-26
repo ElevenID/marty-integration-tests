@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from .helpers.eudi_stage import eudi_stage
+from .helpers.eudi_stage import eudi_stage, require_presentation_accepted
 from .helpers.eudi_wallet_kit_client import (
     EUDIWalletHarnessError,
     EUDIWalletKitClient,
@@ -1065,9 +1065,11 @@ class TestMDocPresentation:
             result.get("responseMode"),
         )
 
-        assert result["success"], f"mDoc VP official presentation failed: {result.get('error')}"
-        assert result["responseMode"] == "direct_post"
-        assert result["verifierAccepted"] is True
+        require_presentation_accepted(
+            result,
+            stage="mdoc-presentation",
+            expected_mode="direct_post",
+        )
         verification = await authenticated_gateway_client.get_verification_result(flow["instance_id"])
         assert verification["status"] == "completed", verification
         assert verification["result"] == "passed", verification

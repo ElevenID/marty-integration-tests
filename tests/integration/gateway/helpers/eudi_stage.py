@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from typing import Any
 
 _STAGE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
@@ -30,3 +31,22 @@ def eudi_stage(stage: str) -> Iterator[None]:
         status_code = getattr(exc, "status_code", None)
         suffix = f"-http-{status_code}" if isinstance(status_code, int) and 400 <= status_code <= 599 else ""
         raise EUDIInteropStageError(f"eudi-stage-{stage}{suffix}") from None
+
+
+def require_presentation_accepted(
+    result: Mapping[str, Any],
+    *,
+    stage: str,
+    expected_mode: str | None = None,
+) -> None:
+    """Require official-wallet dispatch success without publishing response values."""
+
+    if not _STAGE.fullmatch(stage):
+        raise ValueError("EUDI interoperability stage must be a bounded slug")
+    with eudi_stage(f"{stage}-dispatch"):
+        assert result.get("success") is True
+    if expected_mode is not None:
+        with eudi_stage(f"{stage}-response-mode"):
+            assert result.get("responseMode") == expected_mode
+    with eudi_stage(f"{stage}-verifier-accepted"):
+        assert result.get("verifierAccepted") is True
