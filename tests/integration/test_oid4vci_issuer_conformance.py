@@ -25,16 +25,16 @@ Or via pytest:
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
-import struct
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone, timedelta
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -212,39 +212,66 @@ def _fresh_nonce() -> str:
     return nonce
 
 
+def _base58btc_encode(value: bytes) -> str:
+    """Encode bytes with the Bitcoin base58 alphabet."""
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    leading_zeroes = len(value) - len(value.lstrip(b"\0"))
+    number = int.from_bytes(value, "big")
+    encoded = ""
+    while number:
+        number, remainder = divmod(number, 58)
+        encoded = alphabet[remainder] + encoded
+    return ("1" * leading_zeroes) + encoded
+
+
+def _holder_did(private_key: ed25519.Ed25519PrivateKey) -> str:
+    public_key = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    # did:key Ed25519 multicodec varint 0xed01 is encoded as ed 01.
+    return f"did:key:z{_base58btc_encode(bytes((0xED, 0x01)) + public_key)}"
+
+
+_DEFAULT_HOLDER_KEY = ed25519.Ed25519PrivateKey.generate()
+
+
 def _build_proof_jwt(
     issuer_url: str,
     nonce: str,
     *,
-    holder_kid: str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+    holder_key: ed25519.Ed25519PrivateKey | None = None,
     typ: str = "openid4vci-proof+jwt",
     alg: str = "EdDSA",
     bad_nonce: str | None = None,
     bad_aud: str | None = None,
     iat_offset: int = 0,
 ) -> str:
-    """Build a mock proof JWT.
-
-    This creates a *structurally valid* JWT with the correct header/payload
-    fields but a dummy signature (since the server doesn't verify signatures
-    yet). Once signature verification is added this helper will need real
-    Ed25519 signing.
-    """
+    """Build a cryptographically valid OID4VCI holder proof JWT."""
+    if alg != "EdDSA":
+        raise ValueError("the conformance holder currently supports only EdDSA")
+    signing_key = holder_key or _DEFAULT_HOLDER_KEY
+    holder_did = _holder_did(signing_key)
+    holder_kid = f"{holder_did}#{holder_did}"
     header = {
         "alg": alg,
         "typ": typ,
         "kid": holder_kid,
     }
     payload = {
-        "iss": holder_kid.split("#")[0],
+        "iss": holder_did,
         "aud": bad_aud if bad_aud is not None else issuer_url,
         "iat": int(time.time()) + iat_offset,
         "nonce": bad_nonce if bad_nonce is not None else nonce,
     }
-    h = base64.urlsafe_b64encode(json.dumps(header).encode()).rstrip(b"=").decode()
-    p = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
-    # Dummy 64-byte Ed25519-shaped signature
-    sig = base64.urlsafe_b64encode(b"\x00" * 64).rstrip(b"=").decode()
+    h = base64.urlsafe_b64encode(
+        json.dumps(header, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
+    p = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
+    signature = signing_key.sign(f"{h}.{p}".encode())
+    sig = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
     return f"{h}.{p}.{sig}"
 
 
@@ -843,13 +870,16 @@ def test_proof_extraction():
     print("\n--- §8.2 Proof of Possession ---")
 
     # Holder DID should appear as 'sub' in the issued VC.
-    # Use a real valid Ed25519 did:key (different from the default to confirm binding).
-    holder_kid = "did:key:z6Mkep5MgDkUqeGpHFhMKzDWwLRG8W8GMKJhPuPuULJQrLiy#z6Mkep5MgDkUqeGpHFhMKzDWwLRG8W8GMKJhPuPuULJQrLiy"
-    expected_did = "did:key:z6Mkep5MgDkUqeGpHFhMKzDWwLRG8W8GMKJhPuPuULJQrLiy"
+    holder_key = ed25519.Ed25519PrivateKey.generate()
+    expected_did = _holder_did(holder_key)
 
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
-    proof = _build_proof_jwt(ISSUER_BASE_URL, tok["nonce"], holder_kid=holder_kid)
+    proof = _build_proof_jwt(
+        ISSUER_BASE_URL,
+        tok["nonce"],
+        holder_key=holder_key,
+    )
     resp = _issue_credential(tok["access_token"], proof)
 
     if resp.status != 200:
@@ -1438,19 +1468,23 @@ def test_issuer_fail_on_invalid_jwt_proof_signature():
 
     OIDF: VCIIssuerFailOnInvalidJwtProofSignature
     OID4VCI-1FINAL Appendix F.4: Issuer MUST verify proof signature.
-    NOTE: dummy signatures are used throughout this suite. If the server currently
-    doesn't verify signatures, this test will FAIL — exposing the missing feature.
+    The negative proof starts as a valid proof and changes one signature byte,
+    so rejection demonstrates that the production verifier actually checks it.
     """
     print("\n--- VCIIssuerFailOnInvalidJwtProofSignature (Appendix F.4) ---")
     tx = _initiate_issuance()
     tok = _exchange_token(tx["pre_auth_code"])
     nonce = _fresh_nonce()
 
-    header = {"alg": "EdDSA", "typ": "openid4vci-proof+jwt", "kid": "did:key:z6MkBad#z6MkBad"}
-    payload = {"iss": "did:key:z6MkBad", "aud": ISSUER_BASE_URL, "iat": int(time.time()), "nonce": nonce}
-    h = base64.urlsafe_b64encode(json.dumps(header).encode()).rstrip(b"=").decode()
-    p = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
-    bad_sig = base64.urlsafe_b64encode(b"\xff" * 64).rstrip(b"=").decode()
+    valid_proof = _build_proof_jwt(ISSUER_BASE_URL, nonce)
+    h, p, encoded_signature = valid_proof.split(".")
+    signature = bytearray(
+        base64.urlsafe_b64decode(
+            encoded_signature + ("=" * (-len(encoded_signature) % 4))
+        )
+    )
+    signature[-1] ^= 0x01
+    bad_sig = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
     bad_proof = f"{h}.{p}.{bad_sig}"
 
     resp = _issue_credential(tok["access_token"], bad_proof)
@@ -1459,7 +1493,7 @@ def test_issuer_fail_on_invalid_jwt_proof_signature():
     else:
         R.fail("VCIIssuerFailOnInvalidJwtProofSignature",
                f"OID4VCI-1FINAL Appendix F.4: invalid signature MUST be rejected with 400, "
-               f"got {resp.status}. NOTE: server likely not verifying signatures yet.")
+               f"got {resp.status}; production proof verification may have been bypassed.")
 
 
 def test_issuer_fail_on_missing_proof():
