@@ -591,6 +591,16 @@ async def vp_mdoc_policy(
         name=f"VP mDL mDoc ({uuid.uuid4().hex[:6]})",
         purpose="Verify mDL via mDoc",
         trust_profile_id=vp_mdoc_resources["trust_profile_id"],
+        holder_binding={
+            "required": True,
+            "binding_methods": ["DEVICE_KEY"],
+            "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+            "proof_freshness": {
+                "challenge_required": True,
+                "audience_binding_required": True,
+                "replay_detection_required": True,
+            },
+        },
         credential_requirements=[
             {
                 "credential_template_id": mdl_mdoc_template["id"],

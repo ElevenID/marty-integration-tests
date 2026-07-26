@@ -288,6 +288,16 @@ async def dtc_vp_policy(
         credential_template_id=dtc_mdoc_template["id"],
     )
     policy_data["trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
+    policy_data["holder_binding"] = {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
     policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
     policy = await authenticated_gateway_client.activate_presentation_policy(
         policy["id"]
@@ -312,6 +322,16 @@ async def dtc_identity_vp_policy(
         credential_template_id=dtc_mdoc_template["id"],
     )
     policy_data["trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
+    policy_data["holder_binding"] = {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
     policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
     policy = await authenticated_gateway_client.activate_presentation_policy(
         policy["id"]
@@ -591,6 +611,16 @@ class TestDtcWalletEndToEnd:
             credential_template_id=template["id"],
         )
         policy_data["trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
+        policy_data["holder_binding"] = {
+            "required": True,
+            "binding_methods": ["DEVICE_KEY"],
+            "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+            "proof_freshness": {
+                "challenge_required": True,
+                "audience_binding_required": True,
+                "replay_detection_required": True,
+            },
+        }
         policy = await authenticated_gateway_client.create_presentation_policy(
             **policy_data
         )
