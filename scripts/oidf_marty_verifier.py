@@ -262,21 +262,6 @@ def decode_request_object(request_uri: str, *, insecure: bool) -> dict[str, Any]
     return claims
 
 
-def query_parameters(claims: dict[str, Any]) -> dict[str, str]:
-    """Encode request claims for the official URL-query profile.
-
-    The profile itself intentionally assesses query transport; the Marty
-    request object is still fetched above to prove the deployed flow emitted a
-    signed object before these values are passed to the mock wallet.
-    """
-    params: dict[str, str] = {}
-    for key, value in claims.items():
-        if value is None:
-            continue
-        params[key] = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
-    return params
-
-
 def submit_to_official_wallet(url: str, *, insecure: bool) -> None:
     """Submit the prepared request, preserving a narrow race error type."""
     try:
@@ -300,35 +285,32 @@ def call_mock_wallet(
     # Only the isolated upstream runner's fixed local certificate may use its
     # explicitly named local-runner exception.
     outer = outer_parameters or {}
-    if request_method == "url_query":
-        # This is the explicitly documented standard-profile transport
-        # adaptation.  Outer signed-request parameters must not leak into it.
-        claims = decode_request_object(request_uri, insecure=marty_insecure)
-        url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(query_parameters(claims))
-    elif request_method == "request_uri_signed":
-        retrieval_method = outer.get("request_uri_method")
-        outer_client_id = outer.get("client_id")
-        if retrieval_method == "post":
-            # Do not pre-fetch a POST-only request URI with GET.  The official
-            # mock wallet creates wallet_nonce, POSTs it to Marty, and verifies
-            # that the returned signed JAR carries the same nonce.
-            if not outer_client_id:
-                raise RuntimeError("POST request_uri authorization request has no outer client_id")
-            client_id = outer_client_id
-        else:
-            claims = decode_request_object(request_uri, insecure=marty_insecure)
-            signed_client_id = claims.get("client_id")
-            if not isinstance(signed_client_id, str) or not signed_client_id:
-                raise RuntimeError("signed request object has no client_id")
-            if outer_client_id and outer_client_id != signed_client_id:
-                raise RuntimeError("outer client_id does not match signed request object client_id")
-            client_id = outer_client_id or signed_client_id
-        parameters = {"client_id": client_id, "request_uri": request_uri}
-        if retrieval_method is not None:
-            parameters["request_uri_method"] = retrieval_method
-        url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(parameters)
+    if request_method != "request_uri_signed":
+        raise ValueError(
+            "OIDF_VERIFIER_REQUEST_METHOD must be request_uri_signed; "
+            "rewriting a signed request object as URL-query parameters is prohibited"
+        )
+    retrieval_method = outer.get("request_uri_method")
+    outer_client_id = outer.get("client_id")
+    if retrieval_method == "post":
+        # Do not pre-fetch a POST-only request URI with GET.  The official
+        # mock wallet creates wallet_nonce, POSTs it to Marty, and verifies
+        # that the returned signed JAR carries the same nonce.
+        if not outer_client_id:
+            raise RuntimeError("POST request_uri authorization request has no outer client_id")
+        client_id = outer_client_id
     else:
-        raise ValueError("OIDF_VERIFIER_REQUEST_METHOD must be url_query or request_uri_signed")
+        claims = decode_request_object(request_uri, insecure=marty_insecure)
+        signed_client_id = claims.get("client_id")
+        if not isinstance(signed_client_id, str) or not signed_client_id:
+            raise RuntimeError("signed request object has no client_id")
+        if outer_client_id and outer_client_id != signed_client_id:
+            raise RuntimeError("outer client_id does not match signed request object client_id")
+        client_id = outer_client_id or signed_client_id
+    parameters = {"client_id": client_id, "request_uri": request_uri}
+    if retrieval_method is not None:
+        parameters["request_uri_method"] = retrieval_method
+    url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(parameters)
     submit_to_official_wallet(url, insecure=conformance_insecure)
 
 
@@ -338,7 +320,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-name", required=True)
     parser.add_argument("--server", required=True)
     parser.add_argument("--flow-command", type=Path, default=os.environ.get("OIDF_VERIFIER_COMMAND"))
-    parser.add_argument("--request-method", default=os.environ.get("OIDF_VERIFIER_REQUEST_METHOD", "url_query"))
+    parser.add_argument(
+        "--request-method",
+        default=os.environ.get("OIDF_VERIFIER_REQUEST_METHOD", "request_uri_signed"),
+    )
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--insecure", action="store_true", default=os.environ.get("OIDF_INSECURE_TLS") == "1")
     parser.add_argument(

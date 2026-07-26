@@ -126,10 +126,11 @@ def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
             f"verifier.profile must be {expected_profile!r} for {profile_name}; "
             "a mismatched profile cannot produce authoritative evidence"
         )
-    if profile_name == "oid4vp-haip-verifier":
-        anchor = data.get("client", {}).get("request_object_trust_anchor_pem")
-        if not isinstance(anchor, str) or not anchor.strip() or "REPLACE_" in anchor:
-            raise ValueError("client.request_object_trust_anchor_pem is required by the HAIP verifier plan")
+    anchor = data.get("client", {}).get("request_object_trust_anchor_pem")
+    if not isinstance(anchor, str) or not anchor.strip() or "REPLACE_" in anchor:
+        raise ValueError(
+            "client.request_object_trust_anchor_pem is required by the signed request_uri verifier plan"
+        )
 
 
 def runner_relative_path(path: Path, runner: Path) -> str:
@@ -249,18 +250,18 @@ def validate_verifier_interaction_environment(profile_name: str) -> None:
 
     The OIDF runner's plan is immutable, but the bridge invokes a deployment
     command through environment variables.  Checking that small boundary here
-    prevents a pre-activation HAIP run from silently using the plain-verifier
-    URL-query path (or the reverse) and then leaving misleading evidence.
+    prevents a pre-activation run from silently substituting a different
+    transport and then leaving misleading evidence.
     """
     expected = {
-        "oid4vp-verifier": ("standard", "url_query"),
+        "oid4vp-verifier": ("standard", "request_uri_signed"),
         "oid4vp-haip-verifier": ("haip", "request_uri_signed"),
     }.get(profile_name)
     if expected is None:
         return
     expected_profile, expected_method = expected
     actual_profile = os.environ.get("OIDF_MARTY_VERIFIER_PROFILE", "standard").strip()
-    actual_method = os.environ.get("OIDF_VERIFIER_REQUEST_METHOD", "url_query").strip()
+    actual_method = os.environ.get("OIDF_VERIFIER_REQUEST_METHOD", "request_uri_signed").strip()
     if actual_profile != expected_profile or actual_method != expected_method:
         raise ValueError(
             f"{profile_name} requires OIDF_MARTY_VERIFIER_PROFILE={expected_profile!r} "
