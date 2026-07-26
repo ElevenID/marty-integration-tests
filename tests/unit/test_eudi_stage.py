@@ -128,3 +128,31 @@ def test_presentation_acceptance_passes_complete_result() -> None:
         stage="mdoc-presentation",
         expected_mode="direct_post",
     )
+
+
+def test_presentation_acceptance_reduces_verifier_reason_to_fixed_codes() -> None:
+    with pytest.raises(EUDIInteropStageError) as captured:
+        require_presentation_accepted(
+            {
+                "success": False,
+                "error": "Verifier rejected the official OID4VP response",
+                "responseMode": "direct_post",
+                "verifierAccepted": False,
+            },
+            stage="mdoc-presentation",
+            expected_mode="direct_post",
+            verification_result={
+                "decision_reason": (
+                    "Credential verification failed: Signature verification failed "
+                    "for secret-doctype: private-value; Holder device authentication "
+                    "failed: private-key-material"
+                )
+            },
+        )
+
+    assert str(captured.value) == (
+        "eudi-stage-mdoc-presentation-verifier-rejected-"
+        "device-authentication-invalid-issuer-signature-invalid"
+    )
+    assert "secret" not in str(captured.value)
+    assert "private" not in str(captured.value)

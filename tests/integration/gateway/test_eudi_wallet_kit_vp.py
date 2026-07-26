@@ -1065,12 +1065,26 @@ class TestMDocPresentation:
             result.get("responseMode"),
         )
 
+        verification = None
+        if result.get("success") is not True:
+            with eudi_stage("mdoc-presentation-verification-result"):
+                verification = (
+                    await authenticated_gateway_client.get_verification_result(
+                        flow["instance_id"]
+                    )
+                )
         require_presentation_accepted(
             result,
             stage="mdoc-presentation",
             expected_mode="direct_post",
+            verification_result=verification,
         )
-        verification = await authenticated_gateway_client.get_verification_result(flow["instance_id"])
+        verification = (
+            verification
+            or await authenticated_gateway_client.get_verification_result(
+                flow["instance_id"]
+            )
+        )
         assert verification["status"] == "completed", verification
         assert verification["result"] == "passed", verification
         assert verification["decision"] == "allow", verification

@@ -10,6 +10,43 @@ from typing import Any
 _STAGE = re.compile(r"^[a-z][a-z0-9-]{0,159}$")
 _PRESENTATION_ERROR = re.compile(r"^presentation-([a-z][a-z0-9-]{0,143})$")
 _VERIFIER_REJECTED = "Verifier rejected the official OID4VP response"
+_VERIFICATION_REASON_CODES = (
+    (
+        re.compile(r"(?i)holder device authentication failed"),
+        "device-authentication-invalid",
+    ),
+    (
+        re.compile(r"(?i)signature verification failed"),
+        "issuer-signature-invalid",
+    ),
+    (
+        re.compile(
+            r"(?i)(?:issuer certificate chain validation failed|"
+            r"no trusted mdoc issuer certificates|"
+            r"no trusted issuer certificates were configured)"
+        ),
+        "issuer-untrusted",
+    ),
+    (
+        re.compile(
+            r"(?i)(?:no issuer certificate chain|invalid issuer certificate chain|"
+            r"invalid issuer x5chain)"
+        ),
+        "issuer-certificate-invalid",
+    ),
+    (
+        re.compile(r"(?i)failed to parse mdoc"),
+        "device-response-invalid",
+    ),
+    (
+        re.compile(r"(?i)verifier-owned mdoc session transcript is required"),
+        "session-transcript-missing",
+    ),
+    (
+        re.compile(r"(?i)mdoc verifier audience does not match request state"),
+        "audience-mismatch",
+    ),
+)
 
 
 class EUDIInteropStageError(RuntimeError):
@@ -40,6 +77,7 @@ def require_presentation_accepted(
     *,
     stage: str,
     expected_mode: str | None = None,
+    verification_result: Mapping[str, Any] | None = None,
 ) -> None:
     """Require official-wallet dispatch success without publishing response values."""
 
@@ -49,6 +87,19 @@ def require_presentation_accepted(
     error = result.get("error")
     if error == _VERIFIER_REJECTED:
         dispatch_stage = f"{stage}-verifier-rejected"
+        reason = (
+            verification_result.get("decision_reason")
+            if isinstance(verification_result, Mapping)
+            else None
+        )
+        if isinstance(reason, str):
+            reason_codes = [
+                code
+                for pattern, code in _VERIFICATION_REASON_CODES
+                if pattern.search(reason)
+            ]
+            if reason_codes:
+                dispatch_stage = f"{dispatch_stage}-{'-'.join(reason_codes)}"
     elif isinstance(error, str):
         matched = _PRESENTATION_ERROR.fullmatch(error)
         if matched:
