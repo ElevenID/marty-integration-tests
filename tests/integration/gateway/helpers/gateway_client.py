@@ -342,10 +342,11 @@ class GatewayClient:
             application_template_id: Optional reference to Application Template
             trust_profile_id: Optional reference to Trust Profile
             revocation_profile_id: Optional reference to Revocation Profile
-            issuer_key_id: Signing key reference
-            issuer_key_algorithm: Signing algorithm (RS256, ES256, EdDSA)
-            issuer_certificate_chain_pem: X.509 certificate chain (for mDoc)
-            issuer_did: DID for issuer (for DID-based credentials)
+            issuer_key_id: Deprecated legacy signing-key assertion
+            issuer_key_algorithm: Deprecated legacy signing-algorithm assertion
+            issuer_profile_id: Deprecated legacy profile assertion
+            issuer_certificate_chain_pem: Deprecated legacy certificate input
+            issuer_did: Public issuer identity. The gateway resolves custody internally.
             auto_generate_artifacts: Auto-generate missing artifacts in non-production
             credential_payload_format: Payload structure variant (e.g. 'w3c_vcdm_v2_sd_jwt',
                 'ietf_sd_jwt', 'w3c_vcdm_v2_jwt_vc'). Server default: 'w3c_vcdm_v2_sd_jwt'.
@@ -379,16 +380,20 @@ class GatewayClient:
             payload["trust_profile_id"] = trust_profile_id
         if revocation_profile_id:
             payload["revocation_profile_id"] = revocation_profile_id
-        if issuer_key_id:
-            payload["issuer_key_id"] = issuer_key_id
-        if issuer_key_algorithm:
-            payload["issuer_key_algorithm"] = issuer_key_algorithm
-        if issuer_profile_id:
-            payload["issuer_profile_id"] = issuer_profile_id
-        if issuer_certificate_chain_pem:
-            payload["issuer_certificate_chain_pem"] = issuer_certificate_chain_pem
         if issuer_did:
             payload["issuer_did"] = issuer_did
+        else:
+            # Temporary compatibility for older non-official tests. Official
+            # interoperability callers must use issuer_did and never cross the
+            # public boundary with profile/custody selectors.
+            if issuer_key_id:
+                payload["issuer_key_id"] = issuer_key_id
+            if issuer_key_algorithm:
+                payload["issuer_key_algorithm"] = issuer_key_algorithm
+            if issuer_profile_id:
+                payload["issuer_profile_id"] = issuer_profile_id
+            if issuer_certificate_chain_pem:
+                payload["issuer_certificate_chain_pem"] = issuer_certificate_chain_pem
         if schema:
             payload["schema_uri"] = schema
         if zk_predicate_claims:
@@ -1020,9 +1025,8 @@ class GatewayClient:
         presentation_policy_id: str,
         trust_profile_id: Optional[str] = None,
         expiry_minutes: int = 15,
-        organization_id: Optional[str] = None,
-        issuer_profile_id: Optional[str] = None,
-        issuer_did: Optional[str] = None,
+        organization_id: str = "",
+        issuer_did: str = "",
         oid4vp_profile: Optional[Literal["standard", "haip"]] = None,
         request_uri_method: Optional[Literal["get", "post"]] = None,
     ) -> Dict[str, Any]:
@@ -1034,8 +1038,7 @@ class GatewayClient:
             trust_profile_id: Optional trust profile
             expiry_minutes: Request expiry time
             organization_id: Selected organization context for authorization
-            issuer_profile_id: Issuer profile that signs the request object
-            issuer_did: Expected DID owned by the selected issuer profile
+            issuer_did: Public verifier DID resolved inside that organization
             oid4vp_profile: Optional production verifier profile selection
             request_uri_method: Optional signed request-object retrieval method
 
@@ -1047,15 +1050,15 @@ class GatewayClient:
             "trust_profile_id": trust_profile_id,
             "expiry_minutes": expiry_minutes,
         }
-        if organization_id:
-            # Cedar resolves the authorization tenant from trusted route/query/body
-            # inputs before the request is proxied. The header is also sent so the
-            # selected context remains explicit at downstream HTTP boundaries.
-            payload["organization_id"] = organization_id
-        if issuer_profile_id:
-            payload["issuer_profile_id"] = issuer_profile_id
-        if issuer_did:
-            payload["issuer_did"] = issuer_did
+        if not organization_id or not issuer_did:
+            raise ValueError(
+                "organization_id and issuer_did are required for signed verification"
+            )
+        # Cedar resolves the authorization tenant from trusted route/query/body
+        # inputs before the request is proxied. The DID is the only public
+        # signing identity; profile and KMS selectors remain internal.
+        payload["organization_id"] = organization_id
+        payload["issuer_did"] = issuer_did
         if oid4vp_profile is not None:
             payload["oid4vp_profile"] = oid4vp_profile
         if request_uri_method is not None:
@@ -1065,7 +1068,7 @@ class GatewayClient:
             "POST",
             "/v1/flows/verify",
             json=payload,
-            headers=({"X-Organization-ID": organization_id} if organization_id else None),
+            headers={"X-Organization-ID": organization_id},
         )
 
     async def get_verification_request(self, instance_id: str) -> Dict[str, Any]:

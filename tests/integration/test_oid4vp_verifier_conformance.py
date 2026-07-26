@@ -42,6 +42,7 @@ GATEWAY_BASE = os.environ.get("GATEWAY_BASE", "http://localhost:8000")
 SESSION_ID = os.environ.get("SESSION_ID", "")
 ORG_ID = os.environ.get("ORG_ID", "default")
 PRESENTATION_POLICY_ID = os.environ.get("PRESENTATION_POLICY_ID", "")
+ISSUER_DID = os.environ.get("OID4VP_ISSUER_DID", "")
 
 
 # ============================================================================
@@ -204,7 +205,14 @@ def _create_verification_session(
     OID4VP 1.0 Final §5: The Verifier initiates the flow by creating a request.
     Returns the gateway response (contains instance_id and request_uri or request).
     """
-    body: dict[str, Any] = {"organization_id": org_id}
+    if not ISSUER_DID:
+        raise RuntimeError(
+            "OID4VP_ISSUER_DID is required for the public verifier flow"
+        )
+    body: dict[str, Any] = {
+        "organization_id": org_id,
+        "issuer_did": ISSUER_DID,
+    }
     if policy_id or PRESENTATION_POLICY_ID:
         body["presentation_policy_id"] = policy_id or PRESENTATION_POLICY_ID
 

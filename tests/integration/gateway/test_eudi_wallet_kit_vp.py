@@ -218,12 +218,11 @@ async def vp_request_object_issuer_profile(
     vp_test_org,
 ):
     """Select the pre-provisioned DID profile that signs request objects."""
-    profile_id = os.environ.get("EUDI_TEST_REQUEST_ISSUER_PROFILE_ID", "").strip()
     issuer_did = os.environ.get("EUDI_TEST_REQUEST_ISSUER_DID", "").strip()
-    if not profile_id or not issuer_did:
-        raise RuntimeError("EUDI request-object issuer profile identity is required")
+    if not issuer_did:
+        raise RuntimeError("EUDI request-object issuer DID is required")
     assert issuer_did.endswith(f":orgs:{vp_test_org['id']}")
-    return {"id": profile_id, "issuer_did": issuer_did}
+    return {"issuer_did": issuer_did}
 
 
 @pytest.fixture
@@ -236,10 +235,9 @@ async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_te
         credential_format="sd_jwt_vc",
         frameworks=["eudi"],
     )
-    issuer_profile_id = os.environ.get("EUDI_TEST_ISSUER_PROFILE_ID", "").strip()
     issuer_did = os.environ.get("EUDI_TEST_ISSUER_DID", "").strip()
-    if not issuer_profile_id or not issuer_did:
-        raise RuntimeError("EUDI credential issuer profile identity is required")
+    if not issuer_did:
+        raise RuntimeError("EUDI credential issuer DID is required")
     assert issuer_did.endswith(f":orgs:{vp_test_org['id']}")
     revocation = await authenticated_gateway_client.create_revocation_profile(
         organization_id=vp_test_org["id"],
@@ -248,7 +246,7 @@ async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_te
     )
     return {
         "compliance_profile_id": compliance["id"],
-        "issuer_profile_id": issuer_profile_id,
+        "issuer_did": issuer_did,
         "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))[
             "id"
         ],
@@ -341,7 +339,7 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
     )
     return {
         "compliance_profile_id": compliance["id"],
-        "issuer_profile_id": issuer["id"],
+        "issuer_did": issuer["issuer_did"],
         "trust_profile_id": trust_profile["id"],
         "revocation_profile_id": revocation["id"],
     }
@@ -547,7 +545,6 @@ async def vp_age_policy(
         ],
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
-    policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = vp_request_object_issuer_profile["issuer_did"]
     return policy
 
@@ -577,7 +574,6 @@ async def vp_identity_policy(
         ],
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
-    policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = vp_request_object_issuer_profile["issuer_did"]
     return policy
 
@@ -619,7 +615,6 @@ async def vp_mdoc_policy(
         ],
     )
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
-    policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = vp_request_object_issuer_profile["issuer_did"]
     policy["_trust_profile_id"] = vp_mdoc_resources["trust_profile_id"]
     return policy
@@ -648,7 +643,6 @@ class TestOID4VPAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
-            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
 
@@ -669,7 +663,6 @@ class TestOID4VPAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
-            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
@@ -708,7 +701,6 @@ class TestOID4VPAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
-            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
         auth_req = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
@@ -752,7 +744,6 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
-            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
             oid4vp_profile="haip",
             request_uri_method="get",
@@ -814,7 +805,6 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
-            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
@@ -884,7 +874,6 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_identity_policy["id"],
             organization_id=vp_identity_policy["organization_id"],
-            issuer_profile_id=vp_identity_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_identity_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
@@ -931,7 +920,6 @@ class TestOID4VPSdJwtPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
-            issuer_profile_id=vp_age_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
         instance_id = flow["instance_id"]
@@ -1048,7 +1036,6 @@ class TestMDocPresentation:
             presentation_policy_id=vp_mdoc_policy["id"],
             organization_id=vp_mdoc_policy["organization_id"],
             trust_profile_id=vp_mdoc_policy["_trust_profile_id"],
-            issuer_profile_id=vp_mdoc_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_mdoc_policy["_request_object_issuer_did"],
         )
         request_uri = flow.get("request_uri", "")
@@ -1172,7 +1159,6 @@ class TestEndToEndIssuanceAndPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
-            issuer_profile_id=vp_request_object_issuer_profile["id"],
             issuer_did=vp_request_object_issuer_profile["issuer_did"],
         )
         instance_id = flow["instance_id"]
