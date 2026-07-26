@@ -36,6 +36,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from .helpers.eudi_stage import eudi_stage
 from .helpers.eudi_wallet_kit_client import (
     EUDIWalletHarnessError,
     EUDIWalletKitClient,
@@ -257,72 +258,77 @@ async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_te
 @pytest.fixture
 async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test_org):
     """Provision the mDoc-specific profile and document signer used in production."""
-    compliance = await authenticated_gateway_client.create_compliance_profile(
-        organization_id=vp_test_org["id"],
-        name="EUDI VP mDoc",
-        compliance_code="AAMVA_MDL",
-        credential_format="mso_mdoc",
-        frameworks=["aamva", "iso_18013_5"],
-    )
-    service = await _resolve_signing_service(
-        authenticated_gateway_client,
-        vp_test_org["id"],
-        credential_format="mso_mdoc",
-        key_purpose="mdoc_dsc",
-        algorithm="ES256",
-    )
-    issuer = await _issuer_profile(
-        authenticated_gateway_client,
-        vp_test_org["id"],
-        credential_format="mso_mdoc",
-        key_purpose="mdoc_dsc",
-        algorithm="ES256",
-        name="EUDI VP mDoc document signer",
-        service=service,
-    )
-    identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
-        issuer_profile_id=issuer["id"],
-        organization_id=vp_test_org["id"],
-    )
-    public_jwk = identity.get("public_jwk")
-    if not isinstance(public_jwk, dict):
-        raise RuntimeError("Gateway did not return the issuer profile public JWK")
-    certificate = create_disposable_mdoc_certificate_chain(
-        public_jwk,
-        organization_id=vp_test_org["id"],
-    )
-    stored = await authenticated_gateway_client.store_issuer_profile_certificate(
-        issuer_profile_id=issuer["id"],
-        organization_id=vp_test_org["id"],
-        cert_pem=certificate.leaf_pem,
-        cert_chain_pem=certificate.chain_pem,
-    )
-    assert stored.get("ok") is True
-    published_identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
-        issuer_profile_id=issuer["id"],
-        organization_id=vp_test_org["id"],
-    )
-    assert len(published_identity.get("x5c") or []) == 2
-    trust_profile = await authenticated_gateway_client.create_trust_profile(
-        organization_id=vp_test_org["id"],
-        name=f"EUDI VP mDoc trust ({uuid.uuid4().hex[:6]})",
-        trust_sources=[
-            {
-                "name": "Disposable EUDI test IACA",
-                "source_type": "ROOT_CA",
-                "certificate_pem": certificate.trust_anchor_pem,
-                "description": (
-                    "Ephemeral trust anchor for the production-path EUDI "
-                    "interoperability lane"
-                ),
-                "enabled": True,
-            }
-        ],
-        revocation_check_enabled=False,
-    )
-    trust_profile = await authenticated_gateway_client.activate_trust_profile(
-        trust_profile["id"]
-    )
+    with eudi_stage("mdoc-compliance-profile"):
+        compliance = await authenticated_gateway_client.create_compliance_profile(
+            organization_id=vp_test_org["id"],
+            name="EUDI VP mDoc",
+            compliance_code="AAMVA_MDL",
+            credential_format="mso_mdoc",
+            frameworks=["aamva", "iso_18013_5"],
+        )
+    with eudi_stage("mdoc-issuer-profile"):
+        service = await _resolve_signing_service(
+            authenticated_gateway_client,
+            vp_test_org["id"],
+            credential_format="mso_mdoc",
+            key_purpose="mdoc_dsc",
+            algorithm="ES256",
+        )
+        issuer = await _issuer_profile(
+            authenticated_gateway_client,
+            vp_test_org["id"],
+            credential_format="mso_mdoc",
+            key_purpose="mdoc_dsc",
+            algorithm="ES256",
+            name="EUDI VP mDoc document signer",
+            service=service,
+        )
+    with eudi_stage("mdoc-issuer-certificate"):
+        identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
+            issuer_profile_id=issuer["id"],
+            organization_id=vp_test_org["id"],
+        )
+        public_jwk = identity.get("public_jwk")
+        if not isinstance(public_jwk, dict):
+            raise RuntimeError("issuer profile public identity is incomplete")
+        certificate = create_disposable_mdoc_certificate_chain(
+            public_jwk,
+            organization_id=vp_test_org["id"],
+        )
+        stored = await authenticated_gateway_client.store_issuer_profile_certificate(
+            issuer_profile_id=issuer["id"],
+            organization_id=vp_test_org["id"],
+            cert_pem=certificate.leaf_pem,
+            cert_chain_pem=certificate.chain_pem,
+        )
+        assert stored.get("ok") is True
+        published_identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
+            issuer_profile_id=issuer["id"],
+            organization_id=vp_test_org["id"],
+        )
+        assert len(published_identity.get("x5c") or []) == 2
+    with eudi_stage("mdoc-trust-and-status"):
+        trust_profile = await authenticated_gateway_client.create_trust_profile(
+            organization_id=vp_test_org["id"],
+            name=f"EUDI VP mDoc trust ({uuid.uuid4().hex[:6]})",
+            trust_sources=[
+                {
+                    "name": "Disposable EUDI test IACA",
+                    "source_type": "ROOT_CA",
+                    "certificate_pem": certificate.trust_anchor_pem,
+                    "description": ("Ephemeral trust anchor for the production-path EUDI interoperability lane"),
+                    "enabled": True,
+                }
+            ],
+            revocation_check_enabled=False,
+        )
+        trust_profile = await authenticated_gateway_client.activate_trust_profile(trust_profile["id"])
+        revocation = await authenticated_gateway_client.create_revocation_profile(
+            organization_id=vp_test_org["id"],
+            name="EUDI VP mDoc status list",
+            revocation_mechanism=["STATUS_LIST_2021"],
+        )
+        revocation = await authenticated_gateway_client.activate_revocation_profile(revocation["id"])
     logger.info(
         "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer profile %s; verifier trust profile %s",
         certificate.leaf_sha256,
@@ -330,18 +336,11 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         issuer["id"],
         trust_profile["id"],
     )
-    revocation = await authenticated_gateway_client.create_revocation_profile(
-        organization_id=vp_test_org["id"],
-        name="EUDI VP mDoc status list",
-        revocation_mechanism=["STATUS_LIST_2021"],
-    )
     return {
         "compliance_profile_id": compliance["id"],
         "issuer_profile_id": issuer["id"],
         "trust_profile_id": trust_profile["id"],
-        "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))[
-            "id"
-        ],
+        "revocation_profile_id": revocation["id"],
     }
 
 
@@ -376,56 +375,57 @@ async def mdl_mdoc_template(
     vp_mdoc_resources,
 ):
     """mDL mDoc template for mDoc/mDL VP testing."""
-    return await authenticated_gateway_client.create_credential_template(
-        organization_id=vp_test_org["id"],
-        name="VP Test mDL (mDoc)",
-        credential_type="org.iso.18013.5.1.mDL",
-        vct="org.iso.18013.5.1.mDL",
-        doctype="org.iso.18013.5.1.mDL",
-        supported_formats=["mdoc"],
-        schema={
-            "namespaces": {
-                "org.iso.18013.5.1": {
-                    "family_name": {"type": "string", "required": True},
-                    "given_name": {"type": "string", "required": True},
-                    "birth_date": {"type": "string", "format": "full-date", "required": True},
-                    "issue_date": {"type": "string", "format": "full-date", "required": True},
-                    "expiry_date": {"type": "string", "format": "full-date", "required": True},
-                    "issuing_country": {"type": "string", "required": True},
-                    "issuing_authority": {"type": "string", "required": True},
-                    "document_number": {"type": "string", "required": True},
-                    "driving_privileges": {"type": "array", "required": True},
-                    "un_distinguishing_sign": {"type": "string", "required": True},
-                    "age_over_18": {"type": "boolean", "required": False},
-                    "age_over_21": {"type": "boolean", "required": False},
+    with eudi_stage("mdoc-credential-template"):
+        return await authenticated_gateway_client.create_credential_template(
+            organization_id=vp_test_org["id"],
+            name="VP Test mDL (mDoc)",
+            credential_type="org.iso.18013.5.1.mDL",
+            vct="org.iso.18013.5.1.mDL",
+            doctype="org.iso.18013.5.1.mDL",
+            supported_formats=["mdoc"],
+            schema={
+                "namespaces": {
+                    "org.iso.18013.5.1": {
+                        "family_name": {"type": "string", "required": True},
+                        "given_name": {"type": "string", "required": True},
+                        "birth_date": {"type": "string", "format": "full-date", "required": True},
+                        "issue_date": {"type": "string", "format": "full-date", "required": True},
+                        "expiry_date": {"type": "string", "format": "full-date", "required": True},
+                        "issuing_country": {"type": "string", "required": True},
+                        "issuing_authority": {"type": "string", "required": True},
+                        "document_number": {"type": "string", "required": True},
+                        "driving_privileges": {"type": "array", "required": True},
+                        "un_distinguishing_sign": {"type": "string", "required": True},
+                        "age_over_18": {"type": "boolean", "required": False},
+                        "age_over_21": {"type": "boolean", "required": False},
+                    }
                 }
-            }
-        },
-        claims=[
-            {
-                "name": "given_name",
-                "display_name": "Given Name",
-                "required": True,
-                "mdoc_namespace": "org.iso.18013.5.1",
-                "mdoc_element_identifier": "given_name",
             },
-            {
-                "name": "family_name",
-                "display_name": "Family Name",
-                "required": True,
-                "mdoc_namespace": "org.iso.18013.5.1",
-                "mdoc_element_identifier": "family_name",
-            },
-            {
-                "name": "birth_date",
-                "display_name": "Birth Date",
-                "required": True,
-                "mdoc_namespace": "org.iso.18013.5.1",
-                "mdoc_element_identifier": "birth_date",
-            },
-        ],
-        **vp_mdoc_resources,
-    )
+            claims=[
+                {
+                    "name": "given_name",
+                    "display_name": "Given Name",
+                    "required": True,
+                    "mdoc_namespace": "org.iso.18013.5.1",
+                    "mdoc_element_identifier": "given_name",
+                },
+                {
+                    "name": "family_name",
+                    "display_name": "Family Name",
+                    "required": True,
+                    "mdoc_namespace": "org.iso.18013.5.1",
+                    "mdoc_element_identifier": "family_name",
+                },
+                {
+                    "name": "birth_date",
+                    "display_name": "Birth Date",
+                    "required": True,
+                    "mdoc_namespace": "org.iso.18013.5.1",
+                    "mdoc_element_identifier": "birth_date",
+                },
+            ],
+            **vp_mdoc_resources,
+        )
 
 
 @pytest.fixture
@@ -489,16 +489,18 @@ async def issued_mdoc_credential(
         "age_over_21": True,
     }
 
-    result = await authenticated_gateway_client.issue_credential(
-        organization_id=vp_test_org["id"],
-        credential_template_id=mdl_mdoc_template["id"],
-        claims=mdoc_claims,
-    )
+    with eudi_stage("mdoc-credential-offer"):
+        result = await authenticated_gateway_client.issue_credential(
+            organization_id=vp_test_org["id"],
+            credential_template_id=mdl_mdoc_template["id"],
+            claims=mdoc_claims,
+        )
     offer_uri = result["credential_offer_uri"]
 
-    issuance = await wallet_kit.run_preauth_issuance(offer_uri)
-    assert issuance["success"], f"mDoc issuance failed: {issuance.get('error')}"
-    assert issuance["credentialCount"] >= 1
+    with eudi_stage("mdoc-wallet-receipt"):
+        issuance = await wallet_kit.run_preauth_issuance(offer_uri)
+        assert issuance["success"], f"mDoc issuance failed: {issuance.get('error')}"
+        assert issuance["credentialCount"] >= 1
 
     cred = issuance["credentials"][0]
     logger.info(
@@ -1060,14 +1062,10 @@ class TestMDocPresentation:
             result.get("responseMode"),
         )
 
-        assert result["success"], (
-            f"mDoc VP official presentation failed: {result.get('error')}"
-        )
+        assert result["success"], f"mDoc VP official presentation failed: {result.get('error')}"
         assert result["responseMode"] == "direct_post"
         assert result["verifierAccepted"] is True
-        verification = await authenticated_gateway_client.get_verification_result(
-            flow["instance_id"]
-        )
+        verification = await authenticated_gateway_client.get_verification_result(flow["instance_id"])
         assert verification["status"] == "completed", verification
         assert verification["result"] == "passed", verification
         assert verification["decision"] == "allow", verification
