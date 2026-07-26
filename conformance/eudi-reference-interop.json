@@ -60,7 +60,12 @@
     "presentation": ["sd_jwt_vc", "mso_mdoc"],
     "request_object_trust": ["signed_jar_x509_hash_pkix"],
     "response_mode": ["direct_post.jwt"],
-    "negative": ["missing_holder_binding_key"]
+    "negative": [
+      "missing_holder_binding_key",
+      "replayed_response",
+      "invalid_signature",
+      "expired_request"
+    ]
   },
   "required_evidence": {
     "eudi.oid4vci.mdoc-issuance.v1": {
@@ -79,19 +84,27 @@
     },
     "eudi.sd-jwt.missing-holder-binding-key.v1": {
       "claims": ["negative:missing_holder_binding_key"]
+    },
+    "eudi.oid4vp.replayed-response.v1": {
+      "claims": ["negative:replayed_response"]
+    },
+    "eudi.oid4vp.invalid-signature.v1": {
+      "claims": ["negative:invalid_signature"]
+    },
+    "eudi.oid4vp.expired-request.v1": {
+      "claims": ["negative:expired_request"]
     }
   },
-  "compatibility_only": {},
-  "planned_coverage": {
-    "negative": ["replayed_response", "invalid_signature", "expired_or_invalid_request"]
-  },
-  "limitations": {
-    "oid4vp_negative_vectors": {
-      "status": "planned",
-      "reason": "Replay, tampered-signature, and expired-request vectors are not claimed until they execute against the production verifier path.",
-      "owner": "ElevenID interoperability",
-      "review_date": "2026-10-01"
+  "compatibility_only": {
+    "negative_response_mutation": {
+      "evidence": [
+        "eudi.oid4vp.replayed-response.v1",
+        "eudi.oid4vp.invalid-signature.v1"
+      ],
+      "reason": "The official EUDI library creates the holder-bound presentation. The test facade replays or mutates those exact bytes only after resolution so the production Marty callback can be tested deterministically; these cases are not claimed as official-library dispatch evidence."
     }
   },
+  "planned_coverage": {},
+  "limitations": {},
   "target": "digest-pinned EUDI components against the public Marty gateway and normal issuer/verifier flows"
 }

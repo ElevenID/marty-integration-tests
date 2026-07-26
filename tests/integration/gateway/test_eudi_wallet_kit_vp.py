@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -126,6 +127,31 @@ def _presentation_submission_for_request(
             ],
         }
     )
+
+
+def _tamper_key_binding_signature(vp_token: str) -> str:
+    """Corrupt the official wallet's KB-JWT without changing its claims."""
+    parts = vp_token.split("~")
+    for index in range(len(parts) - 1, 0, -1):
+        candidate = parts[index]
+        segments = candidate.split(".")
+        if len(segments) != 3 or not segments[2]:
+            continue
+        replacement = "A" if segments[2][0] != "A" else "B"
+        segments[2] = replacement + segments[2][1:]
+        parts[index] = ".".join(segments)
+        return "~".join(parts)
+    raise ValueError("SD-JWT presentation has no key-binding JWT to tamper")
+
+
+def _verifier_response_body(result: dict[str, Any]) -> dict[str, Any]:
+    body = result.get("responseBody")
+    if not isinstance(body, str) or not body:
+        raise AssertionError("Verifier response did not contain a JSON body")
+    parsed = json.loads(body)
+    if not isinstance(parsed, dict):
+        raise AssertionError("Verifier response body is not a JSON object")
+    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -789,6 +815,126 @@ class TestOID4VPSdJwtPresentation:
                 nonce="negative-holder-binding-test",
             )
         assert "wallet-harness-missing-holder-binding-key" in str(failure.value)
+
+    @pytest.mark.asyncio
+    async def test_replayed_response_is_rejected_by_production_callback(
+        self,
+        authenticated_gateway_client: GatewayClient,
+        wallet_kit: EUDIWalletKitClient,
+        issued_sd_jwt_credential: dict[str, Any],
+        vp_age_policy: dict[str, Any],
+        record_property: Callable[[str, object], None],
+    ) -> None:
+        """A byte-identical accepted response cannot complete the flow twice."""
+        record_property("evidence_id", "eudi.oid4vp.replayed-response.v1")
+        flow = await authenticated_gateway_client.start_verification_flow(
+            presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
+        )
+        auth_req = await authenticated_gateway_client.get_verification_request(
+            flow["instance_id"]
+        )
+        vp_token = await wallet_kit.build_vp_token(
+            credential=issued_sd_jwt_credential["credential"],
+            audience=auth_req["client_id"],
+            nonce=auth_req["nonce"],
+        )
+        submission = _presentation_submission_for_request(auth_req, "dc+sd-jwt")
+        first = await wallet_kit.direct_post_presentation(
+            response_uri=auth_req["response_uri"],
+            vp_token=vp_token,
+            presentation_submission=submission,
+            state=auth_req.get("state", flow["instance_id"]),
+        )
+        assert first["success"] is True, first.get("responseStatus")
+        assert _verifier_response_body(first)["decision"] == "allow"
+
+        replay = await wallet_kit.direct_post_presentation(
+            response_uri=auth_req["response_uri"],
+            vp_token=vp_token,
+            presentation_submission=submission,
+            state=auth_req.get("state", flow["instance_id"]),
+        )
+        assert replay["success"] is False
+        assert replay["verifierAccepted"] is False
+        assert replay["responseStatus"] == 400
+
+    @pytest.mark.asyncio
+    async def test_tampered_holder_signature_is_denied_by_production_verifier(
+        self,
+        authenticated_gateway_client: GatewayClient,
+        wallet_kit: EUDIWalletKitClient,
+        issued_sd_jwt_credential: dict[str, Any],
+        vp_age_policy: dict[str, Any],
+        record_property: Callable[[str, object], None],
+    ) -> None:
+        """Mutation after official-library signing must produce a deny decision."""
+        record_property("evidence_id", "eudi.oid4vp.invalid-signature.v1")
+        flow = await authenticated_gateway_client.start_verification_flow(
+            presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
+        )
+        auth_req = await authenticated_gateway_client.get_verification_request(
+            flow["instance_id"]
+        )
+        valid_token = await wallet_kit.build_vp_token(
+            credential=issued_sd_jwt_credential["credential"],
+            audience=auth_req["client_id"],
+            nonce=auth_req["nonce"],
+        )
+        tampered_token = _tamper_key_binding_signature(valid_token)
+        assert tampered_token != valid_token
+
+        result = await wallet_kit.direct_post_presentation(
+            response_uri=auth_req["response_uri"],
+            vp_token=tampered_token,
+            presentation_submission=_presentation_submission_for_request(
+                auth_req,
+                "dc+sd-jwt",
+            ),
+            state=auth_req.get("state", flow["instance_id"]),
+        )
+        # The OID4VP callback was processed, but the cryptographic verifier
+        # must return a negative decision rather than accepting the credential.
+        assert result["responseStatus"] == 200
+        response = _verifier_response_body(result)
+        assert response["result"] == "failed"
+        assert response["decision"] == "deny"
+        assert response.get("verified_claims") in ({}, None)
+
+        decision = await authenticated_gateway_client.get_verification_decision(
+            flow["instance_id"]
+        )
+        assert decision["status"] == "completed"
+        assert decision["result"]["evaluation_result"] == "failed"
+        assert decision["result"]["decision"] == "deny"
+        assert decision["result"]["verified_claims"] == {}
+
+    @pytest.mark.asyncio
+    async def test_expired_request_is_rejected_during_official_resolution(
+        self,
+        authenticated_gateway_client: GatewayClient,
+        wallet_kit: EUDIWalletKitClient,
+        issued_sd_jwt_credential: dict[str, Any],
+        vp_age_policy: dict[str, Any],
+        record_property: Callable[[str, object], None],
+    ) -> None:
+        """The official EUDI resolver cannot use an already-expired request."""
+        record_property("evidence_id", "eudi.oid4vp.expired-request.v1")
+        flow = await authenticated_gateway_client.start_verification_flow(
+            presentation_policy_id=vp_age_policy["id"],
+            organization_id=vp_age_policy["organization_id"],
+            issuer_did=vp_age_policy["_request_object_issuer_did"],
+            expiry_minutes=0,
+        )
+
+        with pytest.raises(EUDIWalletHarnessError, match=r"HTTP [45]\d\d"):
+            await wallet_kit.submit_presentation(
+                authorization_request_uri=flow["request_uri"],
+                credential=issued_sd_jwt_credential["credential"],
+            )
 
     @pytest.mark.asyncio
     async def test_sd_jwt_vp_direct_post(

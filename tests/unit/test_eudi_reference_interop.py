@@ -24,10 +24,19 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert manifest["coverage"]["presentation"] == ["sd_jwt_vc", "mso_mdoc"]
     assert manifest["coverage"]["request_object_trust"] == ["signed_jar_x509_hash_pkix"]
     assert manifest["coverage"]["response_mode"] == ["direct_post.jwt"]
-    assert manifest["coverage"]["negative"] == ["missing_holder_binding_key"]
+    assert set(manifest["coverage"]["negative"]) == {
+        "missing_holder_binding_key",
+        "replayed_response",
+        "invalid_signature",
+        "expired_request",
+    }
     assert set(manifest["required_evidence"]) == set(eudi.REQUIRED_EVIDENCE_CLAIMS)
-    assert manifest["compatibility_only"] == {}
-    assert "replayed_response" in manifest["planned_coverage"]["negative"]
+    assert set(manifest["compatibility_only"]["negative_response_mutation"]["evidence"]) == {
+        eudi.EUDI_REPLAY_EVIDENCE_ID,
+        eudi.EUDI_INVALID_SIGNATURE_EVIDENCE_ID,
+    }
+    assert manifest["planned_coverage"] == {}
+    assert manifest["limitations"] == {}
     libraries = manifest["components"]["wallet_kit"]["libraries"]
     assert {name: value["version"] for name, value in libraries.items()} == {
         "oid4vp": "0.12.3",
