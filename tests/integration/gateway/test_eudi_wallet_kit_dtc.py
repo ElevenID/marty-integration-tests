@@ -520,7 +520,7 @@ class TestDtcWalletPresentation:
         if result.get("success") is not True:
             with eudi_stage("dtc-presentation-verification-result"):
                 verification = (
-                    await authenticated_gateway_client.get_verification_result(
+                    await authenticated_gateway_client.get_verification_decision(
                         flow["instance_id"]
                     )
                 )
@@ -561,7 +561,7 @@ class TestDtcWalletPresentation:
         if result.get("success") is not True:
             with eudi_stage("dtc-identity-presentation-verification-result"):
                 verification = (
-                    await authenticated_gateway_client.get_verification_result(
+                    await authenticated_gateway_client.get_verification_decision(
                         flow["instance_id"]
                     )
                 )
@@ -676,7 +676,7 @@ class TestDtcWalletEndToEnd:
         if post_result.get("success") is not True:
             with eudi_stage("dtc-lifecycle-presentation-verification-result"):
                 verification = (
-                    await authenticated_gateway_client.get_verification_result(
+                    await authenticated_gateway_client.get_verification_decision(
                         instance_id
                     )
                 )
@@ -690,7 +690,7 @@ class TestDtcWalletEndToEnd:
         # 7. Check verification result
         result = (
             verification
-            or await authenticated_gateway_client.get_verification_result(
+            or await authenticated_gateway_client.get_verification_decision(
                 instance_id
             )
         )
