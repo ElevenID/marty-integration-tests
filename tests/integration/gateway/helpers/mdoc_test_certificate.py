@@ -22,6 +22,7 @@ from cryptography.x509.oid import NameOID
 class MdocCertificateMaterial:
     leaf_pem: str
     chain_pem: str
+    trust_anchor_pem: str
     leaf_sha256: str
     trust_anchor_sha256: str
 
@@ -123,6 +124,7 @@ def create_disposable_issuer_certificate_chain(
     return MdocCertificateMaterial(
         leaf_pem=leaf_pem,
         chain_pem=chain_pem,
+        trust_anchor_pem=chain_pem,
         leaf_sha256=leaf_certificate.fingerprint(hashes.SHA256()).hex(),
         trust_anchor_sha256=ca_certificate.fingerprint(hashes.SHA256()).hex(),
     )
