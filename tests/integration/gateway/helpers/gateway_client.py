@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 class GatewayClientError(Exception):
     """Base exception for gateway client errors"""
 
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GatewayClient:
@@ -150,7 +152,10 @@ class GatewayClient:
                 return {"text": response.text} if response.text else {}
         except httpx.HTTPStatusError as e:
             error_detail = e.response.text
-            raise GatewayClientError(f"{method} {path} failed with {e.response.status_code}: {error_detail}") from e
+            raise GatewayClientError(
+                f"{method} {path} failed with {e.response.status_code}: {error_detail}",
+                status_code=e.response.status_code,
+            ) from e
         except httpx.RequestError as e:
             raise GatewayClientError(f"Request to {path} failed: {e}") from e
 
