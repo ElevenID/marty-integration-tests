@@ -225,7 +225,7 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
     "wallet-preauthorized-issuance": re.compile(r"(?i)/issuance/pre-auth\b"),
     "wallet-presentation": re.compile(r"(?i)/presentation/(?:submit|direct-post|build-vp-token)\b"),
     "wallet-harness-failure-class": re.compile(r"(?i)\bwallet-harness-[a-z][a-z0-9-]{0,79}(?:exception|error)\b"),
-    "eudi-fixture-stage": re.compile(r"(?i)\beudi-stage-[a-z][a-z0-9-]{0,79}\b"),
+    "eudi-fixture-stage": re.compile(r"(?i)\beudi-stage-[a-z][a-z0-9-]{0,159}\b"),
     "presentation-failure-class": re.compile(
         r"(?i)\bpresentation-(?:resolve|query|build-[a-z0-9-]+|dispatch)-[a-z0-9-]+\b"
     ),
@@ -348,7 +348,7 @@ def classify_eudi_failure_text(text: str) -> list[str]:
     if harness_class:
         categories.append(harness_class.group(1).lower())
     fixture_stage = re.search(
-        r"(?i)\b(eudi-stage-[a-z][a-z0-9-]{0,79})\b",
+        r"(?i)\b(eudi-stage-[a-z][a-z0-9-]{0,159})\b",
         text,
     )
     if fixture_stage:

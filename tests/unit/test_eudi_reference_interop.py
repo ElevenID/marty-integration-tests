@@ -315,6 +315,20 @@ def test_eudi_failure_categories_expose_only_bounded_fixture_stage() -> None:
     assert "must-not-escape" not in json.dumps(categories)
 
 
+def test_eudi_failure_categories_preserve_long_value_free_presentation_stage() -> None:
+    stage = (
+        "eudi-stage-build-mso-mdoc-assemble-device-response-"
+        "illegal-argument-exception"
+    )
+    categories = eudi.classify_eudi_failure_text(
+        f"EUDIInteropStageError: {stage} token=must-not-escape"
+    )
+
+    assert "eudi-fixture-stage" in categories
+    assert stage in categories
+    assert "must-not-escape" not in json.dumps(categories)
+
+
 @pytest.mark.parametrize(
     ("diagnostic", "category"),
     [
