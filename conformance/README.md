@@ -536,11 +536,13 @@ silently deleting the tests behind a published claim.
 The stack pin records immutable `marty-ui` release `v1.1.34` as `ready`, with
 the independently downloaded `stack-manifest.json` SHA-256 recorded in
 `stack-under-test.json`. Execution hard-fails if the released asset, its
-attestation, or any digest-pinned component differs from that reviewed pin. A
-monthly execution schedule is intentionally deferred until all four manual
-lanes pass. The single monthly `official-suite-updates.yml` workflow creates
-or refreshes one draft review PR when any official suite has moved. It never
-changes a runner pin or dependency lock automatically and never merges.
+attestation, or any digest-pinned component differs from that reviewed pin.
+The official interoperability workflow runs all four lanes monthly on the
+eighth day and remains manually dispatchable by lane. The separate monthly
+`official-suite-updates.yml` workflow checks upstreams on the first day and
+creates or refreshes one draft review PR when any official suite or the
+temporary W3C patch head has moved. Neither workflow changes a runner pin or
+dependency lock automatically, and the updater never merges.
 
 ## EUDI reference interoperability
 
