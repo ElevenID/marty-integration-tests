@@ -56,6 +56,22 @@ def _require_map(value: Any, *, label: str) -> dict[Any, Any]:
     return dict(value)
 
 
+def _decode_mobile_security_object_bytes(payload: bytes) -> dict[Any, Any]:
+    """Decode ISO 18013-5 ``MobileSecurityObjectBytes`` without accepting legacy shapes."""
+
+    tagged = _decode_cbor_exact(payload, label="mDoc MobileSecurityObjectBytes")
+    if (
+        not isinstance(tagged, cbor2.CBORTag)
+        or tagged.tag != 24
+        or not isinstance(tagged.value, bytes)
+    ):
+        raise ValueError("mDoc MobileSecurityObjectBytes must be tag-24 encoded CBOR bytes")
+    return _require_map(
+        _decode_cbor_exact(tagged.value, label="mDoc MobileSecurityObject"),
+        label="mDoc MobileSecurityObject",
+    )
+
+
 def _as_utc_datetime(value: Any, *, label: str) -> datetime:
     if isinstance(value, datetime):
         parsed = value
@@ -281,9 +297,7 @@ def validate_issuer_signed_mdoc(
         now=checked_at,
     )
 
-    mso = _require_map(
-        _decode_cbor_exact(payload, label="mDoc MobileSecurityObject"), label="mDoc MobileSecurityObject"
-    )
+    mso = _decode_mobile_security_object_bytes(payload)
     if mso.get("version") != "1.0" or mso.get("digestAlgorithm") != "SHA-256":
         raise ValueError("mDoc MSO must use version 1.0 and SHA-256")
     if mso.get("docType") != expected_doc_type:

@@ -90,6 +90,11 @@ import java.util.LinkedHashMap
 class MissingHolderKeyException(message: String) : IllegalStateException(message)
 
 object WalletPresentationService {
+    private class MdocPresentationStageException(
+        val stage: String,
+        cause: Throwable,
+    ) : RuntimeException(cause)
+
     private val log = LoggerFactory.getLogger(javaClass)
     private const val MAX_RETAINED_HOLDER_KEYS = 256
     private const val REQUEST_OBJECT_TRUST_ANCHOR_FILE_ENV = "EUDI_OID4VP_TRUST_ANCHOR_FILE"
@@ -268,7 +273,12 @@ object WalletPresentationService {
      * exception messages remain only in the job-local service log.
      */
     internal fun presentationErrorCode(exception: Throwable, stage: String): String {
-        val safeStage = stage
+        val mdocStage = generateSequence(exception) { it.cause }
+            .filterIsInstance<MdocPresentationStageException>()
+            .firstOrNull()
+            ?.stage
+        val safeStage = listOfNotNull(stage, mdocStage)
+            .joinToString("-")
             .lowercase()
             .replace(Regex("[^a-z0-9-]"), "-")
             .trim('-')
@@ -333,83 +343,98 @@ object WalletPresentationService {
         responseUri: String,
         responseEncryptionJwkThumbprint: ByteArray?,
     ): String {
-        require(holderKey.isPrivate) { "The mdoc holder key must contain private key material" }
-        require(audience.isNotBlank()) { "The OpenID4VP client identifier is required" }
-        require(nonce.isNotBlank()) { "The OpenID4VP nonce is required" }
-        require(responseUri.isNotBlank()) { "The OpenID4VP response URI is required" }
+        var stage = "validate-input"
+        try {
+            require(holderKey.isPrivate) { "The mdoc holder key must contain private key material" }
+            require(audience.isNotBlank()) { "The OpenID4VP client identifier is required" }
+            require(nonce.isNotBlank()) { "The OpenID4VP nonce is required" }
+            require(responseUri.isNotBlank()) { "The OpenID4VP response URI is required" }
 
-        val issuedCredential = Cbor.decode(decodeBase64Url(issuedCredentialCompact))
-        val issuerSigned = if (
-            issuedCredential.hasKey("nameSpaces") &&
-            issuedCredential.hasKey("issuerAuth")
-        ) {
-            // OID4VCI returns the ISO IssuerSigned structure as the credential.
-            issuedCredential
-        } else {
-            // Retain compatibility with a previously wrapped DeviceResponse,
-            // while never treating that wrapper as holder authentication.
-            require(issuedCredential["status"].asNumber == 0L) {
-                "The issued mdoc is not a successful credential"
+            stage = "decode-credential"
+            val issuedCredential = Cbor.decode(decodeBase64Url(issuedCredentialCompact))
+            stage = "select-issuer-signed"
+            val issuerSigned = if (
+                issuedCredential.hasKey("nameSpaces") &&
+                issuedCredential.hasKey("issuerAuth")
+            ) {
+                // OID4VCI returns the ISO IssuerSigned structure as the credential.
+                issuedCredential
+            } else {
+                // Retain compatibility with a previously wrapped DeviceResponse,
+                // while never treating that wrapper as holder authentication.
+                require(issuedCredential["status"].asNumber == 0L) {
+                    "The issued mdoc is not a successful credential"
+                }
+                val issuedDocuments = issuedCredential["documents"].asArray
+                require(issuedDocuments.size == 1) {
+                    "The wallet harness requires exactly one issued mdoc document"
+                }
+                issuedDocuments.single()["issuerSigned"]
             }
-            val issuedDocuments = issuedCredential["documents"].asArray
-            require(issuedDocuments.size == 1) {
-                "The wallet harness requires exactly one issued mdoc document"
+            stage = "decode-mso"
+            val issuerAuthPayload = requireNotNull(issuerSigned["issuerAuth"].asCoseSign1.payload) {
+                "The issued mdoc issuerAuth must contain MobileSecurityObjectBytes"
             }
-            issuedDocuments.single()["issuerSigned"]
-        }
-        val issuerAuthPayload = requireNotNull(issuerSigned["issuerAuth"].asCoseSign1.payload) {
-            "The issued mdoc issuerAuth must contain MobileSecurityObjectBytes"
-        }
-        val mobileSecurityObject = Cbor.decode(issuerAuthPayload).asTaggedEncodedCbor
-        val docType = mobileSecurityObject["docType"].asTstr
+            val mobileSecurityObject = Cbor.decode(issuerAuthPayload).asTaggedEncodedCbor
+            val docType = mobileSecurityObject["docType"].asTstr
 
-        // ISO 18013-7 / OpenID4VP handover used by the EUDI reference wallet:
-        //   HandoverInfo = [clientId, nonce, JWKThumbprint/null, responseUri]
-        //   SessionTranscript = [null, null, ["OpenID4VPHandover", SHA-256(HandoverInfo)]]
-        val sessionTranscript = mdocSessionTranscript(
-            audience = audience,
-            nonce = nonce,
-            responseUri = responseUri,
-            responseEncryptionJwkThumbprint = responseEncryptionJwkThumbprint,
-        )
-        val deviceNamespaces = Cbor.encode(buildCborMap {})
-        val deviceAuthenticationBytes = mdocDeviceAuthenticationBytes(
-            sessionTranscript = sessionTranscript,
-            docType = docType,
-            deviceNamespaces = deviceNamespaces,
-        )
-        val multipazPrivateKey = EcPrivateKey.fromJwk(
-            Json.parseToJsonElement(holderKey.toJSONString()).jsonObject,
-        )
-        val deviceSignature = Cose.coseSign1Sign(
-            signingKey = AsymmetricKey.anonymous(multipazPrivateKey),
-            message = deviceAuthenticationBytes,
-            includeMessageInPayload = false,
-            protectedHeaders = emptyMap(),
-            unprotectedHeaders = emptyMap(),
-        )
+            // ISO 18013-7 / OpenID4VP handover used by the EUDI reference wallet:
+            //   HandoverInfo = [clientId, nonce, JWKThumbprint/null, responseUri]
+            //   SessionTranscript = [null, null, ["OpenID4VPHandover", SHA-256(HandoverInfo)]]
+            stage = "build-transcript"
+            val sessionTranscript = mdocSessionTranscript(
+                audience = audience,
+                nonce = nonce,
+                responseUri = responseUri,
+                responseEncryptionJwkThumbprint = responseEncryptionJwkThumbprint,
+            )
+            stage = "build-device-authentication"
+            val deviceNamespaces = Cbor.encode(buildCborMap {})
+            val deviceAuthenticationBytes = mdocDeviceAuthenticationBytes(
+                sessionTranscript = sessionTranscript,
+                docType = docType,
+                deviceNamespaces = deviceNamespaces,
+            )
+            stage = "load-holder-key"
+            val multipazPrivateKey = EcPrivateKey.fromJwk(
+                Json.parseToJsonElement(holderKey.toJSONString()).jsonObject,
+            )
+            stage = "sign-device-authentication"
+            val deviceSignature = Cose.coseSign1Sign(
+                signingKey = AsymmetricKey.anonymous(multipazPrivateKey),
+                message = deviceAuthenticationBytes,
+                includeMessageInPayload = false,
+                protectedHeaders = emptyMap(),
+                unprotectedHeaders = emptyMap(),
+            )
 
-        val document = buildCborMap {
-            put("docType", docType)
-            put("issuerSigned", issuerSigned)
-            putCborMap("deviceSigned") {
-                put(
-                    "nameSpaces",
-                    Tagged(Tagged.ENCODED_CBOR, Bstr(deviceNamespaces)),
-                )
-                putCborMap("deviceAuth") {
-                    put("deviceSignature", deviceSignature.toDataItem())
+            stage = "assemble-device-response"
+            val document = buildCborMap {
+                put("docType", docType)
+                put("issuerSigned", issuerSigned)
+                putCborMap("deviceSigned") {
+                    put(
+                        "nameSpaces",
+                        Tagged(Tagged.ENCODED_CBOR, Bstr(deviceNamespaces)),
+                    )
+                    putCborMap("deviceAuth") {
+                        put("deviceSignature", deviceSignature.toDataItem())
+                    }
                 }
             }
-        }
-        val deviceResponse = buildCborMap {
-            put("version", "1.0")
-            putCborArray("documents") {
-                add(document)
+            val deviceResponse = buildCborMap {
+                put("version", "1.0")
+                putCborArray("documents") {
+                    add(document)
+                }
+                put("status", 0)
             }
-            put("status", 0)
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(Cbor.encode(deviceResponse))
+        } catch (exception: MdocPresentationStageException) {
+            throw exception
+        } catch (exception: Exception) {
+            throw MdocPresentationStageException(stage, exception)
         }
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(Cbor.encode(deviceResponse))
     }
 
     internal suspend fun mdocSessionTranscript(

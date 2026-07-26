@@ -181,6 +181,29 @@ class WalletPresentationServiceTest {
         assertEquals(false, code.contains("did"))
     }
 
+    @Test
+    fun `mdoc presentation diagnostics include a value-free operation stage`() {
+        val exception = assertFailsWith<RuntimeException> {
+            runBlocking {
+                WalletPresentationService.buildMdocDeviceResponse(
+                    issuedCredentialCompact = "must-not-escape",
+                    holderKey = ECKeyGenerator(Curve.P_256).generate().toPublicJWK(),
+                    audience = AUDIENCE,
+                    nonce = NONCE,
+                    responseUri = RESPONSE_URI,
+                    responseEncryptionJwkThumbprint = null,
+                )
+            }
+        }
+        val code = WalletPresentationService.presentationErrorCode(exception, "build-mso_mdoc")
+
+        assertEquals(
+            "presentation-build-mso-mdoc-validate-input-illegal-argument-exception",
+            code,
+        )
+        assertEquals(false, code.contains("must-not-escape"))
+    }
+
     private companion object {
         const val MDL_DOC_TYPE = "org.iso.18013.5.1.mDL"
         const val AUDIENCE = "x509_hash:verifier.example"
