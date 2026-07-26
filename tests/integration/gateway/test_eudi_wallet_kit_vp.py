@@ -1069,7 +1069,7 @@ class TestMDocPresentation:
         if result.get("success") is not True:
             with eudi_stage("mdoc-presentation-verification-result"):
                 verification = (
-                    await authenticated_gateway_client.get_verification_result(
+                    await authenticated_gateway_client.get_verification_decision(
                         flow["instance_id"]
                     )
                 )
@@ -1081,15 +1081,15 @@ class TestMDocPresentation:
         )
         verification = (
             verification
-            or await authenticated_gateway_client.get_verification_result(
+            or await authenticated_gateway_client.get_verification_decision(
                 flow["instance_id"]
             )
         )
         assert verification["status"] == "completed", verification
-        assert verification["result"] == "passed", verification
-        assert verification["decision"] == "allow", verification
-        assert verification["verified_claims"]["given_name"] == "Erika"
-        assert verification["verified_claims"]["family_name"] == "Mustermann"
+        assert verification["result"]["evaluation_result"] == "passed", verification
+        assert verification["result"]["decision"] == "allow", verification
+        assert verification["result"]["verified_claims"]["given_name"] == "Erika"
+        assert verification["result"]["verified_claims"]["family_name"] == "Mustermann"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

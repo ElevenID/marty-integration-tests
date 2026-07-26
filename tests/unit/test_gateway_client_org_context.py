@@ -72,3 +72,26 @@ async def test_start_verification_flow_can_select_the_production_haip_transport(
         },
         headers={"X-Organization-ID": "org-1"},
     )
+
+
+@pytest.mark.asyncio
+async def test_get_verification_decision_uses_result_endpoint() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(
+        return_value={
+            "status": "completed",
+            "result": {"decision": "deny"},
+        }
+    )
+    client._request = request
+
+    try:
+        result = await client.get_verification_decision("flow-1")
+    finally:
+        await client.close()
+
+    assert result["result"]["decision"] == "deny"
+    request.assert_awaited_once_with(
+        "GET",
+        "/v1/flows/instances/flow-1/result",
+    )

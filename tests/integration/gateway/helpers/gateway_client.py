@@ -1134,6 +1134,13 @@ class GatewayClient:
         """Get verification flow result"""
         return await self._request("GET", f"/v1/flows/instances/{instance_id}")
 
+    async def get_verification_decision(self, instance_id: str) -> Dict[str, Any]:
+        """Get the verifier-owned OID4VP result, including the policy decision."""
+        return await self._request(
+            "GET",
+            f"/v1/flows/instances/{instance_id}/result",
+        )
+
     # =============================================================================
     # Flow Definitions & Instances
     # =============================================================================
