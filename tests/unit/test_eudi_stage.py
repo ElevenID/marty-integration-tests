@@ -69,6 +69,24 @@ def test_stage_rejects_dynamic_labels() -> None:
         ),
         (
             {
+                "success": False,
+                "error": "presentation-build-mso-mdoc-decode-mso-cbor-error",
+                "responseMode": "direct_post",
+                "verifierAccepted": False,
+            },
+            "eudi-stage-build-mso-mdoc-decode-mso-cbor-error",
+        ),
+        (
+            {
+                "success": False,
+                "error": "Verifier rejected the official OID4VP response",
+                "responseMode": "direct_post",
+                "verifierAccepted": False,
+            },
+            "eudi-stage-mdoc-presentation-verifier-rejected",
+        ),
+        (
+            {
                 "success": True,
                 "responseMode": "secret-mode-must-not-escape",
                 "verifierAccepted": True,

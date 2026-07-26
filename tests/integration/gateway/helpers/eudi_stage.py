@@ -7,7 +7,9 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
-_STAGE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_STAGE = re.compile(r"^[a-z][a-z0-9-]{0,159}$")
+_PRESENTATION_ERROR = re.compile(r"^presentation-([a-z][a-z0-9-]{0,143})$")
+_VERIFIER_REJECTED = "Verifier rejected the official OID4VP response"
 
 
 class EUDIInteropStageError(RuntimeError):
@@ -43,7 +45,19 @@ def require_presentation_accepted(
 
     if not _STAGE.fullmatch(stage):
         raise ValueError("EUDI interoperability stage must be a bounded slug")
-    with eudi_stage(f"{stage}-dispatch"):
+    dispatch_stage = f"{stage}-dispatch"
+    error = result.get("error")
+    if error == _VERIFIER_REJECTED:
+        dispatch_stage = f"{stage}-verifier-rejected"
+    elif isinstance(error, str):
+        matched = _PRESENTATION_ERROR.fullmatch(error)
+        if matched:
+            # The Kotlin wallet facade constructs this solely from its
+            # code-owned operation stage and root JVM exception class. Never
+            # propagate arbitrary error text, protocol values, or stack traces.
+            dispatch_stage = matched.group(1)
+
+    with eudi_stage(dispatch_stage):
         assert result.get("success") is True
     if expected_mode is not None:
         with eudi_stage(f"{stage}-response-mode"):
