@@ -133,8 +133,9 @@ def eudi_template_payload(
 ) -> dict[str, object]:
     """Build one production-shaped EUDI SD-JWT credential template.
 
-    The template binds the issuer profile. It intentionally contains no KMS
-    service or key reference, so issuance can only sign as the profile's DID.
+    The template binds the issuer profile. It intentionally contains no
+    custody-service or key reference, so issuance can only request signing as
+    the profile's DID and selected verification method.
     """
     if credential_type not in {"Passport", "MobileDrivingLicense", "OpenBadge"}:
         raise ValueError("unsupported EUDI fixture credential type")
@@ -208,15 +209,27 @@ def template_payload(
     *,
     w3c: bool,
     run_id: str,
+    presentation: bool = False,
 ) -> dict[str, object]:
     if w3c:
+        # Issuance and presentation verification intentionally use separate
+        # templates. The issuance fixture remains JWT VC; the verifier fixture
+        # declares JSON-LD so the policy's authoritative template format
+        # matches the DataIntegrityProof presentations supplied by W3C.
+        data_integrity = presentation
         return {
             "organization_id": organization_id,
-            "name": f"Official W3C VC v2 {run_id}",
+            "name": (
+                f"Official W3C VC v2 Data Integrity verifier {run_id}"
+                if data_integrity
+                else f"Official W3C VC v2 JWT issuer {run_id}"
+            ),
             "credential_type": "VerifiableId",
             "vct": "https://credentials.marty.dev/VerifiableId",
-            "supported_formats": ["jwt_vc"],
-            "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
+            "supported_formats": ["ldp_vc"] if data_integrity else ["jwt_vc"],
+            "credential_payload_format": (
+                "ldp_vc" if data_integrity else "w3c_vcdm_v2_jwt_vc"
+            ),
             "compliance_profile_id": compliance_profile_id,
             "issuer_profile_id": issuer_profile_id,
             "revocation_profile_id": revocation_profile_id,
@@ -445,8 +458,8 @@ def bootstrap_eudi(
 
     This function performs profile administration through the public API. Its
     returned runner contract contains only organization, issuer identity, and
-    template identifiers; KMS service and key references never cross into the
-    issuance request path.
+    template identifiers; custody-service and key references never cross into
+    the issuance request path.
     """
 
     def provision_profile(
@@ -724,6 +737,27 @@ def bootstrap(
             ),
         )
         template_id = response_id(created_template, f"{prefix} credential template")
+        presentation_template_id = template_id
+        if w3c:
+            created_presentation_template = request(
+                gateway_url,
+                session_id,
+                "/v1/credential-templates",
+                method="POST",
+                json_body=template_payload(
+                    organization_id,
+                    compliance_profile_id,
+                    credential_issuer_profile_id,
+                    revocation_profile_id,
+                    w3c=True,
+                    run_id=run_id,
+                    presentation=True,
+                ),
+            )
+            presentation_template_id = response_id(
+                created_presentation_template,
+                f"{prefix} presentation template",
+            )
         policy_roles = ("credential", "presentation") if w3c else ("presentation",)
         policy_ids: dict[str, str] = {}
         for role in policy_roles:
@@ -734,7 +768,7 @@ def bootstrap(
                 method="POST",
                 json_body=policy_payload(
                     organization_id,
-                    template_id,
+                    presentation_template_id if role == "presentation" else template_id,
                     w3c=w3c,
                     run_id=run_id,
                     presentation=role == "presentation",
@@ -753,6 +787,7 @@ def bootstrap(
             policy_ids[role] = policy_id
         result[f"{prefix}_template_id"] = template_id
         if w3c:
+            result["w3c_presentation_template_id"] = presentation_template_id
             result["w3c_credential_policy_id"] = policy_ids["credential"]
             result["w3c_presentation_policy_id"] = policy_ids["presentation"]
         else:
