@@ -1022,6 +1022,7 @@ class TestDataBuilder:
             "name": name or "Digital Travel Credential",
             "credential_type": "com.icao.dtc",
             "vct": "com.icao.dtc",
+            "doctype": "com.icao.dtc",
             "supported_formats": ["mdoc"],
             "schema": {
                 "namespaces": {
@@ -1070,12 +1071,48 @@ class TestDataBuilder:
                 }
             },
             "claims": [
-                {"name": "data_group_1", "display_name": "MRZ Data (DG1)", "required": True},
-                {"name": "data_group_2", "display_name": "Facial Biometric (DG2)", "required": True},
-                {"name": "sod", "display_name": "Document Security Object", "required": True},
-                {"name": "document_number", "display_name": "Document Number", "required": True},
-                {"name": "issuing_authority", "display_name": "Issuing Authority", "required": True},
-                {"name": "expiry_date", "display_name": "Expiry Date", "required": True},
+                {
+                    "name": "data_group_1",
+                    "display_name": "MRZ Data (DG1)",
+                    "required": True,
+                    "mdoc_namespace": "com.icao.dtc",
+                    "mdoc_element_identifier": "data_group_1",
+                },
+                {
+                    "name": "data_group_2",
+                    "display_name": "Facial Biometric (DG2)",
+                    "required": True,
+                    "mdoc_namespace": "com.icao.dtc",
+                    "mdoc_element_identifier": "data_group_2",
+                },
+                {
+                    "name": "sod",
+                    "display_name": "Document Security Object",
+                    "required": True,
+                    "mdoc_namespace": "com.icao.dtc",
+                    "mdoc_element_identifier": "sod",
+                },
+                {
+                    "name": "document_number",
+                    "display_name": "Document Number",
+                    "required": True,
+                    "mdoc_namespace": "com.icao.dtc",
+                    "mdoc_element_identifier": "document_number",
+                },
+                {
+                    "name": "issuing_authority",
+                    "display_name": "Issuing Authority",
+                    "required": True,
+                    "mdoc_namespace": "com.icao.dtc",
+                    "mdoc_element_identifier": "issuing_authority",
+                },
+                {
+                    "name": "expiry_date",
+                    "display_name": "Expiry Date",
+                    "required": True,
+                    "mdoc_namespace": "com.icao.dtc",
+                    "mdoc_element_identifier": "expiry_date",
+                },
             ],
             "auto_generate_artifacts": True,
         }

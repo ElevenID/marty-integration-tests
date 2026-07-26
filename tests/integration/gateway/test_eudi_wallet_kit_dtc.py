@@ -37,6 +37,7 @@ import pytest
 
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
 from .helpers.gateway_client import GatewayClient
+from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
 from .helpers.test_data import TestDataBuilder
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,44 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
         key_purpose="mdoc_dsc",
         status="active",
     )
+    identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
+        issuer_profile_id=issuer["id"],
+        organization_id=dtc_test_org["id"],
+    )
+    public_jwk = identity.get("public_jwk")
+    if not isinstance(public_jwk, dict):
+        raise RuntimeError("Gateway did not return the DTC issuer profile public JWK")
+    certificate = create_disposable_mdoc_certificate_chain(
+        public_jwk,
+        organization_id=dtc_test_org["id"],
+    )
+    stored = await authenticated_gateway_client.store_issuer_profile_certificate(
+        issuer_profile_id=issuer["id"],
+        organization_id=dtc_test_org["id"],
+        cert_pem=certificate.leaf_pem,
+        cert_chain_pem=certificate.chain_pem,
+    )
+    assert stored.get("ok") is True
+    trust_profile = await authenticated_gateway_client.create_trust_profile(
+        organization_id=dtc_test_org["id"],
+        name=f"EUDI DTC trust ({uuid.uuid4().hex[:6]})",
+        trust_sources=[
+            {
+                "name": "Disposable DTC test CSCA",
+                "source_type": "ROOT_CA",
+                "certificate_pem": certificate.trust_anchor_pem,
+                "description": (
+                    "Ephemeral trust anchor for the production-path EUDI "
+                    "DTC interoperability lane"
+                ),
+                "enabled": True,
+            }
+        ],
+        revocation_check_enabled=False,
+    )
+    trust_profile = await authenticated_gateway_client.activate_trust_profile(
+        trust_profile["id"]
+    )
     revocation = await authenticated_gateway_client.create_revocation_profile(
         organization_id=dtc_test_org["id"],
         name="EUDI DTC status list",
@@ -164,6 +203,7 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
     return {
         "compliance_profile_id": compliance["id"],
         "issuer_profile_id": issuer["id"],
+        "trust_profile_id": trust_profile["id"],
         "revocation_profile_id": revocation["id"],
     }
 
@@ -182,6 +222,7 @@ async def dtc_mdoc_template(
     )
     template_data.update({
         "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
+        "trust_profile_id": dtc_mdoc_resources["trust_profile_id"],
         "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
     })
     return await authenticated_gateway_client.create_credential_template(**template_data)
@@ -192,6 +233,7 @@ async def issued_dtc_credential(
     authenticated_gateway_client: GatewayClient,
     wallet_kit: EUDIWalletKitClient,
     dtc_test_org,
+    dtc_mdoc_resources,
     dtc_mdoc_template,
 ) -> Dict[str, Any]:
     """Issue a DTC credential via Marty OID4VCI and receive it through the EUDI wallet harness.
@@ -245,12 +287,14 @@ async def dtc_vp_policy(
         organization_id=dtc_test_org["id"],
         credential_template_id=dtc_mdoc_template["id"],
     )
+    policy_data["trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
     policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
     policy = await authenticated_gateway_client.activate_presentation_policy(
         policy["id"]
     )
     policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = dtc_request_object_issuer_profile["issuer_did"]
+    policy["_trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
     return policy
 
 
@@ -258,6 +302,7 @@ async def dtc_vp_policy(
 async def dtc_identity_vp_policy(
     authenticated_gateway_client: GatewayClient,
     dtc_test_org,
+    dtc_mdoc_resources,
     dtc_mdoc_template,
     dtc_request_object_issuer_profile,
 ):
@@ -266,12 +311,14 @@ async def dtc_identity_vp_policy(
         organization_id=dtc_test_org["id"],
         credential_template_id=dtc_mdoc_template["id"],
     )
+    policy_data["trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
     policy = await authenticated_gateway_client.create_presentation_policy(**policy_data)
     policy = await authenticated_gateway_client.activate_presentation_policy(
         policy["id"]
     )
     policy["_request_object_issuer_profile_id"] = dtc_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = dtc_request_object_issuer_profile["issuer_did"]
+    policy["_trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
     return policy
 
 
@@ -356,6 +403,7 @@ class TestDtcWalletAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
+            trust_profile_id=dtc_vp_policy["_trust_profile_id"],
             issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
@@ -375,6 +423,7 @@ class TestDtcWalletAuthorizationRequest:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
+            trust_profile_id=dtc_vp_policy["_trust_profile_id"],
             issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
@@ -420,6 +469,7 @@ class TestDtcWalletPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_vp_policy["id"],
             organization_id=dtc_vp_policy["organization_id"],
+            trust_profile_id=dtc_vp_policy["_trust_profile_id"],
             issuer_profile_id=dtc_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_vp_policy["_request_object_issuer_did"],
         )
@@ -457,6 +507,7 @@ class TestDtcWalletPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=dtc_identity_vp_policy["id"],
             organization_id=dtc_identity_vp_policy["organization_id"],
+            trust_profile_id=dtc_identity_vp_policy["_trust_profile_id"],
             issuer_profile_id=dtc_identity_vp_policy["_request_object_issuer_profile_id"],
             issuer_did=dtc_identity_vp_policy["_request_object_issuer_did"],
         )
@@ -505,6 +556,7 @@ class TestDtcWalletEndToEnd:
         )
         template_data.update({
             "issuer_profile_id": dtc_mdoc_resources["issuer_profile_id"],
+            "trust_profile_id": dtc_mdoc_resources["trust_profile_id"],
             "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
         })
         template = await authenticated_gateway_client.create_credential_template(
@@ -538,6 +590,7 @@ class TestDtcWalletEndToEnd:
             organization_id=dtc_test_org["id"],
             credential_template_id=template["id"],
         )
+        policy_data["trust_profile_id"] = dtc_mdoc_resources["trust_profile_id"]
         policy = await authenticated_gateway_client.create_presentation_policy(
             **policy_data
         )
@@ -550,6 +603,7 @@ class TestDtcWalletEndToEnd:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
+            trust_profile_id=dtc_mdoc_resources["trust_profile_id"],
             issuer_profile_id=dtc_request_object_issuer_profile["id"],
             issuer_did=dtc_request_object_issuer_profile["issuer_did"],
         )

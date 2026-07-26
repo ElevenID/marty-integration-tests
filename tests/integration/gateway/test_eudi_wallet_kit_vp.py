@@ -303,11 +303,32 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         organization_id=vp_test_org["id"],
     )
     assert len(published_identity.get("x5c") or []) == 2
+    trust_profile = await authenticated_gateway_client.create_trust_profile(
+        organization_id=vp_test_org["id"],
+        name=f"EUDI VP mDoc trust ({uuid.uuid4().hex[:6]})",
+        trust_sources=[
+            {
+                "name": "Disposable EUDI test IACA",
+                "source_type": "ROOT_CA",
+                "certificate_pem": certificate.trust_anchor_pem,
+                "description": (
+                    "Ephemeral trust anchor for the production-path EUDI "
+                    "interoperability lane"
+                ),
+                "enabled": True,
+            }
+        ],
+        revocation_check_enabled=False,
+    )
+    trust_profile = await authenticated_gateway_client.activate_trust_profile(
+        trust_profile["id"]
+    )
     logger.info(
-        "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer profile %s",
+        "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer profile %s; verifier trust profile %s",
         certificate.leaf_sha256,
         certificate.trust_anchor_sha256,
         issuer["id"],
+        trust_profile["id"],
     )
     revocation = await authenticated_gateway_client.create_revocation_profile(
         organization_id=vp_test_org["id"],
@@ -317,6 +338,7 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
     return {
         "compliance_profile_id": compliance["id"],
         "issuer_profile_id": issuer["id"],
+        "trust_profile_id": trust_profile["id"],
         "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))[
             "id"
         ],
@@ -359,6 +381,7 @@ async def mdl_mdoc_template(
         name="VP Test mDL (mDoc)",
         credential_type="org.iso.18013.5.1.mDL",
         vct="org.iso.18013.5.1.mDL",
+        doctype="org.iso.18013.5.1.mDL",
         supported_formats=["mdoc"],
         schema={
             "namespaces": {
@@ -379,9 +402,27 @@ async def mdl_mdoc_template(
             }
         },
         claims=[
-            {"name": "given_name", "display_name": "Given Name", "required": True},
-            {"name": "family_name", "display_name": "Family Name", "required": True},
-            {"name": "birth_date", "display_name": "Birth Date", "required": True},
+            {
+                "name": "given_name",
+                "display_name": "Given Name",
+                "required": True,
+                "mdoc_namespace": "org.iso.18013.5.1",
+                "mdoc_element_identifier": "given_name",
+            },
+            {
+                "name": "family_name",
+                "display_name": "Family Name",
+                "required": True,
+                "mdoc_namespace": "org.iso.18013.5.1",
+                "mdoc_element_identifier": "family_name",
+            },
+            {
+                "name": "birth_date",
+                "display_name": "Birth Date",
+                "required": True,
+                "mdoc_namespace": "org.iso.18013.5.1",
+                "mdoc_element_identifier": "birth_date",
+            },
         ],
         **vp_mdoc_resources,
     )
@@ -540,6 +581,7 @@ async def vp_identity_policy(
 async def vp_mdoc_policy(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
+    vp_mdoc_resources,
     mdl_mdoc_template,
     vp_request_object_issuer_profile,
 ):
@@ -548,6 +590,7 @@ async def vp_mdoc_policy(
         organization_id=vp_test_org["id"],
         name=f"VP mDL mDoc ({uuid.uuid4().hex[:6]})",
         purpose="Verify mDL via mDoc",
+        trust_profile_id=vp_mdoc_resources["trust_profile_id"],
         credential_requirements=[
             {
                 "credential_template_id": mdl_mdoc_template["id"],
@@ -563,6 +606,7 @@ async def vp_mdoc_policy(
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = vp_request_object_issuer_profile["issuer_did"]
+    policy["_trust_profile_id"] = vp_mdoc_resources["trust_profile_id"]
     return policy
 
 
@@ -988,6 +1032,7 @@ class TestMDocPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_mdoc_policy["id"],
             organization_id=vp_mdoc_policy["organization_id"],
+            trust_profile_id=vp_mdoc_policy["_trust_profile_id"],
             issuer_profile_id=vp_mdoc_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_mdoc_policy["_request_object_issuer_did"],
         )
@@ -1010,6 +1055,14 @@ class TestMDocPresentation:
         )
         assert result["responseMode"] == "direct_post"
         assert result["verifierAccepted"] is True
+        verification = await authenticated_gateway_client.get_verification_result(
+            flow["instance_id"]
+        )
+        assert verification["status"] == "completed", verification
+        assert verification["result"] == "passed", verification
+        assert verification["decision"] == "allow", verification
+        assert verification["verified_claims"]["given_name"] == "Erika"
+        assert verification["verified_claims"]["family_name"] == "Mustermann"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
