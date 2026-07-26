@@ -55,6 +55,20 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.multipaz.cbor.Bstr
+import org.multipaz.cbor.Cbor
+import org.multipaz.cbor.Simple
+import org.multipaz.cbor.Tagged
+import org.multipaz.cbor.addCborArray
+import org.multipaz.cbor.buildCborArray
+import org.multipaz.cbor.buildCborMap
+import org.multipaz.cbor.putCborArray
+import org.multipaz.cbor.putCborMap
+import org.multipaz.cose.Cose
+import org.multipaz.crypto.Algorithm as MultipazAlgorithm
+import org.multipaz.crypto.AsymmetricKey
+import org.multipaz.crypto.Crypto
+import org.multipaz.crypto.EcPrivateKey
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.URLDecoder
@@ -127,6 +141,10 @@ object WalletPresentationService {
             vpConfiguration = VPConfiguration(
                 vpFormatsSupported = VpFormatsSupported(
                     sdJwtVc = VpFormatsSupported.SdJwtVc.HAIP,
+                    msoMdoc = VpFormatsSupported.MsoMdoc(
+                        issuerAuthAlgorithms = listOf(eu.europa.ec.eudi.openid4vp.CoseAlgorithm(-7)),
+                        deviceAuthAlgorithms = listOf(eu.europa.ec.eudi.openid4vp.CoseAlgorithm(-7)),
+                    ),
                 ),
             ),
             jarConfiguration = JarConfiguration(
@@ -165,6 +183,7 @@ object WalletPresentationService {
         credentialCompact: String,
     ): PresentationResult = coroutineScope {
         createHttpClient().use { httpClient ->
+            var stage = "resolve"
             try {
                 val openId4Vp = createOpenId4Vp(httpClient)
                 val request = when (val resolution = openId4Vp.resolveRequestUri(authorizationRequestUri)) {
@@ -174,19 +193,33 @@ object WalletPresentationService {
                     )
                 }
 
+                stage = "query"
                 val credentialQuery = request.query.credentials.value.singleOrNull()
                     ?: error("The harness currently requires exactly one DCQL credential query")
-                require(credentialQuery.format.value == "dc+sd-jwt") {
-                    "Official presentation currently supports dc+sd-jwt; requested ${credentialQuery.format.value}"
+                stage = "build-${credentialQuery.format.value.replace(Regex("[^a-zA-Z0-9]+"), "-").lowercase()}"
+                val vpToken = when (credentialQuery.format.value) {
+                    "dc+sd-jwt" -> buildSdJwtVpToken(
+                        sdJwtCompact = credentialCompact,
+                        holderKey = holderKeyFor(credentialCompact),
+                        audience = request.client.id.clientId,
+                        nonce = request.nonce,
+                        transactionData = request.transactionData,
+                    )
+                    "mso_mdoc" -> buildMdocDeviceResponse(
+                        issuedCredentialCompact = credentialCompact,
+                        holderKey = holderKeyFor(credentialCompact),
+                        audience = request.client.id.clientId,
+                        nonce = request.nonce,
+                        responseUri = request.responseMode.mdocResponseUri(),
+                        responseEncryptionJwkThumbprint = request.responseEncryptionSpecification
+                            ?.recipientKey
+                            ?.computeThumbprint()
+                            ?.decode(),
+                    )
+                    else -> error(
+                        "Official presentation does not support ${credentialQuery.format.value}",
+                    )
                 }
-
-                val vpToken = buildSdJwtVpToken(
-                    sdJwtCompact = credentialCompact,
-                    holderKey = holderKeyFor(credentialCompact),
-                    audience = request.client.id.clientId,
-                    nonce = request.nonce,
-                    transactionData = request.transactionData,
-                )
                 val consensus = Consensus.PositiveConsensus(
                     VerifiablePresentations(
                         mapOf(
@@ -199,6 +232,7 @@ object WalletPresentationService {
                     EncryptionParameters.DiffieHellman(Base64URL.encode(apu))
                 }
 
+                stage = "dispatch"
                 when (val outcome = openId4Vp.dispatch(request, consensus, encryptionParameters)) {
                     is DispatchOutcome.VerifierResponse.Accepted -> PresentationResult(
                         success = true,
@@ -223,10 +257,35 @@ object WalletPresentationService {
                 log.error("Official OID4VP presentation flow failed", e)
                 PresentationResult(
                     success = false,
-                    error = "${e::class.simpleName}: ${e.message}",
+                    error = presentationErrorCode(e, stage),
                 )
             }
         }
+    }
+
+    /**
+     * Return a public-safe protocol stage and root exception class. Full
+     * exception messages remain only in the job-local service log.
+     */
+    internal fun presentationErrorCode(exception: Throwable, stage: String): String {
+        val safeStage = stage
+            .lowercase()
+            .replace(Regex("[^a-z0-9-]"), "-")
+            .trim('-')
+            .take(48)
+            .ifEmpty { "unknown" }
+        val errorClass = generateSequence(exception) { it.cause }
+            .lastOrNull()
+            ?.javaClass
+            ?.simpleName
+            ?.replace(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+            ?.lowercase()
+            ?.replace(Regex("[^a-z0-9-]"), "-")
+            ?.trim('-')
+            ?.take(80)
+            ?.takeIf(String::isNotEmpty)
+            ?: "unclassified"
+        return "presentation-$safeStage-$errorClass"
     }
 
     /**
@@ -245,6 +304,165 @@ object WalletPresentationService {
         nonce = nonce,
         transactionData = null,
     )
+
+    /**
+     * Construct the ISO/IEC 18013-5 DeviceResponse used by the EUDI reference
+     * wallet for OpenID4VP. The holder key is the same wallet key bound into
+     * the MSO by the OID4VCI proof; issuer signing remains behind the issuer
+     * profile and is never invoked by this holder-side operation.
+     */
+    suspend fun buildMdocVpTokenString(
+        issuedCredentialCompact: String,
+        audience: String,
+        nonce: String,
+        responseUri: String,
+    ): String = buildMdocDeviceResponse(
+        issuedCredentialCompact = issuedCredentialCompact,
+        holderKey = holderKeyFor(issuedCredentialCompact),
+        audience = audience,
+        nonce = nonce,
+        responseUri = responseUri,
+        responseEncryptionJwkThumbprint = null,
+    )
+
+    internal suspend fun buildMdocDeviceResponse(
+        issuedCredentialCompact: String,
+        holderKey: ECKey,
+        audience: String,
+        nonce: String,
+        responseUri: String,
+        responseEncryptionJwkThumbprint: ByteArray?,
+    ): String {
+        require(holderKey.isPrivate) { "The mdoc holder key must contain private key material" }
+        require(audience.isNotBlank()) { "The OpenID4VP client identifier is required" }
+        require(nonce.isNotBlank()) { "The OpenID4VP nonce is required" }
+        require(responseUri.isNotBlank()) { "The OpenID4VP response URI is required" }
+
+        val issuedCredential = Cbor.decode(decodeBase64Url(issuedCredentialCompact))
+        val issuerSigned = if (
+            issuedCredential.hasKey("nameSpaces") &&
+            issuedCredential.hasKey("issuerAuth")
+        ) {
+            // OID4VCI returns the ISO IssuerSigned structure as the credential.
+            issuedCredential
+        } else {
+            // Retain compatibility with a previously wrapped DeviceResponse,
+            // while never treating that wrapper as holder authentication.
+            require(issuedCredential["status"].asNumber == 0L) {
+                "The issued mdoc is not a successful credential"
+            }
+            val issuedDocuments = issuedCredential["documents"].asArray
+            require(issuedDocuments.size == 1) {
+                "The wallet harness requires exactly one issued mdoc document"
+            }
+            issuedDocuments.single()["issuerSigned"]
+        }
+        val issuerAuthPayload = requireNotNull(issuerSigned["issuerAuth"].asCoseSign1.payload) {
+            "The issued mdoc issuerAuth must contain MobileSecurityObjectBytes"
+        }
+        val mobileSecurityObject = Cbor.decode(issuerAuthPayload).asTaggedEncodedCbor
+        val docType = mobileSecurityObject["docType"].asTstr
+
+        // ISO 18013-7 / OpenID4VP handover used by the EUDI reference wallet:
+        //   HandoverInfo = [clientId, nonce, JWKThumbprint/null, responseUri]
+        //   SessionTranscript = [null, null, ["OpenID4VPHandover", SHA-256(HandoverInfo)]]
+        val sessionTranscript = mdocSessionTranscript(
+            audience = audience,
+            nonce = nonce,
+            responseUri = responseUri,
+            responseEncryptionJwkThumbprint = responseEncryptionJwkThumbprint,
+        )
+        val deviceNamespaces = Cbor.encode(buildCborMap {})
+        val deviceAuthenticationBytes = mdocDeviceAuthenticationBytes(
+            sessionTranscript = sessionTranscript,
+            docType = docType,
+            deviceNamespaces = deviceNamespaces,
+        )
+        val multipazPrivateKey = EcPrivateKey.fromJwk(
+            Json.parseToJsonElement(holderKey.toJSONString()).jsonObject,
+        )
+        val deviceSignature = Cose.coseSign1Sign(
+            signingKey = AsymmetricKey.anonymous(multipazPrivateKey),
+            message = deviceAuthenticationBytes,
+            includeMessageInPayload = false,
+            protectedHeaders = emptyMap(),
+            unprotectedHeaders = emptyMap(),
+        )
+
+        val document = buildCborMap {
+            put("docType", docType)
+            put("issuerSigned", issuerSigned)
+            putCborMap("deviceSigned") {
+                put(
+                    "nameSpaces",
+                    Tagged(Tagged.ENCODED_CBOR, Bstr(deviceNamespaces)),
+                )
+                putCborMap("deviceAuth") {
+                    put("deviceSignature", deviceSignature.toDataItem())
+                }
+            }
+        }
+        val deviceResponse = buildCborMap {
+            put("version", "1.0")
+            putCborArray("documents") {
+                add(document)
+            }
+            put("status", 0)
+        }
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(Cbor.encode(deviceResponse))
+    }
+
+    internal suspend fun mdocSessionTranscript(
+        audience: String,
+        nonce: String,
+        responseUri: String,
+        responseEncryptionJwkThumbprint: ByteArray?,
+    ): ByteArray {
+        val handoverInfo = Cbor.encode(
+            buildCborArray {
+                add(audience)
+                add(nonce)
+                add(responseEncryptionJwkThumbprint?.let(::Bstr) ?: Simple.NULL)
+                add(responseUri)
+            },
+        )
+        return Cbor.encode(
+            buildCborArray {
+                add(Simple.NULL)
+                add(Simple.NULL)
+                addCborArray {
+                    add("OpenID4VPHandover")
+                    add(Crypto.digest(MultipazAlgorithm.SHA256, handoverInfo))
+                }
+            },
+        )
+    }
+
+    internal fun mdocDeviceAuthenticationBytes(
+        sessionTranscript: ByteArray,
+        docType: String,
+        deviceNamespaces: ByteArray,
+    ): ByteArray {
+        val deviceAuthentication = Cbor.encode(
+            buildCborArray {
+                add("DeviceAuthentication")
+                add(Cbor.decode(sessionTranscript))
+                add(docType)
+                add(Tagged(Tagged.ENCODED_CBOR, Bstr(deviceNamespaces)))
+            },
+        )
+        return Cbor.encode(Tagged(Tagged.ENCODED_CBOR, Bstr(deviceAuthentication)))
+    }
+
+    private fun decodeBase64Url(value: String): ByteArray {
+        val compact = value.trim()
+        val padded = compact.padEnd(compact.length + ((4 - compact.length % 4) % 4), '=')
+        return try {
+            Base64.getUrlDecoder().decode(padded)
+        } catch (_: IllegalArgumentException) {
+            Base64.getDecoder().decode(padded)
+        }
+    }
 
     private fun buildSdJwtVpToken(
         sdJwtCompact: String,
@@ -413,5 +631,11 @@ object WalletPresentationService {
         is ResponseMode.QueryJwt -> "query.jwt"
         is ResponseMode.Fragment -> "fragment"
         is ResponseMode.FragmentJwt -> "fragment.jwt"
+    }
+
+    private fun ResponseMode.mdocResponseUri(): String = when (this) {
+        is ResponseMode.DirectPost -> responseURI.toString()
+        is ResponseMode.DirectPostJwt -> responseURI.toString()
+        else -> error("Official mdoc presentation requires direct_post or direct_post.jwt")
     }
 }

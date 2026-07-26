@@ -33,6 +33,9 @@ htmlcov/
 .hypothesis/
 reports/ui-contracts/
 reports/oidf/
+target/
+**/.gradle/
+diag-*/
 
 # IDEs
 .vscode/

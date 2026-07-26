@@ -74,9 +74,9 @@ fun Application.configureRoutes() {
                 capabilities = WalletCapabilities(
                     officialOid4vciIssuance = true,
                     officialOid4vpPresentation = true,
-                    officialOid4vpFormats = listOf("dc+sd-jwt"),
+                    officialOid4vpFormats = listOf("dc+sd-jwt", "mso_mdoc"),
                     holderBinding = "issuance-proof-key-reused",
-                    compatibilityOnlyFormats = listOf("mso_mdoc"),
+                    compatibilityOnlyFormats = emptyList(),
                 ),
             ))
         }
@@ -131,8 +131,8 @@ fun Application.configureRoutes() {
             call.respond(result)
         }
 
-        // Compatibility-only token builder. SD-JWT reuses its issuance proof key.
-        // mDoc is a raw pass-through and is not ISO device-response evidence.
+        // Diagnostic token builder. Both formats reuse their issuance proof key.
+        // Official evidence resolves and dispatches through /presentation/submit.
         post("/presentation/build-vp-token") {
             val request = call.receive<BuildVpTokenRequest>()
             log.info("Building VP token: audience=${request.audience}, format=${request.format}")
@@ -145,10 +145,17 @@ fun Application.configureRoutes() {
                         nonce = request.nonce,
                     )
                 }
-                else -> {
-                    // mDoc / other — pass through raw credential
-                    request.credential
+                "mso_mdoc", "mdoc" -> {
+                    WalletPresentationService.buildMdocVpTokenString(
+                        issuedCredentialCompact = request.credential,
+                        audience = request.audience,
+                        nonce = request.nonce,
+                        responseUri = requireNotNull(request.responseUri) {
+                            "responseUri is required for mdoc presentation"
+                        },
+                    )
                 }
+                else -> error("Unsupported presentation format: ${request.format}")
             }
             call.respond(BuildVpTokenResponse(vpToken = vpToken))
         }

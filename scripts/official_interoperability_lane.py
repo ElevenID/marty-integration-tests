@@ -81,6 +81,38 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
         r"(?i)(?:unsupported_credential_format|unsupported credential format|UnsupportedFormat)"
     ),
     "issuer-profile": re.compile(r"(?i)(?:issuer[_ -]?profile|issuer DID|remote sign|signing service)"),
+    "issuer-profile-not-found": re.compile(r"(?i)active issuer profile not found"),
+    "issuer-profile-binding-incomplete": re.compile(
+        r"(?i)issuer profile has an incomplete signing identity binding"
+    ),
+    "issuer-profile-identity-mismatch": re.compile(
+        r"(?i)(?:issuer profile DID binding resolved to a different identity|"
+        r"issuer-profile signer returned a different (?:profile identity|issuer DID|DID verification method))"
+    ),
+    "issuer-profile-algorithm-mismatch": re.compile(
+        r"(?i)signing algorithm must match the issuer profile binding"
+    ),
+    "mdoc-namespace": re.compile(r"(?i)no mDoc namespace mapping is defined"),
+    "mdoc-certificate-chain": re.compile(
+        r"(?i)(?:_mdoc_x5c|x5chain|invalid certificate|certificate chain)"
+    ),
+    "mdoc-signature-missing": re.compile(
+        r"(?i)(?:remote signing service returned no mDoc signature|"
+        r"issuer-profile signer did not return a signature)"
+    ),
+    "mdoc-signature-length": re.compile(r"(?i)P1363 signature length"),
+    "mdoc-signature-encoding": re.compile(r"(?i)remote mDoc signature encoding"),
+    "mdoc-signature-der": re.compile(
+        r"(?i)(?:remote mDoc signature is not valid DER ECDSA|DER signature coordinate)"
+    ),
+    "mdoc-claims": re.compile(r"(?i)(?:mDoc claims must be|invalid claims JSON)"),
+    "mdoc-prepare": re.compile(r"(?i)(?:oid4vci_prepare_mdoc|mDoc preparation|prepare mDoc)"),
+    "mdoc-assemble": re.compile(
+        r"(?i)(?:oid4vci_assemble_mdoc|mDoc assembl|COSE serialization failed|issuer_auth CBOR)"
+    ),
+    "mdoc-credential-id-mismatch": re.compile(
+        r"(?i)(?:remote|issuer-profile) credential builder changed the reserved credential ID"
+    ),
     "upstream-http-4xx": re.compile(r"(?i)(?:status(?: code)?[=: ]+4\d\d\b|HTTP(?:/\S+)?\s+4\d\d\b)"),
     "upstream-http-5xx": re.compile(r"(?i)(?:status(?: code)?[=: ]+5\d\d\b|HTTP(?:/\S+)?\s+5\d\d\b)"),
     "verifier-invalid-request": re.compile(r"(?i)\binvalid_request\b"),
@@ -868,8 +900,9 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
         suite_environment = dict(environment)
         suite_environment.update(load_verifier_environment(args.haip_material))
         # The runner selects only organization-scoped templates. Each template
-        # is bound to an issuer profile whose DID is the signing identity; KMS
-        # service and key references remain private profile-administration data.
+        # is bound to an issuer profile and its DID, which together are the
+        # runtime signing interface. KMS custody and backend references remain
+        # private profile-administration data and are never runtime inputs.
         suite_environment.update(
             {
                 "TEST_ORG_ID": fixtures["organization_id"],

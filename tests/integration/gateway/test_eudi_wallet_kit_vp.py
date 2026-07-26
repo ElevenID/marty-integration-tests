@@ -31,13 +31,15 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Dict
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-import httpx
 import pytest
 
-from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
+from .helpers.eudi_wallet_kit_client import (
+    EUDIWalletHarnessError,
+    EUDIWalletKitClient,
+)
 from .helpers.gateway_client import GatewayClient
 from .helpers.mdoc_evidence import validate_issuer_signed_mdoc
 from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
@@ -77,7 +79,7 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 
 
-def _decode_jwt_payload(jwt_str: str) -> Dict[str, Any]:
+def _decode_jwt_payload(jwt_str: str) -> dict[str, Any]:
     """Decode a JWT's payload (no verification) for test inspection."""
     parts = jwt_str.strip().split(".")
     if len(parts) != 3:
@@ -101,7 +103,7 @@ def _extract_request_uri(openid4vp_uri: str) -> str:
 
 
 def _presentation_submission_for_request(
-    auth_req: Dict[str, Any],
+    auth_req: dict[str, Any],
     credential_format: str,
 ) -> str | None:
     """Build Presentation Exchange metadata only when the request actually uses PE."""
@@ -155,7 +157,7 @@ async def _resolve_signing_service(
     credential_format: str | None,
     key_purpose: str,
     algorithm: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Resolve the production signing service, allowing the configured fallback scope."""
     service = None
     resolution_error: Exception | None = None
@@ -186,8 +188,8 @@ async def _issuer_profile(
     key_purpose: str,
     algorithm: str,
     name: str,
-    service: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
+    service: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create an issuer profile backed by Marty's configured signing service."""
     if service is None:
         service = await _resolve_signing_service(
@@ -301,11 +303,32 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         organization_id=vp_test_org["id"],
     )
     assert len(published_identity.get("x5c") or []) == 2
+    trust_profile = await authenticated_gateway_client.create_trust_profile(
+        organization_id=vp_test_org["id"],
+        name=f"EUDI VP mDoc trust ({uuid.uuid4().hex[:6]})",
+        trust_sources=[
+            {
+                "name": "Disposable EUDI test IACA",
+                "source_type": "ROOT_CA",
+                "certificate_pem": certificate.trust_anchor_pem,
+                "description": (
+                    "Ephemeral trust anchor for the production-path EUDI "
+                    "interoperability lane"
+                ),
+                "enabled": True,
+            }
+        ],
+        revocation_check_enabled=False,
+    )
+    trust_profile = await authenticated_gateway_client.activate_trust_profile(
+        trust_profile["id"]
+    )
     logger.info(
-        "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer profile %s",
+        "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer profile %s; verifier trust profile %s",
         certificate.leaf_sha256,
         certificate.trust_anchor_sha256,
         issuer["id"],
+        trust_profile["id"],
     )
     revocation = await authenticated_gateway_client.create_revocation_profile(
         organization_id=vp_test_org["id"],
@@ -315,6 +338,7 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
     return {
         "compliance_profile_id": compliance["id"],
         "issuer_profile_id": issuer["id"],
+        "trust_profile_id": trust_profile["id"],
         "revocation_profile_id": (await authenticated_gateway_client.activate_revocation_profile(revocation["id"]))[
             "id"
         ],
@@ -357,6 +381,7 @@ async def mdl_mdoc_template(
         name="VP Test mDL (mDoc)",
         credential_type="org.iso.18013.5.1.mDL",
         vct="org.iso.18013.5.1.mDL",
+        doctype="org.iso.18013.5.1.mDL",
         supported_formats=["mdoc"],
         schema={
             "namespaces": {
@@ -377,9 +402,27 @@ async def mdl_mdoc_template(
             }
         },
         claims=[
-            {"name": "given_name", "display_name": "Given Name", "required": True},
-            {"name": "family_name", "display_name": "Family Name", "required": True},
-            {"name": "birth_date", "display_name": "Birth Date", "required": True},
+            {
+                "name": "given_name",
+                "display_name": "Given Name",
+                "required": True,
+                "mdoc_namespace": "org.iso.18013.5.1",
+                "mdoc_element_identifier": "given_name",
+            },
+            {
+                "name": "family_name",
+                "display_name": "Family Name",
+                "required": True,
+                "mdoc_namespace": "org.iso.18013.5.1",
+                "mdoc_element_identifier": "family_name",
+            },
+            {
+                "name": "birth_date",
+                "display_name": "Birth Date",
+                "required": True,
+                "mdoc_namespace": "org.iso.18013.5.1",
+                "mdoc_element_identifier": "birth_date",
+            },
         ],
         **vp_mdoc_resources,
     )
@@ -391,7 +434,7 @@ async def issued_sd_jwt_credential(
     wallet_kit: EUDIWalletKitClient,
     vp_test_org,
     sd_jwt_dl_template,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Issue an SD-JWT VC via Marty and receive it through the EUDI wallet harness.
 
     Returns a dict with keys: credential, format, issuance_result.
@@ -429,7 +472,7 @@ async def issued_mdoc_credential(
     wallet_kit: EUDIWalletKitClient,
     vp_test_org,
     mdl_mdoc_template,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Issue an mDoc mDL via Marty and receive it through the EUDI wallet harness."""
     mdoc_claims = {
         "given_name": "Erika",
@@ -538,6 +581,7 @@ async def vp_identity_policy(
 async def vp_mdoc_policy(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
+    vp_mdoc_resources,
     mdl_mdoc_template,
     vp_request_object_issuer_profile,
 ):
@@ -546,6 +590,17 @@ async def vp_mdoc_policy(
         organization_id=vp_test_org["id"],
         name=f"VP mDL mDoc ({uuid.uuid4().hex[:6]})",
         purpose="Verify mDL via mDoc",
+        trust_profile_id=vp_mdoc_resources["trust_profile_id"],
+        holder_binding={
+            "required": True,
+            "binding_methods": ["DEVICE_KEY"],
+            "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+            "proof_freshness": {
+                "challenge_required": True,
+                "audience_binding_required": True,
+                "replay_detection_required": True,
+            },
+        },
         credential_requirements=[
             {
                 "credential_template_id": mdl_mdoc_template["id"],
@@ -561,6 +616,7 @@ async def vp_mdoc_policy(
     policy = await authenticated_gateway_client.activate_presentation_policy(policy["id"])
     policy["_request_object_issuer_profile_id"] = vp_request_object_issuer_profile["id"]
     policy["_request_object_issuer_did"] = vp_request_object_issuer_profile["issuer_did"]
+    policy["_trust_profile_id"] = vp_mdoc_resources["trust_profile_id"]
     return policy
 
 
@@ -730,14 +786,13 @@ class TestOID4VPSdJwtPresentation:
             "evidence_id",
             "eudi.sd-jwt.missing-holder-binding-key.v1",
         )
-        with pytest.raises(httpx.HTTPStatusError) as failure:
+        with pytest.raises(EUDIWalletHarnessError, match="HTTP 422") as failure:
             await wallet_kit.build_vp_token(
                 credential="unbound.header.signature~",
                 audience="did:web:verifier.example",
                 nonce="negative-holder-binding-test",
             )
-        assert failure.value.response.status_code == 422
-        assert failure.value.response.json()["error"] == "missing_holder_binding_key"
+        assert "wallet-harness-missing-holder-binding-key" in str(failure.value)
 
     @pytest.mark.asyncio
     async def test_sd_jwt_vp_direct_post(
@@ -978,50 +1033,46 @@ class TestMDocPresentation:
         wallet_kit: EUDIWalletKitClient,
         issued_mdoc_credential,
         vp_mdoc_policy,
+        record_property,
     ):
         """Issue mDoc mDL, present to verifier via OID4VP direct-post."""
+        record_property("evidence_id", "eudi.oid4vp.mdoc-device-response.v1")
         credential = issued_mdoc_credential["credential"]
 
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=vp_mdoc_policy["id"],
             organization_id=vp_mdoc_policy["organization_id"],
+            trust_profile_id=vp_mdoc_policy["_trust_profile_id"],
             issuer_profile_id=vp_mdoc_policy["_request_object_issuer_profile_id"],
             issuer_did=vp_mdoc_policy["_request_object_issuer_did"],
         )
-        instance_id = flow["instance_id"]
+        request_uri = flow.get("request_uri", "")
+        assert request_uri.startswith("openid4vp://"), request_uri
 
-        auth_req = await authenticated_gateway_client.get_verification_request(instance_id)
-
-        # For mDoc, the VP token is the raw credential (no KB-JWT wrapping)
-        vp_token = await wallet_kit.build_vp_token(
+        result = await wallet_kit.submit_presentation(
+            authorization_request_uri=request_uri,
             credential=credential,
-            audience=auth_req["client_id"],
-            nonce=auth_req["nonce"],
-            credential_format="mso_mdoc",
-        )
-
-        presentation_submission = _presentation_submission_for_request(
-            auth_req,
-            "mso_mdoc",
-        )
-
-        result = await wallet_kit.direct_post_presentation(
-            response_uri=auth_req["response_uri"],
-            vp_token=vp_token,
-            presentation_submission=presentation_submission,
-            state=auth_req.get("state", instance_id),
         )
 
         logger.info(
-            "[mDoc VP] Direct-post result: success=%s, status=%s",
+            "[mDoc VP] Official resolve/dispatch result: success=%s, mode=%s",
             result.get("success"),
-            result.get("responseStatus"),
+            result.get("responseMode"),
         )
 
         assert result["success"], (
-            f"mDoc VP direct-post failed: status={result.get('responseStatus')}, "
-            f"body={(result.get('responseBody') or '')[:500]}"
+            f"mDoc VP official presentation failed: {result.get('error')}"
         )
+        assert result["responseMode"] == "direct_post"
+        assert result["verifierAccepted"] is True
+        verification = await authenticated_gateway_client.get_verification_result(
+            flow["instance_id"]
+        )
+        assert verification["status"] == "completed", verification
+        assert verification["result"] == "passed", verification
+        assert verification["decision"] == "allow", verification
+        assert verification["verified_claims"]["given_name"] == "Erika"
+        assert verification["verified_claims"]["family_name"] == "Mustermann"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

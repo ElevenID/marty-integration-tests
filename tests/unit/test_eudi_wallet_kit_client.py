@@ -20,8 +20,7 @@ def test_safe_harness_error_reports_only_allowlisted_metadata_field() -> None:
         {
             "error": "JsonDecodingException",
             "message": (
-                "Unexpected value at credential_signing_alg_values_supported "
-                "https://must-not-escape.example/issuer"
+                "Unexpected value at credential_signing_alg_values_supported https://must-not-escape.example/issuer"
             ),
             "stackTrace": "token=must-not-escape",
         },
@@ -31,8 +30,7 @@ def test_safe_harness_error_reports_only_allowlisted_metadata_field() -> None:
         _raise_for_status_safely(response)
 
     assert str(captured.value) == (
-        "EUDI wallet harness HTTP 500: "
-        "issuer-metadata-json-invalid-credential-signing-algorithms"
+        "EUDI wallet harness HTTP 500: issuer-metadata-json-invalid-credential-signing-algorithms"
     )
     assert "must-not-escape" not in str(captured.value)
 
@@ -50,9 +48,24 @@ def test_safe_harness_error_rejects_unrecognized_error_text() -> None:
     with pytest.raises(EUDIWalletHarnessError) as captured:
         _raise_for_status_safely(response)
 
-    assert str(captured.value) == (
-        "EUDI wallet harness HTTP 502: wallet-harness-unclassified"
+    assert str(captured.value) == ("EUDI wallet harness HTTP 502: wallet-harness-unclassified")
+    assert "must-not-escape" not in str(captured.value)
+
+
+def test_safe_harness_error_preserves_allowlisted_holder_binding_code() -> None:
+    response = _response(
+        422,
+        {
+            "error": "missing_holder_binding_key",
+            "message": "credential=must-not-escape",
+            "stackTrace": "",
+        },
     )
+
+    with pytest.raises(EUDIWalletHarnessError) as captured:
+        _raise_for_status_safely(response)
+
+    assert str(captured.value) == ("EUDI wallet harness HTTP 422: wallet-harness-missing-holder-binding-key")
     assert "must-not-escape" not in str(captured.value)
 
 

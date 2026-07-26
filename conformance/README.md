@@ -315,12 +315,13 @@ material is never overwritten, and standard output contains only paths,
 public certificate fingerprints, validity, and configuration digests. Do not
 commit the generated directory or upload it as an artifact.
 
-For a financed certification run, provision the approved signing key in KMS,
-bind it to the active issuer profile and DID verification method, and provide
-only its externally issued `VERIFIER_X509_CERT_PEM` plus the approved trust
-anchor file. The external certificate takes precedence over disposable
-issuance, but request objects still traverse the identical issuer-profile
-signing path. Direct private-key environment input is rejected.
+For a financed certification run, provision the approved signing key in KMS
+custody, bind it to the active issuer profile and DID verification method, and
+provide only its externally issued `VERIFIER_X509_CERT_PEM` plus the approved
+trust anchor file. The external certificate takes precedence over disposable
+issuance, but request objects still traverse the identical issuer-profile and
+DID signing path; callers never invoke KMS directly. Direct private-key
+environment input is rejected.
 
 ```bash
 cp conformance/marty-verifier.example.json /secure/work/marty-verifier.json
@@ -484,8 +485,9 @@ private configuration, generated keys, cookies, raw logs, and unredacted
 official reports remain job-local and expire with the runner.
 
 The EUDI lane also generates a separate disposable HAIP verifier chain. The
-leaf certifies Marty's issuer-profile DID key, which remains in KMS and signs
-the production JAR through the profile service, while
+leaf certifies Marty's issuer-profile DID key. The profile and its DID are the
+signing interface; the profile internally uses its KMS custody backend to sign
+the production JAR, while
 the wallet harness receives only that chain's root through the read-only
 `EUDI_OID4VP_TRUST_ANCHOR_FILE` mount. This root is deliberately different
 from the disposable TLS CA. The official EUDI OID4VP library must resolve an
@@ -493,19 +495,27 @@ from the disposable TLS CA. The official EUDI OID4VP library must resolve an
 encrypted `direct_post.jwt` response; a default/DID-only flow does not satisfy
 the lane's recorded presentation coverage.
 
-For mdoc issuance, the harness asks the normal gateway API to export the
-selected production KMS public key, issues a short-lived document-signer
+For mdoc issuance, the harness asks the normal gateway API for the selected
+issuer profile's DID public key, issues a short-lived document-signer
 certificate for that key under a disposable test CA, stores the public chain
-through the normal certificate API, and republishes JWKS. The KMS private key
-never enters the test process. The independent evidence parser verifies the
-resulting COSE signature, X.509 chain, MSO validity, digest coverage, CBOR
-types, and issuance claims. An externally managed DSC chain can replace the
-disposable chain later without changing the gateway, KMS, issuance, or wallet
-paths exercised by the lane.
+through the normal issuer-profile certificate API, and republishes JWKS. The
+KMS-custodied private key never enters the test process. The independent
+evidence parser verifies the resulting COSE signature, X.509 chain, MSO
+validity, digest coverage, CBOR types, and issuance claims. An externally
+managed DSC chain can replace the disposable chain later without changing the
+gateway, issuer-profile, DID, issuance, or wallet paths exercised by the lane.
+
+For mdoc presentation, the wallet harness uses the holder proof key bound into
+the issued MSO to construct the ISO DeviceResponse and detached ES256
+DeviceAuthentication signature. It follows the OpenID4VP handover implemented
+by the EUDI reference wallet's pinned Multipaz dependency. This is a
+holder-side operation: issuance remains signed through the selected issuer
+profile and its DID, while neither presentation code nor protocol callers can
+select an issuer KMS service or key reference.
 
 The public summary is also bound to stable, versioned JUnit evidence IDs for
 end-to-end SD-JWT issuance/presentation, cryptographically validated mdoc
-issuance, the official HAIP resolve/dispatch path, and the
+issuance and presentation, the official HAIP resolve/dispatch path, and the
 missing-holder-binding-key negative path. Every claimed coverage value
 must map one-to-one to one of these evidence assertions. The runner rejects an
 unbound claim or a missing, renamed, duplicated, failed, errored, or skipped
@@ -513,7 +523,7 @@ sentinel, and a passing `evidence.json` cannot be written unless all required
 assertions appear exactly once and pass. This prevents a suite refactor from
 silently deleting the tests behind a published claim.
 
-The stack pin records immutable `marty-ui` release `v1.1.4` as `ready`, with
+The stack pin records immutable `marty-ui` release `v1.1.25` as `ready`, with
 the independently downloaded `stack-manifest.json` SHA-256 recorded in
 `stack-under-test.json`. Execution hard-fails if the released asset, its
 attestation, or any digest-pinned component differs from that reviewed pin. A
@@ -555,17 +565,18 @@ when combined with `--eudi-material` they must exactly match it.
 Run the reference wallet tester and verifier as a separate Compose project
 with `conformance/eudi-reference.compose.yml`. It joins only Marty's
 `oidf-runner` TLS-proxy bridge; it cannot access Marty's internal Compose
-network. The wallet-kit harness is likewise a thin facade over the pinned
-official EUDI Wallet Kit Maven libraries, not a mock wallet. The three HTTPS
+network. The wallet-kit harness is likewise a thin facade over pinned official
+EUDI Wallet Kit libraries and the OpenWallet Foundation Multipaz mdoc library
+used by the EUDI reference wallet, not a mock wallet. The three HTTPS
 endpoints above are the TLS boundaries; do not use private container ports
 from a host-side conformance run.
 
 The manifest records each library independently: OID4VP 0.12.3, OID4VCI
-0.9.1, and SD-JWT 0.18.0, including its Maven coordinate, official source
-repository, release tag, and dereferenced commit. The harness build uses
+0.9.1, SD-JWT 0.18.0, and Multipaz 0.99.0, including its Maven coordinate,
+official source repository, release tag, and dereferenced commit. The harness build uses
 digest-pinned Gradle and Temurin bases, Gradle dependency locking, and strict
 SHA-256 dependency verification metadata. The monthly upstream review checks
-all three source repositories rather than treating OID4VP as the whole wallet
+all four source repositories rather than treating OID4VP as the whole wallet
 kit. Updating a coordinate requires regenerating and reviewing both
 `gradle.lockfile` and `gradle/verification-metadata.xml`.
 

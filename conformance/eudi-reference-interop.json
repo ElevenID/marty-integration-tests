@@ -44,13 +44,20 @@
           "version": "0.18.0",
           "commit": "c81ba73c62bae6194fd8ab6e3c5d153b8ed0fc39",
           "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-sdjwt-kt:0.18.0"
+        },
+        "mdoc": {
+          "repository": "https://github.com/openwallet-foundation/multipaz.git",
+          "release": "0.99.0",
+          "version": "0.99.0",
+          "commit": "7486ddbca490038c3580513d8273b9bbf18c6b70",
+          "maven_coordinate": "org.multipaz:multipaz-jvm:0.99.0"
         }
       }
     }
   },
   "coverage": {
     "issuance": ["sd_jwt_vc", "mso_mdoc"],
-    "presentation": ["sd_jwt_vc"],
+    "presentation": ["sd_jwt_vc", "mso_mdoc"],
     "request_object_trust": ["signed_jar_x509_hash_pkix"],
     "response_mode": ["direct_post.jwt"],
     "negative": ["missing_holder_binding_key"]
@@ -58,6 +65,9 @@
   "required_evidence": {
     "eudi.oid4vci.mdoc-issuance.v1": {
       "claims": ["issuance:mso_mdoc"]
+    },
+    "eudi.oid4vp.mdoc-device-response.v1": {
+      "claims": ["presentation:mso_mdoc"]
     },
     "eudi.oid4vp.haip.resolve-dispatch.v1": {
       "claims": [
@@ -71,20 +81,11 @@
       "claims": ["negative:missing_holder_binding_key"]
     }
   },
-  "compatibility_only": {
-    "presentation": ["mso_mdoc"]
-  },
+  "compatibility_only": {},
   "planned_coverage": {
-    "presentation": ["mso_mdoc_device_response"],
     "negative": ["replayed_response", "invalid_signature", "expired_or_invalid_request"]
   },
   "limitations": {
-    "mso_mdoc_presentation": {
-      "status": "not_officially_exercised",
-      "reason": "The compatibility endpoint passes issuer-signed mDoc bytes through; it does not yet construct the ISO 18013-5 device response and device authentication required by the official OID4VP flow.",
-      "owner": "ElevenID interoperability",
-      "review_date": "2026-10-01"
-    },
     "oid4vp_negative_vectors": {
       "status": "planned",
       "reason": "Replay, tampered-signature, and expired-request vectors are not claimed until they execute against the production verifier path.",

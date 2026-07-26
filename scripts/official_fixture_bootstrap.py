@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).parent))
 from oidf_marty_public_login import authenticated_json_request
 from oidf_marty_start_verification import gateway_session_id, https_url
+
 from tests.integration.gateway.helpers.mdoc_test_certificate import (
     create_disposable_issuer_certificate_chain,
 )
@@ -92,7 +94,7 @@ def issuer_profile_payload(
     if not isinstance(service_id, str) or not IDENTIFIER.fullmatch(service_id):
         raise RuntimeError("public signing-service resolution returned an invalid service id")
     if not isinstance(key_reference, str) or not key_reference:
-        raise RuntimeError("public signing-service resolution returned no KMS key reference")
+        raise RuntimeError("issuer-profile backing service returned no managed key reference")
     domain = urlparse(gateway_url).hostname
     if not domain:
         raise ValueError("gateway URL has no hostname for the disposable issuer DID")
@@ -367,6 +369,30 @@ def issuer_profile_response_id(value: object) -> str:
     return response_id(value.get("profile", value), "issuer profile")
 
 
+def resolve_new_profile_public_identity(
+    gateway_url: str,
+    session_id: str,
+    *,
+    organization_id: str,
+    profile_id: str,
+    request: Callable[..., object],
+    attempts: int = 10,
+) -> object:
+    """Wait briefly for a newly created profile's public DID key to be visible."""
+    path = (
+        f"/v1/signing-keys/issuer-profiles/{profile_id}/public-identity?"
+        f"{urlencode({'organization_id': organization_id})}"
+    )
+    for attempt in range(attempts):
+        try:
+            return request(gateway_url, session_id, path, method="GET")
+        except RuntimeError as exc:
+            if "HTTP 404" not in str(exc) or attempt + 1 == attempts:
+                raise
+            time.sleep(1)
+    raise AssertionError("issuer-profile visibility retry exhausted unexpectedly")
+
+
 def resolve_signing_service(
     gateway_url: str,
     session_id: str,
@@ -376,11 +402,11 @@ def resolve_signing_service(
     key_purpose: str = "vc_jwt_issuer",
     request: Callable[..., object],
 ) -> dict[str, object]:
-    """Resolve a KMS signing service through the gateway, with global fallback.
+    """Resolve the managed backend used only to provision an issuer profile.
 
     The fallback is still a public gateway call.  It supports stacks that
-    register a shared managed service while retaining the issuer profile in
-    the disposable test organization.
+    register a shared managed service while retaining the issuer profile and
+    DID as the sole runtime signing interface in the disposable organization.
     """
     failure: RuntimeError | None = None
     for candidate_organization in (organization_id, None):
@@ -404,7 +430,7 @@ def resolve_signing_service(
         if isinstance(resolved, dict) and isinstance(resolved.get("service"), dict):
             return resolved["service"]
         raise RuntimeError("public signing-service resolution returned no service object")
-    raise RuntimeError(f"no public KMS signing service is available: {failure}")
+    raise RuntimeError(f"no managed issuer-profile backing service is available: {failure}")
 
 
 def bootstrap_eudi(
@@ -455,14 +481,12 @@ def bootstrap_eudi(
         )
         profile_id = issuer_profile_response_id(created)
         if attach_certificate:
-            identity = request(
+            identity = resolve_new_profile_public_identity(
                 gateway_url,
                 session_id,
-                (
-                    f"/v1/signing-keys/issuer-profiles/{profile_id}/public-identity?"
-                    f"{urlencode({'organization_id': organization_id})}"
-                ),
-                method="GET",
+                organization_id=organization_id,
+                profile_id=profile_id,
+                request=request,
             )
             public_jwk = identity.get("public_jwk") if isinstance(identity, dict) else None
             if not isinstance(public_jwk, dict):

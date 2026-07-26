@@ -113,6 +113,12 @@ services:
       VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_PASSWORD: ${EUDI_VERIFIER_KEYSTORE_PASSWORD:?set the disposable verifier keystore password}
       VERIFIER_ACCESS_CERTIFICATE_ALIAS: ${EUDI_VERIFIER_KEYSTORE_ALIAS:?set the disposable verifier key alias}
       VERIFIER_ACCESS_CERTIFICATE_PASSWORD: ${EUDI_VERIFIER_KEY_PASSWORD:?set the disposable verifier key password}
+      # The reference verifier requires every VCT to have an attestation
+      # classification before evaluating the credential's x5c chain. Limit
+      # this to the deterministic interoperability VCT. Issuer signing still
+      # selects the Marty issuer profile and asserts that profile's DID.
+      VERIFIER_ATTESTATIONCLASSIFICATIONS: >-
+        {"pid":{"vcts":[],"docTypes":[]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":[],"docTypes":[]},"eaa":[{"useCase":"marty-interop","vcts":["${OIDF_PUBLIC_BASE_URL:?set the Marty HTTPS origin without a trailing slash}/credentials/OpenBadge"],"docTypes":[]}]}
     depends_on:
       eudi-verifier-material-init:
         condition: service_completed_successfully

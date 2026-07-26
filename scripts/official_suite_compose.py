@@ -128,7 +128,7 @@ def configure_haip_environment(
     legacy_key_variable = "VERIFIER_" + "SIGNING_KEY_PEM"
     if environment.get(legacy_key_variable, "").strip():
         raise ValueError(
-            "direct verifier signing-key input is unsupported; Marty signs through its issuer profile and KMS"
+            "direct verifier signing-key input is unsupported; Marty signs as the issuer profile's DID"
         )
     certificate = environment.get("VERIFIER_X509_CERT_PEM", "")
     has_certificate = bool(certificate.strip())
@@ -473,7 +473,7 @@ def stage_haip_profile_certificate(
 ) -> None:
     """Certify the live issuer profile's public DID key without exporting its private key."""
     if args.haip_material is None:
-        raise ValueError("KMS-backed HAIP bootstrap requires --haip-material")
+        raise ValueError("issuer-profile HAIP bootstrap requires --haip-material")
     identity = resolve_issuer_profile_identity(args, projects, environment)
     report = issue_verifier_certificate(
         args.haip_material.resolve(),
@@ -596,7 +596,7 @@ def execute(args: argparse.Namespace) -> int:
         if args.command == "up" and args.haip and not environment.get("VERIFIER_X509_CERT_PEM", "").strip():
             raise ValueError(
                 "remote Docker HAIP startup requires an externally issued certificate for the configured "
-                "issuer-profile KMS key; in-run profile certification is local-runner only"
+                "issuer-profile DID key; in-run profile certification is local-runner only"
             )
     selected = components(args, projects, args.command)
     if args.command != "up":

@@ -21,19 +21,19 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "@sha256:" in manifest["components"]["wallet_tester"]["image"]
     assert "@sha256:" in manifest["components"]["verifier_endpoint"]["image"]
     assert manifest["coverage"]["issuance"] == ["sd_jwt_vc", "mso_mdoc"]
-    assert manifest["coverage"]["presentation"] == ["sd_jwt_vc"]
+    assert manifest["coverage"]["presentation"] == ["sd_jwt_vc", "mso_mdoc"]
     assert manifest["coverage"]["request_object_trust"] == ["signed_jar_x509_hash_pkix"]
     assert manifest["coverage"]["response_mode"] == ["direct_post.jwt"]
     assert manifest["coverage"]["negative"] == ["missing_holder_binding_key"]
     assert set(manifest["required_evidence"]) == set(eudi.REQUIRED_EVIDENCE_CLAIMS)
-    assert manifest["compatibility_only"]["presentation"] == ["mso_mdoc"]
+    assert manifest["compatibility_only"] == {}
     assert "replayed_response" in manifest["planned_coverage"]["negative"]
-    assert manifest["limitations"]["mso_mdoc_presentation"]["status"] == "not_officially_exercised"
     libraries = manifest["components"]["wallet_kit"]["libraries"]
     assert {name: value["version"] for name, value in libraries.items()} == {
         "oid4vp": "0.12.3",
         "oid4vci": "0.9.1",
         "sd_jwt": "0.18.0",
+        "mdoc": "0.99.0",
     }
     assert all(value["maven_coordinate"].endswith(value["version"]) for value in libraries.values())
     build = manifest["components"]["wallet_kit"]["build"]
@@ -87,6 +87,14 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert 'System.getProperty("javax.net.ssl.trustStore")' in issuance_source
     assert "TrustManagerFactory.getDefaultAlgorithm()" in issuance_source
     assert "sslContext(tlsContext)" in issuance_source
+    assert "CredentialOfferRequestResolver(httpClient, vciConfig.issuerMetadataPolicy)" in issuance_source
+    assert 'OfferResolutionStageException("resolver", exception)' in issuance_source
+    assert 'OfferResolutionStageException("issuer-construction", exception)' in issuance_source
+    assert "stage = staged?.stage" in issuance_source
+    assert 'issuanceStage("authorization")' in issuance_source
+    assert 'issuanceStage("credential-request")' in issuance_source
+    assert 'IssuanceStageException("credential-outcome", outcome.error)' in issuance_source
+    assert 'Regex("[a-z][a-z0-9_]{0,63}")' in issuance_source
     official_tests = "\n".join(
         (ROOT / "tests" / "integration" / "gateway" / path).read_text(encoding="utf-8")
         for path in ("test_eudi_wallet_kit.py", "test_eudi_wallet_kit_vp.py")
@@ -256,9 +264,7 @@ def test_eudi_junit_failure_summary_emits_only_fixed_actionable_categories(
 
 
 def test_eudi_failure_categories_recognize_gateway_client_status() -> None:
-    categories = eudi.classify_eudi_failure_text(
-        "POST /v1/signing-keys/config/resolve failed with 422: private detail"
-    )
+    categories = eudi.classify_eudi_failure_text("POST /v1/signing-keys/config/resolve failed with 422: private detail")
 
     assert categories == ["http-422", "signing-service-resolution"]
 
@@ -276,10 +282,62 @@ def test_eudi_failure_categories_identify_verifier_contract_without_values() -> 
     ]
 
 
+def test_eudi_failure_categories_expose_only_presentation_stage_and_class() -> None:
+    categories = eudi.classify_eudi_failure_text(
+        "presentation-build-mso-mdoc-illegal-argument-exception token=must-not-escape"
+    )
+
+    assert categories == [
+        "mdoc",
+        "presentation-failure-class",
+        "presentation-build-mso-mdoc-illegal-argument-exception",
+    ]
+    assert "must-not-escape" not in json.dumps(categories)
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "category"),
+    [
+        ("ContainsInvalidJwt", "verifier-sd-jwt-invalid-jwt"),
+        ("IsMissingHolderPublicKey", "verifier-holder-key-missing"),
+        ("IssuerCertificateIsNotTrusted", "verifier-issuer-certificate-untrusted"),
+        ("UnableToLookupDID", "verifier-issuer-did-unresolved"),
+        ("TypeMetadataResolutionFailure", "verifier-type-metadata-failure"),
+        ("StatusCheckFailed", "verifier-status-failure"),
+        ("UnexpectedError", "verifier-unexpected-error"),
+    ],
+)
+def test_eudi_failure_categories_expose_only_reference_verifier_reason_codes(
+    diagnostic: str,
+    category: str,
+) -> None:
+    assert category in eudi.classify_eudi_failure_text(diagnostic)
+
+
 @pytest.mark.parametrize(
     ("diagnostic", "category"),
     [
         ("offer-json-invalid", "offer-document-invalid"),
+        ("offer-resolution-illegal-state-exception", "offer-resolution-failure-class"),
+        ("offer-resolution-null-pointer-exception", "offer-resolution-null-pointer-exception"),
+        ("issuance-credential-outcome-response-unparsable", "issuance-failure-class"),
+        (
+            "issuance-credential-outcome-response-unparsable",
+            "issuance-credential-outcome-response-unparsable",
+        ),
+        ("offer-resolution-json-decoding-exception", "offer-resolution-json-decoding"),
+        ("offer-resolution-serialization-exception", "offer-resolution-serialization"),
+        ("offer-resolution-illegal-argument-exception", "offer-resolution-illegal-argument"),
+        ("offer-resolution-illegal-state-exception", "offer-resolution-illegal-state"),
+        ("offer-resolution-class-cast-exception", "offer-resolution-class-cast"),
+        (
+            "offer-resolution-credential-issuer-metadata-resolution-exception",
+            "offer-resolution-metadata",
+        ),
+        (
+            "offer-resolution-authorization-server-metadata-resolution-exception",
+            "offer-resolution-metadata",
+        ),
         ("issuer-metadata-json-invalid", "issuer-metadata-json-invalid"),
         ("issuer-metadata-credential-configurations-empty", "issuer-metadata-configurations-empty"),
         ("authorization-server-metadata-resolution-failed", "authorization-server-metadata-failed"),

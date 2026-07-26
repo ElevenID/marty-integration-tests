@@ -109,6 +109,7 @@ data class BuildVpTokenRequest(
     val audience: String,
     val nonce: String,
     val format: String = "dc+sd-jwt",
+    val responseUri: String? = null,
 )
 
 @Serializable

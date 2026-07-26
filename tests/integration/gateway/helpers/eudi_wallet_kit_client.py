@@ -24,6 +24,9 @@ _SAFE_HARNESS_ERROR_CLASSES = {
     "JsonDecodingException",
     "SerializationException",
 }
+_SAFE_HARNESS_ERROR_CODES = {
+    "missing_holder_binding_key": "missing-holder-binding-key",
+}
 _SAFE_METADATA_FIELDS = {
     "credential_configurations_supported": "credential-configurations-supported",
     "credential_signing_alg_values_supported": "credential-signing-algorithms",
@@ -56,11 +59,11 @@ def _raise_for_status_safely(response: httpx.Response) -> None:
         body = None
     if isinstance(body, dict):
         candidate = str(body.get("error") or "")
-        if candidate in _SAFE_HARNESS_ERROR_CLASSES:
+        if candidate in _SAFE_HARNESS_ERROR_CODES:
+            error_class = _SAFE_HARNESS_ERROR_CODES[candidate]
+        elif candidate in _SAFE_HARNESS_ERROR_CLASSES:
             error_class = candidate
-        diagnostic_text = "\n".join(
-            str(body.get(key) or "") for key in ("message", "stackTrace")
-        )
+        diagnostic_text = "\n".join(str(body.get(key) or "") for key in ("message", "stackTrace"))
 
     field = next(
         (
@@ -76,9 +79,7 @@ def _raise_for_status_safely(response: httpx.Response) -> None:
             code = f"{code}-{field}"
     else:
         code = f"wallet-harness-{error_class.casefold()}"
-    raise EUDIWalletHarnessError(
-        f"EUDI wallet harness HTTP {response.status_code}: {code}"
-    )
+    raise EUDIWalletHarnessError(f"EUDI wallet harness HTTP {response.status_code}: {code}")
 
 
 class EUDIWalletKitClient:
@@ -194,19 +195,23 @@ class EUDIWalletKitClient:
         audience: str,
         nonce: str,
         credential_format: str = "dc+sd-jwt",
+        response_uri: str | None = None,
     ) -> str:
         """Build a VP token (SD-JWT with KB-JWT) without submitting it.
 
         Returns the compact VP token string.
         """
+        body: dict[str, Any] = {
+            "credential": credential,
+            "audience": audience,
+            "nonce": nonce,
+            "format": credential_format,
+        }
+        if response_uri is not None:
+            body["responseUri"] = response_uri
         resp = await self.client.post(
             "/presentation/build-vp-token",
-            json={
-                "credential": credential,
-                "audience": audience,
-                "nonce": nonce,
-                "format": credential_format,
-            },
+            json=body,
         )
         _raise_for_status_safely(resp)
         return resp.json()["vpToken"]

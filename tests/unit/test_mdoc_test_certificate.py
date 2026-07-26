@@ -22,13 +22,13 @@ def _b64url(value: int) -> str:
 
 def _public_jwk(key: ec.EllipticCurvePrivateKey) -> dict[str, str]:
     numbers = key.public_key().public_numbers()
-    return {"kty": "EC", "crv": "P-256", "x": _b64url(numbers.x), "y": _b64url(numbers.y), "kid": "kms-key"}
+    return {"kty": "EC", "crv": "P-256", "x": _b64url(numbers.x), "y": _b64url(numbers.y), "kid": "did-key"}
 
 
-def test_certificate_wraps_real_kms_public_key_and_has_valid_chain() -> None:
-    kms_key = ec.generate_private_key(ec.SECP256R1())
+def test_certificate_wraps_issuer_profile_did_public_key_and_has_valid_chain() -> None:
+    profile_key = ec.generate_private_key(ec.SECP256R1())
     material = create_disposable_mdoc_certificate_chain(
-        _public_jwk(kms_key),
+        _public_jwk(profile_key),
         organization_id="org-test",
         now=datetime(2026, 7, 21, 12, tzinfo=UTC),
     )
@@ -38,7 +38,7 @@ def test_certificate_wraps_real_kms_public_key_and_has_valid_chain() -> None:
     assert leaf.public_key().public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
-    ) == kms_key.public_key().public_bytes(
+    ) == profile_key.public_key().public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     )

@@ -251,6 +251,69 @@ def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates(
         assert "signing_key_reference" not in body
 
 
+def test_new_issuer_profile_public_identity_retries_only_transient_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    sleeps: list[int] = []
+
+    def request(
+        _gateway: str,
+        _session: str,
+        _path: str,
+        *,
+        method: str,
+    ) -> object:
+        nonlocal calls
+        calls += 1
+        assert method == "GET"
+        if calls == 1:
+            raise RuntimeError("public gateway returned HTTP 404")
+        return {"public_jwk": PUBLIC_SIGNING_JWK}
+
+    monkeypatch.setattr(fixtures.time, "sleep", sleeps.append)
+    identity = fixtures.resolve_new_profile_public_identity(
+        "https://marty.test",
+        "real-session",
+        organization_id=fixtures.DEFAULT_ORGANIZATION,
+        profile_id="issuer-profile",
+        request=request,
+    )
+
+    assert identity == {"public_jwk": PUBLIC_SIGNING_JWK}
+    assert calls == 2
+    assert sleeps == [1]
+
+
+def test_new_issuer_profile_public_identity_does_not_retry_other_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        fixtures.time,
+        "sleep",
+        lambda _seconds: pytest.fail("non-404 failures must not be retried"),
+    )
+
+    def request(
+        _gateway: str,
+        _session: str,
+        _path: str,
+        *,
+        method: str,
+    ) -> object:
+        assert method == "GET"
+        raise RuntimeError("public gateway returned HTTP 500")
+
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        fixtures.resolve_new_profile_public_identity(
+            "https://marty.test",
+            "real-session",
+            organization_id=fixtures.DEFAULT_ORGANIZATION,
+            profile_id="issuer-profile",
+            request=request,
+        )
+
+
 def test_w3c_fixture_separates_credential_and_presentation_verification() -> None:
     credential_policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,

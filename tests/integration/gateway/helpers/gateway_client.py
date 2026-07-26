@@ -288,6 +288,10 @@ class GatewayClient:
         """Delete a trust profile."""
         await self._request("DELETE", f"/v1/trust-profiles/{profile_id}")
 
+    async def activate_trust_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Activate a trust profile."""
+        return await self._request("POST", f"/v1/trust-profiles/{profile_id}/activate")
+
     # =============================================================================
     # Credential Templates
     # =============================================================================
@@ -299,6 +303,7 @@ class GatewayClient:
         credential_type: str,
         compliance_profile: Optional[Dict[str, Any]] = None,
         vct: str = "",
+        doctype: Optional[str] = None,
         supported_formats: Optional[List[str]] = None,
         schema: Optional[Dict] = None,
         claims: Optional[List[Dict]] = None,
@@ -325,6 +330,7 @@ class GatewayClient:
             credential_type: Type of credential (e.g., "org.iso.18013.5.1.mDL")
             compliance_profile: Embedded compliance profile configuration (required)
             vct: Verifiable Credential Type identifier (required)
+            doctype: ISO 18013 document type for mdoc templates
             supported_formats: List of credential formats (mdoc, sd_jwt_vc, jwt_vc)
             schema: JSON schema for the credential
             claims: List of claim definitions
@@ -358,6 +364,8 @@ class GatewayClient:
             payload["compliance_profile"] = compliance_profile
         if compliance_profile_id:
             payload["compliance_profile_id"] = compliance_profile_id
+        if doctype:
+            payload["doctype"] = doctype
 
         # Add optional fields
         if application_template_id:
@@ -515,6 +523,8 @@ class GatewayClient:
         name: str,
         credential_requirements: List[Dict],
         purpose: Optional[str] = None,
+        trust_profile_id: Optional[str] = None,
+        holder_binding: Optional[Dict[str, Any]] = None,
         prefer_predicates: bool = False,
         fallback_policy: Optional[str] = None,
         supported_circuits: Optional[List[str]] = None,
@@ -527,6 +537,8 @@ class GatewayClient:
             name: Policy name
             credential_requirements: List of credential requirements
             purpose: Purpose of the verification
+            trust_profile_id: Trust profile used to validate presented issuers
+            holder_binding: Required holder proof and request-binding policy
             prefer_predicates: Whether to prefer ZK predicate proofs
             fallback_policy: Optional fallback policy ID
             supported_circuits: Optional list of supported ZK circuits
@@ -542,6 +554,10 @@ class GatewayClient:
         }
         if prefer_predicates:
             body["prefer_predicates"] = True
+        if trust_profile_id:
+            body["trust_profile_id"] = trust_profile_id
+        if holder_binding:
+            body["holder_binding"] = holder_binding
         if fallback_policy:
             body["fallback_policy"] = fallback_policy
         if supported_circuits:
