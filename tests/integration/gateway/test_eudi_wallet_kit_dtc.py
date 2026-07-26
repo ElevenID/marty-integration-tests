@@ -35,7 +35,7 @@ from typing import Any, Dict
 
 import pytest
 
-from .helpers.eudi_stage import eudi_stage
+from .helpers.eudi_stage import eudi_stage, require_presentation_accepted
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
 from .helpers.gateway_client import GatewayClient
 from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
@@ -516,9 +516,11 @@ class TestDtcWalletPresentation:
             result.get("responseMode"),
         )
 
-        assert result["success"], f"DTC VP official presentation failed: {result.get('error')}"
-        assert result["responseMode"] == "direct_post"
-        assert result["verifierAccepted"] is True
+        require_presentation_accepted(
+            result,
+            stage="dtc-presentation",
+            expected_mode="direct_post",
+        )
 
     @pytest.mark.asyncio
     async def test_dtc_identity_only_presentation(
@@ -546,8 +548,10 @@ class TestDtcWalletPresentation:
             credential=credential,
         )
 
-        assert result["success"], f"DTC identity-only VP failed: {result.get('error')}"
-        assert result["verifierAccepted"] is True
+        require_presentation_accepted(
+            result,
+            stage="dtc-identity-presentation",
+        )
         logger.info("[DTC VP] Identity-only presentation accepted")
 
 
@@ -650,8 +654,10 @@ class TestDtcWalletEndToEnd:
             authorization_request_uri=request_uri,
             credential=credential,
         )
-        assert post_result["success"], f"DTC VP official presentation failed: {post_result.get('error')}"
-        assert post_result["verifierAccepted"] is True
+        require_presentation_accepted(
+            post_result,
+            stage="dtc-lifecycle-presentation",
+        )
         logger.info("[DTC E2E] VP token accepted by verifier")
 
         # 7. Check verification result

@@ -5,6 +5,7 @@ import pytest
 from tests.integration.gateway.helpers.eudi_stage import (
     EUDIInteropStageError,
     eudi_stage,
+    require_presentation_accepted,
 )
 from tests.integration.gateway.helpers.gateway_client import GatewayClientError
 
@@ -52,3 +53,60 @@ def test_stage_rejects_dynamic_labels() -> None:
         eudi_stage("must_not_escape"),
     ):
         pass
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (
+            {
+                "success": False,
+                "error": "credential=must-not-escape",
+                "responseMode": "direct_post",
+                "verifierAccepted": False,
+            },
+            "eudi-stage-mdoc-presentation-dispatch",
+        ),
+        (
+            {
+                "success": True,
+                "responseMode": "secret-mode-must-not-escape",
+                "verifierAccepted": True,
+            },
+            "eudi-stage-mdoc-presentation-response-mode",
+        ),
+        (
+            {
+                "success": True,
+                "responseMode": "direct_post",
+                "verifierAccepted": False,
+            },
+            "eudi-stage-mdoc-presentation-verifier-accepted",
+        ),
+    ],
+)
+def test_presentation_acceptance_exposes_only_fixed_stage(
+    result: dict[str, object],
+    expected: str,
+) -> None:
+    with pytest.raises(EUDIInteropStageError) as captured:
+        require_presentation_accepted(
+            result,
+            stage="mdoc-presentation",
+            expected_mode="direct_post",
+        )
+
+    assert str(captured.value) == expected
+    assert "must-not-escape" not in str(captured.value)
+
+
+def test_presentation_acceptance_passes_complete_result() -> None:
+    require_presentation_accepted(
+        {
+            "success": True,
+            "responseMode": "direct_post",
+            "verifierAccepted": True,
+        },
+        stage="mdoc-presentation",
+        expected_mode="direct_post",
+    )
