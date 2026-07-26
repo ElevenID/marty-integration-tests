@@ -46,6 +46,14 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
         "pinned_commit": updates.load_json("conformance/oidf-runner.json")["official_runner"]["commit"],
         "latest_commit": "e" * 40,
     }
+    w3c_manifest = updates.load_json("conformance/w3c-vc-data-model-v2.json")
+    assert observation["upstreams"]["w3c_vc_data_model_v2"] == {
+        "pinned_commit": w3c_manifest["official_suite"]["commit"],
+        "latest_commit": "f" * 40,
+        "pinned_patch_commit": w3c_manifest["compatibility_patch"]["commit"],
+        "latest_patch_commit": "f" * 40,
+        "upstream_pull_request": w3c_manifest["compatibility_patch"]["upstream_pull_request"],
+    }
 
 
 def test_tag_resolution_prefers_the_peeled_commit(monkeypatch: pytest.MonkeyPatch) -> None:

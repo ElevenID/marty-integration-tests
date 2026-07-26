@@ -76,7 +76,9 @@ def load_json(relative: str) -> dict[str, Any]:
 
 def observe() -> dict:
     oidf = load_json("conformance/oidf-runner.json")["official_runner"]
-    w3c = load_json("conformance/w3c-vc-data-model-v2.json")["official_suite"]
+    w3c_manifest = load_json("conformance/w3c-vc-data-model-v2.json")
+    w3c = w3c_manifest["official_suite"]
+    w3c_patch = w3c_manifest["compatibility_patch"]
     eudi = load_json("conformance/eudi-reference-interop.json")["components"]
     latest_oidf = latest_oidf_release()
     upstreams = {
@@ -89,6 +91,12 @@ def observe() -> dict:
         "w3c_vc_data_model_v2": {
             "pinned_commit": w3c["commit"],
             "latest_commit": git_head(w3c["repository"], "refs/heads/main"),
+            "pinned_patch_commit": w3c_patch["commit"],
+            "latest_patch_commit": git_head(
+                w3c["repository"],
+                w3c_patch["pull_request_ref"],
+            ),
+            "upstream_pull_request": w3c_patch["upstream_pull_request"],
         },
         "eudi_wallet_tester": {
             "pinned_commit": eudi["wallet_tester"]["commit"],
@@ -115,6 +123,7 @@ def has_drift(observation: dict) -> bool:
     return any(
         entry.get("pinned_release") != entry.get("latest_release")
         or entry.get("pinned_commit") != entry.get("latest_commit")
+        or entry.get("pinned_patch_commit") != entry.get("latest_patch_commit")
         for entry in values
     )
 
