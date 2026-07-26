@@ -159,3 +159,54 @@ def test_presentation_acceptance_reduces_verifier_reason_to_fixed_codes() -> Non
     )
     assert "secret" not in str(captured.value)
     assert "private" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    ("reason", "code"),
+    [
+        (
+            "Credential verification failed: Unsupported credential format: unknown",
+            "device-response-unrecognized",
+        ),
+        (
+            "Credential verification failed: marty-rs bindings not installed",
+            "verifier-binding-unavailable",
+        ),
+        (
+            "Required credentials not satisfied",
+            "policy-requirements-unsatisfied",
+        ),
+        (
+            "Credential verification failed: Revocation status was not checked",
+            "revocation-unchecked",
+        ),
+        (
+            "Policy service unavailable: private transport detail",
+            "policy-service-unavailable",
+        ),
+    ],
+)
+def test_presentation_acceptance_classifies_preverification_failures(
+    reason: str,
+    code: str,
+) -> None:
+    with pytest.raises(EUDIInteropStageError) as captured:
+        require_presentation_accepted(
+            {
+                "success": False,
+                "error": "Verifier rejected the official OID4VP response",
+                "responseMode": "direct_post",
+                "verifierAccepted": False,
+            },
+            stage="mdoc-presentation",
+            expected_mode="direct_post",
+            verification_result={
+                "status": "completed",
+                "result": {"decision_reason": reason},
+            },
+        )
+
+    assert str(captured.value) == (
+        f"eudi-stage-mdoc-presentation-verifier-rejected-{code}"
+    )
+    assert reason not in str(captured.value)

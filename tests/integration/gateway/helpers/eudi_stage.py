@@ -46,6 +46,29 @@ _VERIFICATION_REASON_CODES = (
         re.compile(r"(?i)mdoc verifier audience does not match request state"),
         "audience-mismatch",
     ),
+    (
+        re.compile(r"(?i)unsupported credential format:\s*unknown"),
+        "device-response-unrecognized",
+    ),
+    (
+        re.compile(
+            r"(?i)(?:marty-rs bindings? (?:are |is )?not installed|"
+            r"marty-rs verification binding is unavailable)"
+        ),
+        "verifier-binding-unavailable",
+    ),
+    (
+        re.compile(r"(?i)required credentials not satisfied"),
+        "policy-requirements-unsatisfied",
+    ),
+    (
+        re.compile(r"(?i)revocation status was not checked"),
+        "revocation-unchecked",
+    ),
+    (
+        re.compile(r"(?i)policy service unavailable"),
+        "policy-service-unavailable",
+    ),
 )
 
 
