@@ -21,6 +21,13 @@ def test_all_suite_sources_are_exact_and_allowlisted() -> None:
     assert oidf_repository == "https://gitlab.com/openid/conformance-suite.git"
     assert w3c_repository == "https://github.com/w3c/vc-data-model-2.0-test-suite.git"
     assert len(oidf_commit) == len(w3c_commit) == 40
+    assert checkout.pinned_compatibility_patch("oidf") is None
+    patch = checkout.pinned_compatibility_patch("w3c")
+    assert patch is not None
+    assert patch["base_commit"] == w3c_commit
+    assert patch["commit"] == "ee3f93ce939161c889afd32591396473435c5ae7"
+    assert patch["paths"] == ["tests/assertions.js"]
+    assert patch["upstream_pull_request"].endswith("/pull/174")
 
 
 def test_checkout_refuses_to_reuse_nonempty_directory(tmp_path: Path) -> None:

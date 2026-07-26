@@ -31,6 +31,8 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
         "vc_verifier",
         "vp_verifier",
     }
+    assert manifest["compatibility_patch"]["status"] == "upstream-pending"
+    assert manifest["compatibility_patch"]["paths"] == ["tests/assertions.js"]
     assert manifest["exclusions"] == []
 
 
@@ -227,8 +229,13 @@ def test_w3c_evidence_records_no_stale_exclusion_and_preserves_immutable_stack(
     assert evidence["result"] == {
         "exit_code": 0,
         "passed": False,
+        "evidence_class": "official-suite-with-reviewed-upstream-pending-runner-fix",
         "required_capabilities": ["issuer", "vc_verifier", "vp_verifier"],
         "executed_capabilities": [],
     }
+    assert evidence["suite_checkout"]["official_upstream_unmodified"] is False
+    assert evidence["suite_checkout"]["compatibility_patch"]["upstream_pull_request"].endswith(
+        "/pull/174"
+    )
     assert evidence["exclusions"] == []
     assert evidence["marty"]["stack_manifest"]["images"][0]["digest"] == "sha256:" + "a" * 64

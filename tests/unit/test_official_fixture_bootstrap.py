@@ -45,6 +45,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "revocation-2"},
             {"id": "revocation-2"},
             {"id": "template-2"},
+            {"id": "template-3"},
             {"id": "policy-2"},
             {"id": "policy-2"},
             {"id": "policy-3"},
@@ -83,6 +84,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert result["w3c_revocation_profile_id"] == "revocation-2"
     assert result["w3c_issuer_profile_id"] == "issuer-2"
     assert result["w3c_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
+    assert result["w3c_template_id"] == "template-2"
+    assert result["w3c_presentation_template_id"] == "template-3"
     assert result["w3c_credential_policy_id"] == "policy-2"
     assert result["w3c_presentation_policy_id"] == "policy-3"
     assert "w3c_policy_id" not in result
@@ -115,12 +118,16 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[11][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
     assert calls[17][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
-    assert calls[18][2]["holder_binding"] == {"required": False}
-    requirement = calls[18][2]["credential_requirements"][0]
+    assert calls[18][2]["credential_payload_format"] == "ldp_vc"
+    assert calls[19][2]["holder_binding"] == {"required": False}
+    requirement = calls[19][2]["credential_requirements"][0]
+    assert requirement["credential_template_id"] == "template-2"
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[20][2]["holder_binding"] == {"required": True}
-    assert calls[20][2]["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
+    assert calls[21][2]["holder_binding"] == {"required": True}
+    presentation_requirement = calls[21][2]["credential_requirements"][0]
+    assert presentation_requirement["credential_template_id"] == "template-3"
+    assert presentation_requirement["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
 
 def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
@@ -160,7 +167,7 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     assert policy["holder_binding"] == {"required": True}
 
 
-def test_eudi_bootstrap_keeps_kms_binding_out_of_runner_templates(
+def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, str, dict | None]] = []
@@ -315,6 +322,23 @@ def test_new_issuer_profile_public_identity_does_not_retry_other_errors(
 
 
 def test_w3c_fixture_separates_credential_and_presentation_verification() -> None:
+    credential_template = fixtures.template_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        "compliance-1",
+        "issuer-1",
+        "revocation-1",
+        w3c=True,
+        run_id="run-1",
+    )
+    presentation_template = fixtures.template_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        "compliance-1",
+        "issuer-1",
+        "revocation-1",
+        w3c=True,
+        run_id="run-1",
+        presentation=True,
+    )
     credential_policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,
         "template-1",
@@ -329,6 +353,15 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
         run_id="run-1",
         presentation=True,
     )
+    assert credential_template["supported_formats"] == ["jwt_vc"]
+    assert credential_template["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert presentation_template["supported_formats"] == ["ldp_vc"]
+    assert presentation_template["credential_payload_format"] == "ldp_vc"
+    assert credential_template["issuer_profile_id"] == "issuer-1"
+    assert presentation_template["issuer_profile_id"] == "issuer-1"
+    for template in (credential_template, presentation_template):
+        assert "signing_service_id" not in template
+        assert "signing_key_reference" not in template
     assert credential_policy["holder_binding"] == {"required": False}
     credential_requirement = credential_policy["credential_requirements"][0]
     assert credential_requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"

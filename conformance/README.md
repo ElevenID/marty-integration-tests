@@ -456,6 +456,16 @@ verifier, and VP verifier. The reviewed row markers live with the suite pin;
 there is deliberately no fixed total-case count, so upstream may add tests
 without weakening or spuriously breaking this evidence guard.
 
+The pinned official revision currently contains an invalid Chai invocation
+that crashes two otherwise valid issuer assertions. Until upstream
+[PR #174](https://github.com/w3c/vc-data-model-2.0-test-suite/pull/174) is
+merged, checkout applies only that PR's exact one-file delta after verifying
+its full commit, allowed path, and SHA-256. Evidence is explicitly classified
+as `official-suite-with-reviewed-upstream-pending-runner-fix` and records that
+the checkout is not unmodified official upstream. The monthly updater watches
+both upstream `main` and the PR head; the patch must be removed when upstream
+adopts the fix. It changes no normative assertion, skip, or expected result.
+
 ## Certification later
 
 At the pinned OIDF `release-v5.2.0`, the official source labels both the
@@ -523,7 +533,7 @@ sentinel, and a passing `evidence.json` cannot be written unless all required
 assertions appear exactly once and pass. This prevents a suite refactor from
 silently deleting the tests behind a published claim.
 
-The stack pin records immutable `marty-ui` release `v1.1.25` as `ready`, with
+The stack pin records immutable `marty-ui` release `v1.1.34` as `ready`, with
 the independently downloaded `stack-manifest.json` SHA-256 recorded in
 `stack-under-test.json`. Execution hard-fails if the released asset, its
 attestation, or any digest-pinned component differs from that reviewed pin. A
