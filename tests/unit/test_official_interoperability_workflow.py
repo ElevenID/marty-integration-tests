@@ -8,10 +8,14 @@ WORKFLOW = ROOT / ".github" / "workflows" / "official-interoperability.yml"
 PYTHON_LOCK = ROOT / "requirements" / "official-py312.lock"
 
 
-def test_workflow_is_manual_and_uses_isolated_standard_runner_lanes() -> None:
+def test_workflow_is_manual_and_monthly_with_isolated_standard_runner_lanes() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in text
-    assert "schedule:" not in text
+    assert "schedule:" in text
+    assert text.count("cron:") == 1
+    assert 'cron: "41 5 8 * *"' in text
+    assert "github.event_name == 'schedule' || inputs.lane == 'all'" in text
+    assert "inputs.lane || 'all'" in text
     assert "pull_request:" not in text
     assert "runs-on: ubuntu-latest" in text
     for lane in ("oid4vp-final", "haip", "w3c-v2", "eudi"):

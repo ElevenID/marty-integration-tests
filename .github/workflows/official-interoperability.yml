@@ -1,6 +1,8 @@
 name: Official interoperability
 
 on:
+  schedule:
+    - cron: "41 5 8 * *"
   workflow_dispatch:
     inputs:
       lane:
@@ -23,16 +25,13 @@ on:
         type: string
         required: false
 
-# A monthly trigger is intentionally withheld until all four lanes pass this
-# manual workflow against a newly released production-path stack.
-
 permissions:
   contents: read
   packages: read
   attestations: read
 
 concurrency:
-  group: official-interoperability-${{ github.ref }}-${{ inputs.lane }}
+  group: official-interoperability-${{ github.ref }}-${{ inputs.lane || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -43,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: ${{ fromJSON(inputs.lane == 'all' && '["oid4vp-final","haip","w3c-v2","eudi"]' || format('["{0}"]', inputs.lane)) }}
+        lane: ${{ fromJSON((github.event_name == 'schedule' || inputs.lane == 'all') && '["oid4vp-final","haip","w3c-v2","eudi"]' || format('["{0}"]', inputs.lane)) }}
     env:
       PYTHONUNBUFFERED: "1"
       OFFICIAL_SUITE_RUN_ID: ${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
