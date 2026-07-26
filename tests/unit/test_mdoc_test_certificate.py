@@ -34,7 +34,9 @@ def test_certificate_wraps_issuer_profile_did_public_key_and_has_valid_chain() -
     )
     leaf = x509.load_pem_x509_certificate(material.leaf_pem.encode("ascii"))
     root = x509.load_pem_x509_certificate(material.chain_pem.encode("ascii"))
+    trust_anchor = x509.load_pem_x509_certificate(material.trust_anchor_pem.encode("ascii"))
 
+    assert trust_anchor == root
     assert leaf.public_key().public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
