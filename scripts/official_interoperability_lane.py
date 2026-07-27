@@ -30,7 +30,12 @@ from haip_test_certificates import (  # noqa: E402
 LANES = {"oid4vci-issuer", "oid4vp-final", "haip", "w3c-v2", "eudi"}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
-IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# Public OID4VCI credential-configuration identifiers are opaque JSON object
+# keys.  Marty uses a fragment-like suffix (for example, ``PID#sd-jwt``) to
+# distinguish formats for the same credential type, so ``#`` is intentional.
+# Keep the fixture channel narrowly printable because these values are also
+# copied into runner configuration and diagnostic output.
+IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:#/+%@-]{1,256}$")
 INITIALIZER_SECRET = re.compile(
     r"(?i)(\b(?:authorization|cookie|password|secret|session(?:_id)?|token|private[_-]?key|api[_-]?key)\b\s*(?:=|:|is)\s*)([^\s,;]+)"
 )

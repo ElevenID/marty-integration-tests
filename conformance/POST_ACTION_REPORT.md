@@ -176,6 +176,18 @@ published `vct` from Marty's public issuer metadata. It therefore selects the
 actual advertised `PID#sd-jwt` identifier instead of guessing from an
 internal resource ID or accepting the wrong wire format.
 
+Run
+[`30232463613`](https://github.com/ElevenID/marty-integration-tests/actions/runs/30232463613)
+then proved that the resolved public identifier was correct but exposed one
+more harness-only constraint: the fixture channel's identifier allowlist did
+not permit `#`. The bootstrap created every resource through the public
+gateway and stopped before invoking the official runner. The allowlist now
+accepts Marty's printable fragment-style protocol identifiers while continuing
+to reject whitespace and control characters. The sanitized summary is
+`sha256:efef32378fc30dbe8caa30577559b06f7e34f1bccec0f90c04c44892c4b86b58`.
+No product endpoint, metadata document, or official assertion was changed to
+accommodate this harness correction.
+
 ## Do the tests cheat?
 
 No production-verification bypass has been found in the reviewed EUDI path:

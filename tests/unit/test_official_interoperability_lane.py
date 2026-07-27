@@ -354,6 +354,81 @@ def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(
     assert captured[captured.index("--oidf-runner-config") + 1] == str(haip_material / "marty-verifier-haip.json")
 
 
+def test_oid4vci_fixture_bootstrap_accepts_public_configuration_fragment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str],
+        _environment: dict[str, str],
+        **_kwargs: object,
+    ) -> int:
+        destination = Path(command[command.index("--output") + 1])
+        destination.parent.mkdir(parents=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "organization_id": "org-1",
+                    "oid4vci_template_id": "template-1",
+                    "oid4vci_credential_configuration_id": "PID#sd-jwt",
+                    "oid4vci_issuer_did": "did:web:marty.test:orgs:org-1",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    args = SimpleNamespace(
+        output_dir=tmp_path / "output",
+        run_id="run-1",
+        haip_material=tmp_path / "haip",
+    )
+
+    result = lane.bootstrap_fixtures(
+        args,
+        {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+        mode="oid4vci",
+    )
+
+    assert result["oid4vci_credential_configuration_id"] == "PID#sd-jwt"
+
+
+def test_fixture_bootstrap_rejects_control_characters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str],
+        _environment: dict[str, str],
+        **_kwargs: object,
+    ) -> int:
+        destination = Path(command[command.index("--output") + 1])
+        destination.parent.mkdir(parents=True)
+        destination.write_text(
+            json.dumps({"organization_id": "org-1\nforged-log-entry"}),
+            encoding="utf-8",
+        )
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    args = SimpleNamespace(
+        output_dir=tmp_path / "output",
+        run_id="run-1",
+        haip_material=tmp_path / "haip",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="oid4vci public fixture bootstrap returned invalid identifiers",
+    ):
+        lane.bootstrap_fixtures(
+            args,
+            {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+            mode="oid4vci",
+        )
+
+
 def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> None:
     config, request = lane.oid4vci_issuer_config(
         tmp_path,
