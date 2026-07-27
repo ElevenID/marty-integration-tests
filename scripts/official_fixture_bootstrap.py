@@ -67,14 +67,21 @@ def signing_service_request_payload(
     *,
     w3c: bool,
     key_purpose: str = "vc_jwt_issuer",
+    data_integrity: bool = False,
 ) -> dict[str, str]:
     """Request the configured production signer for one profile purpose."""
     payload = {
         "key_purpose": key_purpose,
-        "algorithm": "ES256",
+        "algorithm": "EdDSA" if data_integrity else "ES256",
     }
     if key_purpose == "vc_jwt_issuer":
-        payload["credential_format"] = "jwt_vc_json" if w3c else "dc+sd-jwt"
+        payload["credential_format"] = (
+            "ldp_vc"
+            if data_integrity
+            else "jwt_vc_json"
+            if w3c
+            else "dc+sd-jwt"
+        )
     elif key_purpose == "mdoc_dsc":
         payload["credential_format"] = "mso_mdoc"
     return payload
@@ -419,6 +426,7 @@ def resolve_signing_service(
     organization_id: str,
     w3c: bool,
     key_purpose: str = "vc_jwt_issuer",
+    data_integrity: bool = False,
     request: Callable[..., object],
 ) -> dict[str, object]:
     """Resolve the managed backend used only to provision an issuer profile.
@@ -441,6 +449,7 @@ def resolve_signing_service(
                 json_body=signing_service_request_payload(
                     w3c=w3c,
                     key_purpose=key_purpose,
+                    data_integrity=data_integrity,
                 ),
             )
         except RuntimeError as exc:
@@ -662,6 +671,38 @@ def bootstrap(
             json_body=profile_payload,
         )
         issuer_profile_response_id(created_issuer_profile)
+        if w3c:
+            # The W3C lane verifies both JWT VC and Data Integrity credentials.
+            # Keep those capabilities on distinct profiles sharing the same DID:
+            # ES256 remains the JWT signer, while ldp_vc resolves only to the
+            # managed EdDSA key required by the supported eddsa-rdfc-2022 suite.
+            data_integrity_service = resolve_signing_service(
+                gateway_url,
+                session_id,
+                organization_id=organization_id,
+                w3c=True,
+                data_integrity=True,
+                request=request,
+            )
+            data_integrity_profile_payload = issuer_profile_payload(
+                organization_id,
+                data_integrity_service,
+                gateway_url=gateway_url,
+                w3c=True,
+                run_id=run_id,
+                label="W3C VC Data Integrity",
+            )
+            created_data_integrity_profile = request(
+                gateway_url,
+                session_id,
+                (
+                    "/v1/signing-keys/issuer-profiles?"
+                    f"{urlencode({'organization_id': organization_id})}"
+                ),
+                method="POST",
+                json_body=data_integrity_profile_payload,
+            )
+            issuer_profile_response_id(created_data_integrity_profile)
         request_profile_payload: dict[str, str] | None = None
         request_issuer_profile_id: str | None = None
         if not w3c and not oid4vci:
