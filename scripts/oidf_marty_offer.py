@@ -26,6 +26,11 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REQUEST = ROOT / "conformance" / "marty-issuer.offer-request.example.json"
 SAFE_FAILURE_SOURCE = re.compile(r"^[A-Za-z][A-Za-z0-9_$]{0,99}$")
+OFFER_INTERACTION_COUNTS = {
+    # The official module obtains one credential for each of two independent
+    # wallet clients and returns to WAITING before the second flow.
+    "oid4vci-1_0-issuer-happy-flow-multiple-clients": 2,
+}
 
 
 def interrupted_failure_category(
@@ -54,8 +59,14 @@ def interrupted_failure_category(
     return "oidf-invariant-interrupted-no-failure-entry"
 
 
-def request_json(url: str, *, method: str = "GET", body: bytes | None = None,
-                 headers: dict[str, str] | None = None, insecure: bool = False) -> tuple[int, Any]:
+def request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+    insecure: bool = False,
+) -> tuple[int, Any]:
     request = Request(url, data=body, headers=headers or {}, method=method)
     context = ssl._create_unverified_context() if insecure else None  # nosec B323: explicit local option
     try:
@@ -101,6 +112,16 @@ def wait_for_interaction(server: str, test_id: str, *, insecure: bool, timeout: 
                 return False
         time.sleep(1)
     raise RuntimeError(f"OIDF module {test_id} did not reach WAITING within {timeout} seconds")
+
+
+def required_offer_interactions(test_name: str) -> int:
+    """Return the official module's number of issuer-driven offer phases."""
+    if test_name in {
+        "oid4vci-1_0-issuer-metadata-test",
+        "oid4vci-1_0-issuer-metadata-test-signed",
+    }:
+        return 0
+    return OFFER_INTERACTION_COUNTS.get(test_name, 1)
 
 
 def credential_offer_uri(issuance_url: str, api_key: str, payload: dict[str, Any], *, insecure: bool) -> str:
@@ -194,35 +215,47 @@ def main() -> int:
         raise ValueError(f"issuance request is missing: {args.request}")
     conformance_insecure = args.insecure or args.conformance_insecure
     issuance_insecure = args.insecure or args.issuance_insecure
-    if not wait_for_interaction(
-        args.server,
-        args.test_id,
-        insecure=conformance_insecure,
-        timeout=args.timeout,
-    ):
-        print(f"OIDF module {args.test_id} ({args.test_name}) finished without issuer interaction")
+    interaction_count = required_offer_interactions(args.test_name)
+    if interaction_count == 0:
+        print(f"OIDF module {args.test_id} ({args.test_name}) requires no issuer interaction")
         return 0
     payload = json.loads(args.request.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("issuance request must be a JSON object")
-    offer_uri = (
-        command_credential_offer(args.issuance_command, payload)
-        if args.issuance_command is not None
-        else credential_offer_uri(
-            args.issuance_url,
-            args.api_key,
-            payload,
-            insecure=issuance_insecure,
+    for interaction in range(1, interaction_count + 1):
+        if not wait_for_interaction(
+            args.server,
+            args.test_id,
+            insecure=conformance_insecure,
+            timeout=args.timeout,
+        ):
+            if interaction == 1:
+                print(f"OIDF module {args.test_id} ({args.test_name}) finished without issuer interaction")
+                return 0
+            raise RuntimeError(
+                f"OIDF module {args.test_id} finished before issuer interaction {interaction} of {interaction_count}"
+            )
+        offer_uri = (
+            command_credential_offer(args.issuance_command, payload)
+            if args.issuance_command is not None
+            else credential_offer_uri(
+                args.issuance_url,
+                args.api_key,
+                payload,
+                insecure=issuance_insecure,
+            )
         )
-    )
-    deliver_offer(
-        args.server,
-        args.test_id,
-        offer_uri,
-        args.tx_code,
-        insecure=conformance_insecure,
-    )
-    print(f"Delivered Marty credential offer to OIDF module {args.test_id} ({args.test_name})")
+        deliver_offer(
+            args.server,
+            args.test_id,
+            offer_uri,
+            args.tx_code,
+            insecure=conformance_insecure,
+        )
+        print(
+            f"Delivered Marty credential offer {interaction}/{interaction_count} "
+            f"to OIDF module {args.test_id} ({args.test_name})"
+        )
     return 0
 
 

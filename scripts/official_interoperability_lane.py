@@ -646,6 +646,12 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
     address = environment.get("OIDF_MARTY_RESOLVE_IP", "").strip()
     if address:
         command.extend(["--resolve", f"{parsed.hostname}:{port}:{address}"])
+    if os.name == "nt":
+        # Windows curl uses Schannel, which otherwise requires an online
+        # revocation endpoint even for this disposable, locally generated CA.
+        # The generated CA is still required and verified through --cacert;
+        # only the unavailable Windows revocation lookup is disabled.
+        command.append("--ssl-no-revoke")
     command.append(f"{origin}/ready")
     deadline = time.monotonic() + timeout
     last_detail = "no HTTPS response received"

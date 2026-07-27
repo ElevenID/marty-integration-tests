@@ -74,6 +74,15 @@ def ca_options() -> list[str]:
     return ["--cacert", str(ca_file)]
 
 
+def platform_tls_options() -> list[str]:
+    """Keep disposable-CA verification usable with Windows Schannel."""
+    if os.name == "nt":
+        # Schannel otherwise requires an online revocation endpoint for the
+        # locally generated CA. --cacert still verifies the complete chain.
+        return ["--ssl-no-revoke"]
+    return []
+
+
 def parse_response(raw: str) -> tuple[int, dict[str, list[str]], str]:
     """Extract the final HTTP header block emitted by curl without redirects."""
     matches = list(re.finditer(r"HTTP/\d(?:\.\d)?\s+(\d{3})[^\r\n]*\r?\n", raw))
@@ -125,6 +134,7 @@ def curl_request(
         "--cookie-jar",
         str(cookie_jar),
         *ca_options(),
+        *platform_tls_options(),
         *resolve_option(origin),
     ]
     for name, value in (headers or {}).items():
