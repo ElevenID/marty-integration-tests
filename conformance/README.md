@@ -59,13 +59,15 @@ for reproducible evidence, and passes the configuration relative to the runner
 checkout so Windows drive letters cannot be parsed as test-plan syntax. The official suite URL can be supplied with
 `CONFORMANCE_SERVER` when it is not using its normal local default.
 
-The active issuer profile uses `client_auth_type=none`, matching Marty's
-published authorization-server metadata and its pre-authorized public-wallet
-flow. The lane does not send a `private_key_jwt` assertion that Marty would
-ignore and does not claim confidential-client authentication. The upstream
-runner marks its metadata-only modules not applicable for the `none` variant,
-so the lane separately validates the production credential-issuer metadata
-before creating and selecting the public credential configuration.
+Marty's current authorization-server metadata and pre-authorized public-wallet
+flow support `client_auth_type=none`. OIDF release-v5.2.0, however, declares
+every issuer module inapplicable to that variant. The executable official plan
+therefore remains explicitly `planned` and uses `private_key_jwt` only as
+pre-activation interoperability evidence. It must not be described as a pass or
+activated until Marty registers the two official wallet public keys and rejects
+missing, invalid, expired, replayed, wrong-audience, and cross-client
+assertions. The lane separately validates the production credential-issuer
+metadata before creating and selecting the public credential configuration.
 
 ### Driving the real issuer path
 
