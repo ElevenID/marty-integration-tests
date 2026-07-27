@@ -968,9 +968,18 @@ class TestOID4VPSdJwtPresentation:
             assert (
                 decision["status"] == "completed"
             ), "eudi-invariant-tamper-final-status"
-            assert (
-                decision["result"]["decision"] == "deny"
-            ), "eudi-invariant-tamper-final-decision"
+            final_decision = str(
+                decision["result"].get("decision", "")
+            ).strip().lower()
+            decision_category = (
+                final_decision.replace("_", "-")
+                if final_decision
+                in {"allow", "deny", "manual_review", "reject", "rejected"}
+                else "unknown"
+            )
+            assert final_decision == "deny", (
+                f"eudi-invariant-tamper-final-decision-{decision_category}"
+            )
             assert (
                 decision["result"]["verified_claims"] == {}
             ), "eudi-invariant-tamper-final-claims"
