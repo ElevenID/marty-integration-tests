@@ -6,6 +6,12 @@
     "credential_configuration_id": "REPLACE_WITH_PUBLISHED_CREDENTIAL_CONFIGURATION",
     "credential_proof_type_hint": "jwt"
   },
+  "client": {
+    "client_id": "REPLACE_WITH_DISPOSABLE_WALLET_CLIENT_ID"
+  },
+  "client2": {
+    "client_id": "REPLACE_WITH_SECOND_DISPOSABLE_WALLET_CLIENT_ID"
+  },
   "client_attestation": {
     "key_attestation_jwks": {
       "keys": []

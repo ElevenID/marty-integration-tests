@@ -372,6 +372,12 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
         "credential_configuration_id": "template-1",
         "credential_proof_type_hint": "jwt",
     }
+    assert data["client"] == {
+        "client_id": "marty-official-wallet-org-1",
+    }
+    assert data["client2"] == {
+        "client_id": "marty-official-wallet-2-org-1",
+    }
     assert json.loads(request.read_text(encoding="utf-8"))["claims"]["employee_id"] == "oidf-conformance"
 
 

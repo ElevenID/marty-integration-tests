@@ -397,6 +397,16 @@ def oid4vci_issuer_config(
                 "credential_configuration_id": fixtures["oid4vci_template_id"],
                 "credential_proof_type_hint": "jwt",
             },
+            # The official issuer plan emulates two independent wallets. Its
+            # private_key_jwt variant generates ephemeral JWKS when they are
+            # omitted, but it requires stable client identifiers before any
+            # interaction module can enter WAITING.
+            "client": {
+                "client_id": f"marty-official-wallet-{fixtures['organization_id']}",
+            },
+            "client2": {
+                "client_id": f"marty-official-wallet-2-{fixtures['organization_id']}",
+            },
             "client_attestation": {"key_attestation_jwks": {"keys": []}},
         },
     )
