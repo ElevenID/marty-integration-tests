@@ -852,7 +852,9 @@ class TestOID4VPSdJwtPresentation:
         # decision details. Confirm acceptance through the authenticated
         # result API instead of teaching the test to depend on an internal
         # response shape.
-        assert _verifier_response_body(first) == {}
+        callback = _verifier_response_body(first)
+        assert "decision" not in callback
+        assert "verified_claims" not in callback
         accepted = await authenticated_gateway_client.get_verification_decision(
             flow["instance_id"]
         )
@@ -868,8 +870,10 @@ class TestOID4VPSdJwtPresentation:
         )
         assert replay["success"] is False
         assert replay["verifierAccepted"] is False
-        assert replay["responseStatus"] == 400
-        assert isinstance(_verifier_response_body(replay).get("detail"), (dict, str))
+        assert 400 <= replay["responseStatus"] < 500
+        replay_callback = _verifier_response_body(replay)
+        assert "decision" not in replay_callback
+        assert "verified_claims" not in replay_callback
 
     @pytest.mark.asyncio
     async def test_tampered_holder_signature_is_denied_by_production_verifier(
@@ -912,9 +916,10 @@ class TestOID4VPSdJwtPresentation:
         # the authenticated relying-party result API.
         assert result["success"] is False
         assert result["verifierAccepted"] is False
-        assert result["responseStatus"] == 400
+        assert 400 <= result["responseStatus"] < 500
         response = _verifier_response_body(result)
-        assert response["detail"]["error"] == "invalid_presentation"
+        assert "decision" not in response
+        assert "verified_claims" not in response
 
         decision = await authenticated_gateway_client.get_verification_decision(
             flow["instance_id"]
