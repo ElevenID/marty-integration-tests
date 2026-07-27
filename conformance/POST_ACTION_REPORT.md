@@ -88,14 +88,31 @@ Action: assert the stable security boundary:
 This change does not accept 5xx errors, disable signature verification, inject
 an allow result, or mutate production evidence.
 
+The corrected assertion then exposed a release-blocking product defect:
+v1.1.38 finalized a presentation with a deliberately corrupted SD-JWT
+key-binding signature as `allow`. The reusable presentation policy had not
+explicitly enabled holder binding, so the policy service discarded the
+OID4VP nonce and audience before calling the Rust verifier. That policy option
+is valid for credential-only checks but must never disable holder proof in an
+OID4VP verifier transaction.
+
+Action: the flow service now marks every request-object-backed OID4VP
+transaction as verifier context. The policy service treats that trusted
+context as requiring nonce and audience binding regardless of the reusable
+policy's credential-only setting. PR
+[marty-ui#126](https://github.com/ElevenID/marty-ui/pull/126) merged this fix
+with focused flow and policy regression tests. A released immutable-stack
+rerun remains required.
+
 ### 4. The checked-in immutable stack pin lagged the reviewed release
 
 Manual investigation used reviewed tag and manifest overrides while
 `conformance/stack-under-test.json` still named `marty-ui` v1.1.34. The
-released DID-first fixes are in v1.1.38.
+released DID-first fixes are in v1.1.38, and the holder-binding correction
+will first appear in a later release.
 
-Action required: after the final v1.1.38 lane is green, update the checked-in
-pin to v1.1.38 and its independently verified manifest digest.
+Action required: after the final v1.1.39-or-newer lanes are green, update the
+checked-in pin to that release and its independently verified manifest digest.
 
 ### 5. The old stack proved that the harness does not silently fall back
 
@@ -149,6 +166,15 @@ The first corrected rerun then exposed a second configuration mismatch at
 credential issuer URL as its authorization server, while the runner config
 forced the gateway origin. The runner now uses the exact advertised
 per-organization issuer URL; no metadata or production endpoint is rewritten.
+
+The next reruns exposed two distinct identifier mistakes. Marty's internal
+credential-template UUID is not an OID4VCI
+`credential_configuration_id`, and the bare `PID` configuration advertises
+JWT VC rather than the SD-JWT format selected by the official plan. The
+harness now resolves the unique `dc+sd-jwt` configuration with the fixture's
+published `vct` from Marty's public issuer metadata. It therefore selects the
+actual advertised `PID#sd-jwt` identifier instead of guessing from an
+internal resource ID or accepting the wrong wire format.
 
 ## Do the tests cheat?
 
@@ -238,7 +264,7 @@ service images remains required.
 | DID-first OID4VCI issuance | Public-path EUDI issuance; official metadata module passes | Complete the corrected official issuer interaction plan |
 | DID-first signed OID4VP request | Official OID4VP Final plan passes on immutable v1.1.38 | Keep the active profile green as the official runner updates |
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
-| SD-JWT holder binding | Official-library KB-JWT and missing-key negative | Keep invalid signature and replay evidence green |
+| SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks | Add applicable official OIDF mdoc issuer/verifier coverage |
 | OID4VP URL-query transport | Not synthesized or claimed | Implement natively or explicitly retain unsupported status |
 | W3C VCDM v2 verification | Public bootstrap exposed missing `ldp_vc` managed capability | Release the EdDSA profile fix, rerun the adapted suite, then add native Data Integrity issuance |
@@ -253,11 +279,14 @@ service images remains required.
 | --- | --- |
 | `marty-ui` v1.1.36, manifest `sha256:33273c4bbe6ccfc33f22735986f0019e21715f4adf99b425af99d6dccba80f7c` | 52/55 EUDI tests passed; real format/algorithm fixes validated |
 | `marty-ui` v1.1.37, manifest `sha256:3a8ed3f65a98333bf75f1082ed181709b2910215db082ea443ac72e25c4a5897` | 53/55 passed; expiry negative corrected |
-| `marty-ui` v1.1.38, manifest `sha256:091ea151f25c2297c2ad4546cfe089393301652039614379ce69516f353cf050` | Final EUDI negative assertion under investigation |
+| `marty-ui` v1.1.38, manifest `sha256:091ea151f25c2297c2ad4546cfe089393301652039614379ce69516f353cf050` | 54/55 EUDI tests passed; the remaining negative exposed an authoritative fail-open holder-binding defect |
+| EUDI run [30231825647](https://github.com/ElevenID/marty-integration-tests/actions/runs/30231825647), sanitized summary `sha256:d85211cd6d960d72a1c97921516f03db2a307229da2af8a010494b434e8e452f` | Failed safely and specifically as `eudi-invariant-tamper-final-decision-allow`; prompted marty-ui#126 |
 | OID4VP Final run [30230194196](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230194196), sanitized summary `sha256:f96a634c36b0adf65c77308272836b2a1dfb2f869e56051d4bdbe867c83d94ea` | Passed against v1.1.38 and official runner `release-v5.2.0` |
 | HAIP run [30230195076](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230195076), sanitized summary `sha256:b7a9200e66a59f5b319d2c095102e30e640e78df8a7dedf676caadc660332950` | Passed against v1.1.38 and official runner `release-v5.2.0` |
 | W3C v2 run [30230312063](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312063), sanitized summary `sha256:5674d1b6c52e5d5291082f542af6c132a3b5ce72168f7dfe08fb9d7149d8e88b` | Failed at public template bootstrap; exposed missing managed `ldp_vc` capability |
 | OID4VCI issuer run [30230312937](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312937), sanitized summary `sha256:eacc7f2d7fd9edc2ffec43e3faaa590d1c733d429c74bcdaf47c7e3f7189b444` | Metadata passed; interaction modules exposed missing official-runner client identities |
+| OID4VCI issuer run [30231686437](https://github.com/ElevenID/marty-integration-tests/actions/runs/30231686437), sanitized summary `sha256:4adb5cc1e43b14953fc3603a63f3e396a211890399d0de7914562e26a73852a9` | Authorization-server identity passed; exposed internal-template/public-configuration ID confusion |
+| OID4VCI issuer run [30232003181](https://github.com/ElevenID/marty-integration-tests/actions/runs/30232003181), sanitized summary `sha256:de313a9f8dc4338f1ff83dbb0ae60822dda6f468fc7b219f3f0b41e25412d1cb` | Reached issuer interaction; exposed selection of bare JWT VC `PID` instead of advertised SD-JWT `PID#sd-jwt` |
 
 The report must be updated with the passing run URL, harness commit, sanitized
 artifact digest, and final count before the v1.1.38 pin is described as ready.
@@ -266,7 +295,7 @@ artifact digest, and final count before the v1.1.38 pin is described as ready.
 
 This report becomes final only when:
 
-- the immutable v1.1.38-or-newer EUDI lane passes with all required evidence;
+- the immutable v1.1.39-or-newer EUDI lane passes with all required evidence;
 - the default stack pin names that reviewed release;
 - OID4VP Final, HAIP, W3C v2, and applicable mdoc official lanes have explicit
   native/adapted/unsupported outcomes;
