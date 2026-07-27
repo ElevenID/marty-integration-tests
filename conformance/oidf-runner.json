@@ -21,6 +21,13 @@
       "target": "Marty's public verifier URL through the gateway",
       "qualification": "Interoperability evidence only. The upstream profile is not currently a certifiable OIDF profile."
     },
+    "oid4vp-mdoc-verifier": {
+      "status": "active",
+      "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=iso_mdl][response_mode=direct_post][request_method=request_uri_signed][client_id_prefix=x509_hash]",
+      "configuration_example": "conformance/marty-verifier-mdoc.example.json",
+      "target": "Marty's public verifier URL through the gateway",
+      "qualification": "Interoperability evidence only. This native OIDF verifier plan creates ISO 18013-5 mdoc presentations; it does not certify Marty as an mdoc issuer."
+    },
     "oid4vp-haip-verifier": {
       "status": "active",
       "test_plan": "oid4vp-1final-verifier-haip-test-plan[credential_format=sd_jwt_vc][response_mode=direct_post.jwt]",

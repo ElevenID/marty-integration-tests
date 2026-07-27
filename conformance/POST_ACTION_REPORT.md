@@ -134,6 +134,21 @@ Action: mark these interoperability profiles active while continuing to state
 that the upstream profiles are pre-certification/alpha and that a passing run
 is not an OIDF certification.
 
+### 6a. ISO mDL now has an official OIDF verifier lane
+
+The scheduled `oid4vp-mdoc` lane uses the pinned OIDF OID4VP Final verifier
+plan with its `iso_mdl` credential variant. It creates an ISO 18013-5 mDL
+template and active policy through Marty's authenticated public gateway, asks
+for `mso_mdoc` through the normal DID-first verification flow, and lets the
+official runner generate the mdoc presentation and negative cases. The
+fixture's managed `mdoc_dsc` profile is used only for profile administration;
+the runtime flow exposes no profile, service, key, or KMS selector.
+
+Scope: this is native official verifier coverage, not an OIDF mdoc issuer
+claim. The pinned upstream runner has no corresponding OID4VCI mdoc issuer
+plan. EUDI reference-library issuance and independent COSE/CBOR/X.509 checks
+remain the issuance evidence until such a plan is available.
+
 ### 7. W3C Data Integrity had no managed signer capability
 
 The official W3C lane stopped at the public credential-template API with HTTP
@@ -342,7 +357,7 @@ service images remains required.
 | DID-first signed OID4VP request | Official OID4VP Final plan passes on immutable v1.1.38 | Keep the active profile green as the official runner updates |
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
-| mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks | Add applicable official OIDF mdoc issuer/verifier coverage |
+| mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
 | W3C VCDM v2 verification | Public bootstrap exposed missing `ldp_vc` managed capability | Release the EdDSA profile fix, rerun the adapted suite, then add native Data Integrity issuance |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |

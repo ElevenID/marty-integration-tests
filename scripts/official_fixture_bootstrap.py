@@ -36,6 +36,7 @@ def compliance_profile_payload(
     w3c: bool,
     run_id: str,
     oid4vci: bool = False,
+    mdoc: bool = False,
 ) -> dict[str, object]:
     """Build the public API resource a credential template must reference.
 
@@ -51,6 +52,15 @@ def compliance_profile_payload(
             "compliance_code": "W3C_VC",
             "credential_format": "jwt_vc",
             "frameworks": ["w3c_vc"],
+            "system_profile": False,
+        }
+    if mdoc:
+        return {
+            "organization_id": organization_id,
+            "name": f"Official OID4VP ISO mDL {run_id}",
+            "compliance_code": "AAMVA_MDL",
+            "credential_format": "mso_mdoc",
+            "frameworks": ["aamva", "iso_18013_5", "oid4vp"],
             "system_profile": False,
         }
     protocol_name = "OID4VCI" if oid4vci else "OID4VP"
@@ -76,13 +86,7 @@ def signing_service_request_payload(
         "algorithm": "EdDSA" if data_integrity else "ES256",
     }
     if key_purpose == "vc_jwt_issuer":
-        payload["credential_format"] = (
-            "ldp_vc"
-            if data_integrity
-            else "jwt_vc_json"
-            if w3c
-            else "dc+sd-jwt"
-        )
+        payload["credential_format"] = "ldp_vc" if data_integrity else "jwt_vc_json" if w3c else "dc+sd-jwt"
     elif key_purpose == "mdoc_dsc":
         payload["credential_format"] = "mso_mdoc"
     return payload
@@ -196,6 +200,7 @@ def revocation_profile_payload(
     w3c: bool,
     run_id: str,
     label: str | None = None,
+    mdoc: bool = False,
 ) -> dict[str, object]:
     """Build a disposable, standards-shaped revocation dependency.
 
@@ -211,7 +216,7 @@ def revocation_profile_payload(
         "revocation_mechanism": ["BITSTRING_STATUS_LIST"],
         "mechanism_priority": ["BITSTRING_STATUS_LIST"],
         "check_mode": "ALWAYS",
-        "supported_formats": ["VC_JWT"] if w3c else ["SD_JWT_VC"],
+        "supported_formats": (["VC_JWT"] if w3c else ["MSO_MDOC"] if mdoc else ["SD_JWT_VC"]),
     }
 
 
@@ -224,6 +229,7 @@ def template_payload(
     w3c: bool,
     run_id: str,
     presentation: bool = False,
+    mdoc: bool = False,
 ) -> dict[str, object]:
     if w3c:
         # Issuance and presentation verification intentionally use separate
@@ -241,9 +247,7 @@ def template_payload(
             "credential_type": "VerifiableId",
             "vct": "https://credentials.marty.dev/VerifiableId",
             "supported_formats": ["ldp_vc"] if data_integrity else ["jwt_vc"],
-            "credential_payload_format": (
-                "ldp_vc" if data_integrity else "w3c_vcdm_v2_jwt_vc"
-            ),
+            "credential_payload_format": ("ldp_vc" if data_integrity else "w3c_vcdm_v2_jwt_vc"),
             "compliance_profile_id": compliance_profile_id,
             "issuer_did": issuer_did,
             "revocation_profile_id": revocation_profile_id,
@@ -262,6 +266,36 @@ def template_payload(
                 {"name": "familyName", "display_name": "Family Name", "required": True},
                 {"name": "birthDate", "display_name": "Birth Date", "required": True},
                 {"name": "documentNumber", "display_name": "Document Number", "required": True},
+            ],
+            "auto_generate_artifacts": True,
+        }
+    if mdoc:
+        # This is an actual ISO 18013-5 mDL template.  The official OIDF
+        # verifier generates the mdoc credential; Marty contributes the
+        # public policy and request object that must demand this format.
+        return {
+            "organization_id": organization_id,
+            "name": f"Official OID4VP ISO mDL verifier {run_id}",
+            "credential_type": "org.iso.18013.5.1.mDL",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "supported_formats": ["mso_mdoc"],
+            "credential_payload_format": "mso_mdoc",
+            "compliance_profile_id": compliance_profile_id,
+            "issuer_did": issuer_did,
+            "revocation_profile_id": revocation_profile_id,
+            "schema_uri": {
+                "namespaces": {
+                    "org.iso.18013.5.1": {
+                        "family_name": {"type": "string"},
+                        "given_name": {"type": "string"},
+                        "birth_date": {"type": "string", "format": "full-date"},
+                    }
+                }
+            },
+            "claims": [
+                {"name": "family_name", "display_name": "Family Name", "required": True},
+                {"name": "given_name", "display_name": "Given Name", "required": True},
+                {"name": "birth_date", "display_name": "Birth Date", "required": True},
             ],
             "auto_generate_artifacts": True,
         }
@@ -300,16 +334,32 @@ def policy_payload(
     w3c: bool,
     run_id: str,
     presentation: bool = True,
+    mdoc: bool = False,
 ) -> dict[str, object]:
     # The W3C verifier suite supplies standards-conforming generic credentials,
     # not Marty's product-specific identity schema. Marty's policy schema still
     # requires at least one requested-claim entry, so use credentialSubject.id as
     # an optional structural claim. This preserves cryptographic and holder-
     # binding validation without inventing a claim that VCDM v2 does not require.
-    claims = (("id", False),) if w3c else tuple((claim, True) for claim in ("given_name", "family_name", "birthdate"))
+    claims = (
+        (("id", False),)
+        if w3c
+        else tuple(
+            (claim, True)
+            for claim in (
+                ("family_name", "given_name", "birth_date") if mdoc else ("given_name", "family_name", "birthdate")
+            )
+        )
+    )
     if not w3c and not presentation:
         raise ValueError("OID4VP fixtures require a presentation policy")
-    label = f"W3C VC v2 {'presentation' if presentation else 'credential'}" if w3c else "OID4VP SD-JWT"
+    label = (
+        f"W3C VC v2 {'presentation' if presentation else 'credential'}"
+        if w3c
+        else "OID4VP ISO mDL"
+        if mdoc
+        else "OID4VP SD-JWT"
+    )
     return {
         "organization_id": organization_id,
         "name": f"Official {label} {run_id}",
@@ -323,7 +373,13 @@ def policy_payload(
                 "credential_template_id": template_id,
                 "display_name": label,
                 "credential_payload_format": (
-                    "w3c_vcdm_v2_di" if w3c and presentation else "w3c_vcdm_v2_jwt_vc" if w3c else "w3c_vcdm_v2_sd_jwt"
+                    "w3c_vcdm_v2_di"
+                    if w3c and presentation
+                    else "w3c_vcdm_v2_jwt_vc"
+                    if w3c
+                    else "mso_mdoc"
+                    if mdoc
+                    else "w3c_vcdm_v2_sd_jwt"
                 ),
                 "requested_claims": [
                     {
@@ -400,9 +456,7 @@ def oid4vci_configuration_id(
         raise RuntimeError("public OID4VCI metadata is not an object")
     configurations = metadata.get("credential_configurations_supported")
     if not isinstance(configurations, dict):
-        raise RuntimeError(
-            "public OID4VCI metadata has no credential_configurations_supported"
-        )
+        raise RuntimeError("public OID4VCI metadata has no credential_configurations_supported")
     matches = [
         config_id
         for config_id, configuration in configurations.items()
@@ -415,10 +469,7 @@ def oid4vci_configuration_id(
         )
     ]
     if len(matches) != 1:
-        raise RuntimeError(
-            "public OID4VCI metadata did not advertise exactly one matching "
-            "credential configuration"
-        )
+        raise RuntimeError("public OID4VCI metadata did not advertise exactly one matching credential configuration")
     return matches[0]
 
 
@@ -667,7 +718,7 @@ def bootstrap(
         raise ValueError("run id must use lowercase letters, digits, and internal hyphens")
     if not IDENTIFIER.fullmatch(organization_id):
         raise ValueError("organization id contains unsupported characters")
-    if mode in {"oid4vp", "all"} and oidf_signer_public_jwk is None:
+    if mode in {"oid4vp", "oid4vp-mdoc", "all"} and oidf_signer_public_jwk is None:
         raise ValueError("OID4VP fixture bootstrap requires the official runner public signing JWK")
     if mode == "eudi":
         return bootstrap_eudi(
@@ -681,12 +732,14 @@ def bootstrap(
     targets = (False, True) if mode == "all" else (mode == "w3c",)
     for w3c in targets:
         oid4vci = mode == "oid4vci"
-        prefix = "w3c" if w3c else ("oid4vci" if oid4vci else "oid4vp")
+        mdoc = mode == "oid4vp-mdoc"
+        prefix = "w3c" if w3c else ("oid4vci" if oid4vci else "oid4vp_mdoc" if mdoc else "oid4vp")
         signing_service = resolve_signing_service(
             gateway_url,
             session_id,
             organization_id=organization_id,
             w3c=w3c,
+            key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
             request=request,
         )
         profile_payload = issuer_profile_payload(
@@ -696,6 +749,7 @@ def bootstrap(
             w3c=w3c,
             run_id=run_id,
             label="OID4VCI SD-JWT" if oid4vci else None,
+            key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
         )
         created_issuer_profile = request(
             gateway_url,
@@ -729,10 +783,7 @@ def bootstrap(
             created_data_integrity_profile = request(
                 gateway_url,
                 session_id,
-                (
-                    "/v1/signing-keys/issuer-profiles?"
-                    f"{urlencode({'organization_id': organization_id})}"
-                ),
+                (f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}"),
                 method="POST",
                 json_body=data_integrity_profile_payload,
             )
@@ -775,6 +826,7 @@ def bootstrap(
                 w3c=w3c,
                 run_id=run_id,
                 oid4vci=oid4vci,
+                mdoc=mdoc,
             ),
         )
         compliance_profile_id = response_id(
@@ -790,6 +842,7 @@ def bootstrap(
                 organization_id,
                 w3c=w3c,
                 run_id=run_id,
+                mdoc=mdoc,
             ),
         )
         revocation_profile_id = response_id(
@@ -815,6 +868,7 @@ def bootstrap(
             revocation_profile_id,
             w3c=w3c,
             run_id=run_id,
+            mdoc=mdoc,
         )
         created_template = request(
             gateway_url,
@@ -832,20 +886,18 @@ def bootstrap(
                 f"/v1/credential-templates/{template_id}/activate",
                 method="POST",
             )
-            if response_id(
-                activated_template,
-                "activated OID4VCI credential template",
-            ) != template_id:
-                raise RuntimeError(
-                    "activated OID4VCI credential template id changed unexpectedly"
+            if (
+                response_id(
+                    activated_template,
+                    "activated OID4VCI credential template",
                 )
+                != template_id
+            ):
+                raise RuntimeError("activated OID4VCI credential template id changed unexpectedly")
             issuer_metadata = request(
                 gateway_url,
                 session_id,
-                (
-                    f"/org/{organization_id}/"
-                    ".well-known/openid-credential-issuer"
-                ),
+                (f"/org/{organization_id}/.well-known/openid-credential-issuer"),
                 method="GET",
             )
             credential_configuration_id = oid4vci_configuration_id(
@@ -874,11 +926,7 @@ def bootstrap(
                 created_presentation_template,
                 f"{prefix} presentation template",
             )
-        policy_roles = (
-            ("credential", "presentation")
-            if w3c
-            else (() if oid4vci else ("presentation",))
-        )
+        policy_roles = ("credential", "presentation") if w3c else (() if oid4vci else ("presentation",))
         policy_ids: dict[str, str] = {}
         for role in policy_roles:
             created_policy = request(
@@ -892,6 +940,7 @@ def bootstrap(
                     w3c=w3c,
                     run_id=run_id,
                     presentation=role == "presentation",
+                    mdoc=mdoc,
                 ),
             )
             policy_id = response_id(created_policy, f"{prefix} {role} policy")
@@ -911,7 +960,7 @@ def bootstrap(
             result["w3c_credential_policy_id"] = policy_ids["credential"]
             result["w3c_presentation_policy_id"] = policy_ids["presentation"]
         elif not oid4vci:
-            result["oid4vp_policy_id"] = policy_ids["presentation"]
+            result[f"{prefix}_policy_id"] = policy_ids["presentation"]
         result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
         if w3c:
             result["w3c_issuer_did"] = profile_payload["issuer_did"]
@@ -923,13 +972,11 @@ def bootstrap(
             # credential-template resource UUIDs.  Keep both identities so
             # public issuance can address the template while the official
             # runner selects the advertised protocol configuration.
-            result["oid4vci_credential_configuration_id"] = (
-                credential_configuration_id
-            )
+            result["oid4vci_credential_configuration_id"] = credential_configuration_id
         else:
             assert request_profile_payload is not None
             assert request_issuer_profile_id is not None
-            result["oid4vp_issuer_did"] = request_profile_payload["issuer_did"]
+            result[f"{prefix}_issuer_did"] = request_profile_payload["issuer_did"]
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c and not oid4vci:
             assert oidf_signer_public_jwk is not None
@@ -957,7 +1004,7 @@ def bootstrap(
             )
             if activated_trust_profile_id != trust_profile_id:
                 raise RuntimeError("activated OID4VP trust profile id changed unexpectedly")
-            result["oid4vp_trust_profile_id"] = trust_profile_id
+            result[f"{prefix}_trust_profile_id"] = trust_profile_id
     return result
 
 

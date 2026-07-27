@@ -31,6 +31,11 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert "oid4vp-1final-verifier-test-plan" in verifier["test_plan"]
     assert "[request_method=request_uri_signed]" in verifier["test_plan"]
     assert "[client_id_prefix=x509_hash]" in verifier["test_plan"]
+    mdoc = manifest["profiles"]["oid4vp-mdoc-verifier"]
+    assert mdoc["status"] == "active"
+    assert "[credential_format=iso_mdl]" in mdoc["test_plan"]
+    assert "[response_mode=direct_post]" in mdoc["test_plan"]
+    assert "does not certify Marty as an mdoc issuer" in mdoc["qualification"]
     haip = manifest["profiles"]["oid4vp-haip-verifier"]
     assert haip["status"] == "active"
     assert "oid4vp-1final-verifier-haip-test-plan" in haip["test_plan"]
@@ -245,7 +250,7 @@ def test_issuer_profile_remains_pre_activation_until_client_auth_is_enforced(
     )
 
 
-@pytest.mark.parametrize("profile_name", ["oid4vp-verifier", "oid4vp-haip-verifier"])
+@pytest.mark.parametrize("profile_name", ["oid4vp-verifier", "oid4vp-mdoc-verifier", "oid4vp-haip-verifier"])
 def test_activated_verifier_profiles_no_longer_need_pre_activation_switch(
     profile_name: str,
 ) -> None:
@@ -266,6 +271,8 @@ def test_verifier_interaction_environment_matches_the_official_plan(monkeypatch:
     monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "standard")
     monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "request_uri_signed")
     oidf.validate_verifier_interaction_environment("oid4vp-verifier")
+
+    oidf.validate_verifier_interaction_environment("oid4vp-mdoc-verifier")
 
     monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
     monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "request_uri_signed")
