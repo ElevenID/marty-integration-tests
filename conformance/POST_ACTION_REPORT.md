@@ -68,12 +68,17 @@ and `verifierAccepted`; both were calculated solely from the callback HTTP
 status. They cannot establish the relying party's cryptographic decision. A
 2xx privacy-preserving callback may accompany a completed authenticated deny,
 while a pre-finalization rejection may use 4xx and leave the flow retryable.
+The authenticated result also separates policy evaluation from the final
+access-control decision: a policy evaluation label is not authorization and
+may remain successful when a later cryptographic gate produces `deny`.
 
 Action: assert the stable security boundary:
 
 - the first valid response is accepted and its authenticated result is allow;
 - replay and tampered-signature submissions never produce an authenticated
   allow result or a 5xx callback;
+- a finalized tampered response has the authoritative decision `deny` and no
+  verified claims, regardless of a non-authoritative policy-evaluation label;
 - public callbacks disclose no internal decision or verified claims;
 - an invalid response either finalizes as an authenticated deny or remains a
   retryable flow with no result resource; a retryable outcome must use 4xx,

@@ -968,17 +968,6 @@ class TestOID4VPSdJwtPresentation:
             assert (
                 decision["status"] == "completed"
             ), "eudi-invariant-tamper-final-status"
-            evaluation = str(
-                decision["result"].get("evaluation_result", "")
-            ).strip().lower()
-            assert evaluation, "eudi-invariant-tamper-final-evaluation"
-            assert evaluation not in {
-                "passed",
-                "success",
-                "verified",
-                "allow",
-                "approved",
-            }, "eudi-invariant-tamper-final-evaluation"
             assert (
                 decision["result"]["decision"] == "deny"
             ), "eudi-invariant-tamper-final-decision"

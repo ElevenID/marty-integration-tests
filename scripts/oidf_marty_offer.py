@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -24,6 +25,33 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REQUEST = ROOT / "conformance" / "marty-issuer.offer-request.example.json"
+SAFE_FAILURE_SOURCE = re.compile(r"^[A-Za-z][A-Za-z0-9_$]{0,99}$")
+
+
+def interrupted_failure_category(
+    server: str,
+    test_id: str,
+    *,
+    insecure: bool,
+) -> str:
+    """Return a bounded, non-secret category for an interrupted OIDF module."""
+    status, entries = request_json(
+        urljoin(server, f"api/log/{test_id}"),
+        insecure=insecure,
+    )
+    if status != 200 or not isinstance(entries, list):
+        return "oidf-invariant-interrupted-log-unavailable"
+    for entry in reversed(entries):
+        if not isinstance(entry, dict) or entry.get("result") != "FAILURE":
+            continue
+        source = entry.get("src")
+        if isinstance(source, str):
+            source = source.rsplit(".", 1)[-1]
+            if SAFE_FAILURE_SOURCE.fullmatch(source):
+                slug = re.sub(r"[^a-z0-9]+", "-", source.lower()).strip("-")
+                return f"oidf-invariant-interrupted-{slug}"
+        return "oidf-invariant-interrupted-unknown-source"
+    return "oidf-invariant-interrupted-no-failure-entry"
 
 
 def request_json(url: str, *, method: str = "GET", body: bytes | None = None,
@@ -57,7 +85,19 @@ def wait_for_interaction(server: str, test_id: str, *, insecure: bool, timeout: 
             state = info.get("status")
             if state == "WAITING":
                 return True
-            if state in {"FINISHED", "INTERRUPTED"}:
+            if state == "INTERRUPTED":
+                try:
+                    print(
+                        interrupted_failure_category(
+                            server,
+                            test_id,
+                            insecure=insecure,
+                        )
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    print("oidf-invariant-interrupted-diagnostic-unavailable")
+                return False
+            if state == "FINISHED":
                 return False
         time.sleep(1)
     raise RuntimeError(f"OIDF module {test_id} did not reach WAITING within {timeout} seconds")
