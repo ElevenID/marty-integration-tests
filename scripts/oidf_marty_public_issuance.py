@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,57 @@ def required_env(name: str) -> str:
     return value
 
 
+def validated_authorized_client(value: object) -> dict[str, Any]:
+    """Validate the exact marty-protocol OID4VCI authorized-client shape."""
+
+    if not isinstance(value, dict) or set(value) != {"client_id", "jwks"}:
+        raise ValueError("authorized_client must contain only client_id and jwks")
+    client_id = value.get("client_id")
+    jwks = value.get("jwks")
+    if (
+        not isinstance(client_id, str)
+        or not 1 <= len(client_id) <= 512
+        or not isinstance(jwks, dict)
+        or set(jwks) != {"keys"}
+    ):
+        raise ValueError("authorized_client must contain a client_id and public JWKS")
+    keys = jwks.get("keys")
+    if not isinstance(keys, list) or not keys:
+        raise ValueError("authorized_client must contain a client_id and public JWKS")
+
+    allowed_fields = {"alg", "crv", "key_ops", "kid", "kty", "use", "x", "y"}
+    required_fields = {"crv", "kid", "kty", "x", "y"}
+    key_ids: set[str] = set()
+    for key in keys:
+        if (
+            not isinstance(key, dict)
+            or not required_fields <= set(key)
+            or set(key) - allowed_fields
+        ):
+            raise ValueError("authorized_client JWKS must contain public keys only")
+        if (
+            key.get("kty") != "EC"
+            or key.get("crv") != "P-256"
+            or key.get("alg") not in (None, "ES256")
+            or key.get("use") not in (None, "sig")
+            or key.get("key_ops") not in (None, ["verify"])
+        ):
+            raise ValueError("authorized_client JWKS must use public ES256 P-256 keys")
+        kid = key.get("kid")
+        if (
+            not isinstance(kid, str)
+            or not 1 <= len(kid) <= 256
+            or kid in key_ids
+            or not isinstance(key.get("x"), str)
+            or not isinstance(key.get("y"), str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{43}", key["x"]) is None
+            or re.fullmatch(r"[A-Za-z0-9_-]{43}", key["y"]) is None
+        ):
+            raise ValueError("authorized_client JWKS is not a valid public key set")
+        key_ids.add(kid)
+    return value
+
+
 def issuance_body(payload: dict[str, Any]) -> dict[str, Any]:
     claims = payload.get("claims")
     if claims is None:
@@ -34,10 +86,12 @@ def issuance_body(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if not isinstance(claims, dict):
         raise ValueError("OIDF issuance claims must be an object")
+    authorized_client = validated_authorized_client(payload.get("authorized_client"))
     return {
         "organization_id": required_env("OIDF_MARTY_ORGANIZATION_ID"),
         "credential_template_id": required_env("OIDF_MARTY_CREDENTIAL_TEMPLATE_ID"),
         "issuer_did": required_env("OIDF_MARTY_ISSUER_DID"),
+        "authorized_client": authorized_client,
         "claims": claims,
     }
 

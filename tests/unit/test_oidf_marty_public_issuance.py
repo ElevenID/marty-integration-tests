@@ -6,6 +6,20 @@ import pytest
 
 from scripts import oidf_marty_public_issuance as issuance
 
+PUBLIC_JWKS = {
+    "keys": [
+        {
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "use": "sig",
+            "kid": "wallet-key-1",
+            "x": "A" * 43,
+            "y": "B" * 43,
+        }
+    ]
+}
+
 
 def test_issuance_body_uses_fixed_did_first_public_identity(
     monkeypatch: pytest.MonkeyPatch,
@@ -20,6 +34,10 @@ def test_issuance_body_uses_fixed_did_first_public_identity(
             "credential_template_id": "attacker-template",
             "issuer_profile_id": "attacker-profile",
             "signing_service_id": "attacker-service",
+            "authorized_client": {
+                "client_id": "official-wallet",
+                "jwks": PUBLIC_JWKS,
+            },
             "claims": {"given_name": "Official"},
         }
     )
@@ -28,8 +46,65 @@ def test_issuance_body_uses_fixed_did_first_public_identity(
         "organization_id": "org-1",
         "credential_template_id": "template-1",
         "issuer_did": "did:web:issuer.example",
+        "authorized_client": {
+            "client_id": "official-wallet",
+            "jwks": PUBLIC_JWKS,
+        },
         "claims": {"given_name": "Official"},
     }
+
+
+def test_issuance_body_rejects_wallet_private_key_material(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OIDF_MARTY_ORGANIZATION_ID", "org-1")
+    monkeypatch.setenv("OIDF_MARTY_CREDENTIAL_TEMPLATE_ID", "template-1")
+    monkeypatch.setenv("OIDF_MARTY_ISSUER_DID", "did:web:issuer.example")
+    private_jwks = json.loads(json.dumps(PUBLIC_JWKS))
+    private_jwks["keys"][0]["d"] = "private"
+
+    with pytest.raises(ValueError, match="public keys only"):
+        issuance.issuance_body(
+            {
+                "authorized_client": {
+                    "client_id": "official-wallet",
+                    "jwks": private_jwks,
+                },
+                "claims": {},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"kty": "RSA"},
+        {"crv": "P-384"},
+        {"alg": "none"},
+        {"x": "short"},
+        {"unexpected": "contract-drift"},
+    ],
+)
+def test_issuance_body_rejects_keys_outside_marty_protocol(
+    patch: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OIDF_MARTY_ORGANIZATION_ID", "org-1")
+    monkeypatch.setenv("OIDF_MARTY_CREDENTIAL_TEMPLATE_ID", "template-1")
+    monkeypatch.setenv("OIDF_MARTY_ISSUER_DID", "did:web:issuer.example")
+    jwks = json.loads(json.dumps(PUBLIC_JWKS))
+    jwks["keys"][0].update(patch)
+
+    with pytest.raises(ValueError, match="authorized_client"):
+        issuance.issuance_body(
+            {
+                "authorized_client": {
+                    "client_id": "official-wallet",
+                    "jwks": jwks,
+                },
+                "claims": {},
+            }
+        )
 
 
 def test_create_offer_uses_normal_gateway_endpoint(
@@ -85,10 +160,22 @@ def test_main_writes_only_the_gateway_response(
     monkeypatch.setattr(
         issuance.sys,
         "stdin",
-        type("_Input", (), {"read": lambda _self: json.dumps({"claims": {}})})(),
+        type(
+            "_Input",
+            (),
+            {
+                "read": lambda _self: json.dumps(
+                    {
+                        "authorized_client": {
+                            "client_id": "official-wallet",
+                            "jwks": PUBLIC_JWKS,
+                        },
+                        "claims": {},
+                    }
+                )
+            },
+        )(),
     )
 
     assert issuance.main() == 0
-    assert json.loads(capsys.readouterr().out) == {
-        "credential_offer_uri": "openid-credential-offer://offer"
-    }
+    assert json.loads(capsys.readouterr().out) == {"credential_offer_uri": "openid-credential-offer://offer"}
