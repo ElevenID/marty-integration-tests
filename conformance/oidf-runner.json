@@ -14,18 +14,18 @@
       "target": "Marty's public credential-issuer URL through the gateway"
     },
     "oid4vp-verifier": {
-      "status": "planned",
+      "status": "active",
       "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=sd_jwt_vc][response_mode=direct_post][request_method=request_uri_signed][client_id_prefix=x509_hash]",
       "configuration_example": "conformance/marty-verifier.example.json",
       "target": "Marty's public verifier URL through the gateway",
-      "reason": "Enable only after Marty's native signed request_uri flow passes every module without transport adaptation."
+      "qualification": "Interoperability evidence only. The upstream profile is not currently a certifiable OIDF profile."
     },
     "oid4vp-haip-verifier": {
-      "status": "planned",
+      "status": "active",
       "test_plan": "oid4vp-1final-verifier-haip-test-plan[credential_format=sd_jwt_vc][response_mode=direct_post.jwt]",
       "configuration_example": "conformance/marty-verifier-haip.example.json",
       "target": "Marty's public verifier URL through the gateway",
-      "reason": "Enable only after signed request URIs, x509_hash, per-request encryption keys, and encrypted direct_post.jwt are implemented and verified."
+      "qualification": "Interoperability evidence only. The upstream profile is not currently a certifiable OIDF profile."
     }
   },
   "certification": {

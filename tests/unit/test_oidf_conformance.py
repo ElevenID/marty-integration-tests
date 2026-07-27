@@ -22,11 +22,14 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert manifest["profiles"]["oid4vci-issuer"]["status"] == "active"
     assert "[credential_format=sd_jwt_vc]" in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
     verifier = manifest["profiles"]["oid4vp-verifier"]
+    assert verifier["status"] == "active"
+    assert "not currently a certifiable" in verifier["qualification"]
     assert verifier["configuration_example"] == "conformance/marty-verifier.example.json"
     assert "oid4vp-1final-verifier-test-plan" in verifier["test_plan"]
     assert "[request_method=request_uri_signed]" in verifier["test_plan"]
     assert "[client_id_prefix=x509_hash]" in verifier["test_plan"]
     haip = manifest["profiles"]["oid4vp-haip-verifier"]
+    assert haip["status"] == "active"
     assert "oid4vp-1final-verifier-haip-test-plan" in haip["test_plan"]
     assert "[response_mode=direct_post.jwt]" in haip["test_plan"]
 
@@ -202,7 +205,8 @@ def test_signed_request_uri_requires_a_runner_trust_anchor(tmp_path: Path) -> No
 
 
 def test_planned_verifier_requires_explicit_attested_pre_activation_run(tmp_path: Path) -> None:
-    profile = oidf.load_manifest()["profiles"]["oid4vp-verifier"]
+    profile = dict(oidf.load_manifest()["profiles"]["oid4vp-verifier"])
+    profile["status"] = "planned"
     stack = tmp_path / "stack.json"
     stack.write_text('{"schema":"marty.stack/v1"}', encoding="utf-8")
 
@@ -217,6 +221,23 @@ def test_active_profile_does_not_need_pre_activation_switch() -> None:
     profile = oidf.load_manifest()["profiles"]["oid4vci-issuer"]
 
     assert oidf.execution_mode("oid4vci-issuer", profile, allow_planned=False, stack_manifest=None) == "active"
+
+
+@pytest.mark.parametrize("profile_name", ["oid4vp-verifier", "oid4vp-haip-verifier"])
+def test_activated_verifier_profiles_no_longer_need_pre_activation_switch(
+    profile_name: str,
+) -> None:
+    profile = oidf.load_manifest()["profiles"][profile_name]
+
+    assert (
+        oidf.execution_mode(
+            profile_name,
+            profile,
+            allow_planned=False,
+            stack_manifest=None,
+        )
+        == "active"
+    )
 
 
 def test_verifier_interaction_environment_matches_the_official_plan(monkeypatch: pytest.MonkeyPatch) -> None:

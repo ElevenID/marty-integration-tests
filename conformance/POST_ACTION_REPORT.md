@@ -1,7 +1,7 @@
 # Protocol Compliance Post-Action Report
 
 Status: in progress  
-Last updated: 2026-07-26
+Last updated: 2026-07-27
 
 ## Purpose
 
@@ -100,6 +100,45 @@ harness did not add the deprecated selector to make the run proceed. This is
 useful negative evidence that the DID-only public boundary is enforced by the
 test client rather than bypassed for compatibility.
 
+### 6. OID4VP Final and HAIP work through the production gateway
+
+The official OIDF `release-v5.2.0` OID4VP Final and HAIP verifier plans both
+passed against the immutable v1.1.38 stack. The lanes used signed request
+objects, the public request URI and callback, and authenticated relying-party
+results. No verifier service, inline verifier, or private signing selector was
+substituted.
+
+Action: mark these interoperability profiles active while continuing to state
+that the upstream profiles are pre-certification/alpha and that a passing run
+is not an OIDF certification.
+
+### 7. W3C Data Integrity had no managed signer capability
+
+The official W3C lane stopped at the public credential-template API with HTTP
+404 because the managed signer registry did not advertise `ldp_vc`. This was a
+real production configuration gap. Marty supports the
+`eddsa-rdfc-2022` verification suite; assigning Data Integrity to the default
+ES256 key would have falsely advertised an unsupported cryptographic pairing.
+
+Action: normalize W3C Data Integrity aliases to `ldp_vc`, advertise that
+format only on the managed EdDSA issuer key, and provision separate JWT/ES256
+and Data Integrity/EdDSA profiles sharing the same issuer DID. Runtime callers
+still provide only the issuer DID; custody selectors remain administrative.
+A released-stack rerun is required before the adapted W3C lane is green.
+
+### 8. The OID4VCI runner lacked its emulated wallet identities
+
+OID4VCI metadata passed, while all interaction modules entered `INTERRUPTED`
+before issuer interaction. The official plan requires static `client` and
+`client2` identifiers for its private-key-JWT wallet emulators; our generated
+runner configuration omitted them. This was a harness configuration defect,
+not evidence of thirteen separate product failures.
+
+Action: generate two disposable client identifiers and continue allowing the
+official suite to generate their ephemeral JWKS. The corrected rerun will
+expose the first actual authorization, DPoP, token, credential, notification,
+or negative-response gap instead of failing during module configuration.
+
 ## Do the tests cheat?
 
 No production-verification bypass has been found in the reviewed EUDI path:
@@ -185,13 +224,13 @@ service images remains required.
 
 | Capability | Current evidence | Remaining gap |
 | --- | --- | --- |
-| DID-first OID4VCI issuance | Public-path EUDI issuance on corrected releases | Activate and keep the official OIDF issuer plan green |
-| DID-first signed OID4VP request | Public request-URI flow and EUDI library resolution | Complete every official OID4VP Final module |
-| HAIP request-object trust | Signed JAR, `x509_hash`, separate PKIX trust in EUDI lane | Complete the official HAIP verifier plan |
+| DID-first OID4VCI issuance | Public-path EUDI issuance; official metadata module passes | Complete the corrected official issuer interaction plan |
+| DID-first signed OID4VP request | Official OID4VP Final plan passes on immutable v1.1.38 | Keep the active profile green as the official runner updates |
+| HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative | Keep invalid signature and replay evidence green |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks | Add applicable official OIDF mdoc issuer/verifier coverage |
 | OID4VP URL-query transport | Not synthesized or claimed | Implement natively or explicitly retain unsupported status |
-| W3C VCDM v2 verification | Adapted official-suite execution | Supported public path and native Data Integrity issuance |
+| W3C VCDM v2 verification | Public bootstrap exposed missing `ldp_vc` managed capability | Release the EdDSA profile fix, rerun the adapted suite, then add native Data Integrity issuance |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
@@ -204,6 +243,10 @@ service images remains required.
 | `marty-ui` v1.1.36, manifest `sha256:33273c4bbe6ccfc33f22735986f0019e21715f4adf99b425af99d6dccba80f7c` | 52/55 EUDI tests passed; real format/algorithm fixes validated |
 | `marty-ui` v1.1.37, manifest `sha256:3a8ed3f65a98333bf75f1082ed181709b2910215db082ea443ac72e25c4a5897` | 53/55 passed; expiry negative corrected |
 | `marty-ui` v1.1.38, manifest `sha256:091ea151f25c2297c2ad4546cfe089393301652039614379ce69516f353cf050` | Final EUDI negative assertion under investigation |
+| OID4VP Final run [30230194196](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230194196), sanitized summary `sha256:f96a634c36b0adf65c77308272836b2a1dfb2f869e56051d4bdbe867c83d94ea` | Passed against v1.1.38 and official runner `release-v5.2.0` |
+| HAIP run [30230195076](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230195076), sanitized summary `sha256:b7a9200e66a59f5b319d2c095102e30e640e78df8a7dedf676caadc660332950` | Passed against v1.1.38 and official runner `release-v5.2.0` |
+| W3C v2 run [30230312063](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312063), sanitized summary `sha256:5674d1b6c52e5d5291082f542af6c132a3b5ce72168f7dfe08fb9d7149d8e88b` | Failed at public template bootstrap; exposed missing managed `ldp_vc` capability |
+| OID4VCI issuer run [30230312937](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312937), sanitized summary `sha256:eacc7f2d7fd9edc2ffec43e3faaa590d1c733d429c74bcdaf47c7e3f7189b444` | Metadata passed; interaction modules exposed missing official-runner client identities |
 
 The report must be updated with the passing run URL, harness commit, sanitized
 artifact digest, and final count before the v1.1.38 pin is described as ready.
