@@ -26,6 +26,7 @@ from tests.integration.gateway.helpers.mdoc_test_certificate import (
 DEFAULT_ORGANIZATION = "00000000-0000-0000-0000-000000000001"
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+CREDENTIAL_CONFIGURATION_ID = re.compile(r"^[A-Za-z0-9_.:#-]{1,192}$")
 OFFICIAL_OIDF_ISSUER_DOMAIN = "localhost.emobix.co.uk"
 
 
@@ -67,14 +68,21 @@ def signing_service_request_payload(
     *,
     w3c: bool,
     key_purpose: str = "vc_jwt_issuer",
+    data_integrity: bool = False,
 ) -> dict[str, str]:
     """Request the configured production signer for one profile purpose."""
     payload = {
         "key_purpose": key_purpose,
-        "algorithm": "ES256",
+        "algorithm": "EdDSA" if data_integrity else "ES256",
     }
     if key_purpose == "vc_jwt_issuer":
-        payload["credential_format"] = "jwt_vc_json" if w3c else "dc+sd-jwt"
+        payload["credential_format"] = (
+            "ldp_vc"
+            if data_integrity
+            else "jwt_vc_json"
+            if w3c
+            else "dc+sd-jwt"
+        )
     elif key_purpose == "mdoc_dsc":
         payload["credential_format"] = "mso_mdoc"
     return payload
@@ -381,6 +389,39 @@ def response_id(value: object, resource: str) -> str:
     return identifier
 
 
+def oid4vci_configuration_id(
+    metadata: object,
+    *,
+    expected_format: str,
+    expected_vct: str,
+) -> str:
+    """Resolve the unique public configuration advertised for the fixture."""
+    if not isinstance(metadata, dict):
+        raise RuntimeError("public OID4VCI metadata is not an object")
+    configurations = metadata.get("credential_configurations_supported")
+    if not isinstance(configurations, dict):
+        raise RuntimeError(
+            "public OID4VCI metadata has no credential_configurations_supported"
+        )
+    matches = [
+        config_id
+        for config_id, configuration in configurations.items()
+        if (
+            isinstance(config_id, str)
+            and CREDENTIAL_CONFIGURATION_ID.fullmatch(config_id)
+            and isinstance(configuration, dict)
+            and configuration.get("format") == expected_format
+            and configuration.get("vct") == expected_vct
+        )
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            "public OID4VCI metadata did not advertise exactly one matching "
+            "credential configuration"
+        )
+    return matches[0]
+
+
 def issuer_profile_response_id(value: object) -> str:
     """Extract the profile object returned by the public issuer-profile API."""
     if not isinstance(value, dict):
@@ -419,6 +460,7 @@ def resolve_signing_service(
     organization_id: str,
     w3c: bool,
     key_purpose: str = "vc_jwt_issuer",
+    data_integrity: bool = False,
     request: Callable[..., object],
 ) -> dict[str, object]:
     """Resolve the managed backend used only to provision an issuer profile.
@@ -441,6 +483,7 @@ def resolve_signing_service(
                 json_body=signing_service_request_payload(
                     w3c=w3c,
                     key_purpose=key_purpose,
+                    data_integrity=data_integrity,
                 ),
             )
         except RuntimeError as exc:
@@ -662,6 +705,38 @@ def bootstrap(
             json_body=profile_payload,
         )
         issuer_profile_response_id(created_issuer_profile)
+        if w3c:
+            # The W3C lane verifies both JWT VC and Data Integrity credentials.
+            # Keep those capabilities on distinct profiles sharing the same DID:
+            # ES256 remains the JWT signer, while ldp_vc resolves only to the
+            # managed EdDSA key required by the supported eddsa-rdfc-2022 suite.
+            data_integrity_service = resolve_signing_service(
+                gateway_url,
+                session_id,
+                organization_id=organization_id,
+                w3c=True,
+                data_integrity=True,
+                request=request,
+            )
+            data_integrity_profile_payload = issuer_profile_payload(
+                organization_id,
+                data_integrity_service,
+                gateway_url=gateway_url,
+                w3c=True,
+                run_id=run_id,
+                label="W3C VC Data Integrity",
+            )
+            created_data_integrity_profile = request(
+                gateway_url,
+                session_id,
+                (
+                    "/v1/signing-keys/issuer-profiles?"
+                    f"{urlencode({'organization_id': organization_id})}"
+                ),
+                method="POST",
+                json_body=data_integrity_profile_payload,
+            )
+            issuer_profile_response_id(created_data_integrity_profile)
         request_profile_payload: dict[str, str] | None = None
         request_issuer_profile_id: str | None = None
         if not w3c and not oid4vci:
@@ -733,21 +808,23 @@ def bootstrap(
         )
         if activated_revocation_profile_id != revocation_profile_id:
             raise RuntimeError(f"activated {prefix} revocation profile id changed unexpectedly")
+        created_template_payload = template_payload(
+            organization_id,
+            compliance_profile_id,
+            profile_payload["issuer_did"],
+            revocation_profile_id,
+            w3c=w3c,
+            run_id=run_id,
+        )
         created_template = request(
             gateway_url,
             session_id,
             "/v1/credential-templates",
             method="POST",
-            json_body=template_payload(
-                organization_id,
-                compliance_profile_id,
-                profile_payload["issuer_did"],
-                revocation_profile_id,
-                w3c=w3c,
-                run_id=run_id,
-            ),
+            json_body=created_template_payload,
         )
         template_id = response_id(created_template, f"{prefix} credential template")
+        credential_configuration_id: str | None = None
         if oid4vci:
             activated_template = request(
                 gateway_url,
@@ -762,6 +839,20 @@ def bootstrap(
                 raise RuntimeError(
                     "activated OID4VCI credential template id changed unexpectedly"
                 )
+            issuer_metadata = request(
+                gateway_url,
+                session_id,
+                (
+                    f"/org/{organization_id}/"
+                    ".well-known/openid-credential-issuer"
+                ),
+                method="GET",
+            )
+            credential_configuration_id = oid4vci_configuration_id(
+                issuer_metadata,
+                expected_format="dc+sd-jwt",
+                expected_vct=str(created_template_payload["vct"]),
+            )
         presentation_template_id = template_id
         if w3c:
             created_presentation_template = request(
@@ -826,6 +917,15 @@ def bootstrap(
             result["w3c_issuer_did"] = profile_payload["issuer_did"]
         elif oid4vci:
             result["oid4vci_issuer_did"] = profile_payload["issuer_did"]
+            assert credential_configuration_id is not None
+            # OID4VCI credential-configuration identifiers are the keys of
+            # credential_configurations_supported, not Marty's internal
+            # credential-template resource UUIDs.  Keep both identities so
+            # public issuance can address the template while the official
+            # runner selects the advertised protocol configuration.
+            result["oid4vci_credential_configuration_id"] = (
+                credential_configuration_id
+            )
         else:
             assert request_profile_payload is not None
             assert request_issuer_profile_id is not None

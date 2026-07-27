@@ -368,6 +368,12 @@ def classify_eudi_failure_text(text: str) -> list[str]:
     )
     if fixture_stage:
         categories.append(fixture_stage.group(1).lower())
+    invariant = re.search(
+        r"(?i)\b(eudi-invariant-[a-z][a-z0-9-]{0,159})\b",
+        text,
+    )
+    if invariant:
+        categories.append(invariant.group(1).lower())
     return categories or ["unclassified"]
 
 

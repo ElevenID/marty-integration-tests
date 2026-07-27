@@ -30,7 +30,12 @@ from haip_test_certificates import (  # noqa: E402
 LANES = {"oid4vci-issuer", "oid4vp-final", "haip", "w3c-v2", "eudi"}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
-IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# Public OID4VCI credential-configuration identifiers are opaque JSON object
+# keys.  Marty uses a fragment-like suffix (for example, ``PID#sd-jwt``) to
+# distinguish formats for the same credential type, so ``#`` is intentional.
+# Keep the fixture channel narrowly printable because these values are also
+# copied into runner configuration and diagnostic output.
+IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:#/+%@-]{1,256}$")
 INITIALIZER_SECRET = re.compile(
     r"(?i)(\b(?:authorization|cookie|password|secret|session(?:_id)?|token|private[_-]?key|api[_-]?key)\b\s*(?:=|:|is)\s*)([^\s,;]+)"
 )
@@ -385,17 +390,32 @@ def oid4vci_issuer_config(
     private_dir = output_dir / "private"
     config = private_dir / "marty-issuer.json"
     request = private_dir / "marty-issuer-request.json"
+    credential_issuer_url = f"{gateway_url}/org/{fixtures['organization_id']}"
     write_private_json(
         config,
         {
             "description": "Disposable Marty OID4VCI issuer under official test",
             "vci": {
-                "credential_issuer_url": (
-                    f"{gateway_url}/org/{fixtures['organization_id']}"
-                ),
-                "authorization_server": gateway_url,
-                "credential_configuration_id": fixtures["oid4vci_template_id"],
+                "credential_issuer_url": credential_issuer_url,
+                # Marty advertises the organization-specific credential
+                # issuer as its authorization server. The official runner
+                # requires an explicit override to match that advertised
+                # issuer exactly; the gateway origin alone is not equivalent.
+                "authorization_server": credential_issuer_url,
+                "credential_configuration_id": fixtures[
+                    "oid4vci_credential_configuration_id"
+                ],
                 "credential_proof_type_hint": "jwt",
+            },
+            # The official issuer plan emulates two independent wallets. Its
+            # private_key_jwt variant generates ephemeral JWKS when they are
+            # omitted, but it requires stable client identifiers before any
+            # interaction module can enter WAITING.
+            "client": {
+                "client_id": f"marty-official-wallet-{fixtures['organization_id']}",
+            },
+            "client2": {
+                "client_id": f"marty-official-wallet-2-{fixtures['organization_id']}",
             },
             "client_attestation": {"key_attestation_jwks": {"keys": []}},
         },

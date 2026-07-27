@@ -9,6 +9,51 @@ import pytest
 from scripts import oidf_marty_offer as offer
 
 
+def test_interrupted_failure_category_emits_only_safe_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        offer,
+        "request_json",
+        lambda *_args, **_kwargs: (
+            200,
+            [
+                {"result": "SUCCESS", "src": "EarlierCondition"},
+                {
+                    "result": "FAILURE",
+                    "src": "net.openid.conformance.condition.client.GetStaticClientConfiguration",
+                    "msg": "contains a disposable secret that must not be emitted",
+                },
+            ],
+        ),
+    )
+
+    assert offer.interrupted_failure_category(
+        "https://oidf.example",
+        "module-1",
+        insecure=True,
+    ) == "oidf-invariant-interrupted-getstaticclientconfiguration"
+
+
+def test_interrupted_failure_category_rejects_unsafe_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        offer,
+        "request_json",
+        lambda *_args, **_kwargs: (
+            200,
+            [{"result": "FAILURE", "src": "unsafe source: secret"}],
+        ),
+    )
+
+    assert offer.interrupted_failure_category(
+        "https://oidf.example",
+        "module-1",
+        insecure=True,
+    ) == "oidf-invariant-interrupted-unknown-source"
+
+
 def test_command_offer_relaxes_only_conformance_runner_tls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
