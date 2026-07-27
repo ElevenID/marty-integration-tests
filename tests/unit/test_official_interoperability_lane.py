@@ -368,7 +368,7 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
     data = json.loads(config.read_text(encoding="utf-8"))
     assert data["vci"] == {
         "credential_issuer_url": "https://marty.test/org/org-1",
-        "authorization_server": "https://marty.test",
+        "authorization_server": "https://marty.test/org/org-1",
         "credential_configuration_id": "template-1",
         "credential_proof_type_hint": "jwt",
     }

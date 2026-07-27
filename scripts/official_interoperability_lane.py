@@ -385,15 +385,18 @@ def oid4vci_issuer_config(
     private_dir = output_dir / "private"
     config = private_dir / "marty-issuer.json"
     request = private_dir / "marty-issuer-request.json"
+    credential_issuer_url = f"{gateway_url}/org/{fixtures['organization_id']}"
     write_private_json(
         config,
         {
             "description": "Disposable Marty OID4VCI issuer under official test",
             "vci": {
-                "credential_issuer_url": (
-                    f"{gateway_url}/org/{fixtures['organization_id']}"
-                ),
-                "authorization_server": gateway_url,
+                "credential_issuer_url": credential_issuer_url,
+                # Marty advertises the organization-specific credential
+                # issuer as its authorization server. The official runner
+                # requires an explicit override to match that advertised
+                # issuer exactly; the gateway origin alone is not equivalent.
+                "authorization_server": credential_issuer_url,
                 "credential_configuration_id": fixtures["oid4vci_template_id"],
                 "credential_proof_type_hint": "jwt",
             },

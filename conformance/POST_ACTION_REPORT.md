@@ -144,6 +144,12 @@ official suite to generate their ephemeral JWKS. The corrected rerun will
 expose the first actual authorization, DPoP, token, credential, notification,
 or negative-response gap instead of failing during module configuration.
 
+The first corrected rerun then exposed a second configuration mismatch at
+`VCISelectOAuthorizationServer`: Marty advertises the organization-specific
+credential issuer URL as its authorization server, while the runner config
+forced the gateway origin. The runner now uses the exact advertised
+per-organization issuer URL; no metadata or production endpoint is rewritten.
+
 ## Do the tests cheat?
 
 No production-verification bypass has been found in the reviewed EUDI path:
