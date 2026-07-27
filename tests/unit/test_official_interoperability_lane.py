@@ -649,6 +649,38 @@ def test_public_readiness_uses_generated_ca_and_exact_origin(monkeypatch: pytest
     assert calls[0][-1] == "https://marty-oidf.test:18443/ready"
 
 
+def test_public_readiness_disables_only_windows_revocation_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    response = type(
+        "Result",
+        (),
+        {
+            "returncode": 0,
+            "stdout": '{"status":"ready"}\n__MARTY_PUBLIC_HTTP_STATUS__:200\n',
+        },
+    )()
+    monkeypatch.setattr(lane.os, "name", "nt")
+    monkeypatch.setattr(
+        lane.subprocess,
+        "run",
+        lambda command, **_kwargs: calls.append(command) or response,
+    )
+
+    lane.wait_for_public_stack(
+        {
+            "OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test:18443",
+            "OIDF_MARTY_RESOLVE_IP": "127.0.0.1",
+            "SSL_CERT_FILE": "/material/root-ca.pem",
+        }
+    )
+
+    assert "--cacert" in calls[0]
+    assert "--ssl-no-revoke" in calls[0]
+    assert calls[0][-1] == "https://marty-oidf.test:18443/ready"
+
+
 def test_public_readiness_timeout_reports_only_service_states(monkeypatch: pytest.MonkeyPatch) -> None:
     response = type(
         "Result",

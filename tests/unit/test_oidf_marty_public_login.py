@@ -47,6 +47,13 @@ def test_ca_options_requires_and_returns_the_configured_ca(
         public_login.ca_options()
 
 
+def test_windows_tls_options_disable_only_unavailable_revocation_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(public_login.os, "name", "nt")
+    assert public_login.platform_tls_options() == ["--ssl-no-revoke"]
+
+
 def test_parse_response_uses_the_last_header_block() -> None:
     raw = (
         "HTTP/1.1 100 Continue\r\n\r\n"

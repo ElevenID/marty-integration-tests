@@ -59,6 +59,14 @@ for reproducible evidence, and passes the configuration relative to the runner
 checkout so Windows drive letters cannot be parsed as test-plan syntax. The official suite URL can be supplied with
 `CONFORMANCE_SERVER` when it is not using its normal local default.
 
+The active issuer profile uses `client_auth_type=none`, matching Marty's
+published authorization-server metadata and its pre-authorized public-wallet
+flow. The lane does not send a `private_key_jwt` assertion that Marty would
+ignore and does not claim confidential-client authentication. The upstream
+runner marks its metadata-only modules not applicable for the `none` variant,
+so the lane separately validates the production credential-issuer metadata
+before creating and selecting the public credential configuration.
+
 ### Driving the real issuer path
 
 Issuer-plan modules wait for an issuer to deliver a credential offer. Use the

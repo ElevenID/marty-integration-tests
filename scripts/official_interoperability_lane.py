@@ -65,17 +65,11 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
     "metadata-json-type-mismatch": re.compile(
         r"(?i)(?:JsonDecodingException|unexpected JSON token|expected\b[^\n]{0,80}\bbut had)"
     ),
-    "metadata-field-credential-configurations-supported": re.compile(
-        r"(?i)credential_configurations_supported"
-    ),
+    "metadata-field-credential-configurations-supported": re.compile(r"(?i)credential_configurations_supported"),
     "metadata-field-credential-definition": re.compile(r"(?i)credential_definition"),
-    "metadata-field-cryptographic-binding-methods": re.compile(
-        r"(?i)cryptographic_binding_methods_supported"
-    ),
+    "metadata-field-cryptographic-binding-methods": re.compile(r"(?i)cryptographic_binding_methods_supported"),
     "metadata-field-proof-types": re.compile(r"(?i)proof_types_supported"),
-    "metadata-field-signing-algorithms": re.compile(
-        r"(?i)credential_signing_alg_values_supported"
-    ),
+    "metadata-field-signing-algorithms": re.compile(r"(?i)credential_signing_alg_values_supported"),
     "metadata-field-claims": re.compile(r"(?i)(?:\bclaims\b|credentialSubject)"),
     "metadata-field-doctype": re.compile(r"(?i)\bdoctype\b"),
     "metadata-field-vct": re.compile(r"(?i)\bvct\b"),
@@ -87,29 +81,21 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
     ),
     "issuer-profile": re.compile(r"(?i)(?:issuer[_ -]?profile|issuer DID|remote sign|signing service)"),
     "issuer-profile-not-found": re.compile(r"(?i)active issuer profile not found"),
-    "issuer-profile-binding-incomplete": re.compile(
-        r"(?i)issuer profile has an incomplete signing identity binding"
-    ),
+    "issuer-profile-binding-incomplete": re.compile(r"(?i)issuer profile has an incomplete signing identity binding"),
     "issuer-profile-identity-mismatch": re.compile(
         r"(?i)(?:issuer profile DID binding resolved to a different identity|"
         r"issuer-profile signer returned a different (?:profile identity|issuer DID|DID verification method))"
     ),
-    "issuer-profile-algorithm-mismatch": re.compile(
-        r"(?i)signing algorithm must match the issuer profile binding"
-    ),
+    "issuer-profile-algorithm-mismatch": re.compile(r"(?i)signing algorithm must match the issuer profile binding"),
     "mdoc-namespace": re.compile(r"(?i)no mDoc namespace mapping is defined"),
-    "mdoc-certificate-chain": re.compile(
-        r"(?i)(?:_mdoc_x5c|x5chain|invalid certificate|certificate chain)"
-    ),
+    "mdoc-certificate-chain": re.compile(r"(?i)(?:_mdoc_x5c|x5chain|invalid certificate|certificate chain)"),
     "mdoc-signature-missing": re.compile(
         r"(?i)(?:remote signing service returned no mDoc signature|"
         r"issuer-profile signer did not return a signature)"
     ),
     "mdoc-signature-length": re.compile(r"(?i)P1363 signature length"),
     "mdoc-signature-encoding": re.compile(r"(?i)remote mDoc signature encoding"),
-    "mdoc-signature-der": re.compile(
-        r"(?i)(?:remote mDoc signature is not valid DER ECDSA|DER signature coordinate)"
-    ),
+    "mdoc-signature-der": re.compile(r"(?i)(?:remote mDoc signature is not valid DER ECDSA|DER signature coordinate)"),
     "mdoc-claims": re.compile(r"(?i)(?:mDoc claims must be|invalid claims JSON)"),
     "mdoc-prepare": re.compile(r"(?i)(?:oid4vci_prepare_mdoc|mDoc preparation|prepare mDoc)"),
     "mdoc-assemble": re.compile(
@@ -402,15 +388,14 @@ def oid4vci_issuer_config(
                 # requires an explicit override to match that advertised
                 # issuer exactly; the gateway origin alone is not equivalent.
                 "authorization_server": credential_issuer_url,
-                "credential_configuration_id": fixtures[
-                    "oid4vci_credential_configuration_id"
-                ],
+                "credential_configuration_id": fixtures["oid4vci_credential_configuration_id"],
                 "credential_proof_type_hint": "jwt",
             },
-            # The official issuer plan emulates two independent wallets. Its
-            # private_key_jwt variant generates ephemeral JWKS when they are
-            # omitted, but it requires stable client identifiers before any
-            # interaction module can enter WAITING.
+            # The public-client issuer plan emulates two independent wallets.
+            # Stable client identifiers let the multiple-client module prove
+            # that DPoP-bound access tokens cannot cross wallet boundaries.
+            # Marty advertises token_endpoint_auth_methods_supported=["none"];
+            # do not claim private_key_jwt unless the product validates it.
             "client": {
                 "client_id": f"marty-official-wallet-{fixtures['organization_id']}",
             },
@@ -646,6 +631,12 @@ def wait_for_public_stack(environment: dict[str, str], *, timeout: float = 300, 
     address = environment.get("OIDF_MARTY_RESOLVE_IP", "").strip()
     if address:
         command.extend(["--resolve", f"{parsed.hostname}:{port}:{address}"])
+    if os.name == "nt":
+        # Windows curl uses Schannel, which otherwise requires an online
+        # revocation endpoint even for this disposable, locally generated CA.
+        # The generated CA is still required and verified through --cacert;
+        # only the unavailable Windows revocation lookup is disabled.
+        command.append("--ssl-no-revoke")
     command.append(f"{origin}/ready")
     deadline = time.monotonic() + timeout
     last_detail = "no HTTPS response received"
@@ -916,14 +907,10 @@ def run_oid4vci_issuer(
                 "CONFORMANCE_DEV_MODE": "1",
                 "OIDF_CONFORMANCE_RESOLVE_IP": "127.0.0.1",
                 "OIDF_CONFORMANCE_INSECURE_TLS": "1",
-                "OIDF_ISSUANCE_COMMAND": str(
-                    (ROOT / "scripts" / "oidf_marty_public_issuance.py").resolve()
-                ),
+                "OIDF_ISSUANCE_COMMAND": str((ROOT / "scripts" / "oidf_marty_public_issuance.py").resolve()),
                 "OIDF_ISSUANCE_REQUEST": str(issuance_request),
                 "OIDF_MARTY_ORGANIZATION_ID": fixtures["organization_id"],
-                "OIDF_MARTY_CREDENTIAL_TEMPLATE_ID": fixtures[
-                    "oid4vci_template_id"
-                ],
+                "OIDF_MARTY_CREDENTIAL_TEMPLATE_ID": fixtures["oid4vci_template_id"],
                 "OIDF_MARTY_ISSUER_DID": fixtures["oid4vci_issuer_did"],
             }
         )
