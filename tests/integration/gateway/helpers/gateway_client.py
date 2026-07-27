@@ -12,7 +12,6 @@ import logging
 import os
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import parse_qs, urlparse
-from uuid import uuid4
 
 import httpx
 
@@ -342,10 +341,6 @@ class GatewayClient:
             application_template_id: Optional reference to Application Template
             trust_profile_id: Optional reference to Trust Profile
             revocation_profile_id: Optional reference to Revocation Profile
-            issuer_key_id: Deprecated legacy signing-key assertion
-            issuer_key_algorithm: Deprecated legacy signing-algorithm assertion
-            issuer_profile_id: Deprecated legacy profile assertion
-            issuer_certificate_chain_pem: Deprecated legacy certificate input
             issuer_did: Public issuer identity. The gateway resolves custody internally.
             auto_generate_artifacts: Auto-generate missing artifacts in non-production
             credential_payload_format: Payload structure variant (e.g. 'w3c_vcdm_v2_sd_jwt',
@@ -380,20 +375,12 @@ class GatewayClient:
             payload["trust_profile_id"] = trust_profile_id
         if revocation_profile_id:
             payload["revocation_profile_id"] = revocation_profile_id
-        if issuer_did:
-            payload["issuer_did"] = issuer_did
-        else:
-            # Temporary compatibility for older non-official tests. Official
-            # interoperability callers must use issuer_did and never cross the
-            # public boundary with profile/custody selectors.
-            if issuer_key_id:
-                payload["issuer_key_id"] = issuer_key_id
-            if issuer_key_algorithm:
-                payload["issuer_key_algorithm"] = issuer_key_algorithm
-            if issuer_profile_id:
-                payload["issuer_profile_id"] = issuer_profile_id
-            if issuer_certificate_chain_pem:
-                payload["issuer_certificate_chain_pem"] = issuer_certificate_chain_pem
+        if not issuer_did:
+            raise ValueError(
+                "issuer_did is required; integration clients cannot select an issuer profile, "
+                "key, certificate, or custody service."
+            )
+        payload["issuer_did"] = issuer_did
         if schema:
             payload["schema_uri"] = schema
         if zk_predicate_claims:

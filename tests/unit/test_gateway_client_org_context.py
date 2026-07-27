@@ -39,6 +39,21 @@ async def test_credential_template_with_did_never_sends_custody_selectors() -> N
 
 
 @pytest.mark.asyncio
+async def test_credential_template_requires_a_public_issuer_did() -> None:
+    client = GatewayClient("https://gateway.example")
+    try:
+        with pytest.raises(ValueError, match="issuer_did is required"):
+            await client.create_credential_template(
+                organization_id="org-1",
+                name="Legacy template",
+                credential_type="EmployeeBadge",
+                issuer_profile_id="legacy-profile",
+            )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_start_verification_flow_sends_selected_organization_header() -> None:
     client = GatewayClient("https://gateway.example")
     request = AsyncMock(return_value={"instance_id": "flow-1"})
