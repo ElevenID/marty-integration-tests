@@ -900,7 +900,9 @@ class TestOID4VPSdJwtPresentation:
             nonce=auth_req["nonce"],
         )
         tampered_token = _tamper_key_binding_signature(valid_token)
-        assert tampered_token != valid_token
+        assert (
+            tampered_token != valid_token
+        ), "eudi-invariant-tamper-mutated-token"
 
         result = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
@@ -914,15 +916,25 @@ class TestOID4VPSdJwtPresentation:
         # The wallet-facing callback exposes only a protocol-safe error. The
         # detailed cryptographic decision is available exclusively through
         # the authenticated relying-party result API.
-        assert result["success"] is False
-        assert result["verifierAccepted"] is False
-        assert 400 <= result["responseStatus"] < 500
+        assert (
+            result["success"] is False
+        ), "eudi-invariant-tamper-callback-success"
+        assert (
+            result["verifierAccepted"] is False
+        ), "eudi-invariant-tamper-verifier-accepted"
+        assert (
+            400 <= result["responseStatus"] < 500
+        ), "eudi-invariant-tamper-callback-status"
         response_body = result.get("responseBody")
         if isinstance(response_body, str) and response_body:
             # Error callbacks are allowed to be empty or non-JSON, but they
             # must never disclose the verifier's internal decision/claims.
-            assert '"decision"' not in response_body
-            assert '"verified_claims"' not in response_body
+            assert (
+                '"decision"' not in response_body
+            ), "eudi-invariant-tamper-public-decision-leak"
+            assert (
+                '"verified_claims"' not in response_body
+            ), "eudi-invariant-tamper-public-claims-leak"
 
         try:
             decision = await authenticated_gateway_client.get_verification_decision(
@@ -934,7 +946,7 @@ class TestOID4VPSdJwtPresentation:
             # Only that explicit not-finalized response is acceptable here.
             if exc.status_code not in {404, 409}:
                 raise AssertionError(
-                    "Invalid-signature result lookup failed unexpectedly"
+                    "eudi-invariant-tamper-result-lookup"
                 ) from exc
             flow_state = (
                 await authenticated_gateway_client.get_verification_result(
@@ -947,14 +959,22 @@ class TestOID4VPSdJwtPresentation:
                 "created",
                 "active",
                 "AWAITING_WALLET",
-            }
+            }, "eudi-invariant-tamper-retryable-state"
         else:
             # Implementations that finalize a cryptographic rejection must
             # expose a deny—not an allow—through the authenticated RP API.
-            assert decision["status"] == "completed"
-            assert decision["result"]["evaluation_result"] == "failed"
-            assert decision["result"]["decision"] == "deny"
-            assert decision["result"]["verified_claims"] == {}
+            assert (
+                decision["status"] == "completed"
+            ), "eudi-invariant-tamper-final-status"
+            assert (
+                decision["result"]["evaluation_result"] == "failed"
+            ), "eudi-invariant-tamper-final-evaluation"
+            assert (
+                decision["result"]["decision"] == "deny"
+            ), "eudi-invariant-tamper-final-decision"
+            assert (
+                decision["result"]["verified_claims"] == {}
+            ), "eudi-invariant-tamper-final-claims"
 
     @pytest.mark.asyncio
     async def test_expired_request_is_rejected_during_official_resolution(

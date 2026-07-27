@@ -324,6 +324,15 @@ def test_eudi_failure_categories_expose_only_bounded_fixture_stage() -> None:
     assert "must-not-escape" not in json.dumps(categories)
 
 
+def test_eudi_failure_categories_expose_only_bounded_invariant_code() -> None:
+    categories = eudi.classify_eudi_failure_text(
+        "AssertionError: eudi-invariant-tamper-result-lookup token=must-not-escape"
+    )
+
+    assert "eudi-invariant-tamper-result-lookup" in categories
+    assert "must-not-escape" not in json.dumps(categories)
+
+
 def test_eudi_failure_categories_preserve_long_value_free_presentation_stage() -> None:
     stage = (
         "eudi-stage-build-mso-mdoc-assemble-device-response-"
