@@ -319,7 +319,6 @@ class GatewayClient:
         issuer_profile_id: Optional[str] = None,
         issuer_certificate_chain_pem: Optional[str] = None,
         issuer_did: Optional[str] = None,
-        auto_generate_artifacts: bool = True,
         zk_predicate_claims: Optional[List[str]] = None,
         credential_payload_format: Optional[str] = None,
         wallet_configs: Optional[List[Dict[str, str]]] = None,
@@ -342,7 +341,6 @@ class GatewayClient:
             trust_profile_id: Optional reference to Trust Profile
             revocation_profile_id: Optional reference to Revocation Profile
             issuer_did: Public issuer identity. The gateway resolves custody internally.
-            auto_generate_artifacts: Auto-generate missing artifacts in non-production
             credential_payload_format: Payload structure variant (e.g. 'w3c_vcdm_v2_sd_jwt',
                 'ietf_sd_jwt', 'w3c_vcdm_v2_jwt_vc'). Server default: 'w3c_vcdm_v2_sd_jwt'.
             wallet_configs: Per-wallet deep-link configs, e.g.
@@ -358,7 +356,6 @@ class GatewayClient:
             "vct": vct,
             "supported_formats": supported_formats or ["sd_jwt_vc"],
             "claims": claims or [],
-            "auto_generate_artifacts": auto_generate_artifacts,
         }
 
         if compliance_profile is not None:
