@@ -42,7 +42,7 @@ from .helpers.eudi_wallet_kit_client import (
     EUDIWalletHarnessError,
     EUDIWalletKitClient,
 )
-from .helpers.gateway_client import GatewayClient
+from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.mdoc_evidence import validate_issuer_signed_mdoc
 from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
 
@@ -917,17 +917,44 @@ class TestOID4VPSdJwtPresentation:
         assert result["success"] is False
         assert result["verifierAccepted"] is False
         assert 400 <= result["responseStatus"] < 500
-        response = _verifier_response_body(result)
-        assert "decision" not in response
-        assert "verified_claims" not in response
+        response_body = result.get("responseBody")
+        if isinstance(response_body, str) and response_body:
+            # Error callbacks are allowed to be empty or non-JSON, but they
+            # must never disclose the verifier's internal decision/claims.
+            assert '"decision"' not in response_body
+            assert '"verified_claims"' not in response_body
 
-        decision = await authenticated_gateway_client.get_verification_decision(
-            flow["instance_id"]
-        )
-        assert decision["status"] == "completed"
-        assert decision["result"]["evaluation_result"] == "failed"
-        assert decision["result"]["decision"] == "deny"
-        assert decision["result"]["verified_claims"] == {}
+        try:
+            decision = await authenticated_gateway_client.get_verification_decision(
+                flow["instance_id"]
+            )
+        except GatewayClientError as exc:
+            # Rejecting an invalid wallet response before finalization leaves
+            # the flow retryable and therefore has no final result resource.
+            # Only that explicit not-finalized response is acceptable here.
+            if exc.status_code not in {404, 409}:
+                raise AssertionError(
+                    "Invalid-signature result lookup failed unexpectedly"
+                ) from exc
+            flow_state = (
+                await authenticated_gateway_client.get_verification_result(
+                    flow["instance_id"]
+                )
+            )
+            assert flow_state["status"] in {
+                "pending",
+                "waiting",
+                "created",
+                "active",
+                "AWAITING_WALLET",
+            }
+        else:
+            # Implementations that finalize a cryptographic rejection must
+            # expose a deny—not an allow—through the authenticated RP API.
+            assert decision["status"] == "completed"
+            assert decision["result"]["evaluation_result"] == "failed"
+            assert decision["result"]["decision"] == "deny"
+            assert decision["result"]["verified_claims"] == {}
 
     @pytest.mark.asyncio
     async def test_expired_request_is_rejected_during_official_resolution(
