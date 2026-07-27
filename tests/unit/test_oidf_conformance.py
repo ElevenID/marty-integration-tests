@@ -19,10 +19,11 @@ SPEC.loader.exec_module(oidf)
 def test_pinned_official_runner_manifest_is_valid() -> None:
     manifest = oidf.load_manifest()
     assert manifest["official_runner"]["repository"].startswith("https://gitlab.com/openid/")
-    assert manifest["profiles"]["oid4vci-issuer"]["status"] == "active"
-    assert "[credential_format=sd_jwt_vc]" in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
-    assert "[client_auth_type=none]" in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
-    assert "private_key_jwt" not in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
+    issuer = manifest["profiles"]["oid4vci-issuer"]
+    assert issuer["status"] == "planned"
+    assert "[credential_format=sd_jwt_vc]" in issuer["test_plan"]
+    assert "[client_auth_type=private_key_jwt]" in issuer["test_plan"]
+    assert "no issuer modules for client_auth_type=none" in issuer["qualification"]
     verifier = manifest["profiles"]["oid4vp-verifier"]
     assert verifier["status"] == "active"
     assert "not currently a certifiable" in verifier["qualification"]
@@ -219,10 +220,29 @@ def test_planned_verifier_requires_explicit_attested_pre_activation_run(tmp_path
     assert oidf.execution_mode("oid4vp-verifier", profile, allow_planned=True, stack_manifest=stack) == "pre-activation"
 
 
-def test_active_profile_does_not_need_pre_activation_switch() -> None:
+def test_issuer_profile_remains_pre_activation_until_client_auth_is_enforced(
+    tmp_path: Path,
+) -> None:
     profile = oidf.load_manifest()["profiles"]["oid4vci-issuer"]
+    stack = tmp_path / "stack.json"
+    stack.write_text('{"schema":"marty.stack/v1"}', encoding="utf-8")
 
-    assert oidf.execution_mode("oid4vci-issuer", profile, allow_planned=False, stack_manifest=None) == "active"
+    with pytest.raises(ValueError, match="not active"):
+        oidf.execution_mode(
+            "oid4vci-issuer",
+            profile,
+            allow_planned=False,
+            stack_manifest=stack,
+        )
+    assert (
+        oidf.execution_mode(
+            "oid4vci-issuer",
+            profile,
+            allow_planned=True,
+            stack_manifest=stack,
+        )
+        == "pre-activation"
+    )
 
 
 @pytest.mark.parametrize("profile_name", ["oid4vp-verifier", "oid4vp-haip-verifier"])

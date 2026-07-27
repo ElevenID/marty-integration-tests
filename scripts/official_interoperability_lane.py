@@ -927,6 +927,7 @@ def run_oid4vci_issuer(
                 str(config),
                 "--stack-manifest",
                 str(args.stack_manifest),
+                "--allow-planned-profile",
                 "--output-dir",
                 str(args.output_dir / "raw" / "oid4vci-issuer"),
                 "--interaction-script",
