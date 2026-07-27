@@ -139,6 +139,7 @@ class TestDataBuilder:
         """
         data = {
             "organization_id": organization_id,
+            "issuer_did": f"did:web:marty.test:orgs:{organization_id}",
             "name": name or "Mobile Driver's License",
             "credential_type": "org.iso.18013.5.1.mDL",
             "vct": "org.iso.18013.5.1.mDL",
@@ -186,7 +187,6 @@ class TestDataBuilder:
                 {"name": "document_number", "display_name": "Document Number", "required": True},
                 {"name": "driving_privileges", "display_name": "Driving Privileges", "required": True},
             ],
-            "auto_generate_artifacts": True,
         }
         
         # Include compliance profile if not provided via ID
@@ -257,7 +257,6 @@ class TestDataBuilder:
                 {"name": "given_name", "display_name": "Given Name", "required": True},
                 {"name": "birth_date", "display_name": "Birth Date", "required": True},
             ],
-            "auto_generate_artifacts": True,
         }
 
     @staticmethod
@@ -270,6 +269,7 @@ class TestDataBuilder:
         """Create employee badge credential template (W3C VCDM v2 SD-JWT payload)."""
         data = {
             "organization_id": organization_id,
+            "issuer_did": f"did:web:marty.test:orgs:{organization_id}",
             "name": name or "Employee Badge",
             "credential_type": "EmployeeBadge",
             "vct": "https://credentials.marty.dev/EmployeeBadge",
@@ -303,7 +303,6 @@ class TestDataBuilder:
                 {"name": "familyName", "display_name": "Family Name", "required": True},
                 {"name": "department", "display_name": "Department", "required": True},
             ],
-            "auto_generate_artifacts": True,
         }
         
         if application_template_id:
@@ -335,6 +334,7 @@ class TestDataBuilder:
         """
         data = {
             "organization_id": organization_id,
+            "issuer_did": f"did:web:marty.test:orgs:{organization_id}",
             "name": name or "Verifiable ID",
             "credential_type": "VerifiableId",
             "vct": "https://credentials.marty.dev/VerifiableId",
@@ -368,7 +368,6 @@ class TestDataBuilder:
                 {"name": "birthDate", "display_name": "Birth Date", "required": True},
                 {"name": "documentNumber", "display_name": "Document Number", "required": True},
             ],
-            "auto_generate_artifacts": True,
         }
 
         if application_template_id:
@@ -428,7 +427,6 @@ class TestDataBuilder:
                 {"name": "birthDate", "display_name": "Birth Date", "required": True},
                 {"name": "documentNumber", "display_name": "Document Number", "required": True},
             ],
-            "auto_generate_artifacts": True,
         }
 
         if application_template_id:
@@ -513,7 +511,6 @@ class TestDataBuilder:
                 {"name": "age_over_18", "display_name": "Age Over 18", "required": False},
                 {"name": "age_over_21", "display_name": "Age Over 21", "required": False},
             ],
-            "auto_generate_artifacts": True,
         }
 
         if application_template_id:
@@ -1114,7 +1111,6 @@ class TestDataBuilder:
                     "mdoc_element_identifier": "expiry_date",
                 },
             ],
-            "auto_generate_artifacts": True,
         }
 
         if compliance_profile_id:
