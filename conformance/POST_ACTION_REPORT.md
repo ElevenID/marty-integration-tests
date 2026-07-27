@@ -188,6 +188,64 @@ to reject whitespace and control characters. The sanitized summary is
 No product endpoint, metadata document, or official assertion was changed to
 accommodate this harness correction.
 
+### 9. Declared private-key JWT authentication was not an enforced boundary
+
+The official issuer profile declared `private_key_jwt`, but the production
+stack had no tenant-owned wallet-client registration contract. The token
+endpoint accepted `none`, while the gRPC `ExchangeToken` transport did not
+process a client assertion at all. A test could therefore appear configured
+for authenticated clients without proving that the client which received an
+offer was the client redeeming it.
+
+The audit also found three related production-boundary gaps:
+
+- authorization and pre-authorization codes were read and then updated in
+  separate repository operations, allowing concurrent redemption races;
+- per-organization authorization-server metadata advertised a PAR endpoint
+  whose form body could still nominate a different organization;
+- global authorization-server metadata advertised tenant-only client
+  authentication without a tenant from which to resolve the registration.
+
+Actions:
+
+- add tenant-owned registrations containing public P-256 ES256 JWKs only;
+- bind an issuance offer to the registered wallet client through an internal
+  opaque identifier;
+- verify RFC 7523 identity, audience, signature, bounded timestamps, and
+  one-time `jti` through one application service used by REST and gRPC;
+- reject embedded/private key material, unregistered or cross-tenant clients,
+  transport bypasses, and assertion replay;
+- atomically claim both authorization-code grant types so concurrent
+  redemption has exactly one winner;
+- bind organization-specific PAR endpoints to their organization and prevent
+  form data from overriding that binding;
+- advertise `none` globally and advertise `private_key_jwt` only in
+  organization-scoped metadata where the registration can be resolved.
+
+The public gateway accepts a typed authorized-client public JWKS through the
+normal authenticated `/v1/issuance` route. It registers that public material
+internally and sends only the opaque client identifier to the issuance
+service. The official runner receives the corresponding disposable private
+JWK through its mode-0600 local configuration. Wallet private keys do not
+enter Marty, and this holder-client registration does not alter issuer
+signing: issuer keys remain in managed custody and signing remains
+issuer-profile mediated after DID-first resolution.
+
+Evidence under review:
+
+- [marty-credentials#67](https://github.com/ElevenID/marty-credentials/pull/67)
+  implements the shared authentication service, tenant persistence, atomic
+  replay/code claims, REST/gRPC parity, and truthful metadata;
+- [marty-ui#133](https://github.com/ElevenID/marty-ui/pull/133) implements the
+  normal public issuance contract and strict public-JWK validation;
+- [marty-integration-tests#147](https://github.com/ElevenID/marty-integration-tests/pull/147)
+  provisions two disposable clients without an internal-service or API-key
+  issuance bypass.
+
+The OID4VCI profile remains `planned`. These changes are necessary evidence,
+but they are not sufficient to claim the official issuer profile until merged
+component releases are pinned by digest and the complete upstream plan passes.
+
 ## Do the tests cheat?
 
 No production-verification bypass has been found in the reviewed EUDI path:
@@ -273,7 +331,7 @@ service images remains required.
 
 | Capability | Current evidence | Remaining gap |
 | --- | --- | --- |
-| DID-first OID4VCI issuance | Public-path EUDI issuance; official metadata module passes | Complete the corrected official issuer interaction plan |
+| DID-first OID4VCI issuance | Public-path EUDI issuance; official metadata module passes; tenant-bound `private_key_jwt` registration, REST/gRPC parity, replay rejection, atomic grant consumption, and PAR binding are implemented in the current remediation set | Release the remediation set and pass the complete official issuer interaction plan against its immutable artifacts |
 | DID-first signed OID4VP request | Official OID4VP Final plan passes on immutable v1.1.38 | Keep the active profile green as the official runner updates |
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
