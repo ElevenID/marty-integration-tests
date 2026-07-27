@@ -21,6 +21,8 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert manifest["official_runner"]["repository"].startswith("https://gitlab.com/openid/")
     assert manifest["profiles"]["oid4vci-issuer"]["status"] == "active"
     assert "[credential_format=sd_jwt_vc]" in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
+    assert "[client_auth_type=none]" in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
+    assert "private_key_jwt" not in manifest["profiles"]["oid4vci-issuer"]["test_plan"]
     verifier = manifest["profiles"]["oid4vp-verifier"]
     assert verifier["status"] == "active"
     assert "not currently a certifiable" in verifier["qualification"]
