@@ -397,7 +397,9 @@ def oid4vci_issuer_config(
                 # requires an explicit override to match that advertised
                 # issuer exactly; the gateway origin alone is not equivalent.
                 "authorization_server": credential_issuer_url,
-                "credential_configuration_id": fixtures["oid4vci_template_id"],
+                "credential_configuration_id": fixtures[
+                    "oid4vci_credential_configuration_id"
+                ],
                 "credential_proof_type_hint": "jwt",
             },
             # The official issuer plan emulates two independent wallets. Its

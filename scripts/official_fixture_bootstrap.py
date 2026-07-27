@@ -789,7 +789,21 @@ def bootstrap(
             ),
         )
         template_id = response_id(created_template, f"{prefix} credential template")
+        credential_configuration_id: str | None = None
         if oid4vci:
+            if not isinstance(created_template, dict):
+                raise RuntimeError(
+                    "public API returned a non-object for OID4VCI credential template"
+                )
+            credential_configuration_id = created_template.get("credential_type")
+            if (
+                not isinstance(credential_configuration_id, str)
+                or not IDENTIFIER.fullmatch(credential_configuration_id)
+            ):
+                raise RuntimeError(
+                    "public API returned no valid advertised credential-configuration "
+                    "identifier for the OID4VCI template"
+                )
             activated_template = request(
                 gateway_url,
                 session_id,
@@ -867,6 +881,15 @@ def bootstrap(
             result["w3c_issuer_did"] = profile_payload["issuer_did"]
         elif oid4vci:
             result["oid4vci_issuer_did"] = profile_payload["issuer_did"]
+            assert credential_configuration_id is not None
+            # OID4VCI credential-configuration identifiers are the keys of
+            # credential_configurations_supported, not Marty's internal
+            # credential-template resource UUIDs.  Keep both identities so
+            # public issuance can address the template while the official
+            # runner selects the advertised protocol configuration.
+            result["oid4vci_credential_configuration_id"] = (
+                credential_configuration_id
+            )
         else:
             assert request_profile_payload is not None
             assert request_issuer_profile_id is not None

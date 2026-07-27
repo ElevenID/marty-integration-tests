@@ -32,7 +32,7 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
             {"id": "compliance-1"},
             {"id": "revocation-1"},
             {"id": "revocation-1"},
-            {"id": "template-1"},
+            {"id": "template-1", "credential_type": "PID"},
             {"id": "template-1"},
         ]
     )
@@ -61,6 +61,7 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
     assert result == {
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
         "oid4vci_template_id": "template-1",
+        "oid4vci_credential_configuration_id": "PID",
         "oid4vci_compliance_profile_id": "compliance-1",
         "oid4vci_issuer_did": issuer_did,
         "oid4vci_revocation_profile_id": "revocation-1",

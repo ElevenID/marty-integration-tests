@@ -361,6 +361,7 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
         {
             "organization_id": "org-1",
             "oid4vci_template_id": "template-1",
+            "oid4vci_credential_configuration_id": "PID",
             "oid4vci_issuer_did": "did:web:marty.test:orgs:org-1",
         },
     )
@@ -369,7 +370,7 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
     assert data["vci"] == {
         "credential_issuer_url": "https://marty.test/org/org-1",
         "authorization_server": "https://marty.test/org/org-1",
-        "credential_configuration_id": "template-1",
+        "credential_configuration_id": "PID",
         "credential_proof_type_hint": "jwt",
     }
     assert data["client"] == {
@@ -406,6 +407,7 @@ def test_oid4vci_lane_runs_official_plan_through_public_issuance(
         lambda *_args, **_kwargs: {
             "organization_id": "org-1",
             "oid4vci_template_id": "template-1",
+            "oid4vci_credential_configuration_id": "PID",
             "oid4vci_issuer_did": "did:web:marty.test:orgs:org-1",
         },
     )
