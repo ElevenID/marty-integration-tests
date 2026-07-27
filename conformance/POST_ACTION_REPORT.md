@@ -272,6 +272,13 @@ Two paths must remain described as adapted:
   to a supported public VC-API or the ordinary product path before Marty
   claims native VC-API coverage.
 
+OID4VP URL-query is not an adapted path. Marty supports the native signed
+`request_uri` transport, including the OID4VP `request_uri_method=post`
+wallet-nonce exchange. The OIDF adapter rejects any request method other than
+`request_uri_signed`; it does not unpack a signed JAR and re-encode its claims
+as URL-query parameters. URL-query remains explicitly unsupported until the
+product implements it as a separately reviewed transport.
+
 ## Does the suite use Marty Protocol abstractions?
 
 Partially.
@@ -336,7 +343,7 @@ service images remains required.
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks | Add applicable official OIDF mdoc issuer/verifier coverage |
-| OID4VP URL-query transport | Not synthesized or claimed | Implement natively or explicitly retain unsupported status |
+| OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
 | W3C VCDM v2 verification | Public bootstrap exposed missing `ldp_vc` managed capability | Release the EdDSA profile fix, rerun the adapted suite, then add native Data Integrity issuance |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
