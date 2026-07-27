@@ -14,8 +14,8 @@ PUBLIC_JWKS = {
             "alg": "ES256",
             "use": "sig",
             "kid": "wallet-key-1",
-            "x": "public-x",
-            "y": "public-y",
+            "x": "A" * 43,
+            "y": "B" * 43,
         }
     ]
 }
@@ -69,6 +69,38 @@ def test_issuance_body_rejects_wallet_private_key_material(
                 "authorized_client": {
                     "client_id": "official-wallet",
                     "jwks": private_jwks,
+                },
+                "claims": {},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"kty": "RSA"},
+        {"crv": "P-384"},
+        {"alg": "none"},
+        {"x": "short"},
+        {"unexpected": "contract-drift"},
+    ],
+)
+def test_issuance_body_rejects_keys_outside_marty_protocol(
+    patch: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OIDF_MARTY_ORGANIZATION_ID", "org-1")
+    monkeypatch.setenv("OIDF_MARTY_CREDENTIAL_TEMPLATE_ID", "template-1")
+    monkeypatch.setenv("OIDF_MARTY_ISSUER_DID", "did:web:issuer.example")
+    jwks = json.loads(json.dumps(PUBLIC_JWKS))
+    jwks["keys"][0].update(patch)
+
+    with pytest.raises(ValueError, match="authorized_client"):
+        issuance.issuance_body(
+            {
+                "authorized_client": {
+                    "client_id": "official-wallet",
+                    "jwks": jwks,
                 },
                 "claims": {},
             }
