@@ -34,6 +34,17 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
             {"id": "revocation-1"},
             {"id": "template-1", "credential_type": "PID"},
             {"id": "template-1"},
+            {
+                "credential_configurations_supported": {
+                    "PID": {
+                        "format": "jwt_vc_json",
+                    },
+                    "PID#sd-jwt": {
+                        "format": "dc+sd-jwt",
+                        "vct": "urn:eudi:pid:1",
+                    },
+                }
+            },
         ]
     )
 
@@ -61,7 +72,7 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
     assert result == {
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
         "oid4vci_template_id": "template-1",
-        "oid4vci_credential_configuration_id": "PID",
+        "oid4vci_credential_configuration_id": "PID#sd-jwt",
         "oid4vci_compliance_profile_id": "compliance-1",
         "oid4vci_issuer_did": issuer_did,
         "oid4vci_revocation_profile_id": "revocation-1",
@@ -75,8 +86,16 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
         "/v1/revocation-profiles/revocation-1/activate",
         "/v1/credential-templates",
         "/v1/credential-templates/template-1/activate",
+        (
+            f"/org/{fixtures.DEFAULT_ORGANIZATION}/"
+            ".well-known/openid-credential-issuer"
+        ),
     ]
-    template = calls[-2][2]
+    template = next(
+        body
+        for path, method, body in calls
+        if path == "/v1/credential-templates" and method == "POST"
+    )
     assert template is not None
     assert template["issuer_did"] == issuer_did
     assert "issuer_profile_id" not in template

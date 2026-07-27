@@ -26,6 +26,7 @@ from tests.integration.gateway.helpers.mdoc_test_certificate import (
 DEFAULT_ORGANIZATION = "00000000-0000-0000-0000-000000000001"
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+CREDENTIAL_CONFIGURATION_ID = re.compile(r"^[A-Za-z0-9_.:#-]{1,192}$")
 OFFICIAL_OIDF_ISSUER_DOMAIN = "localhost.emobix.co.uk"
 
 
@@ -386,6 +387,39 @@ def response_id(value: object, resource: str) -> str:
     if not isinstance(identifier, str) or not IDENTIFIER.fullmatch(identifier):
         raise RuntimeError(f"public API returned an invalid {resource} id")
     return identifier
+
+
+def oid4vci_configuration_id(
+    metadata: object,
+    *,
+    expected_format: str,
+    expected_vct: str,
+) -> str:
+    """Resolve the unique public configuration advertised for the fixture."""
+    if not isinstance(metadata, dict):
+        raise RuntimeError("public OID4VCI metadata is not an object")
+    configurations = metadata.get("credential_configurations_supported")
+    if not isinstance(configurations, dict):
+        raise RuntimeError(
+            "public OID4VCI metadata has no credential_configurations_supported"
+        )
+    matches = [
+        config_id
+        for config_id, configuration in configurations.items()
+        if (
+            isinstance(config_id, str)
+            and CREDENTIAL_CONFIGURATION_ID.fullmatch(config_id)
+            and isinstance(configuration, dict)
+            and configuration.get("format") == expected_format
+            and configuration.get("vct") == expected_vct
+        )
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            "public OID4VCI metadata did not advertise exactly one matching "
+            "credential configuration"
+        )
+    return matches[0]
 
 
 def issuer_profile_response_id(value: object) -> str:
@@ -774,36 +808,24 @@ def bootstrap(
         )
         if activated_revocation_profile_id != revocation_profile_id:
             raise RuntimeError(f"activated {prefix} revocation profile id changed unexpectedly")
+        created_template_payload = template_payload(
+            organization_id,
+            compliance_profile_id,
+            profile_payload["issuer_did"],
+            revocation_profile_id,
+            w3c=w3c,
+            run_id=run_id,
+        )
         created_template = request(
             gateway_url,
             session_id,
             "/v1/credential-templates",
             method="POST",
-            json_body=template_payload(
-                organization_id,
-                compliance_profile_id,
-                profile_payload["issuer_did"],
-                revocation_profile_id,
-                w3c=w3c,
-                run_id=run_id,
-            ),
+            json_body=created_template_payload,
         )
         template_id = response_id(created_template, f"{prefix} credential template")
         credential_configuration_id: str | None = None
         if oid4vci:
-            if not isinstance(created_template, dict):
-                raise RuntimeError(
-                    "public API returned a non-object for OID4VCI credential template"
-                )
-            credential_configuration_id = created_template.get("credential_type")
-            if (
-                not isinstance(credential_configuration_id, str)
-                or not IDENTIFIER.fullmatch(credential_configuration_id)
-            ):
-                raise RuntimeError(
-                    "public API returned no valid advertised credential-configuration "
-                    "identifier for the OID4VCI template"
-                )
             activated_template = request(
                 gateway_url,
                 session_id,
@@ -817,6 +839,20 @@ def bootstrap(
                 raise RuntimeError(
                     "activated OID4VCI credential template id changed unexpectedly"
                 )
+            issuer_metadata = request(
+                gateway_url,
+                session_id,
+                (
+                    f"/org/{organization_id}/"
+                    ".well-known/openid-credential-issuer"
+                ),
+                method="GET",
+            )
+            credential_configuration_id = oid4vci_configuration_id(
+                issuer_metadata,
+                expected_format="dc+sd-jwt",
+                expected_vct=str(created_template_payload["vct"]),
+            )
         presentation_template_id = template_id
         if w3c:
             created_presentation_template = request(
