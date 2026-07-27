@@ -9,6 +9,13 @@ import pytest
 from scripts import oidf_marty_offer as offer
 
 
+def _authorized_client(name: str) -> dict[str, object]:
+    return {
+        "client_id": name,
+        "jwks": {"keys": [{"kid": f"{name}-key", "kty": "EC"}]},
+    }
+
+
 def test_interrupted_failure_category_emits_only_safe_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -65,7 +72,15 @@ def test_command_offer_relaxes_only_conformance_runner_tls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = tmp_path / "request.json"
-    request.write_text(json.dumps({"claims": {"given_name": "Test"}}), encoding="utf-8")
+    request.write_text(
+        json.dumps(
+            {
+                "claims": {"given_name": "Test"},
+                "authorized_clients": [_authorized_client("client-1")],
+            }
+        ),
+        encoding="utf-8",
+    )
     observed: dict[str, object] = {}
     monkeypatch.setattr(
         offer,
@@ -113,7 +128,10 @@ def test_command_offer_relaxes_only_conformance_runner_tls(
     assert observed == {
         "wait_insecure": True,
         "timeout": 30,
-        "payload": {"claims": {"given_name": "Test"}},
+        "payload": {
+            "claims": {"given_name": "Test"},
+            "authorized_client": _authorized_client("client-1"),
+        },
         "deliver_insecure": True,
     }
 
@@ -123,8 +141,20 @@ def test_official_multiple_client_module_receives_two_fresh_offers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = tmp_path / "request.json"
-    request.write_text(json.dumps({"claims": {"given_name": "Test"}}), encoding="utf-8")
+    request.write_text(
+        json.dumps(
+            {
+                "claims": {"given_name": "Test"},
+                "authorized_clients": [
+                    _authorized_client("client-1"),
+                    _authorized_client("client-2"),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     observed: list[str] = []
+    payloads: list[dict[str, object]] = []
     monkeypatch.setattr(
         offer,
         "parse_args",
@@ -151,7 +181,11 @@ def test_official_multiple_client_module_receives_two_fresh_offers(
     monkeypatch.setattr(
         offer,
         "command_credential_offer",
-        lambda *_args, **_kwargs: observed.append("create") or "openid-credential-offer://?credential_offer=%7B%7D",
+        lambda _command, payload: (
+            payloads.append(payload)
+            or observed.append("create")
+            or "openid-credential-offer://?credential_offer=%7B%7D"
+        ),
     )
     monkeypatch.setattr(
         offer,
@@ -167,6 +201,10 @@ def test_official_multiple_client_module_receives_two_fresh_offers(
         "wait",
         "create",
         "deliver",
+    ]
+    assert [payload["authorized_client"] for payload in payloads] == [
+        _authorized_client("client-1"),
+        _authorized_client("client-2"),
     ]
 
 

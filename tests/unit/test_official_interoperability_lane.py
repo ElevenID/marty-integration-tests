@@ -448,13 +448,21 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
         "credential_configuration_id": "PID#sd-jwt",
         "credential_proof_type_hint": "jwt",
     }
-    assert data["client"] == {
-        "client_id": "marty-official-wallet-org-1",
-    }
-    assert data["client2"] == {
-        "client_id": "marty-official-wallet-2-org-1",
-    }
-    assert json.loads(request.read_text(encoding="utf-8"))["claims"]["employee_id"] == "oidf-conformance"
+    assert data["client"]["client_id"] == "marty-official-wallet-org-1"
+    assert data["client2"]["client_id"] == "marty-official-wallet-2-org-1"
+    request_data = json.loads(request.read_text(encoding="utf-8"))
+    assert request_data["claims"]["employee_id"] == "oidf-conformance"
+    for runner_client, registered_client in zip(
+        (data["client"], data["client2"]),
+        request_data["authorized_clients"],
+        strict=True,
+    ):
+        private_key = runner_client["jwks"]["keys"][0]
+        public_key = registered_client["jwks"]["keys"][0]
+        assert private_key["d"]
+        assert "d" not in public_key
+        assert public_key == {name: value for name, value in private_key.items() if name != "d"}
+        assert registered_client["client_id"] == runner_client["client_id"]
 
 
 def test_oid4vci_lane_runs_official_plan_through_public_issuance(

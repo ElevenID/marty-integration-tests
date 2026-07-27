@@ -34,10 +34,24 @@ def issuance_body(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if not isinstance(claims, dict):
         raise ValueError("OIDF issuance claims must be an object")
+    authorized_client = payload.get("authorized_client")
+    if not isinstance(authorized_client, dict):
+        raise ValueError("OIDF issuance requires one authorized_client object")
+    if set(authorized_client) != {"client_id", "jwks"}:
+        raise ValueError("authorized_client must contain only client_id and jwks")
+    client_id = authorized_client.get("client_id")
+    jwks = authorized_client.get("jwks")
+    keys = jwks.get("keys") if isinstance(jwks, dict) else None
+    if not isinstance(client_id, str) or not client_id or not isinstance(keys, list) or not keys:
+        raise ValueError("authorized_client must contain a client_id and public JWKS")
+    private_fields = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+    if any(not isinstance(key, dict) or set(key) & private_fields for key in keys):
+        raise ValueError("authorized_client JWKS must contain public keys only")
     return {
         "organization_id": required_env("OIDF_MARTY_ORGANIZATION_ID"),
         "credential_template_id": required_env("OIDF_MARTY_CREDENTIAL_TEMPLATE_ID"),
         "issuer_did": required_env("OIDF_MARTY_ISSUER_DID"),
+        "authorized_client": authorized_client,
         "claims": claims,
     }
 

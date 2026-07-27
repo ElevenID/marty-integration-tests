@@ -124,6 +124,23 @@ def required_offer_interactions(test_name: str) -> int:
     return OFFER_INTERACTION_COUNTS.get(test_name, 1)
 
 
+def offer_payload_for_interaction(
+    payload: dict[str, Any],
+    interaction: int,
+) -> dict[str, Any]:
+    """Bind each fresh offer to the official wallet client that will redeem it."""
+
+    clients = payload.get("authorized_clients")
+    if not isinstance(clients, list) or len(clients) < interaction:
+        raise ValueError(f"issuance request has no authorized client for interaction {interaction}")
+    client = clients[interaction - 1]
+    if not isinstance(client, dict):
+        raise ValueError(f"authorized client {interaction} must be an object")
+    effective = {key: value for key, value in payload.items() if key != "authorized_clients"}
+    effective["authorized_client"] = client
+    return effective
+
+
 def credential_offer_uri(issuance_url: str, api_key: str, payload: dict[str, Any], *, insecure: bool) -> str:
     status, response = request_json(
         issuance_url,
@@ -235,13 +252,14 @@ def main() -> int:
             raise RuntimeError(
                 f"OIDF module {args.test_id} finished before issuer interaction {interaction} of {interaction_count}"
             )
+        interaction_payload = offer_payload_for_interaction(payload, interaction)
         offer_uri = (
-            command_credential_offer(args.issuance_command, payload)
+            command_credential_offer(args.issuance_command, interaction_payload)
             if args.issuance_command is not None
             else credential_offer_uri(
                 args.issuance_url,
                 args.api_key,
-                payload,
+                interaction_payload,
                 insecure=issuance_insecure,
             )
         )

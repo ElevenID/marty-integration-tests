@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -16,6 +17,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
+
+from cryptography.hazmat.primitives.asymmetric import ec
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = Path(__file__).resolve().parent
@@ -367,6 +370,38 @@ def standard_verifier_config(haip_material: Path, gateway_url: str) -> Path:
     return destination
 
 
+def oidf_wallet_jwks() -> tuple[dict[str, list[dict[str, str]]], dict[str, list[dict[str, str]]]]:
+    """Create one disposable OIDF wallet keypair and its public registration.
+
+    These are external test-wallet keys, not Marty issuer keys. The private
+    parameter is written only to the mode-0600 OIDF runner configuration.
+    """
+
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_numbers = private_key.private_numbers()
+    public_numbers = private_numbers.public_numbers
+
+    def b64url(value: int) -> str:
+        return base64.urlsafe_b64encode(value.to_bytes(32, "big")).decode("ascii").rstrip("=")
+
+    public_key = {
+        "kty": "EC",
+        "crv": "P-256",
+        "alg": "ES256",
+        "use": "sig",
+        "x": b64url(public_numbers.x),
+        "y": b64url(public_numbers.y),
+    }
+    thumbprint_input = json.dumps(
+        {name: public_key[name] for name in ("crv", "kty", "x", "y")},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    public_key["kid"] = base64.urlsafe_b64encode(sha256(thumbprint_input).digest()).decode("ascii").rstrip("=")
+    private_key_jwk = {**public_key, "d": b64url(private_numbers.private_value)}
+    return {"keys": [private_key_jwk]}, {"keys": [public_key]}
+
+
 def oid4vci_issuer_config(
     output_dir: Path,
     gateway_url: str,
@@ -377,6 +412,10 @@ def oid4vci_issuer_config(
     config = private_dir / "marty-issuer.json"
     request = private_dir / "marty-issuer-request.json"
     credential_issuer_url = f"{gateway_url}/org/{fixtures['organization_id']}"
+    client_id = f"marty-official-wallet-{fixtures['organization_id']}"
+    client2_id = f"marty-official-wallet-2-{fixtures['organization_id']}"
+    client_jwks, client_public_jwks = oidf_wallet_jwks()
+    client2_jwks, client2_public_jwks = oidf_wallet_jwks()
     write_private_json(
         config,
         {
@@ -391,16 +430,13 @@ def oid4vci_issuer_config(
                 "credential_configuration_id": fixtures["oid4vci_credential_configuration_id"],
                 "credential_proof_type_hint": "jwt",
             },
-            # The public-client issuer plan emulates two independent wallets.
-            # Stable client identifiers let the multiple-client module prove
-            # that DPoP-bound access tokens cannot cross wallet boundaries.
-            # Marty advertises token_endpoint_auth_methods_supported=["none"];
-            # do not claim private_key_jwt unless the product validates it.
             "client": {
-                "client_id": f"marty-official-wallet-{fixtures['organization_id']}",
+                "client_id": client_id,
+                "jwks": client_jwks,
             },
             "client2": {
-                "client_id": f"marty-official-wallet-2-{fixtures['organization_id']}",
+                "client_id": client2_id,
+                "jwks": client2_jwks,
             },
             "client_attestation": {"key_attestation_jwks": {"keys": []}},
         },
@@ -408,12 +444,16 @@ def oid4vci_issuer_config(
     write_private_json(
         request,
         {
+            "authorized_clients": [
+                {"client_id": client_id, "jwks": client_public_jwks},
+                {"client_id": client2_id, "jwks": client2_public_jwks},
+            ],
             "claims": {
                 "given_name": "Conformance",
                 "family_name": "Test",
                 "email": "conformance@example.test",
                 "employee_id": "oidf-conformance",
-            }
+            },
         },
     )
     return config, request
