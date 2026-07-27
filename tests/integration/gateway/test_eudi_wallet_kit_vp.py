@@ -848,7 +848,17 @@ class TestOID4VPSdJwtPresentation:
             state=auth_req.get("state", flow["instance_id"]),
         )
         assert first["success"] is True, first.get("responseStatus")
-        assert _verifier_response_body(first)["decision"] == "allow"
+        # The wallet-facing callback deliberately exposes no relying-party
+        # decision details. Confirm acceptance through the authenticated
+        # result API instead of teaching the test to depend on an internal
+        # response shape.
+        assert _verifier_response_body(first) == {}
+        accepted = await authenticated_gateway_client.get_verification_decision(
+            flow["instance_id"]
+        )
+        assert accepted["status"] == "completed"
+        assert accepted["result"]["evaluation_result"] == "passed"
+        assert accepted["result"]["decision"] == "allow"
 
         replay = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
@@ -859,6 +869,7 @@ class TestOID4VPSdJwtPresentation:
         assert replay["success"] is False
         assert replay["verifierAccepted"] is False
         assert replay["responseStatus"] == 400
+        assert isinstance(_verifier_response_body(replay).get("detail"), (dict, str))
 
     @pytest.mark.asyncio
     async def test_tampered_holder_signature_is_denied_by_production_verifier(
@@ -896,13 +907,14 @@ class TestOID4VPSdJwtPresentation:
             ),
             state=auth_req.get("state", flow["instance_id"]),
         )
-        # The OID4VP callback was processed, but the cryptographic verifier
-        # must return a negative decision rather than accepting the credential.
-        assert result["responseStatus"] == 200
+        # The wallet-facing callback exposes only a protocol-safe error. The
+        # detailed cryptographic decision is available exclusively through
+        # the authenticated relying-party result API.
+        assert result["success"] is False
+        assert result["verifierAccepted"] is False
+        assert result["responseStatus"] == 400
         response = _verifier_response_body(result)
-        assert response["result"] == "failed"
-        assert response["decision"] == "deny"
-        assert response.get("verified_claims") in ({}, None)
+        assert response["detail"]["error"] == "invalid_presentation"
 
         decision = await authenticated_gateway_client.get_verification_decision(
             flow["instance_id"]
@@ -930,11 +942,17 @@ class TestOID4VPSdJwtPresentation:
             expiry_minutes=0,
         )
 
-        with pytest.raises(EUDIWalletHarnessError, match=r"HTTP [45]\d\d"):
-            await wallet_kit.submit_presentation(
-                authorization_request_uri=flow["request_uri"],
-                credential=issued_sd_jwt_credential["credential"],
-            )
+        result = await wallet_kit.submit_presentation(
+            authorization_request_uri=flow["request_uri"],
+            credential=issued_sd_jwt_credential["credential"],
+        )
+        # The harness endpoint itself remains healthy (HTTP 200) and returns a
+        # public-safe official-library outcome. The EUDI resolver failed before
+        # it could build or dispatch a presentation.
+        assert result["success"] is False
+        assert result["verifierAccepted"] is False
+        assert result["responseStatus"] is None
+        assert str(result.get("error") or "").startswith("presentation-resolve-")
 
     @pytest.mark.asyncio
     async def test_sd_jwt_vp_direct_post(
