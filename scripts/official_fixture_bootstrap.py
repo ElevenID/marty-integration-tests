@@ -59,7 +59,9 @@ def compliance_profile_payload(
             "organization_id": organization_id,
             "name": f"Official OID4VP ISO mDL {run_id}",
             "compliance_code": "AAMVA_MDL",
-            "credential_format": "mso_mdoc",
+            # Marty resources use the protocol enum. `mso_mdoc` is emitted only
+            # by the OID4VC adapter at the external metadata/wire boundary.
+            "credential_format": "MDOC",
             "frameworks": ["aamva", "iso_18013_5", "oid4vp"],
             "system_profile": False,
         }
@@ -192,7 +194,6 @@ def eudi_template_payload(
             "required": ["given_name", "family_name", "date_of_birth"],
         },
         "claims": claims,
-        "auto_generate_artifacts": True,
     }
 
 
@@ -268,7 +269,6 @@ def template_payload(
                 {"name": "birthDate", "display_name": "Birth Date", "required": True},
                 {"name": "documentNumber", "display_name": "Document Number", "required": True},
             ],
-            "auto_generate_artifacts": True,
         }
     if mdoc:
         # This is an actual ISO 18013-5 mDL template.  The official OIDF
@@ -279,8 +279,8 @@ def template_payload(
             "name": f"Official OID4VP ISO mDL verifier {run_id}",
             "credential_type": "org.iso.18013.5.1.mDL",
             "doctype": "org.iso.18013.5.1.mDL",
-            "supported_formats": ["mso_mdoc"],
-            "credential_payload_format": "mso_mdoc",
+            "supported_formats": ["MDOC"],
+            "credential_payload_format": "MDOC",
             "compliance_profile_id": compliance_profile_id,
             "issuer_did": issuer_did,
             "revocation_profile_id": revocation_profile_id,
@@ -298,7 +298,6 @@ def template_payload(
                 {"name": "given_name", "display_name": "Given Name", "required": True},
                 {"name": "birth_date", "display_name": "Birth Date", "required": True},
             ],
-            "auto_generate_artifacts": True,
         }
     return {
         "organization_id": organization_id,
@@ -324,7 +323,6 @@ def template_payload(
             {"name": "given_name", "display_name": "Given Name", "required": True},
             {"name": "birthdate", "display_name": "Birth Date", "required": True},
         ],
-        "auto_generate_artifacts": True,
     }
 
 
@@ -374,7 +372,7 @@ def policy_payload(
                 "credential_template_id": template_id,
                 "display_name": label,
                 "credential_payload_format": (
-                    "w3c_vcdm_v2_di" if w3c else "mso_mdoc" if mdoc else "w3c_vcdm_v2_sd_jwt"
+                    "w3c_vcdm_v2_di" if w3c else "MDOC" if mdoc else "w3c_vcdm_v2_sd_jwt"
                 ),
                 "requested_claims": [
                     {
