@@ -10,7 +10,7 @@ from tests.integration.gateway.helpers.gateway_client import GatewayClient
 
 
 @pytest.mark.asyncio
-async def test_credential_template_with_did_never_sends_custody_selectors() -> None:
+async def test_credential_template_with_did_never_exposes_custody_selectors() -> None:
     client = GatewayClient("https://gateway.example")
     request = AsyncMock(return_value={"id": "template-1"})
     client._request = request
@@ -22,10 +22,6 @@ async def test_credential_template_with_did_never_sends_custody_selectors() -> N
             credential_type="EmployeeBadge",
             compliance_profile_id="compliance-1",
             issuer_did="did:web:issuer.example",
-            issuer_profile_id="legacy-profile",
-            issuer_key_id="provider-key",
-            issuer_key_algorithm="ES256",
-            issuer_certificate_chain_pem="legacy-certificate",
         )
     finally:
         await client.close()
@@ -37,6 +33,15 @@ async def test_credential_template_with_did_never_sends_custody_selectors() -> N
     assert "issuer_key_algorithm" not in payload
     assert "issuer_certificate_chain_pem" not in payload
 
+    with pytest.raises(TypeError, match="issuer_profile_id"):
+        await client.create_credential_template(
+            organization_id="org-1",
+            name="Legacy selector",
+            credential_type="EmployeeBadge",
+            issuer_did="did:web:issuer.example",
+            issuer_profile_id="legacy-profile",  # type: ignore[call-arg]
+        )
+
 
 @pytest.mark.asyncio
 async def test_credential_template_requires_a_public_issuer_did() -> None:
@@ -47,7 +52,6 @@ async def test_credential_template_requires_a_public_issuer_did() -> None:
                 organization_id="org-1",
                 name="Legacy template",
                 credential_type="EmployeeBadge",
-                issuer_profile_id="legacy-profile",
             )
     finally:
         await client.close()
