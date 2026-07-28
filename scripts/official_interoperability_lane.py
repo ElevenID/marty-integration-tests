@@ -772,7 +772,7 @@ def bootstrap_fixtures(
         "--output",
         str(destination),
     ]
-    if mode == "oid4vp":
+    if mode in {"oid4vp", "oid4vp-mdoc"}:
         command.extend(
             [
                 "--oidf-runner-config",

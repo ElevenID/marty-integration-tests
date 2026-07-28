@@ -572,6 +572,49 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert all("--haip" in command for command in compose_commands)
 
 
+def test_mdoc_fixture_bootstrap_receives_the_official_signer_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command: list[str] = []
+    output_dir = tmp_path / "output"
+    haip_material = tmp_path / "haip"
+    haip_material.mkdir()
+
+    def fake_run(actual: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
+        command.extend(actual)
+        destination = Path(actual[actual.index("--output") + 1])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "oid4vp_mdoc_policy_id": "policy-1",
+                    "oid4vp_mdoc_trust_profile_id": "trust-1",
+                    "oid4vp_mdoc_issuer_did": "did:web:marty.test:orgs:org-1",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    args = SimpleNamespace(
+        output_dir=output_dir,
+        run_id="run-1",
+        haip_material=haip_material,
+    )
+
+    fixtures = lane.bootstrap_fixtures(
+        args,
+        {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+        mode="oid4vp-mdoc",
+    )
+
+    assert fixtures["oid4vp_mdoc_policy_id"] == "policy-1"
+    assert "--oidf-runner-config" in command
+    assert str(haip_material / "marty-verifier-haip.json") in command
+
+
 def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
