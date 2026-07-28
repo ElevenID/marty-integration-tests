@@ -247,7 +247,7 @@ section 7 builds on this boundary: canonical proof bytes are signed by issuer
 DID through the resolved profile, never by passing a private JWK or public KMS
 selector.
 
-### 7b. The managed EdDSA key was published as provider metadata, not a JWK
+### 7b. The managed EdDSA key was not converted from OpenBao's native form
 
 The first W3C run against immutable `marty-ui` v1.1.42 passed stack
 materialization, provenance verification, anonymous image pulls, and public
@@ -256,13 +256,12 @@ public credential-template API with HTTP 503:
 
 `Issuer DID verification method has no usable public key material.`
 
-This was a production defect, not an official-runner or adapter failure.
-OpenBao returned the managed Ed25519 public key as PEM. The gateway stored a
-provider metadata object containing `public_key_pem` beneath
-`publicKeyJwk`, so the DID resolver correctly rejected the verification method
-because it had no JWK `kty`. The same adapter always prehashed signing input
-with SHA-256, which is invalid for OpenBao Ed25519 keys, and the public signing
-response would have mislabeled the resulting Ed25519 bytes as DER.
+This was a production defect, not an official-runner or adapter failure. The
+gateway stored an OpenBao provider metadata object beneath `publicKeyJwk`, so
+the DID resolver correctly rejected the verification method because it had no
+JWK `kty`. The same adapter always prehashed signing input with SHA-256, which
+is invalid for OpenBao Ed25519 keys, and the public signing response would
+have mislabeled the resulting Ed25519 bytes as DER.
 
 Action:
 
@@ -278,11 +277,19 @@ Action:
 
 [marty-ui#140](https://github.com/ElevenID/marty-ui/pull/140) and
 [marty-integration-tests#157](https://github.com/ElevenID/marty-integration-tests/pull/157)
-contain the fixes and regression tests. All issuer private keys remain in
-OpenBao, and the runtime request still selects only the organization and
-issuer DID. A new component release, stack manifest, and official rerun are
-required before the W3C capability is classified as immutable passing
-evidence.
+merged the first fixes and regression tests. Immutable v1.1.43 then exposed a
+second, more precise representation gap while creating the issuer profile:
+OpenBao 2 returns Ed25519 public keys as standard-base64 raw 32-byte values,
+while its P-256 and RSA keys are PEM. The fail-closed PEM parser correctly
+rejected the raw value. This behavior was reproduced against the exact
+digest-pinned conformance OpenBao image.
+
+[marty-ui#142](https://github.com/ElevenID/marty-ui/pull/142) adds type-aware,
+length-checked raw Ed25519 decoding while preserving PEM support for EC, RSA,
+and compatible Ed25519 responses. All issuer private keys remain in OpenBao,
+and the runtime request still selects only the organization and issuer DID. A
+new component release, stack manifest, and official rerun are required before
+the W3C capability is classified as immutable passing evidence.
 
 ### 8. The OID4VCI runner lacked its emulated wallet identities
 
@@ -496,7 +503,7 @@ service images remains required.
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
-| W3C VCDM v2 verification and issuance | v1.1.42 contains the native proof, full-document, production-validator, general issuance API, and DID-mediated custody work; its immutable run reached the production DID resolver | Release the OpenBao PEM-to-JWK and EdDSA signing correction, then rerun the pinned suite against the new attested stack |
+| W3C VCDM v2 verification and issuance | v1.1.43 contains the native proof, full-document, production-validator, general issuance API, DID-mediated custody, JWK-shape, and EdDSA signing work; its immutable run reached real OpenBao Ed25519 key retrieval | Release raw OpenBao Ed25519 public-key decoding, then rerun the pinned suite against the new attested stack |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
@@ -513,7 +520,8 @@ service images remains required.
 | Public `application_id` was rejected downstream | Protocol drift | A gateway-valid issuance request could fail at the issuance service and lose application linkage | `marty-protocol` issuance schema and `marty-credentials` request/transaction mapping | Fixed locally; requires protocol and credentials CI/merge |
 | Generated `credential_subject` type collapsed object/array to string | Protocol drift | Generated clients could not represent the production request | `marty-protocol` code generator and generated bindings | Fixed locally; Python/Rust/TypeScript checks pass |
 | Official W3C registration claimed JOSE enveloping proof | Misleading claim | Selected assertions Marty was not exercising natively | `w3c_vc_conformance.py` registration | Fixed locally; official config now advertises `vc2.0` only |
-| OpenBao public PEM was stored beneath `publicKeyJwk` | Product implementation gap | DID resolution rejected the managed EdDSA verification method before official assertions | `marty-ui#140` converts supported public keys to JWKs and fails closed on invalid material | Local gateway regression suite passes; merge, release, and immutable official rerun required |
+| OpenBao provider metadata was stored beneath `publicKeyJwk` | Product implementation gap | DID resolution rejected the managed EdDSA verification method before official assertions | `marty-ui#140` converts supported public keys to JWKs and fails closed on invalid material | Merged and released in v1.1.43; immutable rerun passed this earlier boundary |
+| OpenBao Ed25519 public keys are raw base64 rather than PEM | Product implementation gap | v1.1.43 rejected the real managed public key during issuer-profile creation | `marty-ui#142` decodes an exact 32-byte Ed25519 value by provider key type and retains PEM paths | Reproduced against the exact OpenBao image; local gateway suite passes; merge, release, and immutable official rerun required |
 | OpenBao prehashed EdDSA input and advertised DER output | Product implementation gap | Native Data Integrity signatures could not be produced or described correctly | `marty-ui#140` propagates the profile algorithm, sends raw EdDSA input, and returns raw signature metadata | Local gateway regression suite passes; merge, release, and immutable official rerun required |
 | W3C fixture profile omitted its algorithm | Harness configuration gap | The managed Ed25519 key was provisioned behind a profile that defaulted to ES256 | `marty-integration-tests#157` explicitly declares EdDSA in profile administration | Unit tests pass; merge and include the released suite in the next stack manifest |
 | Official lanes use one organization | Missing evidence | Tenant isolation and cross-tenant DID resolution remain unproven | Two-organization adversarial matrix | Partial template isolation exists; full matrix remains open |
@@ -532,6 +540,8 @@ service images remains required.
 | W3C v2 run [30230312063](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312063), sanitized summary `sha256:5674d1b6c52e5d5291082f542af6c132a3b5ce72168f7dfe08fb9d7149d8e88b` | Failed at public template bootstrap; exposed missing managed `ldp_vc` capability |
 | `marty-ui` v1.1.42, manifest `sha256:82404a3586fd2fd50b1fc6c99ef3f0c125dc25433247bf2f20c90c7b32b9e9b1` | Materialized seven immutable components and pulled the released credentials image anonymously |
 | W3C v2 run [30348779384](https://github.com/ElevenID/marty-integration-tests/actions/runs/30348779384), sanitized artifact `official-w3c-v2-30348779384-1`, artifact digest `sha256:4d1cc64f224d7683dad284199bbabb4181b34dff6505c05929c78b891064e857` | Reached the production DID resolver and failed closed on malformed OpenBao public-key publication; exposed the PEM-to-JWK and EdDSA adapter gaps |
+| `marty-ui` v1.1.43, manifest `sha256:6bf612248e8246a500d06a5975c5a6d698566eb692eacf966893cdbb49a6e4f6` | Provenance checks, corrected image builds, and the artifact-only public stack smoke passed |
+| W3C v2 run [30351469090](https://github.com/ElevenID/marty-integration-tests/actions/runs/30351469090), sanitized artifact `official-w3c-v2-30351469090-1`, artifact digest `sha256:e19a8e909a778fc0249bedffea686bfbe470c5f19e2d1325dc649139a110cbe9` | Passed the prior JWK-shape boundary, reached the real OpenBao Ed25519 public key, and failed closed because the provider returns raw base64 rather than PEM |
 | OID4VCI issuer run [30230312937](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312937), sanitized summary `sha256:eacc7f2d7fd9edc2ffec43e3faaa590d1c733d429c74bcdaf47c7e3f7189b444` | Metadata passed; interaction modules exposed missing official-runner client identities |
 | OID4VCI issuer run [30231686437](https://github.com/ElevenID/marty-integration-tests/actions/runs/30231686437), sanitized summary `sha256:4adb5cc1e43b14953fc3603a63f3e396a211890399d0de7914562e26a73852a9` | Authorization-server identity passed; exposed internal-template/public-configuration ID confusion |
 | OID4VCI issuer run [30232003181](https://github.com/ElevenID/marty-integration-tests/actions/runs/30232003181), sanitized summary `sha256:de313a9f8dc4338f1ff83dbb0ae60822dda6f468fc7b219f3f0b41e25412d1cb` | Reached issuer interaction; exposed selection of bare JWT VC `PID` instead of advertised SD-JWT `PID#sd-jwt` |
