@@ -772,13 +772,17 @@ def bootstrap_fixtures(
         "--output",
         str(destination),
     ]
-    if mode in {"oid4vp", "oid4vp-mdoc"}:
+    if mode == "oid4vp":
         command.extend(
             [
                 "--oidf-runner-config",
                 str(args.haip_material / "marty-verifier-haip.json"),
             ]
         )
+    elif mode == "oid4vp-mdoc":
+        if args.oidf_runner is None:
+            raise RuntimeError("oid4vp-mdoc fixture bootstrap requires the exact OIDF runner checkout")
+        command.extend(["--oidf-runner-source", str(args.oidf_runner)])
     result = run(command, environment)
     if result:
         raise RuntimeError(f"{mode} public fixture bootstrap failed with exit code {result}")

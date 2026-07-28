@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import ssl
 import stat
 import sys
 import time
@@ -28,6 +29,11 @@ RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 CREDENTIAL_CONFIGURATION_ID = re.compile(r"^[A-Za-z0-9_.:#-]{1,192}$")
 OFFICIAL_OIDF_ISSUER_DOMAIN = "localhost.emobix.co.uk"
+OFFICIAL_MDOC_SIGNER_CERTIFICATE = re.compile(
+    r"val\s+documentSignerCert\s*=\s*X509Cert\.fromPem\(\s*"
+    r'"""(?P<certificate>-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)"""',
+    re.DOTALL,
+)
 
 
 def compliance_profile_payload(
@@ -371,9 +377,7 @@ def policy_payload(
             {
                 "credential_template_id": template_id,
                 "display_name": label,
-                "credential_payload_format": (
-                    "w3c_vcdm_v2_di" if w3c else "MDOC" if mdoc else "w3c_vcdm_v2_sd_jwt"
-                ),
+                "credential_payload_format": ("w3c_vcdm_v2_di" if w3c else "MDOC" if mdoc else "w3c_vcdm_v2_sd_jwt"),
                 "requested_claims": [
                     {
                         "claim_name": claim,
@@ -408,12 +412,68 @@ def official_signer_public_jwk(config_path: Path) -> dict[str, str]:
     }
 
 
+def official_mdoc_trust_anchor(runner_source: Path) -> str:
+    """Read the mock mdoc issuer certificate from the exact OIDF runner source.
+
+    The verifier plan's mdoc wallet does not use ``credential.signing_jwk``.
+    It provisions a separate document signer in ``TestAppUtils`` and includes
+    that public certificate in IssuerAuth. Reading it from the checked-out,
+    commit-pinned runner keeps the Trust Profile aligned when the official
+    runner rotates its disposable certificate.
+    """
+    candidates = sorted(
+        runner_source.glob(
+            "src/main/kotlin/**/TestAppUtils.kt",
+        )
+    )
+    matches: list[str] = []
+    for source in candidates:
+        match = OFFICIAL_MDOC_SIGNER_CERTIFICATE.search(source.read_text(encoding="utf-8"))
+        if match is not None:
+            certificate = "\n".join(line.strip() for line in match.group("certificate").strip().splitlines())
+            certificate += "\n"
+            # Reject malformed or substituted PEM before sending public trust
+            # administration data to Marty.
+            ssl.PEM_cert_to_DER_cert(certificate)
+            matches.append(certificate)
+    if len(matches) != 1:
+        raise ValueError("exact OIDF runner source must expose exactly one documentSignerCert mdoc trust anchor")
+    return matches[0]
+
+
 def trust_profile_payload(
     organization_id: str,
-    public_jwk: dict[str, str],
+    public_jwk: dict[str, str] | None,
     *,
     run_id: str,
+    mdoc_trust_anchor_pem: str | None = None,
 ) -> dict[str, object]:
+    if mdoc_trust_anchor_pem is not None:
+        if public_jwk is not None:
+            raise ValueError("mdoc trust must use the runner document certificate, not its SD-JWT JWK")
+        ssl.PEM_cert_to_DER_cert(mdoc_trust_anchor_pem)
+        return {
+            "organization_id": organization_id,
+            "name": f"Official OIDF mdoc signer {run_id}",
+            "description": ("Disposable root certificate pinned from the exact official OIDF runner revision"),
+            "profile_type": "CUSTOM",
+            "supported_formats": ["MDOC"],
+            "allowed_algorithms": ["ES256"],
+            "trust_sources": [
+                {
+                    "name": "Official OIDF mdoc document signer",
+                    "source_type": "ROOT_CA",
+                    "certificate_pem": mdoc_trust_anchor_pem,
+                    "description": (
+                        "Public test certificate extracted from the exact commit-pinned OIDF conformance runner"
+                    ),
+                    "enabled": True,
+                }
+            ],
+            "auto_generated": True,
+        }
+    if public_jwk is None:
+        raise ValueError("OIDF SD-JWT trust requires the runner public signing JWK")
     return {
         "organization_id": organization_id,
         "name": f"Official OIDF signer {run_id}",
@@ -706,14 +766,17 @@ def bootstrap(
     run_id: str,
     mode: str,
     oidf_signer_public_jwk: dict[str, str] | None = None,
+    oidf_mdoc_trust_anchor_pem: str | None = None,
     request: Callable[..., object] = authenticated_json_request,
 ) -> dict[str, str]:
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("run id must use lowercase letters, digits, and internal hyphens")
     if not IDENTIFIER.fullmatch(organization_id):
         raise ValueError("organization id contains unsupported characters")
-    if mode in {"oid4vp", "oid4vp-mdoc", "all"} and oidf_signer_public_jwk is None:
+    if mode in {"oid4vp", "all"} and oidf_signer_public_jwk is None:
         raise ValueError("OID4VP fixture bootstrap requires the official runner public signing JWK")
+    if mode == "oid4vp-mdoc" and oidf_mdoc_trust_anchor_pem is None:
+        raise ValueError("OID4VP mdoc fixture bootstrap requires the official runner document certificate")
     if mode == "eudi":
         return bootstrap_eudi(
             gateway_url,
@@ -947,7 +1010,6 @@ def bootstrap(
             result[f"{prefix}_issuer_did"] = request_profile_payload["issuer_did"]
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c and not oid4vci:
-            assert oidf_signer_public_jwk is not None
             created_trust_profile = request(
                 gateway_url,
                 session_id,
@@ -955,8 +1017,9 @@ def bootstrap(
                 method="POST",
                 json_body=trust_profile_payload(
                     organization_id,
-                    oidf_signer_public_jwk,
+                    None if mdoc else oidf_signer_public_jwk,
                     run_id=run_id,
+                    mdoc_trust_anchor_pem=(oidf_mdoc_trust_anchor_pem if mdoc else None),
                 ),
             )
             trust_profile_id = response_id(created_trust_profile, "OID4VP trust profile")
@@ -998,6 +1061,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--run-id", default=os.environ.get("OFFICIAL_SUITE_RUN_ID"), required=False)
     result.add_argument("--oidf-runner-config", type=Path)
+    result.add_argument("--oidf-runner-source", type=Path)
     result.add_argument("--output", type=Path, required=True)
     return result
 
@@ -1008,13 +1072,20 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--gateway-url or OIDF_MARTY_GATEWAY_URL is required")
     if not args.run_id:
         raise ValueError("--run-id or OFFICIAL_SUITE_RUN_ID is required")
-    needs_oidf_signer = args.mode in {"oid4vp", "oid4vp-mdoc", "all"}
+    needs_oidf_signer = args.mode in {"oid4vp", "all"}
     if needs_oidf_signer and args.oidf_runner_config is None:
         raise ValueError("--oidf-runner-config is required for OID4VP fixture bootstrap")
+    if args.mode == "oid4vp-mdoc" and args.oidf_runner_source is None:
+        raise ValueError("--oidf-runner-source is required for OID4VP mdoc fixture bootstrap")
     gateway = https_url(args.gateway_url, "gateway URL")
     signer_public_jwk = (
         official_signer_public_jwk(args.oidf_runner_config)
         if args.oidf_runner_config is not None and needs_oidf_signer
+        else None
+    )
+    mdoc_trust_anchor_pem = (
+        official_mdoc_trust_anchor(args.oidf_runner_source)
+        if args.oidf_runner_source is not None and args.mode == "oid4vp-mdoc"
         else None
     )
     fixtures = bootstrap(
@@ -1024,6 +1095,7 @@ def main(argv: list[str] | None = None) -> int:
         run_id=args.run_id,
         mode=args.mode,
         oidf_signer_public_jwk=signer_public_jwk,
+        oidf_mdoc_trust_anchor_pem=mdoc_trust_anchor_pem,
     )
     write_private_json(args.output.resolve(), fixtures)
     # The file contains identifiers only, but keep stdout free of values so it

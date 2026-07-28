@@ -21,6 +21,10 @@ PUBLIC_SIGNING_JWK = {
     "x": "public-x",
     "y": "public-y",
 }
+MDOC_TRUST_ANCHOR_PEM = """-----BEGIN CERTIFICATE-----
+Y2VydGlmaWNhdGU=
+-----END CERTIFICATE-----
+"""
 
 
 def test_mdoc_mode_is_a_supported_public_fixture_mode() -> None:
@@ -32,8 +36,8 @@ def test_mdoc_mode_is_a_supported_public_fixture_mode() -> None:
             "https://marty.test",
             "--run-id",
             "run-1",
-            "--oidf-runner-config",
-            "marty-verifier.json",
+            "--oidf-runner-source",
+            "oidf-runner",
             "--output",
             "fixtures.json",
         ]
@@ -361,7 +365,7 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
         organization_id=fixtures.DEFAULT_ORGANIZATION,
         run_id="run-1",
         mode="oid4vp-mdoc",
-        oidf_signer_public_jwk=PUBLIC_SIGNING_JWK,
+        oidf_mdoc_trust_anchor_pem=MDOC_TRUST_ANCHOR_PEM,
         request=request,
     )
 
@@ -378,6 +382,19 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
     assert calls[7][2]["credential_payload_format"] == "MDOC"
     assert calls[7][2]["doctype"] == "org.iso.18013.5.1.mDL"
     assert calls[8][2]["credential_requirements"][0]["credential_payload_format"] == "MDOC"
+    trust_profile = calls[10][2]
+    assert trust_profile["supported_formats"] == ["MDOC"]
+    assert trust_profile["trust_sources"] == [
+        {
+            "name": "Official OIDF mdoc document signer",
+            "source_type": "ROOT_CA",
+            "certificate_pem": MDOC_TRUST_ANCHOR_PEM,
+            "description": ("Public test certificate extracted from the exact commit-pinned OIDF conformance runner"),
+            "enabled": True,
+        }
+    ]
+    assert "allowed_issuers" not in trust_profile
+    assert "system_issuer_overrides" not in trust_profile
     assert all("issuer_profile_id" not in (body or {}) for _path, _method, body in calls)
     assert all("auto_generate_artifacts" not in (body or {}) for _path, _method, body in calls)
 
@@ -627,6 +644,35 @@ def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_
     assert pinned == public_jwk
     assert set(pinned) == {"kty", "crv", "x", "y"}
     assert payload["allowed_issuers"] == [fixtures.OFFICIAL_OIDF_ISSUER_DOMAIN]
+
+
+def test_mdoc_trust_anchor_is_read_from_exact_runner_source(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "main" / "kotlin" / "org" / "multipaz" / "testapp" / "TestAppUtils.kt"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        """
+        val documentSignerCert = X509Cert.fromPem(
+            \"\"\"-----BEGIN CERTIFICATE-----
+            Y2VydGlmaWNhdGU=
+            -----END CERTIFICATE-----\"\"\"
+        )
+        """,
+        encoding="utf-8",
+    )
+
+    assert fixtures.official_mdoc_trust_anchor(tmp_path) == MDOC_TRUST_ANCHOR_PEM
+
+
+def test_mdoc_bootstrap_requires_the_runner_document_certificate() -> None:
+    with pytest.raises(ValueError, match="document certificate"):
+        fixtures.bootstrap(
+            "https://marty.test",
+            "real-session",
+            organization_id=fixtures.DEFAULT_ORGANIZATION,
+            run_id="run-1",
+            mode="oid4vp-mdoc",
+            request=lambda *_args, **_kwargs: {"id": "not-reached"},
+        )
 
 
 def test_oidf_bootstrap_requires_the_runner_public_key() -> None:
