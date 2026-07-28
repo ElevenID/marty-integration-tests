@@ -279,8 +279,8 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
         run_id="run-1",
         mdoc=True,
     )
-    # Revocation profiles use Marty's protocol enum.  `mso_mdoc` is reserved
-    # for the OID4VC wire boundary below.
+    # Marty resources use the protocol enum. `mso_mdoc` is reserved for the
+    # OID4VC signing/metadata/wire adapter boundary.
     assert revocation["supported_formats"] == ["MDOC"]
 
     compliance = fixtures.compliance_profile_payload(
@@ -289,7 +289,7 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
         run_id="run-1",
         mdoc=True,
     )
-    assert compliance["credential_format"] == "mso_mdoc"
+    assert compliance["credential_format"] == "MDOC"
     assert compliance["frameworks"] == ["aamva", "iso_18013_5", "oid4vp"]
 
     template = fixtures.template_payload(
@@ -303,10 +303,11 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
     )
     assert template["credential_type"] == "org.iso.18013.5.1.mDL"
     assert template["doctype"] == "org.iso.18013.5.1.mDL"
-    assert template["supported_formats"] == ["mso_mdoc"]
-    assert template["credential_payload_format"] == "mso_mdoc"
+    assert template["supported_formats"] == ["MDOC"]
+    assert template["credential_payload_format"] == "MDOC"
     assert template["issuer_did"] == "did:web:issuer.example.com"
     assert "issuer_profile_id" not in template
+    assert "auto_generate_artifacts" not in template
 
     policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,
@@ -316,7 +317,7 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
         mdoc=True,
     )
     requirement = policy["credential_requirements"][0]
-    assert requirement["credential_payload_format"] == "mso_mdoc"
+    assert requirement["credential_payload_format"] == "MDOC"
     assert [claim["claim_name"] for claim in requirement["requested_claims"]] == [
         "family_name",
         "given_name",
@@ -374,10 +375,11 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
     }
     assert calls[1][2]["key_purpose"] == "mdoc_dsc"
     assert calls[1][2]["algorithm"] == "ES256"
-    assert calls[7][2]["credential_payload_format"] == "mso_mdoc"
+    assert calls[7][2]["credential_payload_format"] == "MDOC"
     assert calls[7][2]["doctype"] == "org.iso.18013.5.1.mDL"
-    assert calls[8][2]["credential_requirements"][0]["credential_payload_format"] == "mso_mdoc"
+    assert calls[8][2]["credential_requirements"][0]["credential_payload_format"] == "MDOC"
     assert all("issuer_profile_id" not in (body or {}) for _path, _method, body in calls)
+    assert all("auto_generate_artifacts" not in (body or {}) for _path, _method, body in calls)
 
 
 def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
