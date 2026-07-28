@@ -60,11 +60,7 @@ def _decode_mobile_security_object_bytes(payload: bytes) -> dict[Any, Any]:
     """Decode ISO 18013-5 ``MobileSecurityObjectBytes`` without accepting legacy shapes."""
 
     tagged = _decode_cbor_exact(payload, label="mDoc MobileSecurityObjectBytes")
-    if (
-        not isinstance(tagged, cbor2.CBORTag)
-        or tagged.tag != 24
-        or not isinstance(tagged.value, bytes)
-    ):
+    if not isinstance(tagged, cbor2.CBORTag) or tagged.tag != 24 or not isinstance(tagged.value, bytes):
         raise ValueError("mDoc MobileSecurityObjectBytes must be tag-24 encoded CBOR bytes")
     return _require_map(
         _decode_cbor_exact(tagged.value, label="mDoc MobileSecurityObject"),
@@ -102,7 +98,7 @@ def _x5chain(header: dict[Any, Any]) -> list[bytes]:
         return [raw_chain]
     if isinstance(raw_chain, (list, tuple)) and raw_chain and all(isinstance(item, bytes) for item in raw_chain):
         return list(raw_chain)
-    raise ValueError("mDoc issuerAuth protected header must contain a non-empty x5chain")
+    raise ValueError("mDoc issuerAuth unprotected header must contain a non-empty x5chain")
 
 
 def _verify_cose_signature(
@@ -119,11 +115,11 @@ def _verify_cose_signature(
     algorithm = protected.get(1)
     if algorithm not in _COSE_ALGORITHMS:
         raise ValueError(f"unsupported mDoc COSE algorithm: {algorithm!r}")
-    if 33 in unprotected:
-        raise ValueError("mDoc x5chain must be integrity-protected")
+    if 33 in protected:
+        raise ValueError("mDoc x5chain must be in the COSE unprotected header")
 
     certificates: list[x509.Certificate] = []
-    for index, der in enumerate(_x5chain(protected)):
+    for index, der in enumerate(_x5chain(unprotected)):
         try:
             certificates.append(x509.load_der_x509_certificate(der))
         except ValueError as exc:
