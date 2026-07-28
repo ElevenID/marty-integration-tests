@@ -170,6 +170,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     }
     assert calls[1][0].startswith("/v1/signing-keys/issuer-profiles?")
     assert calls[1][2]["key_purpose"] == "vc_jwt_issuer"
+    assert calls[1][2]["algorithm"] == "ES256"
     assert calls[2][0].startswith("/v1/signing-keys/config/resolve?")
     assert calls[2][2] == {
         "key_purpose": "oid4vp_request_signing",
@@ -177,6 +178,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     }
     assert calls[3][0].startswith("/v1/signing-keys/issuer-profiles?")
     assert calls[3][2]["key_purpose"] == "oid4vp_request_signing"
+    assert calls[3][2]["algorithm"] == "ES256"
     assert calls[4][0] == "/v1/compliance-profiles"
     assert calls[5][0] == "/v1/revocation-profiles"
     assert calls[6][0] == "/v1/revocation-profiles/revocation-1/activate"
@@ -199,6 +201,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     }
     assert calls[13][0].startswith("/v1/signing-keys/issuer-profiles?")
     assert calls[13][2]["signing_key_reference"] == "issuer-eddsa"
+    assert calls[13][2]["algorithm"] == "EdDSA"
     assert calls[17][2]["credential_payload_format"] == "ldp_vc"
     assert calls[18][2]["credential_payload_format"] == "ldp_vc"
     assert calls[19][2]["holder_binding"] == {"required": False}
@@ -341,6 +344,7 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
         "algorithm": "ES256",
     }
     assert calls[1][2]["key_purpose"] == "mdoc_dsc"
+    assert calls[1][2]["algorithm"] == "ES256"
     assert calls[7][2]["credential_payload_format"] == "mso_mdoc"
     assert calls[7][2]["doctype"] == "org.iso.18013.5.1.mDL"
     assert calls[8][2]["credential_requirements"][0]["credential_payload_format"] == "mso_mdoc"
@@ -414,6 +418,7 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
     assert profile_body["issuer_did"] == result["eudi_issuer_did"]
     assert profile_body["signing_service_id"] == "managed-service"
     assert profile_body["signing_key_reference"] == "managed-key"
+    assert profile_body["algorithm"] == "ES256"
     assert calls[2][0].startswith("/v1/signing-keys/issuer-profiles/issuer-profile/public-identity?")
     assert calls[2][1] == "GET"
     assert calls[2][2] is None
@@ -429,6 +434,7 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
     assert request_profile_body["signing_service_id"] == "request-service"
     assert request_profile_body["signing_key_reference"] == "request-key"
     assert request_profile_body["key_purpose"] == "oid4vp_request_signing"
+    assert request_profile_body["algorithm"] == "ES256"
     for _path, _method, body in calls[9:]:
         assert body is not None
         assert body["issuer_did"] == result["eudi_issuer_did"]
