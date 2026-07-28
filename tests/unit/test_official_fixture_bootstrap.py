@@ -86,16 +86,9 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
         "/v1/revocation-profiles/revocation-1/activate",
         "/v1/credential-templates",
         "/v1/credential-templates/template-1/activate",
-        (
-            f"/org/{fixtures.DEFAULT_ORGANIZATION}/"
-            ".well-known/openid-credential-issuer"
-        ),
+        (f"/org/{fixtures.DEFAULT_ORGANIZATION}/.well-known/openid-credential-issuer"),
     ]
-    template = next(
-        body
-        for path, method, body in calls
-        if path == "/v1/credential-templates" and method == "POST"
-    )
+    template = next(body for path, method, body in calls if path == "/v1/credential-templates" and method == "POST")
     assert template is not None
     assert template["issuer_did"] == issuer_did
     assert "issuer_profile_id" not in template
@@ -191,9 +184,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[6][0] == "/v1/revocation-profiles/revocation-1/activate"
     assert calls[7][0] == "/v1/credential-templates"
     assert calls[7][2]["compliance_profile_id"] == "compliance-1"
-    assert calls[7][2]["issuer_did"] == (
-        f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}"
-    )
+    assert calls[7][2]["issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
     assert "issuer_profile_id" not in calls[7][2]
     assert calls[7][2]["revocation_profile_id"] == "revocation-1"
     assert "compliance_profile" not in calls[7][2]
@@ -260,6 +251,103 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
         "birthdate",
     ]
     assert policy["holder_binding"] == {"required": True}
+
+
+def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
+    compliance = fixtures.compliance_profile_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        w3c=False,
+        run_id="run-1",
+        mdoc=True,
+    )
+    assert compliance["credential_format"] == "mso_mdoc"
+    assert compliance["frameworks"] == ["aamva", "iso_18013_5", "oid4vp"]
+
+    template = fixtures.template_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        "compliance-1",
+        "did:web:issuer.example.com",
+        "revocation-1",
+        w3c=False,
+        run_id="run-1",
+        mdoc=True,
+    )
+    assert template["credential_type"] == "org.iso.18013.5.1.mDL"
+    assert template["doctype"] == "org.iso.18013.5.1.mDL"
+    assert template["supported_formats"] == ["mso_mdoc"]
+    assert template["credential_payload_format"] == "mso_mdoc"
+    assert template["issuer_did"] == "did:web:issuer.example.com"
+    assert "issuer_profile_id" not in template
+
+    policy = fixtures.policy_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        "template-1",
+        w3c=False,
+        run_id="run-1",
+        mdoc=True,
+    )
+    requirement = policy["credential_requirements"][0]
+    assert requirement["credential_payload_format"] == "mso_mdoc"
+    assert [claim["claim_name"] for claim in requirement["requested_claims"]] == [
+        "family_name",
+        "given_name",
+        "birth_date",
+    ]
+
+
+def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+    responses = iter(
+        [
+            {"service": {"id": "mdoc-service", "key_reference": "mdoc-es256"}},
+            {"profile": {"id": "mdoc-issuer"}},
+            {"service": {"id": "request-service", "key_reference": "request-es256"}},
+            {"profile": {"id": "request-issuer"}},
+            {"id": "compliance-1"},
+            {"id": "revocation-1"},
+            {"id": "revocation-1"},
+            {"id": "template-1"},
+            {"id": "policy-1"},
+            {"id": "policy-1"},
+            {"id": "trust-1"},
+            {"id": "trust-1"},
+        ]
+    )
+
+    def request(
+        _gateway: str,
+        _session: str,
+        path: str,
+        *,
+        method: str,
+        json_body: dict | None = None,
+    ) -> object:
+        calls.append((path, method, json_body))
+        return next(responses)
+
+    result = fixtures.bootstrap(
+        "https://marty.test",
+        "real-session",
+        organization_id=fixtures.DEFAULT_ORGANIZATION,
+        run_id="run-1",
+        mode="oid4vp-mdoc",
+        oidf_signer_public_jwk=PUBLIC_SIGNING_JWK,
+        request=request,
+    )
+
+    assert result["oid4vp_mdoc_policy_id"] == "policy-1"
+    assert result["oid4vp_mdoc_trust_profile_id"] == "trust-1"
+    assert result["oid4vp_mdoc_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
+    assert calls[0][2] == {
+        "credential_format": "mso_mdoc",
+        "key_purpose": "mdoc_dsc",
+        "algorithm": "ES256",
+    }
+    assert calls[1][2]["key_purpose"] == "mdoc_dsc"
+    assert calls[7][2]["credential_payload_format"] == "mso_mdoc"
+    assert calls[7][2]["doctype"] == "org.iso.18013.5.1.mDL"
+    assert calls[8][2]["credential_requirements"][0]["credential_payload_format"] == "mso_mdoc"
+    assert all("issuer_profile_id" not in (body or {}) for _path, _method, body in calls)
 
 
 def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(

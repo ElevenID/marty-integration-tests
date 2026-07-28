@@ -571,6 +571,51 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert all("--haip" in command for command in compose_commands)
 
 
+def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command: list[str] = []
+    suite_environment: dict[str, str] = {}
+
+    def fake_run(actual: list[str], environment: dict[str, str], **_kwargs: object) -> int:
+        if "oidf_conformance.py" in " ".join(actual):
+            command.extend(actual)
+            suite_environment.update(environment)
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(
+        lane,
+        "bootstrap_fixtures",
+        lambda *_args, **_kwargs: {
+            "oid4vp_mdoc_policy_id": "mdoc-policy-1",
+            "oid4vp_mdoc_trust_profile_id": "trust-1",
+            "oid4vp_mdoc_issuer_did": "did:web:marty.test:orgs:org-1",
+        },
+    )
+    monkeypatch.setattr(
+        lane,
+        "standard_verifier_config",
+        lambda _material, _gateway: tmp_path / "marty-verifier.json",
+    )
+    args = SimpleNamespace(
+        lane="oid4vp-mdoc",
+        marty_ui=tmp_path / "marty-ui",
+        run_id="run-1",
+        oidf_runner=tmp_path / "runner",
+        haip_material=tmp_path / "haip",
+        output_dir=tmp_path / "output",
+        stack_manifest=tmp_path / "stack-manifest.json",
+    )
+
+    assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
+    assert "oid4vp-mdoc-verifier" in command
+    assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "mdoc-policy-1"
+    assert suite_environment["OIDF_MARTY_VERIFIER_PROFILE"] == "standard"
+
+
 def test_old_release_fails_before_any_compose_command(tmp_path: Path) -> None:
     args = type(
         "Args",

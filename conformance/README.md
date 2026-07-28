@@ -374,6 +374,33 @@ client identifier; it never decodes the JAR into a different front-channel
 transport. URL-query authorization requests are not currently a supported
 Marty production transport and are not claimed or synthesized by this suite.
 
+## Run the official ISO mDL verifier plan
+
+The `oid4vp-mdoc` lane uses the pinned OIDF OID4VP Final verifier plan with
+`credential_format=iso_mdl`, `response_mode=direct_post`,
+`request_method=request_uri_signed`, and `client_id_prefix=x509_hash`. It
+provisions an ISO 18013-5 mDL template and presentation policy through the
+same authenticated public gateway API as the UI. The disposable profile uses a
+managed `mdoc_dsc` signer only while creating the issuer profile; the runtime
+request carries only organization and DID identity, never a custody selector.
+
+```bash
+cp conformance/marty-verifier-mdoc.example.json /secure/work/marty-verifier-mdoc.json
+python scripts/oidf_conformance.py run \
+  --runner /opt/openid-conformance-suite \
+  --profile oid4vp-mdoc-verifier \
+  --config /secure/work/marty-verifier-mdoc.json \
+  --stack-manifest /secure/work/stack-manifest.json \
+  --output-dir reports/oidf/mdoc-verifier \
+  --interaction-script scripts/oidf_marty_verifier.py
+```
+
+This is native official **verifier** coverage: the upstream runner creates the
+ISO mDL presentation and checks Marty's public OID4VP request, callback, and
+verification behavior. It is not an OIDF mdoc issuer certification and must
+not be presented as one. Marty mdoc issuance remains covered separately by
+the EUDI reference-library lane until upstream provides a suitable issuer plan.
+
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
 per-request encryption key, and encrypted `direct_post.jwt` handling. Its

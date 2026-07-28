@@ -30,7 +30,7 @@ from haip_test_certificates import (  # noqa: E402
     load_verifier_environment,
 )
 
-LANES = {"oid4vci-issuer", "oid4vp-final", "haip", "w3c-v2", "eudi"}
+LANES = {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip", "w3c-v2", "eudi"}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 # Public OID4VCI credential-configuration identifiers are opaque JSON object
@@ -803,13 +803,13 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         )
     if args.lane == "haip" and "--haip" not in launcher.read_text(encoding="utf-8"):
         raise ValueError("released marty-ui conformance launcher does not support --haip")
-    if args.lane in {"oid4vci-issuer", "oid4vp-final", "haip"} and (
+    if args.lane in {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip"} and (
         args.oidf_runner is None or not args.oidf_runner.is_dir()
     ):
         raise ValueError(f"{args.lane} requires the exact pinned OIDF runner checkout")
     if args.lane == "w3c-v2" and (args.w3c_suite is None or not args.w3c_suite.is_dir()):
         raise ValueError("w3c-v2 requires the exact pinned W3C suite checkout")
-    if args.lane in {"oid4vp-final", "haip", "eudi"} and (
+    if args.lane in {"oid4vp-final", "oid4vp-mdoc", "haip", "eudi"} and (
         args.haip_material is None or not args.haip_material.is_dir()
     ):
         raise ValueError(f"{args.lane} requires generated verifier test material")
@@ -858,6 +858,7 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
 
 def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     haip = args.lane == "haip"
+    mdoc = args.lane == "oid4vp-mdoc"
     # Both verifier plans exercise Marty's native signed request_uri. The
     # x509_hash client identifier therefore requires a short-lived certificate
     # over the issuer profile's public DID key even when response encryption is
@@ -870,10 +871,11 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         return 1
     try:
         wait_for_public_stack(environment)
-        fixtures = bootstrap_fixtures(args, environment, mode="oid4vp")
-        environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures["oid4vp_policy_id"]
-        environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures["oid4vp_trust_profile_id"]
-        environment["OIDF_MARTY_ISSUER_DID"] = fixtures["oid4vp_issuer_did"]
+        fixture_prefix = "oid4vp_mdoc" if mdoc else "oid4vp"
+        fixtures = bootstrap_fixtures(args, environment, mode="oid4vp-mdoc" if mdoc else "oid4vp")
+        environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures[f"{fixture_prefix}_policy_id"]
+        environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures[f"{fixture_prefix}_trust_profile_id"]
+        environment["OIDF_MARTY_ISSUER_DID"] = fixtures[f"{fixture_prefix}_issuer_did"]
         environment.update(
             {
                 "CONFORMANCE_SERVER": "https://localhost.emobix.co.uk:8443/",
@@ -891,7 +893,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             if haip
             else standard_verifier_config(args.haip_material, environment["OIDF_MARTY_GATEWAY_URL"])
         )
-        profile = "oid4vp-haip-verifier" if haip else "oid4vp-verifier"
+        profile = "oid4vp-haip-verifier" if haip else "oid4vp-mdoc-verifier" if mdoc else "oid4vp-verifier"
         return run(
             [
                 sys.executable,
@@ -1138,7 +1140,7 @@ def main(argv: list[str] | None = None) -> int:
     environment, _metadata = base_environment(args)
     if args.lane == "oid4vci-issuer":
         return run_oid4vci_issuer(args, environment)
-    if args.lane in {"oid4vp-final", "haip"}:
+    if args.lane in {"oid4vp-final", "oid4vp-mdoc", "haip"}:
         return run_oidf(args, environment)
     if args.lane == "w3c-v2":
         return run_w3c(args, environment)
