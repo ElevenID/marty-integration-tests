@@ -273,6 +273,16 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
 
 
 def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
+    revocation = fixtures.revocation_profile_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        w3c=False,
+        run_id="run-1",
+        mdoc=True,
+    )
+    # Revocation profiles use Marty's protocol enum.  `mso_mdoc` is reserved
+    # for the OID4VC wire boundary below.
+    assert revocation["supported_formats"] == ["MDOC"]
+
     compliance = fixtures.compliance_profile_payload(
         fixtures.DEFAULT_ORGANIZATION,
         w3c=False,
