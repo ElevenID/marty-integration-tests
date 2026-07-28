@@ -991,7 +991,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument(
         "--mode",
-        choices=("oid4vci", "oid4vp", "w3c", "eudi", "all"),
+        choices=("oid4vci", "oid4vp", "oid4vp-mdoc", "w3c", "eudi", "all"),
         required=True,
     )
     result.add_argument("--gateway-url", default=os.environ.get("OIDF_MARTY_GATEWAY_URL"))
@@ -1010,7 +1010,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--gateway-url or OIDF_MARTY_GATEWAY_URL is required")
     if not args.run_id:
         raise ValueError("--run-id or OFFICIAL_SUITE_RUN_ID is required")
-    needs_oidf_signer = args.mode in {"oid4vp", "all"}
+    needs_oidf_signer = args.mode in {"oid4vp", "oid4vp-mdoc", "all"}
     if needs_oidf_signer and args.oidf_runner_config is None:
         raise ValueError("--oidf-runner-config is required for OID4VP fixture bootstrap")
     gateway = https_url(args.gateway_url, "gateway URL")

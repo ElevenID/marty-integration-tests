@@ -23,6 +23,25 @@ PUBLIC_SIGNING_JWK = {
 }
 
 
+def test_mdoc_mode_is_a_supported_public_fixture_mode() -> None:
+    parsed = fixtures.parser().parse_args(
+        [
+            "--mode",
+            "oid4vp-mdoc",
+            "--gateway-url",
+            "https://marty.test",
+            "--run-id",
+            "run-1",
+            "--oidf-runner-config",
+            "marty-verifier.json",
+            "--output",
+            "fixtures.json",
+        ]
+    )
+
+    assert parsed.mode == "oid4vp-mdoc"
+
+
 def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
     calls: list[tuple[str, str, dict | None]] = []
     responses = iter(

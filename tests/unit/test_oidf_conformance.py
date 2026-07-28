@@ -72,6 +72,19 @@ def test_request_uri_post_retrieval_is_not_expected_to_skip() -> None:
     assert request_uri_post == []
 
 
+def test_expected_skips_do_not_start_racy_product_interactions() -> None:
+    expected_skips = [
+        {
+            "test-name": "optional-module",
+            "configuration-filename": "*marty-issuer*.json",
+        }
+    ]
+
+    assert oidf.requires_interaction_hook("active-module", expected_skips) is True
+    assert oidf.requires_interaction_hook("optional-module", expected_skips) is False
+    assert oidf.requires_interaction_hook("unexpected-skipped-module", expected_skips) is True
+
+
 def test_official_runner_always_emits_actionable_failure_detail() -> None:
     source = (ROOT / "scripts" / "oidf_conformance.py").read_text(encoding="utf-8")
     assert '"--no-parallel",\n        "--verbose",' in source

@@ -171,6 +171,18 @@ def applicable_expected_skips(config: Path) -> list[dict]:
     return [entry for entry in entries if fnmatch.fnmatchcase(config.name, str(entry["configuration-filename"]))]
 
 
+def requires_interaction_hook(test_name: str, expected_skips: list[dict]) -> bool:
+    """Return whether an official module may receive a product interaction.
+
+    Expected skips are reviewed, configuration-scoped declarations that the
+    upstream runner enforces independently. Starting an asynchronous issuer or
+    browser hook for one of those modules can race the runner after it has
+    already skipped the module, creating a false harness failure. Unexpected
+    skips and every active module remain untouched and blocking.
+    """
+    return not any(entry.get("test-name") == test_name for entry in expected_skips)
+
+
 def write_evidence(
     output: Path,
     manifest: dict,
@@ -370,6 +382,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             continue
         match = re.search(r"Created test module, new id: ([A-Za-z0-9]+)", line)
         if match:
+            if not requires_interaction_hook(current_module, expected_skips):
+                print(f"Not starting a product interaction for expected-skipped module {current_module}")
+                continue
             hook_command = [
                 sys.executable,
                 str(interaction_script),
