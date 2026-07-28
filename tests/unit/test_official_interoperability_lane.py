@@ -563,6 +563,7 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     )
 
     assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
+    assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
     assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "policy-1"
     assert suite_environment["OIDF_MARTY_TRUST_PROFILE_ID"] == "trust-1"
     assert "OIDF_MARTY_ISSUER_PROFILE_ID" not in suite_environment
@@ -634,6 +635,7 @@ def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
         lane,
         "bootstrap_fixtures",
         lambda *_args, **_kwargs: {
+            "organization_id": "org-1",
             "oid4vp_mdoc_policy_id": "mdoc-policy-1",
             "oid4vp_mdoc_trust_profile_id": "trust-1",
             "oid4vp_mdoc_issuer_did": "did:web:marty.test:orgs:org-1",
@@ -656,6 +658,7 @@ def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
 
     assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
     assert "oid4vp-mdoc-verifier" in command
+    assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
     assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "mdoc-policy-1"
     assert suite_environment["OIDF_MARTY_VERIFIER_PROFILE"] == "standard"
 
