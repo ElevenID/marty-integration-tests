@@ -1,7 +1,7 @@
 # Protocol Compliance Post-Action Report
 
 Status: in progress  
-Last updated: 2026-07-27
+Last updated: 2026-07-28
 
 ## Purpose
 
@@ -9,6 +9,19 @@ This report records what the official OIDF, W3C, and EUDI interoperability
 work actually exercised, what it exposed in Marty, which findings have been
 corrected, and which product gaps remain. A passing adapted test is not treated
 as proof of native product support or certification.
+
+Every capability is classified as one of:
+
+- **native**: an official assertion traverses the supported production
+  contract and implementation;
+- **adapted**: an official assertion reaches production through a documented
+  compatibility facade;
+- **partial**: only a defined subset of the capability has evidence;
+- **missing**: the product does not implement the required behavior;
+- **bypassed**: the test substitutes or short-circuits production behavior and
+  therefore provides no compliance evidence; or
+- **unproven**: implementation may exist, but released immutable evidence is
+  absent.
 
 ## Boundary under audit
 
@@ -234,6 +247,43 @@ section 7 builds on this boundary: canonical proof bytes are signed by issuer
 DID through the resolved profile, never by passing a private JWK or public KMS
 selector.
 
+### 7b. The managed EdDSA key was published as provider metadata, not a JWK
+
+The first W3C run against immutable `marty-ui` v1.1.42 passed stack
+materialization, provenance verification, anonymous image pulls, and public
+fixture setup through issuer-profile creation. It then failed at the normal
+public credential-template API with HTTP 503:
+
+`Issuer DID verification method has no usable public key material.`
+
+This was a production defect, not an official-runner or adapter failure.
+OpenBao returned the managed Ed25519 public key as PEM. The gateway stored a
+provider metadata object containing `public_key_pem` beneath
+`publicKeyJwk`, so the DID resolver correctly rejected the verification method
+because it had no JWK `kty`. The same adapter always prehashed signing input
+with SHA-256, which is invalid for OpenBao Ed25519 keys, and the public signing
+response would have mislabeled the resulting Ed25519 bytes as DER.
+
+Action:
+
+- convert provider PEM into standards-shaped public EC, RSA, or OKP JWK
+  material before DID publication;
+- reject missing, malformed, or unsupported public keys instead of publishing
+  provider metadata as cryptographic identity;
+- propagate the issuer profile's selected algorithm into the custody adapter;
+- send the original canonical proof bytes with `prehashed=false` for EdDSA;
+- report EdDSA output as raw signatures; and
+- make the official fixture's administrative issuer-profile payload explicitly
+  declare EdDSA rather than relying on the legacy ES256 default.
+
+[marty-ui#140](https://github.com/ElevenID/marty-ui/pull/140) and
+[marty-integration-tests#157](https://github.com/ElevenID/marty-integration-tests/pull/157)
+contain the fixes and regression tests. All issuer private keys remain in
+OpenBao, and the runtime request still selects only the organization and
+issuer DID. A new component release, stack manifest, and official rerun are
+required before the W3C capability is classified as immutable passing
+evidence.
+
 ### 8. The OID4VCI runner lacked its emulated wallet identities
 
 OID4VCI metadata passed, while all interaction modules entered `INTERRUPTED`
@@ -356,8 +406,9 @@ Two paths must remain described as adapted:
   libraries, not the reference mobile wallet binary.
 - The W3C suite reaches a gated VC-API-shaped facade. Valid issuance now
   traverses the ordinary product transaction/token/nonce/holder-proof path,
-  but the VC-API interface itself is adapted and the adapter's remaining
-  suite-specific negative-case validation is not native product evidence.
+  and suite-specific semantic validation has been removed from the facade.
+  The VC-API transport itself remains adapted and is not represented as a
+  native Marty deployment endpoint.
 
 No W3C pass may be claimed merely because the adapter rejects an invalid
 fixture. Every negative assertion must be traceable to a shared production
@@ -445,7 +496,7 @@ service images remains required.
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
-| W3C VCDM v2 verification and issuance | Native marty-core proof preparation/completion is merged; credentials and UI changes preserve the complete unsigned document and use DID-mediated issuer-profile custody through the normal product transaction/token/nonce/holder-proof path; semantic and related-resource validation now execute in production credentials code rather than the adapter | Merge and release `marty-credentials#74` and `marty-ui#138`, then rerun the pinned suite against the attested stack |
+| W3C VCDM v2 verification and issuance | v1.1.42 contains the native proof, full-document, production-validator, general issuance API, and DID-mediated custody work; its immutable run reached the production DID resolver | Release the OpenBao PEM-to-JWK and EdDSA signing correction, then rerun the pinned suite against the new attested stack |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
@@ -462,6 +513,9 @@ service images remains required.
 | Public `application_id` was rejected downstream | Protocol drift | A gateway-valid issuance request could fail at the issuance service and lose application linkage | `marty-protocol` issuance schema and `marty-credentials` request/transaction mapping | Fixed locally; requires protocol and credentials CI/merge |
 | Generated `credential_subject` type collapsed object/array to string | Protocol drift | Generated clients could not represent the production request | `marty-protocol` code generator and generated bindings | Fixed locally; Python/Rust/TypeScript checks pass |
 | Official W3C registration claimed JOSE enveloping proof | Misleading claim | Selected assertions Marty was not exercising natively | `w3c_vc_conformance.py` registration | Fixed locally; official config now advertises `vc2.0` only |
+| OpenBao public PEM was stored beneath `publicKeyJwk` | Product implementation gap | DID resolution rejected the managed EdDSA verification method before official assertions | `marty-ui#140` converts supported public keys to JWKs and fails closed on invalid material | Local gateway regression suite passes; merge, release, and immutable official rerun required |
+| OpenBao prehashed EdDSA input and advertised DER output | Product implementation gap | Native Data Integrity signatures could not be produced or described correctly | `marty-ui#140` propagates the profile algorithm, sends raw EdDSA input, and returns raw signature metadata | Local gateway regression suite passes; merge, release, and immutable official rerun required |
+| W3C fixture profile omitted its algorithm | Harness configuration gap | The managed Ed25519 key was provisioned behind a profile that defaulted to ES256 | `marty-integration-tests#157` explicitly declares EdDSA in profile administration | Unit tests pass; merge and include the released suite in the next stack manifest |
 | Official lanes use one organization | Missing evidence | Tenant isolation and cross-tenant DID resolution remain unproven | Two-organization adversarial matrix | Partial template isolation exists; full matrix remains open |
 | Official lanes do not drive the browser | Missing evidence | UI request shapes and exclusive general-API use remain unproven | Released-stack Playwright issuance/verification smoke | Open |
 
@@ -476,6 +530,8 @@ service images remains required.
 | OID4VP Final run [30230194196](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230194196), sanitized summary `sha256:f96a634c36b0adf65c77308272836b2a1dfb2f869e56051d4bdbe867c83d94ea` | Passed against v1.1.38 and official runner `release-v5.2.0` |
 | HAIP run [30230195076](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230195076), sanitized summary `sha256:b7a9200e66a59f5b319d2c095102e30e640e78df8a7dedf676caadc660332950` | Passed against v1.1.38 and official runner `release-v5.2.0` |
 | W3C v2 run [30230312063](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312063), sanitized summary `sha256:5674d1b6c52e5d5291082f542af6c132a3b5ce72168f7dfe08fb9d7149d8e88b` | Failed at public template bootstrap; exposed missing managed `ldp_vc` capability |
+| `marty-ui` v1.1.42, manifest `sha256:82404a3586fd2fd50b1fc6c99ef3f0c125dc25433247bf2f20c90c7b32b9e9b1` | Materialized seven immutable components and pulled the released credentials image anonymously |
+| W3C v2 run [30348779384](https://github.com/ElevenID/marty-integration-tests/actions/runs/30348779384), sanitized artifact `official-w3c-v2-30348779384-1`, artifact digest `sha256:4d1cc64f224d7683dad284199bbabb4181b34dff6505c05929c78b891064e857` | Reached the production DID resolver and failed closed on malformed OpenBao public-key publication; exposed the PEM-to-JWK and EdDSA adapter gaps |
 | OID4VCI issuer run [30230312937](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312937), sanitized summary `sha256:eacc7f2d7fd9edc2ffec43e3faaa590d1c733d429c74bcdaf47c7e3f7189b444` | Metadata passed; interaction modules exposed missing official-runner client identities |
 | OID4VCI issuer run [30231686437](https://github.com/ElevenID/marty-integration-tests/actions/runs/30231686437), sanitized summary `sha256:4adb5cc1e43b14953fc3603a63f3e396a211890399d0de7914562e26a73852a9` | Authorization-server identity passed; exposed internal-template/public-configuration ID confusion |
 | OID4VCI issuer run [30232003181](https://github.com/ElevenID/marty-integration-tests/actions/runs/30232003181), sanitized summary `sha256:de313a9f8dc4338f1ff83dbb0ae60822dda6f468fc7b219f3f0b41e25412d1cb` | Reached issuer interaction; exposed selection of bare JWT VC `PID` instead of advertised SD-JWT `PID#sd-jwt` |
