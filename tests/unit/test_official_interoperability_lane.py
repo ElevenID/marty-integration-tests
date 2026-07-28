@@ -573,7 +573,7 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert all("--haip" in command for command in compose_commands)
 
 
-def test_mdoc_fixture_bootstrap_receives_the_official_signer_config(
+def test_mdoc_fixture_bootstrap_receives_the_exact_runner_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -603,6 +603,7 @@ def test_mdoc_fixture_bootstrap_receives_the_official_signer_config(
         output_dir=output_dir,
         run_id="run-1",
         haip_material=haip_material,
+        oidf_runner=tmp_path / "oidf-runner",
     )
 
     fixtures = lane.bootstrap_fixtures(
@@ -612,8 +613,8 @@ def test_mdoc_fixture_bootstrap_receives_the_official_signer_config(
     )
 
     assert fixtures["oid4vp_mdoc_policy_id"] == "policy-1"
-    assert "--oidf-runner-config" in command
-    assert str(haip_material / "marty-verifier-haip.json") in command
+    assert "--oidf-runner-config" not in command
+    assert command[command.index("--oidf-runner-source") + 1] == str(tmp_path / "oidf-runner")
 
 
 def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
@@ -944,10 +945,7 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
         "bootstrap_fixtures",
         lambda *_args, **_kwargs: {
             "organization_id": "00000000-0000-0000-0000-000000000001",
-            "w3c_issuer_did": (
-                "did:web:marty-oidf.test:orgs:"
-                "00000000-0000-0000-0000-000000000001"
-            ),
+            "w3c_issuer_did": ("did:web:marty-oidf.test:orgs:00000000-0000-0000-0000-000000000001"),
             "w3c_template_id": "00000000-0000-0000-0000-000000000002",
             "w3c_credential_policy_id": "00000000-0000-0000-0000-000000000003",
             "w3c_presentation_policy_id": "00000000-0000-0000-0000-000000000004",
@@ -967,9 +965,7 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
 
     assert lane.run_w3c(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test:18443"}) == 0
     assert events == ["ready", "adapter-up", "ready", "suite"]
-    assert adapter_environment["W3C_VC_TEST_ISSUER_DID"].startswith(
-        "did:web:marty-oidf.test:orgs:"
-    )
+    assert adapter_environment["W3C_VC_TEST_ISSUER_DID"].startswith("did:web:marty-oidf.test:orgs:")
 
 
 def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
