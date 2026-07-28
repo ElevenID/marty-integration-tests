@@ -18,6 +18,7 @@ SPEC.loader.exec_module(oidf_start)
 
 @pytest.fixture(autouse=True)
 def issuer_profile_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OIDF_MARTY_ORGANIZATION_ID", "org-1")
     monkeypatch.setenv("OIDF_MARTY_ISSUER_DID", "did:web:verifier.example")
 
 
@@ -33,6 +34,7 @@ def test_flow_body_selects_post_only_for_the_official_signed_post_module(
         "request_method": "request_uri_signed",
     }
     assert oidf_start.flow_body(payload) == {
+        "organization_id": "org-1",
         "presentation_policy_id": "policy-1",
         "trust_profile_id": "trust-1",
         "issuer_did": "did:web:verifier.example",

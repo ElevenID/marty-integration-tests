@@ -57,6 +57,9 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("OIDF_MARTY_VERIFIER_PROFILE must be standard or haip")
     module_name = payload["test_name"].partition("[")[0]
     return {
+        # Organization is an explicit public authorization boundary. Do not
+        # infer it from an operator session or omit it for conformance runs.
+        "organization_id": required_env("OIDF_MARTY_ORGANIZATION_ID"),
         "presentation_policy_id": required_env("OIDF_MARTY_PRESENTATION_POLICY_ID"),
         "trust_profile_id": os.environ.get("OIDF_MARTY_TRUST_PROFILE_ID") or None,
         # The public DID is the sole signing-identity input. The organization

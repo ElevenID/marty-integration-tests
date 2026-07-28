@@ -873,6 +873,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         wait_for_public_stack(environment)
         fixture_prefix = "oid4vp_mdoc" if mdoc else "oid4vp"
         fixtures = bootstrap_fixtures(args, environment, mode="oid4vp-mdoc" if mdoc else "oid4vp")
+        environment["OIDF_MARTY_ORGANIZATION_ID"] = fixtures["organization_id"]
         environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures[f"{fixture_prefix}_policy_id"]
         environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures[f"{fixture_prefix}_trust_profile_id"]
         environment["OIDF_MARTY_ISSUER_DID"] = fixtures[f"{fixture_prefix}_issuer_did"]
