@@ -194,9 +194,13 @@ issuance request model. Remote `relatedResource` digest verification is an
 allowlisted production issuance policy with HTTPS-only exact URLs, no
 redirects, bounded responses, and request timeouts. The adapter-owned
 validators and their tests were deleted; equivalent official negative
-regressions now run against production code. This remediation is locally
-passing but still needs component merge, release, and pinned-suite evidence
-before it is an immutable native-compliance result.
+regressions now run against production code. The adapter also stopped
+duplicating the gateway's template lookup and DID/profile resolution: it now
+submits `organization_id`, the fixture's public `issuer_did`, template ID, and
+the complete document to the same `create_issuance` application path used by
+the general UI API. This remediation is locally passing but still needs
+component merge, release, and pinned-suite evidence before it is an immutable
+native-compliance result.
 
 ### 7a. DID-first resolution did not yet extend to every internal signing call
 
@@ -453,6 +457,7 @@ service images remains required.
 | --- | --- | --- | --- | --- |
 | W3C adapter reconstructed only `credentialSubject` | Bypass risk | Could pass top-level VCDM assertions without signing the tested document | `marty-core#72`, `marty-credentials#74`, `marty-ui#138` | Product code fixed locally/partly merged; requires released-stack official run |
 | W3C adapter performed suite-specific semantic validation | Adapted gap / bypass risk | Negative cases could pass before production code saw the input | `marty-ui#138` deletes adapter-owned validation; `marty-credentials#74` owns structural and allowlisted digest validation | Remediated locally with production negative regressions; merge/release and immutable official rerun required |
+| W3C adapter duplicated the general UI issuance boundary | API bypass risk | Private template/resolver calls could drift from the API the UI is required to use | `marty-ui#138` calls the shared general `create_issuance` path with only organization, public issuer DID, template, and complete document | Remediated locally; gateway tests assert no private resolver/template call and immutable official rerun remains required |
 | Managed registry lacked `ldp_vc`/EdDSA | Missing feature | Public template bootstrap failed; unsafe ES256 substitution was possible if forced | Official fixture bootstrap plus managed EdDSA profile | Implemented locally; requires immutable stack proof |
 | Public `application_id` was rejected downstream | Protocol drift | A gateway-valid issuance request could fail at the issuance service and lose application linkage | `marty-protocol` issuance schema and `marty-credentials` request/transaction mapping | Fixed locally; requires protocol and credentials CI/merge |
 | Generated `credential_subject` type collapsed object/array to string | Protocol drift | Generated clients could not represent the production request | `marty-protocol` code generator and generated bindings | Fixed locally; Python/Rust/TypeScript checks pass |

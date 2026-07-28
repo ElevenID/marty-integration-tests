@@ -881,10 +881,12 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
+    adapter_environment: dict[str, str] = {}
 
-    def fake_run(command: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
+    def fake_run(command: list[str], environment: dict[str, str], **_kwargs: object) -> int:
         if "--include-w3c" in command and "up" in command:
             events.append("adapter-up")
+            adapter_environment.update(environment)
         elif "w3c_vc_conformance.py" in " ".join(command):
             events.append("suite")
         return 0
@@ -919,6 +921,9 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
 
     assert lane.run_w3c(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test:18443"}) == 0
     assert events == ["ready", "adapter-up", "ready", "suite"]
+    assert adapter_environment["W3C_VC_TEST_ISSUER_DID"].startswith(
+        "did:web:marty-oidf.test:orgs:"
+    )
 
 
 def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(

@@ -1001,6 +1001,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
             {
                 "W3C_VC_TEST_ORGANIZATION_ID": fixtures["organization_id"],
                 "W3C_VC_TEST_TEMPLATE_ID": fixtures["w3c_template_id"],
+                "W3C_VC_TEST_ISSUER_DID": fixtures["w3c_issuer_did"],
                 "W3C_VC_TEST_CREDENTIAL_POLICY_ID": fixtures["w3c_credential_policy_id"],
                 "W3C_VC_TEST_PRESENTATION_POLICY_ID": fixtures["w3c_presentation_policy_id"],
             }
