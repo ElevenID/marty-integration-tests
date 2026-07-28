@@ -369,6 +369,16 @@ Missing evidence:
 A dedicated two-organization adversarial matrix is required before the
 multitenancy objective is satisfied.
 
+Initial executable coverage in
+[marty-integration-tests#154](https://github.com/ElevenID/marty-integration-tests/pull/154)
+creates two disposable organizations through the normal authenticated gateway,
+then proves that template lists do not leak and that template-issuance and
+policy-template resource-ID substitutions fail closed.  It deliberately uses
+one operator able to administer both organizations, so it tests resource
+isolation independently of role assignment.  Membership, RBAC, API-key,
+SCIM, result, audit, webhook, and error-message isolation remain separate
+required matrix rows.
+
 ## Does the suite use the UI's general API?
 
 The EUDI and OIDF paths use the same authenticated public gateway that the UI
