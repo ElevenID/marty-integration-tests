@@ -287,9 +287,241 @@ digest-pinned conformance OpenBao image.
 [marty-ui#142](https://github.com/ElevenID/marty-ui/pull/142) adds type-aware,
 length-checked raw Ed25519 decoding while preserving PEM support for EC, RSA,
 and compatible Ed25519 responses. All issuer private keys remain in OpenBao,
-and the runtime request still selects only the organization and issuer DID. A
-new component release, stack manifest, and official rerun are required before
-the W3C capability is classified as immutable passing evidence.
+and the runtime request still selects only the organization and issuer DID.
+The fix is released in immutable stack v1.1.44. Its official rerun passed both
+earlier OpenBao boundaries and reached the upstream W3C assertions.
+
+### 7c. Duplicated generated protobuf code dropped the template issuer DID
+
+The v1.1.44 run successfully provisioned the real OpenBao Ed25519 key, created
+the issuer profile, published usable DID verification material, created the
+W3C resources through the authenticated gateway, and started the pinned
+official W3C suite. Most positive issuer assertions then received HTTP 422:
+
+`credential_template_id must reference a template with an issuer_did`
+
+The public fixture supplied `issuer_did`, and the credential-template service
+correctly resolved, persisted, and returned it. The issuance image nevertheless
+shipped an older duplicate of `credential_template_service_pb2.py` whose
+`TemplateResponse` descriptor ended at field 27. Protobuf treated the service's
+new field 28 as unknown and silently discarded it. The gRPC request therefore
+succeeded while the DID appeared absent, so the production issuance guard
+correctly rejected the template as legacy.
+
+This is protocol transport drift, not a missing issuer feature and not a reason
+to weaken the guard. One shared descriptor defect caused many apparent
+failures—including contexts, subjects, types, validity, status, schema, and
+related-resource cases—before cryptographic issuance began. Those capabilities
+remain unproven until the rerun reaches their individual assertions.
+
+The evidence guard did not count attempted requests as successful coverage.
+Although the upstream process invoked issuer and credential-verifier cases,
+the sanitized result credited only `vp_verifier`, the sole required normative
+role row that passed. The lane remains failed unless passed official report
+rows prove `issuer`, `vc_verifier`, and `vp_verifier`; a zero process exit alone
+is insufficient.
+
+Action:
+
+- synchronize the issuance image's credential-template descriptor with the
+  current DID-first service contract;
+- assert field numbers for `issuer_did` on create, update, and response;
+- assert that public protobuf requests cannot reintroduce issuer-profile,
+  signing-key, access-mode, or remote-KMS selectors; and
+- retain the fail-closed legacy-template and DID-mismatch checks.
+
+[marty-credentials#77](https://github.com/ElevenID/marty-credentials/pull/77)
+contains this remediation and its descriptor regression. The finding also
+strengthens the case for generated/shared internal contracts instead of
+independently copied protobuf outputs. The change merged after its complete
+Python, Rust, WASM, migration, security, dependency-review, CodeQL, and
+workflow-policy matrix passed. It is released as `marty-credentials` v0.1.24
+and pinned by immutable stack v1.1.45.
+
+The same run exposed a separate error-boundary defect in one negative
+assertion. The VC-API facade validates its outer shape through FastAPI, then
+constructs the normal public `IssuanceCreate` model for the inner credential.
+An invalid empty `credentialSubject` therefore raised Pydantic validation
+inside the route and produced an unhandled ASGI traceback. The document was
+not accepted, but invalid public input must return a controlled 422 without
+logging credential content or internal stack details.
+
+[marty-ui#144](https://github.com/ElevenID/marty-ui/pull/144) translates that
+production-model validation result at the compatibility boundary. It does not
+relax the validator, make a negative assertion pass as valid, or bypass the
+normal issuance path. The change merged after its service, browser, UI,
+security, release-contract, and workflow-policy checks passed and is included
+in immutable stack v1.1.45.
+
+### 7d. The descriptor-corrected run exposed two final W3C product gaps
+
+Immutable v1.1.45 passed stack provenance, anonymous digest pulls, managed
+Ed25519 provisioning, issuer-DID resolution, the general issuance transaction,
+token, nonce, holder-proof, remote profile-mediated signature, and the
+official W3C runner bootstrap. The official suite passed 35 normative
+assertions and failed three:
+
+- two valid Data Integrity credentials reached the public verifier but were
+  classified as an unknown format before the Rust VCDM verifier ran; and
+- a syntactically valid credential whose `validUntil` was in the past was
+  rejected during issuance completion as expired.
+
+The first defect was caused by transport routing that required both an exact
+VCDM context and a `DataIntegrityProof` before invoking the released verifier.
+Candidate detection is not semantic acceptance. A document with a Data
+Integrity proof must reach the VCDM verifier, which remains responsible for
+context, type, proof configuration, signature, and current-validity checks.
+
+The second defect conflated issuance correctness with relying-party acceptance
+at the current instant. VCDM v2 permits a syntactically valid `validFrom` in
+the future or `validUntil` in the past. Remote signing completion must validate
+the date syntax and ordering and verify the exact returned proof, but it must
+not refuse to create the document solely because it is not currently valid.
+The normal public verifier continues to reject expired and premature
+credentials.
+
+Released remediation:
+
+- [marty-ui#146](https://github.com/ElevenID/marty-ui/pull/146) routes
+  `DataIntegrityProof` candidates to the released Rust verifier and proves
+  that an invalid context still fails there. It merged as
+  `52e35cbceb06d9d2ed541f9e36b7be79d7ba9bbc` after the complete service,
+  browser, UI, security, release-contract, CodeQL, dependency, and policy
+  checks passed; and
+- [marty-core#75](https://github.com/ElevenID/marty-core/pull/75) separates
+  proof completion from current-time verification, validates RFC 3339 syntax
+  and date ordering, and adds past, future, malformed, reversed, tampered, and
+  invalid-signature regressions. It merged as
+  `13b690b7bb61c004d75d5faff297f8c07bcb6d9e`, passed the 174-test library
+  suite, integrations, documentation, Clippy, feature combinations, and the
+  complete GitHub matrix, and is released in `marty-core` v0.1.23.
+
+This is not a test accommodation: no official input is rewritten, no signature
+is fabricated, and the public verifier's current-time policy is not weakened.
+`marty-credentials` v0.1.25 consumes the corrected core and publishes the
+issuance image as
+`sha256:45bc3dfd6623d3350f35147942d380dff2761b1ce49ebdee6c42edb5200c3c94`
+and the verification image as
+`sha256:72e680b8a237f0dd5934341af88d25e1b99e3bb8340328bf49c99ca340fc8cda`.
+The three assertions remain failed until one attested stack manifest pins
+these releases and the exact official suite passes against it.
+
+### 7e. The immutable rerun exposed source/image drift and did:web verification
+
+Immutable stack v1.1.46 correctly pins core v0.1.23, credentials v0.1.25, and
+the merged verifier-routing change. Its manifest, checksum record, attestation,
+anonymous digest pulls, image builds, and artifact-only public smoke test all
+passed. Official run
+[30366183232](https://github.com/ElevenID/marty-integration-tests/actions/runs/30366183232)
+nevertheless reproduced the same three normative failures.
+
+The rerun changed these findings from hypotheses into two narrower product and
+release gaps:
+
+- the UI services image installed the corrected core v0.1.23 wheel, but the
+  separately released credentials issuance image still downloaded core
+  v0.1.22 from its own `release/dependencies.json`. Its redacted production
+  diagnostic emitted the older completion error, proving that source-level
+  Cargo tests and the deployed image were exercising different core builds;
+  and
+- structured Data Integrity credentials now reached the Rust verifier, but
+  that verifier resolved only `did:key`. The managed issuer profile correctly
+  publishes a tenant-scoped `did:web` DID, so the verifier had no product-
+  resolved public method with which to check the proof.
+
+Neither gap justifies changing the fixture to `did:key`, placing a key in test
+code, accepting the credential without verification, or passing a KMS
+coordinate. The intended production repair is to have the presentation-policy
+service resolve the proof's DID through Marty's DID resolver, require the exact
+DID document, controller, verification-method ID, and assertion/authentication
+relationship, and pass only the resulting public JWK to the Rust cryptographic
+verifier. The Rust boundary must reject private JWK parameters, duplicate or
+conflicting methods, wrong controllers, wrong keys, invalid signatures, and
+tampered documents while retaining offline `did:key` support.
+
+Actions:
+
+- [marty-core#77](https://github.com/ElevenID/marty-core/pull/77), merged as
+  `364b4863059d449f8d0dc1c7561d035d16e1cdd4`, adds the resolver-owned
+  public-method input and fail-closed Rust verification; it is released as
+  core v0.1.24 at `f2074854ca31f76d6f44cbf03dc055a912814330`;
+- [marty-ui#148](https://github.com/ElevenID/marty-ui/pull/148), merged as
+  `c3d44f6bb229ad6ae116bdb2a03343d1427adf71`, resolves exact
+  `did:web` proof relationships without exposing a public key, profile, KMS,
+  provider, or custody selector; and
+- [marty-credentials#80](https://github.com/ElevenID/marty-credentials/pull/80)
+  makes Cargo's core crate revisions and the release image's core wheel name
+  the same immutable release commit, with a regression contract preventing
+  future source/image drift; it merged as
+  `4d8b004b10a4eb4278957dc46228166d800f45ac` and is released as v0.1.26.
+
+Until all three changes are released together and pass the same pinned official
+suite, W3C Data Integrity issuance and verification remain **partial**, not
+native passing evidence. A green source pull request or merged commit is not
+used as a substitute for immutable released-stack evidence.
+
+### 7f. The corrected release exposed a public DID-document identity mismatch
+
+Immutable stack v1.1.47 pins core v0.1.24 and credentials v0.1.26, so the
+official rerun exercised the same corrected core in source tests, the released
+Python wheel, and the deployed issuance image. Its seven-component manifest,
+checksums, provenance, three stack image attestations, anonymous registry
+pulls, and artifact-only public smoke test passed.
+
+Official run
+[30380594927](https://github.com/ElevenID/marty-integration-tests/actions/runs/30380594927)
+then passed 57 normative assertions and failed two valid verifier assertions
+with HTTP 422:
+
+`DID resolution failed: resolved document id does not match the proof controller`
+
+This result proves that the prior source/image drift and issuance-time validity
+defect are closed. It also proves that native managed-key Data Integrity
+issuance reaches a cryptographic verifier; the remaining failures are both the
+same publication defect. The organization-scoped public URL requested
+`did:web:<public-domain>:orgs:<slug>`, while the endpoint returned an otherwise
+usable issuer-profile document with its stored source/alias DID in `id`,
+`controller`, and relationship identifiers. The resolver correctly refused to
+use a public method from a document representing another DID.
+
+The repair is at the production DID boundary, not in the official adapter:
+
+- the tenant-bound public route retargets the stored document to the exact
+  requested public DID, including embedded verification relationships;
+- the resolver ignores any 200 response whose document `id` differs from the
+  requested DID and tries the next legitimate candidate; and
+- if no exact document exists, verification continues to fail closed.
+
+No private key is published or passed to the verifier, and no profile, KMS,
+provider, signing-service, or key selector is accepted. Signing remains
+issuer-profile mediated in managed custody. A `Protected term redefinition`
+diagnostic in the same run came from an expected invalid-input case and did not
+fail a normative assertion; it is not counted as an exposed product gap.
+
+[marty-ui#150](https://github.com/ElevenID/marty-ui/pull/150) merged as
+`56147d7cc2af1fc4d9c6d6472e97bc7ca3512faf` after every PR check passed.
+Immutable stack v1.1.48 then passed all five release jobs and independently
+verified checksum, provenance, OCI-attestation, anonymous-pull, and
+artifact-only smoke gates.
+
+Official run
+[30382577365](https://github.com/ElevenID/marty-integration-tests/actions/runs/30382577365)
+passed all 59 normative assertions with zero failures. Its evidence guard
+proved all required `issuer`, `vc_verifier`, and `vp_verifier` roles against
+the exact v1.1.48 manifest and image digests. The W3C Data Integrity
+implementation is therefore **native** at the production issuance,
+issuer-profile custody, DID resolution, and cryptographic verification layers.
+The official suite's VC-API entry shape remains a documented **adapted**
+transport surface: it is gated, calls the shared general issuance/public
+verification paths, performs no suite-owned semantic acceptance, and provides
+no evidence for a generally supported public VC-API product.
+
+The upstream suite is pinned at
+`1db599924e6601555933550e0e65925a6abbd0a8` with the reviewed one-file
+compatibility patch from upstream PR 174. That patch repairs an invalid Chai
+invocation without changing a normative condition. The evidence is not
+described as an unmodified upstream run; the patch must be removed when
+upstream merges the fix and the monthly pin advances.
 
 ### 8. The OID4VCI runner lacked its emulated wallet identities
 
@@ -503,7 +735,7 @@ service images remains required.
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
-| W3C VCDM v2 verification and issuance | v1.1.43 contains the native proof, full-document, production-validator, general issuance API, DID-mediated custody, JWK-shape, and EdDSA signing work; its immutable run reached real OpenBao Ed25519 key retrieval | Release raw OpenBao Ed25519 public-key decoding, then rerun the pinned suite against the new attested stack |
+| W3C VCDM v2 verification and issuance | v1.1.48 passes 59/59 normative assertions with issuer, VC-verifier, and VP-verifier evidence through DID-first, profile-mediated managed signing and production cryptographic verification | Native implementation evidence; the official VC-API entry shape remains adapted, and the reviewed PR 174 runner patch must be removed when upstream merges it |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
@@ -513,17 +745,24 @@ service images remains required.
 
 | Finding | Classification | Impact | Owner/remediation | Status and required evidence |
 | --- | --- | --- | --- | --- |
-| W3C adapter reconstructed only `credentialSubject` | Bypass risk | Could pass top-level VCDM assertions without signing the tested document | `marty-core#72`, `marty-credentials#74`, `marty-ui#138` | Product code fixed locally/partly merged; requires released-stack official run |
-| W3C adapter performed suite-specific semantic validation | Adapted gap / bypass risk | Negative cases could pass before production code saw the input | `marty-ui#138` deletes adapter-owned validation; `marty-credentials#74` owns structural and allowlisted digest validation | Remediated locally with production negative regressions; merge/release and immutable official rerun required |
-| W3C adapter duplicated the general UI issuance boundary | API bypass risk | Private template/resolver calls could drift from the API the UI is required to use | `marty-ui#138` calls the shared general `create_issuance` path with only organization, public issuer DID, template, and complete document | Remediated locally; gateway tests assert no private resolver/template call and immutable official rerun remains required |
-| Managed registry lacked `ldp_vc`/EdDSA | Missing feature | Public template bootstrap failed; unsafe ES256 substitution was possible if forced | Official fixture bootstrap plus managed EdDSA profile | Implemented locally; requires immutable stack proof |
+| W3C adapter reconstructed only `credentialSubject` | Bypass risk | Could pass top-level VCDM assertions without signing the tested document | `marty-core#72`, `marty-credentials#74`, `marty-ui#138` | Removed and released; v1.1.48 signs the complete supplied document and passes 59/59 official assertions |
+| W3C adapter performed suite-specific semantic validation | Adapted gap / bypass risk | Negative cases could pass before production code saw the input | `marty-ui#138` deletes adapter-owned validation; `marty-credentials#74` owns structural and allowlisted digest validation | Removed and released; production validators/verifiers own acceptance and the immutable official negative assertions pass |
+| W3C adapter duplicated the general UI issuance boundary | API bypass risk | Private template/resolver calls could drift from the API the UI is required to use | `marty-ui#138` calls the shared general `create_issuance` path with only organization, public issuer DID, template, and complete document | Removed and released; gateway regressions prohibit private resolver/template calls and v1.1.48 passes the official suite through the shared path |
+| Managed registry lacked `ldp_vc`/EdDSA | Missing feature | Public template bootstrap failed; unsafe ES256 substitution was possible if forced | Official fixture bootstrap plus managed EdDSA profile | Implemented and released; v1.1.48 proves managed EdDSA profile creation, full-document issuance, remote signing, and verification |
 | Public `application_id` was rejected downstream | Protocol drift | A gateway-valid issuance request could fail at the issuance service and lose application linkage | `marty-protocol` issuance schema and `marty-credentials` request/transaction mapping | Fixed locally; requires protocol and credentials CI/merge |
 | Generated `credential_subject` type collapsed object/array to string | Protocol drift | Generated clients could not represent the production request | `marty-protocol` code generator and generated bindings | Fixed locally; Python/Rust/TypeScript checks pass |
 | Official W3C registration claimed JOSE enveloping proof | Misleading claim | Selected assertions Marty was not exercising natively | `w3c_vc_conformance.py` registration | Fixed locally; official config now advertises `vc2.0` only |
 | OpenBao provider metadata was stored beneath `publicKeyJwk` | Product implementation gap | DID resolution rejected the managed EdDSA verification method before official assertions | `marty-ui#140` converts supported public keys to JWKs and fails closed on invalid material | Merged and released in v1.1.43; immutable rerun passed this earlier boundary |
-| OpenBao Ed25519 public keys are raw base64 rather than PEM | Product implementation gap | v1.1.43 rejected the real managed public key during issuer-profile creation | `marty-ui#142` decodes an exact 32-byte Ed25519 value by provider key type and retains PEM paths | Reproduced against the exact OpenBao image; local gateway suite passes; merge, release, and immutable official rerun required |
-| OpenBao prehashed EdDSA input and advertised DER output | Product implementation gap | Native Data Integrity signatures could not be produced or described correctly | `marty-ui#140` propagates the profile algorithm, sends raw EdDSA input, and returns raw signature metadata | Local gateway regression suite passes; merge, release, and immutable official rerun required |
-| W3C fixture profile omitted its algorithm | Harness configuration gap | The managed Ed25519 key was provisioned behind a profile that defaulted to ES256 | `marty-integration-tests#157` explicitly declares EdDSA in profile administration | Unit tests pass; merge and include the released suite in the next stack manifest |
+| OpenBao Ed25519 public keys are raw base64 rather than PEM | Product implementation gap | v1.1.43 rejected the real managed public key during issuer-profile creation | `marty-ui#142` decodes an exact 32-byte Ed25519 value by provider key type and retains PEM paths | Merged and released in v1.1.44; run 30353063442 passed this boundary |
+| OpenBao prehashed EdDSA input and advertised DER output | Product implementation gap | Native Data Integrity signatures could not be produced or described correctly | `marty-ui#140` propagates the profile algorithm, sends raw EdDSA input, and returns raw signature metadata | Merged, released, and proven by the v1.1.48 59/59 issuer/verifier run |
+| W3C fixture profile omitted its algorithm | Harness configuration gap | The managed Ed25519 key was provisioned behind a profile that defaulted to ES256 | `marty-integration-tests#157` explicitly declares EdDSA in profile administration | Merged and released in v1.2.22; run 30353063442 passed profile creation |
+| Issuance protobuf descriptor silently dropped template `issuer_did` | Protocol drift | The template existed and was correctly bound, but issuance saw it as legacy; one transport defect blocked most positive W3C issuer assertions | `marty-credentials#77` synchronizes the descriptor and asserts DID-first field numbers and forbidden selectors | Released in credentials v0.1.24 and immutable stack v1.1.45; run 30357905195 passed this boundary |
+| Inner VC issuance validation escaped as an ASGI exception | Public error-boundary gap | Invalid standards input was rejected but produced a 500 traceback instead of a controlled 422 | `marty-ui#144` translates the normal issuance-model validation error without echoing credential input | Released in immutable stack v1.1.45; the official negative assertions now return controlled responses |
+| Valid Data Integrity credentials were classified as unknown before verification | Product routing gap | The released Rust verifier was bypassed for otherwise valid structured credentials | `marty-ui#146` uses proof shape only for routing and leaves all acceptance checks to the Rust verifier | Released in stack v1.1.46; run 30366183232 proved that structured credentials reached the Rust verifier |
+| Issuance completion enforced current-time validity | Product semantics gap | A standards-conforming past/future credential could not be issued even though its proof was valid | `marty-core#75` validates syntax/order and proof during completion while retaining current-time checks in normal verification | Remediated and released; v1.1.47 passed the previously failing past/future issuance assertions |
+| Credentials release image pinned an older core than its source workspace | Release provenance/consistency gap | Local and source-wheel tests exercised corrected completion behavior while the deployed issuance image retained the expired-claim rejection | `marty-credentials#80` aligns Cargo revisions and release-wheel commit and adds a coherence contract | Remediated in v0.1.26 and proven in v1.1.47; exact manifests, checksums, attestations, anonymous digest access, and the formerly failing official assertions pass |
+| Data Integrity verifier resolved only did:key | Product DID-resolution gap | Correct tenant-scoped did:web credentials reached Rust but could not be cryptographically verified | `marty-core#77` accepts resolver-owned public methods; `marty-ui#148` enforces exact DID document, controller, method, and relationship | Released in v1.1.47; run 30380594927 reached the exact document-identity guard, exposing the separate public alias-publication defect rather than the prior did:key-only limitation |
+| Public did:web route returned a stored alias DID | Product DID-publication gap | The exact resolver correctly rejected the managed public method because the document `id`, controller, and relationship identifiers represented another DID | `marty-ui#150` retargets the tenant-bound public document and makes candidate resolution skip mismatched documents | Remediated and released; 197 focused tests, every PR/release gate, and the v1.1.48 59/59 official run pass |
 | Official lanes use one organization | Missing evidence | Tenant isolation and cross-tenant DID resolution remain unproven | Two-organization adversarial matrix | Partial template isolation exists; full matrix remains open |
 | Official lanes do not drive the browser | Missing evidence | UI request shapes and exclusive general-API use remain unproven | Released-stack Playwright issuance/verification smoke | Open |
 
@@ -542,6 +781,21 @@ service images remains required.
 | W3C v2 run [30348779384](https://github.com/ElevenID/marty-integration-tests/actions/runs/30348779384), sanitized artifact `official-w3c-v2-30348779384-1`, artifact digest `sha256:4d1cc64f224d7683dad284199bbabb4181b34dff6505c05929c78b891064e857` | Reached the production DID resolver and failed closed on malformed OpenBao public-key publication; exposed the PEM-to-JWK and EdDSA adapter gaps |
 | `marty-ui` v1.1.43, manifest `sha256:6bf612248e8246a500d06a5975c5a6d698566eb692eacf966893cdbb49a6e4f6` | Provenance checks, corrected image builds, and the artifact-only public stack smoke passed |
 | W3C v2 run [30351469090](https://github.com/ElevenID/marty-integration-tests/actions/runs/30351469090), sanitized artifact `official-w3c-v2-30351469090-1`, artifact digest `sha256:e19a8e909a778fc0249bedffea686bfbe470c5f19e2d1325dc649139a110cbe9` | Passed the prior JWK-shape boundary, reached the real OpenBao Ed25519 public key, and failed closed because the provider returns raw base64 rather than PEM |
+| `marty-ui` v1.1.44, manifest `sha256:aa35b7ece5771f5d8d0d1b07dc38b97d75fb2b8796ff95239c988cf01a6a4076` | Provenance checks, anonymous digest pulls, corrected Ed25519 key publication, and the artifact-only public stack smoke passed |
+| W3C v2 run [30353063442](https://github.com/ElevenID/marty-integration-tests/actions/runs/30353063442), sanitized artifact `official-w3c-v2-30353063442-1`, artifact digest `sha256:aa5988e2982dd8ff9e0aebd462da0a79799b64dfee3ff2a300d9211b16c539e2` | Reached the pinned official suite at commit `1db599924e6601555933550e0e65925a6abbd0a8`; passed both OpenBao boundaries, then exposed the stale issuance protobuf descriptor and uncontrolled inner validation error |
+| `marty-credentials` v0.1.24, release commit `e866439a4bf443beb09c0b86b861fd83f91d305a` | Release contract, checksums, SBOM, signatures, provenance, and final public issuance/verification images passed; issuance image `sha256:b5522b65898e62b03453ef86496d64ed58430f3460cd8c25d58096d3d53d526b` |
+| `marty-ui` v1.1.45, manifest `sha256:8ee54dec98af141d348a7963b83c70875b95fe94a8fa8010773b3b00ea3bbe00` | Attested seven-component manifest, artifact-only public stack smoke, and anonymous digest pulls passed; it pins credentials v0.1.24 |
+| W3C v2 run [30357905195](https://github.com/ElevenID/marty-integration-tests/actions/runs/30357905195), sanitized artifact `official-w3c-v2-30357905195-1`, artifact digest `sha256:da0de923b8e098a62b7ae38f010164e187a0b328fd54bf5cc19f19869dddff06` | Exact official commit `1db599924e6601555933550e0e65925a6abbd0a8` passed 35 normative assertions and failed three, exposing verifier routing and issuance-time validity semantics; the evidence guard credited issuer and VP-verifier roles but correctly withheld VC-verifier completion |
+| `marty-core` v0.1.23, release commit `3a073cfa54672e7ed3905aa59227ab7d5e4e3f49` | Locked tests, feature checks, cross-platform release artifacts, checksums, SBOM, Sigstore bundles, and provenance passed; Linux Python wheel `sha256:359beb4502b24dccb40756a6a067fe4430af051e1ef71195cc7d7a042f22cb44` |
+| `marty-core` v0.1.24, release commit `f2074854ca31f76d6f44cbf03dc055a912814330`, run [30372799402](https://github.com/ElevenID/marty-core/actions/runs/30372799402) | All 19 release jobs passed; the independently downloaded Linux `marty_rs` wheel matches `SHA256SUMS` at `sha256:b70e61dc95a3e11a616445491f6812ac4673cdd8281b2bd83212fc3540144c14` and its GitHub provenance attestation verifies |
+| `marty-credentials` v0.1.25, release commit `4fd7785e70b71e12038d58b3509256336522835f` | Full Python/Rust/WASM, security, policy, image-build, checksum, SBOM, signature, and provenance gates passed; issuance image `sha256:45bc3dfd6623d3350f35147942d380dff2761b1ce49ebdee6c42edb5200c3c94`, verification image `sha256:72e680b8a237f0dd5934341af88d25e1b99e3bb8340328bf49c99ca340fc8cda` |
+| `marty-credentials` v0.1.26, release commit `4d8b004b10a4eb4278957dc46228166d800f45ac`, source run [30377296203](https://github.com/ElevenID/marty-credentials/actions/runs/30377296203), finalization run [30378769520](https://github.com/ElevenID/marty-credentials/actions/runs/30378769520) | All nine source-artifact jobs and four finalization jobs passed; published digest files match `SHA256SUMS`; OCI attestations and anonymous registry access verify for issuance `sha256:63d71bfe0c8c62733293d2faf607a86074f84a297e8cd90706bd461de7947980` and verification `sha256:a1e7b079b60894918f24c5cc1aad381b8987bee4a185007cfc226acbdca1674d` |
+| `marty-ui` v1.1.46, release commit `dd860a9173cfe01a175fd0b11dbdae3ce0cb2b69`, manifest `sha256:b9acedb2e531a833be038b49f80c56721f9348e5fa17f4585a8119c54d4787b4` | Attested seven-component manifest, checksums, signed images, anonymous digest pulls, and artifact-only public stack smoke passed; UI `sha256:68f5a0648f185244f72daf0a2d24274b71054422036fb7c3473bf68c73dc6fb5`, services `sha256:b2e75cc0ca82b145155f97a43df94adfb43c7edf70450e32f12cdd0e7db572d8`, migrations `sha256:a826c53e7a2c591a3146dc46a55325818065b4210a0319be3398985be48c1aa1` |
+| W3C v2 run [30366183232](https://github.com/ElevenID/marty-integration-tests/actions/runs/30366183232), sanitized artifact `official-w3c-v2-30366183232-1`, artifact digest `sha256:570c1760511c43b09839561f9f73ac44c45658bc236142f89412398b4b3bfce2` | Exact official commit `1db599924e6601555933550e0e65925a6abbd0a8` reproduced the three failed assertions and narrowed them to credentials image/source drift plus missing product-resolved did:web verification; the evidence guard again withheld VC-verifier completion |
+| `marty-ui` v1.1.47, release commit `ac0b7809fc20c2ed8ecf0bef0ebdeffe73d1ea4a`, manifest `sha256:da7f476dfa4bcc8cb6352b2aa5b32efbaf265f6257c883a2c6cefba44ec783e3`, run [30379854048](https://github.com/ElevenID/marty-ui/actions/runs/30379854048) | All five release jobs passed; manifest checksum and attestation verify; anonymous digest access and OCI attestations verify for UI `sha256:d253b76f6d40c0e0ff727d4d2e8ee7702d856fde31f54dfc36008d423d7adf5f`, services `sha256:611e121a4df22b2e59b95a2b2fe04a2bf4e8d87f6402cf5ee6363f7112cdfa59`, and migrations `sha256:da259f3ebd8595688d513da7f75a3141a51edc486fbf3e29bdf91c70eeac7325` |
+| W3C v2 run [30380594927](https://github.com/ElevenID/marty-integration-tests/actions/runs/30380594927), sanitized artifact `official-w3c-v2-30380594927-1`, artifact digest `sha256:92161f74ed38a98d83ef45803da7d69480f424d60fc6a4031c9f01d3b0283be7`, summary `sha256:7adf65a1fea8d4dec3a458f84b49bdf087a22efad9c38f7691f85d905f19bcca` | Exact official commit `1db599924e6601555933550e0e65925a6abbd0a8` passed 57 normative assertions and failed two exact-DID verifier assertions; it proves the release-coherence and issuance-validity fixes and exposes one public DID-document alias mismatch |
+| `marty-ui` v1.1.48, release commit `56147d7cc2af1fc4d9c6d6472e97bc7ca3512faf`, manifest `sha256:dadff3abe5fd721148c53a9b99f5b86473e8fcd3a80b41962dcf73ee7a1639be`, run [30381800023](https://github.com/ElevenID/marty-ui/actions/runs/30381800023) | All five release jobs passed; the independently downloaded manifest matches `SHA256SUMS` and its provenance verifies; anonymous digest access and OCI attestations verify for UI `sha256:4b3c4fec9f7169531e4cc7efed3e866b6f3c967b3957656481ebfbc49eeec446`, services `sha256:4044102f32d3e80915d641780e7b7dac7fe4f9d9d51e806a2427bd7a7d78f436`, and migrations `sha256:786dc77a1817c7be7f09d6b401018e013ea0a158576c99c79499a26df2b6aecc` |
+| W3C v2 run [30382577365](https://github.com/ElevenID/marty-integration-tests/actions/runs/30382577365), sanitized artifact `official-w3c-v2-30382577365-1`, artifact digest `sha256:ecae45c7972e0e9b589c6eea9d51a21559470c6164088f601b70ba9a8ee6dbea`, summary `sha256:4f2dd455dfc0dacc921359b55b6ab5888439f375890757e31c74b87d455c5a60` | Exact official commit `1db599924e6601555933550e0e65925a6abbd0a8` plus the declared PR 174 Chai compatibility patch passed 59/59 assertions; the evidence guard proved `issuer`, `vc_verifier`, and `vp_verifier` against exact v1.1.48 artifacts |
 | OID4VCI issuer run [30230312937](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312937), sanitized summary `sha256:eacc7f2d7fd9edc2ffec43e3faaa590d1c733d429c74bcdaf47c7e3f7189b444` | Metadata passed; interaction modules exposed missing official-runner client identities |
 | OID4VCI issuer run [30231686437](https://github.com/ElevenID/marty-integration-tests/actions/runs/30231686437), sanitized summary `sha256:4adb5cc1e43b14953fc3603a63f3e396a211890399d0de7914562e26a73852a9` | Authorization-server identity passed; exposed internal-template/public-configuration ID confusion |
 | OID4VCI issuer run [30232003181](https://github.com/ElevenID/marty-integration-tests/actions/runs/30232003181), sanitized summary `sha256:de313a9f8dc4338f1ff83dbb0ae60822dda6f468fc7b219f3f0b41e25412d1cb` | Reached issuer interaction; exposed selection of bare JWT VC `PID` instead of advertised SD-JWT `PID#sd-jwt` |
