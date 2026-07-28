@@ -26,6 +26,8 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REQUEST = ROOT / "conformance" / "marty-issuer.offer-request.example.json"
 SAFE_FAILURE_SOURCE = re.compile(r"^[A-Za-z][A-Za-z0-9_$]{0,99}$")
+SAFE_HTTP_STATUS_MIN = 100
+SAFE_HTTP_STATUS_MAX = 599
 OFFER_INTERACTION_COUNTS = {
     # The official module obtains one credential for each of two independent
     # wallet clients and returns to WAITING before the second flow.
@@ -54,7 +56,15 @@ def interrupted_failure_category(
             source = source.rsplit(".", 1)[-1]
             if SAFE_FAILURE_SOURCE.fullmatch(source):
                 slug = re.sub(r"[^a-z0-9]+", "-", source.lower()).strip("-")
-                return f"oidf-invariant-interrupted-{slug}"
+                category = f"oidf-invariant-interrupted-{slug}"
+                actual = entry.get("actual")
+                if (
+                    isinstance(actual, int)
+                    and not isinstance(actual, bool)
+                    and SAFE_HTTP_STATUS_MIN <= actual <= SAFE_HTTP_STATUS_MAX
+                ):
+                    return f"{category}-http-{actual}"
+                return category
         return "oidf-invariant-interrupted-unknown-source"
     return "oidf-invariant-interrupted-no-failure-entry"
 

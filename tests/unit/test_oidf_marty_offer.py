@@ -67,6 +67,66 @@ def test_interrupted_failure_category_rejects_unsafe_source(
     )
 
 
+def test_interrupted_failure_category_includes_only_a_valid_http_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        offer,
+        "request_json",
+        lambda *_args, **_kwargs: (
+            200,
+            [
+                {
+                    "result": "FAILURE",
+                    "src": "net.openid.conformance.condition.client.CheckTokenEndpointHttpStatus200",
+                    "actual": 401,
+                    "expected": 200,
+                    "msg": "response body and disposable client material must not be emitted",
+                },
+            ],
+        ),
+    )
+
+    assert (
+        offer.interrupted_failure_category(
+            "https://oidf.example",
+            "module-1",
+            insecure=True,
+        )
+        == "oidf-invariant-interrupted-checktokenendpointhttpstatus200-http-401"
+    )
+
+
+@pytest.mark.parametrize("actual", [True, 99, 600, "401", {"status": 401}])
+def test_interrupted_failure_category_rejects_unsafe_http_status_values(
+    monkeypatch: pytest.MonkeyPatch,
+    actual: object,
+) -> None:
+    monkeypatch.setattr(
+        offer,
+        "request_json",
+        lambda *_args, **_kwargs: (
+            200,
+            [
+                {
+                    "result": "FAILURE",
+                    "src": "CheckTokenEndpointHttpStatus200",
+                    "actual": actual,
+                },
+            ],
+        ),
+    )
+
+    assert (
+        offer.interrupted_failure_category(
+            "https://oidf.example",
+            "module-1",
+            insecure=True,
+        )
+        == "oidf-invariant-interrupted-checktokenendpointhttpstatus200"
+    )
+
+
 def test_command_offer_relaxes_only_conformance_runner_tls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
