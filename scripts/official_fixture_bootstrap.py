@@ -99,6 +99,7 @@ def issuer_profile_payload(
     gateway_url: str,
     w3c: bool,
     run_id: str,
+    algorithm: str,
     label: str | None = None,
     key_purpose: str = "vc_jwt_issuer",
 ) -> dict[str, str]:
@@ -124,6 +125,7 @@ def issuer_profile_payload(
         "signing_service_id": service_id,
         "signing_key_reference": key_reference,
         "key_purpose": key_purpose,
+        "algorithm": algorithm,
         "status": "active",
     }
 
@@ -372,11 +374,7 @@ def policy_payload(
                 "credential_template_id": template_id,
                 "display_name": label,
                 "credential_payload_format": (
-                    "w3c_vcdm_v2_di"
-                    if w3c
-                    else "mso_mdoc"
-                    if mdoc
-                    else "w3c_vcdm_v2_sd_jwt"
+                    "w3c_vcdm_v2_di" if w3c else "mso_mdoc" if mdoc else "w3c_vcdm_v2_sd_jwt"
                 ),
                 "requested_claims": [
                     {
@@ -579,6 +577,7 @@ def bootstrap_eudi(
             gateway_url=gateway_url,
             w3c=False,
             run_id=run_id,
+            algorithm="ES256",
             label=label,
             key_purpose=key_purpose,
         )
@@ -746,6 +745,7 @@ def bootstrap(
             gateway_url=gateway_url,
             w3c=w3c,
             run_id=run_id,
+            algorithm="EdDSA" if w3c else "ES256",
             label="W3C VC Data Integrity" if w3c else "OID4VCI SD-JWT" if oid4vci else None,
             key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
         )
@@ -774,6 +774,7 @@ def bootstrap(
                 gateway_url=gateway_url,
                 w3c=False,
                 run_id=run_id,
+                algorithm="ES256",
                 label="OID4VP Request Object",
                 key_purpose="oid4vp_request_signing",
             )
