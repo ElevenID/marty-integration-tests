@@ -194,6 +194,7 @@ def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(
         "bootstrap_fixtures",
         lambda *_args, **_kwargs: {
             "organization_id": "organization",
+            "w3c_issuer_did": "did:web:marty-oidf.test:orgs:organization",
             "w3c_template_id": "template",
             "w3c_credential_policy_id": "credential-policy",
             "w3c_presentation_policy_id": "presentation-policy",
@@ -895,6 +896,10 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
         "bootstrap_fixtures",
         lambda *_args, **_kwargs: {
             "organization_id": "00000000-0000-0000-0000-000000000001",
+            "w3c_issuer_did": (
+                "did:web:marty-oidf.test:orgs:"
+                "00000000-0000-0000-0000-000000000001"
+            ),
             "w3c_template_id": "00000000-0000-0000-0000-000000000002",
             "w3c_credential_policy_id": "00000000-0000-0000-0000-000000000003",
             "w3c_presentation_policy_id": "00000000-0000-0000-0000-000000000004",

@@ -1018,6 +1018,8 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 str(args.w3c_suite),
                 "--adapter-url",
                 f"{environment['OIDF_MARTY_GATEWAY_URL']}/__test__/vc-api",
+                "--issuer-id",
+                fixtures["w3c_issuer_did"],
                 "--stack-manifest",
                 str(args.stack_manifest),
                 "--output-dir",
