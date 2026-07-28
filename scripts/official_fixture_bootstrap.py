@@ -218,7 +218,7 @@ def revocation_profile_payload(
         "revocation_mechanism": ["BITSTRING_STATUS_LIST"],
         "mechanism_priority": ["BITSTRING_STATUS_LIST"],
         "check_mode": "ALWAYS",
-        "supported_formats": (["JSON_LD"] if w3c else ["MSO_MDOC"] if mdoc else ["SD_JWT_VC"]),
+        "supported_formats": (["JSON_LD"] if w3c else ["MDOC"] if mdoc else ["SD_JWT_VC"]),
     }
 
 
