@@ -448,23 +448,28 @@ matching verifier signing certificate and the official trust anchor.
 records the present proof-format boundary. A disposable stack enables the
 adapter only with `W3C_VC_TEST_ADAPTER=1` and assigns separate active fixture
 policies through `W3C_VC_TEST_CREDENTIAL_POLICY_ID` and
-`W3C_VC_TEST_PRESENTATION_POLICY_ID`. The credential policy verifies JWT VCs
-without presentation holder binding. The presentation policy verifies Data
-Integrity VPs with the official challenge and domain. The adapter has VC-API-shaped
-`/credentials/verify` and `/presentations/verify` endpoints, but forwards
-supported serialized credentials to the normal Marty presentation-policy
-evaluator. It never uses the inline evaluator because that endpoint is for
-ad-hoc policy simulation rather than an interoperability assertion.
+`W3C_VC_TEST_PRESENTATION_POLICY_ID`. Both policies and both credential
+templates declare the native W3C VC Data Model v2 Data Integrity
+representation. The credential policy omits presentation holder binding; the
+presentation policy verifies the official challenge and domain.
 
-Marty's `eddsa-rdfc-2022` verification remains on the normal presentation-policy
-path backed by marty-core. The W3C registration advertises the enveloping-proof
-capability for JWT VCs and the Data Integrity capability for VPs; it does not
-claim the separate JWT enveloping-proof VP representation.
+The VC-API-shaped issuer endpoint is an adapted interface, but its
+implementation is not a synthetic signer. It submits the complete unsigned
+credential to Marty's normal issuance transaction, token, nonce, holder-proof,
+DID-resolution, issuer-profile, managed-custody, and native marty-core
+`eddsa-rdfc-2022` proof path. The verification endpoints forward supported
+serialized credentials to the normal Marty presentation-policy evaluator and
+never use the inline ad-hoc evaluator.
+
+The official registration uses the product-resolved issuer DID as its issuer
+ID and advertises only the `vc2.0` Data Integrity capability. It does not tag
+Marty as `EnvelopingProof` or claim JOSE issuance in this lane.
 
 ```bash
 python scripts/w3c_vc_conformance.py validate
 python scripts/w3c_vc_conformance.py write-local-config \
   --adapter-url https://stack.test.example/__test__/vc-api \
+  --issuer-id did:web:stack.test.example:orgs:official-w3c \
   --output /opt/vc-data-model-2.0-test-suite/localConfig.cjs
 ```
 
@@ -488,6 +493,7 @@ under Python 3.12, then review the complete diff before merging.
 python scripts/w3c_vc_conformance.py run \
   --suite /opt/vc-data-model-2.0-test-suite \
   --adapter-url https://stack.test.example/__test__/vc-api \
+  --issuer-id did:web:stack.test.example:orgs:official-w3c \
   --stack-manifest /secure/work/stack-manifest.json \
   --output-dir reports/w3c-vc-v2 \
   --install

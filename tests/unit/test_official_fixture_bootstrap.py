@@ -112,8 +112,6 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "policy-1"},
             {"id": "trust-1"},
             {"id": "trust-1"},
-            {"service": {"id": "service-2", "key_reference": "issuer-es256"}},
-            {"profile": {"id": "issuer-2"}},
             {"service": {"id": "service-2", "key_reference": "issuer-eddsa"}},
             {"profile": {"id": "issuer-di-2"}},
             {"id": "compliance-2"},
@@ -193,24 +191,23 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[10][0] == "/v1/trust-profiles"
     assert calls[11][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
-    assert calls[14][0].startswith("/v1/signing-keys/config/resolve?")
-    assert calls[14][2] == {
+    assert calls[12][0].startswith("/v1/signing-keys/config/resolve?")
+    assert calls[12][2] == {
         "credential_format": "ldp_vc",
         "key_purpose": "vc_jwt_issuer",
         "algorithm": "EdDSA",
     }
-    assert calls[15][0].startswith("/v1/signing-keys/issuer-profiles?")
-    assert calls[15][2]["issuer_did"] == calls[13][2]["issuer_did"]
-    assert calls[15][2]["signing_key_reference"] == "issuer-eddsa"
-    assert calls[19][2]["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
-    assert calls[20][2]["credential_payload_format"] == "ldp_vc"
-    assert calls[21][2]["holder_binding"] == {"required": False}
-    requirement = calls[21][2]["credential_requirements"][0]
+    assert calls[13][0].startswith("/v1/signing-keys/issuer-profiles?")
+    assert calls[13][2]["signing_key_reference"] == "issuer-eddsa"
+    assert calls[17][2]["credential_payload_format"] == "ldp_vc"
+    assert calls[18][2]["credential_payload_format"] == "ldp_vc"
+    assert calls[19][2]["holder_binding"] == {"required": False}
+    requirement = calls[19][2]["credential_requirements"][0]
     assert requirement["credential_template_id"] == "template-2"
-    assert requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[23][2]["holder_binding"] == {"required": True}
-    presentation_requirement = calls[23][2]["credential_requirements"][0]
+    assert calls[21][2]["holder_binding"] == {"required": True}
+    presentation_requirement = calls[21][2]["credential_requirements"][0]
     assert presentation_requirement["credential_template_id"] == "template-3"
     assert presentation_requirement["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
@@ -535,8 +532,8 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
         run_id="run-1",
         presentation=True,
     )
-    assert credential_template["supported_formats"] == ["jwt_vc"]
-    assert credential_template["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert credential_template["supported_formats"] == ["ldp_vc"]
+    assert credential_template["credential_payload_format"] == "ldp_vc"
     assert presentation_template["supported_formats"] == ["ldp_vc"]
     assert presentation_template["credential_payload_format"] == "ldp_vc"
     assert credential_template["issuer_did"] == "did:web:issuer.example.com"
@@ -547,7 +544,7 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
         assert "signing_key_reference" not in template
     assert credential_policy["holder_binding"] == {"required": False}
     credential_requirement = credential_policy["credential_requirements"][0]
-    assert credential_requirement["credential_payload_format"] == "w3c_vcdm_v2_jwt_vc"
+    assert credential_requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert credential_requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
     assert presentation_policy["holder_binding"] == {"required": True}
     assert presentation_policy["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
@@ -562,6 +559,16 @@ def test_w3c_data_integrity_signer_uses_managed_eddsa_capability() -> None:
         "key_purpose": "vc_jwt_issuer",
         "algorithm": "EdDSA",
     }
+
+
+def test_w3c_revocation_profile_declares_json_ld() -> None:
+    profile = fixtures.revocation_profile_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        w3c=True,
+        run_id="run-1",
+    )
+
+    assert profile["supported_formats"] == ["JSON_LD"]
 
 
 def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_path: Path) -> None:

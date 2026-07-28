@@ -112,12 +112,29 @@ def test_w3c_test_command_uses_absolute_reporter_paths(tmp_path: Path, monkeypat
 
 def test_w3c_local_config_registers_the_real_issuer_and_verifiers(tmp_path: Path) -> None:
     output = tmp_path / "localConfig.cjs"
-    w3c.write_local_config(output, "https://interop.example.test/__test__/vc-api")
+    issuer_did = "did:web:interop.example.test:orgs:official-suite"
+    w3c.write_local_config(
+        output,
+        "https://interop.example.test/__test__/vc-api",
+        issuer_did,
+    )
     config = output.read_text(encoding="utf-8")
     assert "/credentials/issue" in config
     assert "/credentials/verify" in config
     assert "/presentations/verify" in config
     assert "issuers:" in config
+    assert f"id: '{issuer_did}'" in config
+    issuer_registration = config.split("issuers:", maxsplit=1)[1].split(
+        "verifiers:", maxsplit=1
+    )[0]
+    verifier_registration = config.split("verifiers:", maxsplit=1)[1].split(
+        "vpVerifiers:", maxsplit=1
+    )[0]
+    assert "tags: ['vc2.0']" in issuer_registration
+    assert "EnvelopingProof" not in issuer_registration
+    assert "JOSE" not in issuer_registration
+    assert "tags: ['vc2.0']" in verifier_registration
+    assert "EnvelopingProof" not in verifier_registration
     vp_registration = config.split("vpVerifiers:", maxsplit=1)[1]
     assert "tags: ['vc2.0']" in vp_registration
     assert "EnvelopingProof" not in vp_registration

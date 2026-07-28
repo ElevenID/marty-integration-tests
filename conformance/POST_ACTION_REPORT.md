@@ -149,7 +149,7 @@ claim. The pinned upstream runner has no corresponding OID4VCI mdoc issuer
 plan. EUDI reference-library issuance and independent COSE/CBOR/X.509 checks
 remain the issuance evidence until such a plan is available.
 
-### 7. W3C Data Integrity had no managed signer capability
+### 7. W3C Data Integrity issuance was configuration-only and reconstructed the document
 
 The official W3C lane stopped at the public credential-template API with HTTP
 404 because the managed signer registry did not advertise `ldp_vc`. This was a
@@ -157,11 +157,50 @@ real production configuration gap. Marty supports the
 `eddsa-rdfc-2022` verification suite; assigning Data Integrity to the default
 ES256 key would have falsely advertised an unsupported cryptographic pairing.
 
-Action: normalize W3C Data Integrity aliases to `ldp_vc`, advertise that
-format only on the managed EdDSA issuer key, and provision separate JWT/ES256
-and Data Integrity/EdDSA profiles sharing the same issuer DID. Runtime callers
-still provide only the issuer DID; custody selectors remain administrative.
-A released-stack rerun is required before the adapted W3C lane is green.
+The audit then exposed a more important implementation gap: the VC-API adapter
+discarded every top-level official credential field except
+`credentialSubject`, and the production Data Integrity helper still required
+local private key material. A suite could therefore appear to exercise
+contexts, types, validity, schemas, status, names, and issuer objects while the
+actual signed document had been reconstructed from a much narrower input.
+That was not acceptable compliance evidence.
+
+Remediation in the current change set:
+
+- [marty-core#72](https://github.com/ElevenID/marty-core/pull/72) is merged and
+  provides native prepare/complete `eddsa-rdfc-2022` operations. It returns the
+  canonical signing bytes, rejects private JWK input, and verifies that the
+  completion identity and algorithm match the preparation.
+- `marty-credentials#74` sends those canonical bytes through the DID-mediated
+  issuer-profile signer, preserves the complete unsigned VCDM v2 document,
+  and rejects caller proofs, issuer mismatches, invalid signatures, and signing
+  identity substitution.
+- `marty-ui#138` passes the complete unsigned document through the normal
+  issuance transaction, token, nonce, and real holder-proof path. It no longer
+  substitutes a JWT envelope or forwards only `credentialSubject`.
+- The official fixture now provisions one managed EdDSA/Data Integrity profile
+  for the lane, registers the product-resolved issuer DID, and advertises only
+  `vc2.0`; it no longer claims `EnvelopingProof` or JOSE coverage.
+
+This is native product-path issuance behind an adapted VC-API facade. It is
+not yet immutable official evidence: both open component changes must merge,
+release, enter the stack manifest, and pass the pinned official suite.
+
+The audit also found and removed an adapter-owned anti-cheat risk. The adapter
+had performed suite-specific semantic VCDM and related-resource validation
+before the production issuance call. Those structural rules now live in a
+production `marty-credentials` domain validator invoked by the ordinary
+issuance request model. Remote `relatedResource` digest verification is an
+allowlisted production issuance policy with HTTPS-only exact URLs, no
+redirects, bounded responses, and request timeouts. The adapter-owned
+validators and their tests were deleted; equivalent official negative
+regressions now run against production code. The adapter also stopped
+duplicating the gateway's template lookup and DID/profile resolution: it now
+submits `organization_id`, the fixture's public `issuer_did`, template ID, and
+the complete document to the same `create_issuance` application path used by
+the general UI API. This remediation is locally passing but still needs
+component merge, release, and pinned-suite evidence before it is an immutable
+native-compliance result.
 
 ### 7a. DID-first resolution did not yet extend to every internal signing call
 
@@ -182,7 +221,7 @@ DID verification material and signature.  Update OID4VCI, mdoc, DIDComm, and
 gRPC issuance to use this endpoint.  The gateway-to-KMS mapping remains
 issuer-profile mediated and private.
 
-Evidence pending CI/merge:
+Merged evidence:
 
 - [marty-ui#137](https://github.com/ElevenID/marty-ui/pull/137) adds the
   DID-mediated signer and override-rejection tests;
@@ -190,10 +229,10 @@ Evidence pending CI/merge:
   removes profile IDs from issuance-to-signer calls and covers REST/gRPC
   signing requests.
 
-This closes an architectural boundary gap, not the separate Data Integrity
-issuance gap.  The current SSI-based Data Integrity issuer needs a production
-remote-proof-signing integration; a local private JWK or the W3C test adapter
-must not be used to make the suite pass.
+Both changes merged on 2026-07-28. The native Data Integrity remediation in
+section 7 builds on this boundary: canonical proof bytes are signed by issuer
+DID through the resolved profile, never by passing a private JWK or public KMS
+selector.
 
 ### 8. The OID4VCI runner lacked its emulated wallet identities
 
@@ -315,9 +354,14 @@ Two paths must remain described as adapted:
 
 - The EUDI wallet HTTP service is an ElevenID facade over pinned official JVM
   libraries, not the reference mobile wallet binary.
-- The W3C suite currently reaches a gated VC-API-shaped adapter. It must move
-  to a supported public VC-API or the ordinary product path before Marty
-  claims native VC-API coverage.
+- The W3C suite reaches a gated VC-API-shaped facade. Valid issuance now
+  traverses the ordinary product transaction/token/nonce/holder-proof path,
+  but the VC-API interface itself is adapted and the adapter's remaining
+  suite-specific negative-case validation is not native product evidence.
+
+No W3C pass may be claimed merely because the adapter rejects an invalid
+fixture. Every negative assertion must be traceable to a shared production
+validator or explicitly labeled adapted until that gap is removed.
 
 OID4VP URL-query is not an adapted path. Marty supports the native signed
 `request_uri` transport, including the OID4VP `request_uri_method=post`
@@ -401,11 +445,25 @@ service images remains required.
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
-| W3C VCDM v2 verification and issuance | Public bootstrap exposed missing `ldp_vc` managed capability; verification supports the currently configured Data Integrity suite | Release the EdDSA profile fix, rerun the adapted suite, then add native remote Data Integrity proof issuance without a private JWK or test-adapter bypass |
+| W3C VCDM v2 verification and issuance | Native marty-core proof preparation/completion is merged; credentials and UI changes preserve the complete unsigned document and use DID-mediated issuer-profile custody through the normal product transaction/token/nonce/holder-proof path; semantic and related-resource validation now execute in production credentials code rather than the adapter | Merge and release `marty-credentials#74` and `marty-ui#138`, then rerun the pinned suite against the attested stack |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
 | Wider Marty feature model | Not covered by official suites | RBAC/SCIM, saved flows, vetting, devices, API keys, revocation, trust registries, notifications, audit, wallet profiles, DIDComm |
+
+### Exposed-gap action ledger
+
+| Finding | Classification | Impact | Owner/remediation | Status and required evidence |
+| --- | --- | --- | --- | --- |
+| W3C adapter reconstructed only `credentialSubject` | Bypass risk | Could pass top-level VCDM assertions without signing the tested document | `marty-core#72`, `marty-credentials#74`, `marty-ui#138` | Product code fixed locally/partly merged; requires released-stack official run |
+| W3C adapter performed suite-specific semantic validation | Adapted gap / bypass risk | Negative cases could pass before production code saw the input | `marty-ui#138` deletes adapter-owned validation; `marty-credentials#74` owns structural and allowlisted digest validation | Remediated locally with production negative regressions; merge/release and immutable official rerun required |
+| W3C adapter duplicated the general UI issuance boundary | API bypass risk | Private template/resolver calls could drift from the API the UI is required to use | `marty-ui#138` calls the shared general `create_issuance` path with only organization, public issuer DID, template, and complete document | Remediated locally; gateway tests assert no private resolver/template call and immutable official rerun remains required |
+| Managed registry lacked `ldp_vc`/EdDSA | Missing feature | Public template bootstrap failed; unsafe ES256 substitution was possible if forced | Official fixture bootstrap plus managed EdDSA profile | Implemented locally; requires immutable stack proof |
+| Public `application_id` was rejected downstream | Protocol drift | A gateway-valid issuance request could fail at the issuance service and lose application linkage | `marty-protocol` issuance schema and `marty-credentials` request/transaction mapping | Fixed locally; requires protocol and credentials CI/merge |
+| Generated `credential_subject` type collapsed object/array to string | Protocol drift | Generated clients could not represent the production request | `marty-protocol` code generator and generated bindings | Fixed locally; Python/Rust/TypeScript checks pass |
+| Official W3C registration claimed JOSE enveloping proof | Misleading claim | Selected assertions Marty was not exercising natively | `w3c_vc_conformance.py` registration | Fixed locally; official config now advertises `vc2.0` only |
+| Official lanes use one organization | Missing evidence | Tenant isolation and cross-tenant DID resolution remain unproven | Two-organization adversarial matrix | Partial template isolation exists; full matrix remains open |
+| Official lanes do not drive the browser | Missing evidence | UI request shapes and exclusive general-API use remain unproven | Released-stack Playwright issuance/verification smoke | Open |
 
 ## Immutable evidence collected
 

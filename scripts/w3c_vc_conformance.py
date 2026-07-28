@@ -142,24 +142,25 @@ def validate_checkout(path: Path, manifest: dict) -> None:
         )
 
 
-def write_local_config(path: Path, adapter_base_url: str) -> None:
+def write_local_config(path: Path, adapter_base_url: str, issuer_id: str) -> None:
     base = adapter_base_url.rstrip("/")
     if not base.startswith(("http://", "https://")):
         raise ValueError("adapter URL must be absolute http(s)")
+    if not re.fullmatch(r"did:[a-z0-9]+:.+", issuer_id):
+        raise ValueError("W3C issuer id must be the resolved issuer DID")
     path.write_text(
         "module.exports = {\n"
         "  settings: { enableInteropTests: false, testAllImplementations: false },\n"
         "  implementations: [{\n"
         "    name: 'ElevenID', implementation: 'Marty VC API test adapter',\n"
-        # Marty issues and verifies JWT VCs as the VC Data Model v2 JOSE
-        # enveloping-proof representation.  The official runner uses this
-        # capability tag to inspect the nested JWT payload rather than
-        # assuming an embedded JSON-LD Data Integrity proof.
-        f"    issuers: [{{ id: '{base}/issuer',\n"
-        f"      endpoint: '{base}/credentials/issue', tags: ['vc2.0', 'EnvelopingProof'],\n"
-        "      supports: { vc: ['2.0'], proof: ['JOSE'] } }],\n"
+        # The issuer identity is the same DID resolved by the product API. The
+        # vc2.0 tag selects the suite's embedded Data Integrity assertions;
+        # EnvelopingProof would incorrectly select the JOSE-only matrix.
+        f"    issuers: [{{ id: '{issuer_id}',\n"
+        f"      endpoint: '{base}/credentials/issue', tags: ['vc2.0'],\n"
+        "      supports: { vc: ['2.0'] } }],\n"
         "    verifiers: [{ id: 'marty-vc-verifier',\n"
-        f"      endpoint: '{base}/credentials/verify', tags: ['vc2.0', 'EnvelopingProof'],\n"
+        f"      endpoint: '{base}/credentials/verify', tags: ['vc2.0'],\n"
         "      supports: { vc: ['2.0'] } }],\n"
         "    vpVerifiers: [{ id: 'marty-vp-verifier',\n"
         # Marty verifies the official suite's eddsa-rdfc-2022 VPs through its
@@ -406,7 +407,15 @@ def write_evidence(
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def run_suite(suite: Path, adapter_url: str, output: Path, stack_manifest: Path, *, install: bool) -> int:
+def run_suite(
+    suite: Path,
+    adapter_url: str,
+    issuer_id: str,
+    output: Path,
+    stack_manifest: Path,
+    *,
+    install: bool,
+) -> int:
     """Run the official W3C test command against the real test-only adapter.
 
     The upstream checkout is pinned before invoking its own ``npm test``
@@ -418,7 +427,7 @@ def run_suite(suite: Path, adapter_url: str, output: Path, stack_manifest: Path,
     manifest = load_manifest()
     validate_checkout(suite, manifest)
     stack_manifest_metadata(stack_manifest)
-    write_local_config(suite / "localConfig.cjs", adapter_url)
+    write_local_config(suite / "localConfig.cjs", adapter_url, issuer_id)
     if install:
         install_result = install_dependencies(suite, manifest)
         if install_result:
@@ -457,10 +466,12 @@ def main() -> int:
     bootstrap.add_argument("--output", type=Path, required=True)
     run = sub.add_parser("write-local-config")
     run.add_argument("--adapter-url", required=True)
+    run.add_argument("--issuer-id", required=True)
     run.add_argument("--output", type=Path, required=True)
     execute = sub.add_parser("run")
     execute.add_argument("--suite", type=Path, required=True)
     execute.add_argument("--adapter-url", required=True)
+    execute.add_argument("--issuer-id", required=True)
     execute.add_argument("--output-dir", type=Path, required=True)
     execute.add_argument(
         "--stack-manifest",
@@ -480,6 +491,7 @@ def main() -> int:
         return run_suite(
             args.suite.resolve(),
             args.adapter_url,
+            args.issuer_id,
             args.output_dir.resolve(),
             args.stack_manifest.resolve(),
             install=args.install,
@@ -487,7 +499,7 @@ def main() -> int:
     if args.command == "bootstrap-npm":
         print(bootstrap_npm(args.output.resolve(), manifest))
         return 0
-    write_local_config(args.output, args.adapter_url)
+    write_local_config(args.output, args.adapter_url, args.issuer_id)
     return 0
 
 

@@ -216,7 +216,7 @@ def revocation_profile_payload(
         "revocation_mechanism": ["BITSTRING_STATUS_LIST"],
         "mechanism_priority": ["BITSTRING_STATUS_LIST"],
         "check_mode": "ALWAYS",
-        "supported_formats": (["VC_JWT"] if w3c else ["MSO_MDOC"] if mdoc else ["SD_JWT_VC"]),
+        "supported_formats": (["JSON_LD"] if w3c else ["MSO_MDOC"] if mdoc else ["SD_JWT_VC"]),
     }
 
 
@@ -233,21 +233,20 @@ def template_payload(
 ) -> dict[str, object]:
     if w3c:
         # Issuance and presentation verification intentionally use separate
-        # templates. The issuance fixture remains JWT VC; the verifier fixture
-        # declares JSON-LD so the policy's authoritative template format
-        # matches the DataIntegrityProof presentations supplied by W3C.
-        data_integrity = presentation
+        # templates, but both declare the native Data Integrity representation.
+        # This keeps each policy role explicit without reconstructing a JOSE
+        # envelope around a credential that Marty actually signs as JSON-LD.
         return {
             "organization_id": organization_id,
             "name": (
                 f"Official W3C VC v2 Data Integrity verifier {run_id}"
-                if data_integrity
-                else f"Official W3C VC v2 JWT issuer {run_id}"
+                if presentation
+                else f"Official W3C VC v2 Data Integrity issuer {run_id}"
             ),
             "credential_type": "VerifiableId",
             "vct": "https://credentials.marty.dev/VerifiableId",
-            "supported_formats": ["ldp_vc"] if data_integrity else ["jwt_vc"],
-            "credential_payload_format": ("ldp_vc" if data_integrity else "w3c_vcdm_v2_jwt_vc"),
+            "supported_formats": ["ldp_vc"],
+            "credential_payload_format": "ldp_vc",
             "compliance_profile_id": compliance_profile_id,
             "issuer_did": issuer_did,
             "revocation_profile_id": revocation_profile_id,
@@ -374,8 +373,6 @@ def policy_payload(
                 "display_name": label,
                 "credential_payload_format": (
                     "w3c_vcdm_v2_di"
-                    if w3c and presentation
-                    else "w3c_vcdm_v2_jwt_vc"
                     if w3c
                     else "mso_mdoc"
                     if mdoc
@@ -740,6 +737,7 @@ def bootstrap(
             organization_id=organization_id,
             w3c=w3c,
             key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
+            data_integrity=w3c,
             request=request,
         )
         profile_payload = issuer_profile_payload(
@@ -748,7 +746,7 @@ def bootstrap(
             gateway_url=gateway_url,
             w3c=w3c,
             run_id=run_id,
-            label="OID4VCI SD-JWT" if oid4vci else None,
+            label="W3C VC Data Integrity" if w3c else "OID4VCI SD-JWT" if oid4vci else None,
             key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
         )
         created_issuer_profile = request(
@@ -759,35 +757,6 @@ def bootstrap(
             json_body=profile_payload,
         )
         issuer_profile_response_id(created_issuer_profile)
-        if w3c:
-            # The W3C lane verifies both JWT VC and Data Integrity credentials.
-            # Keep those capabilities on distinct profiles sharing the same DID:
-            # ES256 remains the JWT signer, while ldp_vc resolves only to the
-            # managed EdDSA key required by the supported eddsa-rdfc-2022 suite.
-            data_integrity_service = resolve_signing_service(
-                gateway_url,
-                session_id,
-                organization_id=organization_id,
-                w3c=True,
-                data_integrity=True,
-                request=request,
-            )
-            data_integrity_profile_payload = issuer_profile_payload(
-                organization_id,
-                data_integrity_service,
-                gateway_url=gateway_url,
-                w3c=True,
-                run_id=run_id,
-                label="W3C VC Data Integrity",
-            )
-            created_data_integrity_profile = request(
-                gateway_url,
-                session_id,
-                (f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}"),
-                method="POST",
-                json_body=data_integrity_profile_payload,
-            )
-            issuer_profile_response_id(created_data_integrity_profile)
         request_profile_payload: dict[str, str] | None = None
         request_issuer_profile_id: str | None = None
         if not w3c and not oid4vci:

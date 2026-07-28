@@ -33,7 +33,7 @@
     "target": "Marty gateway -> presentation-policy evaluator"
   },
   "supported": {
-    "serializations": ["jwt_vc_json", "w3c_vcdm_v2_di", "sd_jwt_vc", "mso_mdoc"],
+    "serializations": ["w3c_vcdm_v2_di"],
     "verification_path": "Marty presentation-policy evaluator"
   },
   "evidence": {
