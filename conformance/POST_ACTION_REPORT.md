@@ -163,6 +163,38 @@ and Data Integrity/EdDSA profiles sharing the same issuer DID. Runtime callers
 still provide only the issuer DID; custody selectors remain administrative.
 A released-stack rerun is required before the adapted W3C lane is green.
 
+### 7a. DID-first resolution did not yet extend to every internal signing call
+
+The public gateway correctly accepted only an organization and `issuer_did`,
+then resolved the active compatible issuer profile.  However, the OID4VCI,
+mdoc, DIDComm, and gRPC issuance workers subsequently addressed the internal
+signing endpoint by the resolved `issuer_profile_id`.  This was not a test
+bypass—profile resolution had already happened through the DID resolver and
+the worker still had no KMS selector—but it left a second identity selector in
+the protocol-service-to-custody boundary.  It would make a stale profile
+binding easier to misuse and contradicted the intended DID-first architecture.
+
+Action: add a gateway-only DID-mediated signing endpoint.  It receives only
+`organization_id`, `issuer_did`, credential format/purpose, algorithm, and the
+payload; it resolves exactly one active compatible profile internally and
+rejects profile, service, and key overrides.  The endpoint returns only the
+DID verification material and signature.  Update OID4VCI, mdoc, DIDComm, and
+gRPC issuance to use this endpoint.  The gateway-to-KMS mapping remains
+issuer-profile mediated and private.
+
+Evidence pending CI/merge:
+
+- [marty-ui#137](https://github.com/ElevenID/marty-ui/pull/137) adds the
+  DID-mediated signer and override-rejection tests;
+- [marty-credentials#73](https://github.com/ElevenID/marty-credentials/pull/73)
+  removes profile IDs from issuance-to-signer calls and covers REST/gRPC
+  signing requests.
+
+This closes an architectural boundary gap, not the separate Data Integrity
+issuance gap.  The current SSI-based Data Integrity issuer needs a production
+remote-proof-signing integration; a local private JWK or the W3C test adapter
+must not be used to make the suite pass.
+
 ### 8. The OID4VCI runner lacked its emulated wallet identities
 
 OID4VCI metadata passed, while all interaction modules entered `INTERRUPTED`
@@ -353,13 +385,13 @@ service images remains required.
 
 | Capability | Current evidence | Remaining gap |
 | --- | --- | --- |
-| DID-first OID4VCI issuance | Public-path EUDI issuance; official metadata module passes; tenant-bound `private_key_jwt` registration, REST/gRPC parity, replay rejection, atomic grant consumption, and PAR binding are implemented in the current remediation set | Release the remediation set and pass the complete official issuer interaction plan against its immutable artifacts |
+| DID-first OID4VCI issuance | Public-path EUDI issuance; tenant-bound `private_key_jwt` registration, REST/gRPC parity, replay rejection, atomic grant consumption, PAR binding, and DID-mediated signer calls are implemented in the current remediation set | Merge/release the remediation set and pass the complete official issuer interaction plan against its immutable artifacts |
 | DID-first signed OID4VP request | Official OID4VP Final plan passes on immutable v1.1.38 | Keep the active profile green as the official runner updates |
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
-| W3C VCDM v2 verification | Public bootstrap exposed missing `ldp_vc` managed capability | Release the EdDSA profile fix, rerun the adapted suite, then add native Data Integrity issuance |
+| W3C VCDM v2 verification and issuance | Public bootstrap exposed missing `ldp_vc` managed capability; verification supports the currently configured Data Integrity suite | Release the EdDSA profile fix, rerun the adapted suite, then add native remote Data Integrity proof issuance without a private JWK or test-adapter bypass |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
