@@ -32,7 +32,11 @@ CLAIMS = {
 }
 
 
-def _encoded_mdoc(*, tag_mobile_security_object: bool = True) -> str:
+def _encoded_mdoc(
+    *,
+    tag_mobile_security_object: bool = True,
+    legacy_protected_x5chain: bool = False,
+) -> str:
     key = ec.generate_private_key(ec.SECP256R1())
     ca_key = ec.generate_private_key(ec.SECP256R1())
     issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "EUDI test document CA")])
@@ -88,27 +92,27 @@ def _encoded_mdoc(*, tag_mobile_security_object: bool = True) -> str:
             },
         }
     )
-    mso_bytes = (
-        cbor2.dumps(cbor2.CBORTag(24, encoded_mso))
-        if tag_mobile_security_object
-        else encoded_mso
-    )
-    protected = cbor2.dumps(
-        {
-            1: -7,
-            33: [
-                certificate.public_bytes(serialization.Encoding.DER),
-                root.public_bytes(serialization.Encoding.DER),
-            ],
-        }
-    )
+    mso_bytes = cbor2.dumps(cbor2.CBORTag(24, encoded_mso)) if tag_mobile_security_object else encoded_mso
+    certificate_chain = [
+        certificate.public_bytes(serialization.Encoding.DER),
+        root.public_bytes(serialization.Encoding.DER),
+    ]
+    protected_headers: dict[int, Any] = {1: -7}
+    unprotected_headers: dict[int, Any] = {33: certificate_chain}
+    if legacy_protected_x5chain:
+        protected_headers[33] = certificate_chain
+        unprotected_headers = {}
+    protected = cbor2.dumps(protected_headers)
     to_be_signed = cbor2.dumps(["Signature1", protected, b"", mso_bytes])
     signature_der = key.sign(to_be_signed, ec.ECDSA(hashes.SHA256()))
     r, s = decode_dss_signature(signature_der)
     signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
     issuer_signed = {
         "nameSpaces": {NAMESPACE: items},
-        "issuerAuth": cbor2.CBORTag(18, [protected, {}, mso_bytes, signature]),
+        "issuerAuth": cbor2.CBORTag(
+            18,
+            [protected, unprotected_headers, mso_bytes, signature],
+        ),
     }
     return base64.urlsafe_b64encode(cbor2.dumps(issuer_signed)).rstrip(b"=").decode("ascii")
 
@@ -124,9 +128,7 @@ def _validate(credential: str) -> dict[str, object]:
 
 
 def _mutate(credential: str, operation: Callable[[dict[str, Any]], None]) -> str:
-    decoded = _mutable_cbor(
-        cbor2.loads(base64.urlsafe_b64decode(credential + "=" * (-len(credential) % 4)))
-    )
+    decoded = _mutable_cbor(cbor2.loads(base64.urlsafe_b64decode(credential + "=" * (-len(credential) % 4))))
     operation(decoded)
     return base64.urlsafe_b64encode(cbor2.dumps(decoded)).rstrip(b"=").decode("ascii")
 
@@ -172,6 +174,19 @@ def test_opaque_long_text_cannot_satisfy_mdoc_evidence() -> None:
 def test_legacy_raw_mso_payload_cannot_satisfy_mdoc_evidence() -> None:
     with pytest.raises(ValueError, match="MobileSecurityObjectBytes must be tag-24"):
         _validate(_encoded_mdoc(tag_mobile_security_object=False))
+
+
+def test_legacy_protected_x5chain_cannot_satisfy_mdoc_evidence() -> None:
+    with pytest.raises(ValueError, match="x5chain must be in the COSE unprotected header"):
+        _validate(_encoded_mdoc(legacy_protected_x5chain=True))
+
+
+def test_missing_unprotected_x5chain_cannot_satisfy_mdoc_evidence() -> None:
+    def remove_chain(value: dict[str, Any]) -> None:
+        value["issuerAuth"].value[1] = {}
+
+    with pytest.raises(ValueError, match="unprotected header must contain a non-empty x5chain"):
+        _validate(_mutate(_encoded_mdoc(), remove_chain))
 
 
 def test_tampered_mdoc_signature_cannot_satisfy_evidence() -> None:
