@@ -119,13 +119,17 @@ rerun remains required.
 
 ### 4. The checked-in immutable stack pin lagged the reviewed release
 
-Manual investigation used reviewed tag and manifest overrides while
-`conformance/stack-under-test.json` still named `marty-ui` v1.1.34. The
-released DID-first fixes are in v1.1.38, and the holder-binding correction
-will first appear in a later release.
+Manual investigation initially used reviewed tag and manifest overrides while
+`conformance/stack-under-test.json` still named `marty-ui` v1.1.34. That could
+cause a default or scheduled lane to test an obsolete pre-DID-first stack even
+while manually dispatched evidence used newer artifacts.
 
-Action required: after the final v1.1.39-or-newer lanes are green, update the
-checked-in pin to that release and its independently verified manifest digest.
+Action completed: the checked-in pin now names `marty-ui` v1.1.49 and its
+independently verified manifest digest
+`sha256:abf954ffa8fe2cc763734b9e3b98b3f38d39d0ee98eb76649e31ba7b44d345c3`.
+Overrides remain available for controlled candidate testing, but the default
+is the latest stack that passed both its artifact-only release gate and the
+official OID4VCI issuer lane.
 
 ### 5. The old stack proved that the harness does not silently fall back
 
@@ -606,7 +610,7 @@ enter Marty, and this holder-client registration does not alter issuer
 signing: issuer keys remain in managed custody and signing remains
 issuer-profile mediated after DID-first resolution.
 
-Evidence under review:
+Released evidence:
 
 - [marty-credentials#67](https://github.com/ElevenID/marty-credentials/pull/67)
   implements the shared authentication service, tenant persistence, atomic
@@ -617,9 +621,60 @@ Evidence under review:
   provisions two disposable clients without an internal-service or API-key
   issuance bypass.
 
-The OID4VCI profile remains `planned`. These changes are necessary evidence,
-but they are not sufficient to claim the official issuer profile until merged
-component releases are pinned by digest and the complete upstream plan passes.
+All three changes are merged. They are necessary production controls, but the
+first immutable official rerun still rejected every active interaction module
+at the token endpoint. The failure was retained rather than dismissed or
+listed as expected.
+
+### 9a. The official client assertion exposed an overly strict duplicate identifier check
+
+Official run
+[30385508700](https://github.com/ElevenID/marty-integration-tests/actions/runs/30385508700)
+proved the exact remaining failure as token-endpoint HTTP 401. The OIDF wallet
+sent an RFC 7523 `client_assertion` with its authenticated identity in signed
+`iss` and `sub` claims, but did not redundantly send the optional OAuth form
+`client_id`. Marty had already selected the one transaction-bound,
+tenant-owned registration and verified assertions only against that
+registration's public JWKS, yet it also required the absent form value to
+equal the registered client ID.
+
+This was a production interoperability defect. It was not corrected in the
+test adapter. [marty-credentials#81](https://github.com/ElevenID/marty-credentials/pull/81)
+changes the shared REST/gRPC authentication service so that:
+
+- an omitted form `client_id` is accepted only after the assertion's signed
+  identity and signature establish the registered client;
+- a supplied mismatched form `client_id` is still rejected;
+- the transaction remains bound to one organization and one opaque
+  registration;
+- signature, audience, bounded time, key ID, and one-time `jti` checks remain
+  mandatory; and
+- the issuer signing operation continues through DID-first issuer-profile
+  custody, independently of holder-client authentication.
+
+The fix is released as `marty-credentials` v0.1.27 and pinned by immutable
+stack `marty-ui` v1.1.49. Official run
+[30389863768](https://github.com/ElevenID/marty-integration-tests/actions/runs/30389863768)
+then passed the exact OIDF `release-v5.2.0` runner commit
+`dee9a25160e789f0f80517674693ef7989ab9fa1`. The runner reported 16 modules,
+1,015 successful conditions, zero failures, and zero warnings. Every active
+non-skipped module passed, including metadata, normal issuance, additional
+requests, multiple registered clients, notification omission, invalid nonce,
+invalid JWT proof signature, missing proof, unknown configuration, unknown
+credential identifier, and access-token-in-query rejection.
+
+Four optional capabilities remain deliberately unadvertised and are therefore
+documented, expiring skips rather than failed or simulated features:
+
+- signed Credential Issuer Metadata;
+- batch credential issuance;
+- holder-key attestation; and
+- credential-response encryption.
+
+Those are **missing optional features**, not hidden failures in the active
+profile. The OID4VCI issuer profile is now **native** for the tested
+pre-authorized-code, DPoP, private-key-JWT, SD-JWT VC configuration. This is
+official-suite interoperability evidence, not an OIDF certification.
 
 ## Do the tests cheat?
 
@@ -729,7 +784,7 @@ service images remains required.
 
 | Capability | Current evidence | Remaining gap |
 | --- | --- | --- |
-| DID-first OID4VCI issuance | Public-path EUDI issuance; tenant-bound `private_key_jwt` registration, REST/gRPC parity, replay rejection, atomic grant consumption, PAR binding, and DID-mediated signer calls are implemented in the current remediation set | Merge/release the remediation set and pass the complete official issuer interaction plan against its immutable artifacts |
+| DID-first OID4VCI issuance | Native official OIDF issuer evidence on immutable v1.1.49: pre-authorized code, DPoP, `private_key_jwt`, SD-JWT VC, multiple clients, nonce/proof/configuration negatives, notifications, and token-query rejection | Signed metadata, batch issuance, holder-key attestation, and credential-response encryption are optional, unadvertised gaps; keep the active profile green as the runner updates |
 | DID-first signed OID4VP request | Official OID4VP Final plan passes on immutable v1.1.38 | Keep the active profile green as the official runner updates |
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
@@ -763,6 +818,8 @@ service images remains required.
 | Credentials release image pinned an older core than its source workspace | Release provenance/consistency gap | Local and source-wheel tests exercised corrected completion behavior while the deployed issuance image retained the expired-claim rejection | `marty-credentials#80` aligns Cargo revisions and release-wheel commit and adds a coherence contract | Remediated in v0.1.26 and proven in v1.1.47; exact manifests, checksums, attestations, anonymous digest access, and the formerly failing official assertions pass |
 | Data Integrity verifier resolved only did:key | Product DID-resolution gap | Correct tenant-scoped did:web credentials reached Rust but could not be cryptographically verified | `marty-core#77` accepts resolver-owned public methods; `marty-ui#148` enforces exact DID document, controller, method, and relationship | Released in v1.1.47; run 30380594927 reached the exact document-identity guard, exposing the separate public alias-publication defect rather than the prior did:key-only limitation |
 | Public did:web route returned a stored alias DID | Product DID-publication gap | The exact resolver correctly rejected the managed public method because the document `id`, controller, and relationship identifiers represented another DID | `marty-ui#150` retargets the tenant-bound public document and makes candidate resolution skip mismatched documents | Remediated and released; 197 focused tests, every PR/release gate, and the v1.1.48 59/59 official run pass |
+| Token endpoint required a redundant form `client_id` with RFC 7523 client assertions | Product interoperability gap | Every active official OID4VCI interaction reached the real token endpoint but failed HTTP 401 despite a transaction-bound registered client and a signed assertion identity | `marty-credentials#81` permits omission only after signed `iss`/`sub`, public-JWKS signature, audience, time, key, and replay checks establish the exact registered client; supplied mismatches still fail | Remediated in credentials v0.1.27 and immutable stack v1.1.49; official run 30389863768 reports 1,015 successful conditions, zero failures, and zero warnings |
+| Signed issuer metadata, batch issuance, holder-key attestation, and credential-response encryption are not advertised | Missing optional features | The active profile is narrower than the complete optional OID4VCI feature set | Keep explicit capability metadata and owned, expiring skip records; implement each only through a separately reviewed production path | Open by design; never represent these skipped modules as passed |
 | Official lanes use one organization | Missing evidence | Tenant isolation and cross-tenant DID resolution remain unproven | Two-organization adversarial matrix | Partial template isolation exists; full matrix remains open |
 | Official lanes do not drive the browser | Missing evidence | UI request shapes and exclusive general-API use remain unproven | Released-stack Playwright issuance/verification smoke | Open |
 
@@ -799,15 +856,20 @@ service images remains required.
 | OID4VCI issuer run [30230312937](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312937), sanitized summary `sha256:eacc7f2d7fd9edc2ffec43e3faaa590d1c733d429c74bcdaf47c7e3f7189b444` | Metadata passed; interaction modules exposed missing official-runner client identities |
 | OID4VCI issuer run [30231686437](https://github.com/ElevenID/marty-integration-tests/actions/runs/30231686437), sanitized summary `sha256:4adb5cc1e43b14953fc3603a63f3e396a211890399d0de7914562e26a73852a9` | Authorization-server identity passed; exposed internal-template/public-configuration ID confusion |
 | OID4VCI issuer run [30232003181](https://github.com/ElevenID/marty-integration-tests/actions/runs/30232003181), sanitized summary `sha256:de313a9f8dc4338f1ff83dbb0ae60822dda6f468fc7b219f3f0b41e25412d1cb` | Reached issuer interaction; exposed selection of bare JWT VC `PID` instead of advertised SD-JWT `PID#sd-jwt` |
+| OID4VCI issuer run [30385508700](https://github.com/ElevenID/marty-integration-tests/actions/runs/30385508700), sanitized artifact `official-oid4vci-issuer-30385508700-1`, artifact digest `sha256:97524a4f3117fe376ba48371061ae2438c7b66fec9481f2c73628c87e5c3bc19` | Exact v1.1.48 artifacts reached the real token endpoint; every active interaction failed safely and specifically as HTTP 401, exposing the redundant form `client_id` requirement |
+| `marty-credentials` v0.1.27, release commit `cf4edaad499f42fa06215cadfc96365ec0ae01d4`, source run [30386890440](https://github.com/ElevenID/marty-credentials/actions/runs/30386890440), finalization run [30388324868](https://github.com/ElevenID/marty-credentials/actions/runs/30388324868) | Full Python/Rust/WASM, cross-platform artifacts, security, checksum, SBOM, signature, and provenance gates passed; the issuance image is `sha256:43f8a2de5dc8f6d66acfa0197f2a552a80a7c54317d93c5c99f45959b06dab2c` |
+| `marty-ui` v1.1.49, release commit `c40b9c398a3a28be0d02f7f65ead975720f8b729`, manifest `sha256:abf954ffa8fe2cc763734b9e3b98b3f38d39d0ee98eb76649e31ba7b44d345c3`, run [30389205086](https://github.com/ElevenID/marty-ui/actions/runs/30389205086) | All release jobs passed, including exact dependency provenance, signed images, no-commerce scan, upgrade/rollback rendering, anonymous digest pulls, and the artifact-only public integration suite |
+| OID4VCI issuer run [30389863768](https://github.com/ElevenID/marty-integration-tests/actions/runs/30389863768), sanitized artifact `official-oid4vci-issuer-30389863768-1`, artifact digest `sha256:30bbb18e66e11fa4b73b8af15ddc88f791a88b1b88cbc919ea14a1b653fe25c9` | Exact OIDF `release-v5.2.0` commit `dee9a25160e789f0f80517674693ef7989ab9fa1` passed every active module against exact v1.1.49 artifacts: 1,015 successful conditions, zero failures, zero warnings; four optional unadvertised capabilities remain explicit skips |
 
-The report must be updated with the passing run URL, harness commit, sanitized
-artifact digest, and final count before the v1.1.38 pin is described as ready.
+The OID4VCI passing run is bound to harness commit
+`874aa50ba32a89a743ad6546758ad7fcf6c87886`, artifact ID `8700574000`, and
+the exact v1.1.49 stack manifest above.
 
 ## Completion criteria for this report
 
 This report becomes final only when:
 
-- the immutable v1.1.39-or-newer EUDI lane passes with all required evidence;
+- the immutable EUDI lane passes with all required evidence;
 - the default stack pin names that reviewed release;
 - OID4VP Final, HAIP, W3C v2, and applicable mdoc official lanes have explicit
   native/adapted/unsupported outcomes;
