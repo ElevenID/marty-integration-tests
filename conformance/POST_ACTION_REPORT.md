@@ -186,12 +186,17 @@ This is native product-path issuance behind an adapted VC-API facade. It is
 not yet immutable official evidence: both open component changes must merge,
 release, enter the stack manifest, and pass the pinned official suite.
 
-One remaining anti-cheat item is explicit. The adapter still performs
-suite-specific semantic VCDM and related-resource validation before the
-production issuance call. Baseline unsigned-document validation now exists at
-the public gateway and issuance service, but the deeper rules must move to a
-shared production validator (or be removed from the adapter) before negative
-official cases can be described as native product validation.
+The audit also found and removed an adapter-owned anti-cheat risk. The adapter
+had performed suite-specific semantic VCDM and related-resource validation
+before the production issuance call. Those structural rules now live in a
+production `marty-credentials` domain validator invoked by the ordinary
+issuance request model. Remote `relatedResource` digest verification is an
+allowlisted production issuance policy with HTTPS-only exact URLs, no
+redirects, bounded responses, and request timeouts. The adapter-owned
+validators and their tests were deleted; equivalent official negative
+regressions now run against production code. This remediation is locally
+passing but still needs component merge, release, and pinned-suite evidence
+before it is an immutable native-compliance result.
 
 ### 7a. DID-first resolution did not yet extend to every internal signing call
 
@@ -436,7 +441,7 @@ service images remains required.
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
-| W3C VCDM v2 verification and issuance | Native marty-core proof preparation/completion is merged; credentials and UI changes preserve the complete unsigned document and use DID-mediated issuer-profile custody through the normal product transaction/token/nonce/holder-proof path | Merge and release `marty-credentials#74` and `marty-ui#138`; move remaining suite-specific semantic validation into production/shared code; rerun the pinned suite against the attested stack |
+| W3C VCDM v2 verification and issuance | Native marty-core proof preparation/completion is merged; credentials and UI changes preserve the complete unsigned document and use DID-mediated issuer-profile custody through the normal product transaction/token/nonce/holder-proof path; semantic and related-resource validation now execute in production credentials code rather than the adapter | Merge and release `marty-credentials#74` and `marty-ui#138`, then rerun the pinned suite against the attested stack |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
@@ -447,7 +452,7 @@ service images remains required.
 | Finding | Classification | Impact | Owner/remediation | Status and required evidence |
 | --- | --- | --- | --- | --- |
 | W3C adapter reconstructed only `credentialSubject` | Bypass risk | Could pass top-level VCDM assertions without signing the tested document | `marty-core#72`, `marty-credentials#74`, `marty-ui#138` | Product code fixed locally/partly merged; requires released-stack official run |
-| W3C adapter performs suite-specific semantic validation | Adapted gap | Negative cases can pass before production code sees the input | `marty-ui` and `marty-credentials`: shared production VCDM validator | Open; remove adapter-only decisions and add production negative regressions |
+| W3C adapter performed suite-specific semantic validation | Adapted gap / bypass risk | Negative cases could pass before production code saw the input | `marty-ui#138` deletes adapter-owned validation; `marty-credentials#74` owns structural and allowlisted digest validation | Remediated locally with production negative regressions; merge/release and immutable official rerun required |
 | Managed registry lacked `ldp_vc`/EdDSA | Missing feature | Public template bootstrap failed; unsafe ES256 substitution was possible if forced | Official fixture bootstrap plus managed EdDSA profile | Implemented locally; requires immutable stack proof |
 | Public `application_id` was rejected downstream | Protocol drift | A gateway-valid issuance request could fail at the issuance service and lose application linkage | `marty-protocol` issuance schema and `marty-credentials` request/transaction mapping | Fixed locally; requires protocol and credentials CI/merge |
 | Generated `credential_subject` type collapsed object/array to string | Protocol drift | Generated clients could not represent the production request | `marty-protocol` code generator and generated bindings | Fixed locally; Python/Rust/TypeScript checks pass |
