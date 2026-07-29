@@ -25,7 +25,11 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
     lock = w3c.reviewed_package_lock_path(manifest)
     assert lock.is_file()
     assert w3c.package_lock_sha256(lock) == manifest["official_suite"]["package_lock_sha256"]
-    assert manifest["adapter"]["path"] == "/__test__/vc-api"
+    assert manifest["adapter"]["path"] == "/v1/vc-api"
+    assert manifest["adapter"]["required_scopes"] == [
+        "credentials:issue",
+        "credentials:read",
+    ]
     assert set(manifest["evidence"]["required_capabilities"]) == {
         "issuer",
         "vc_verifier",
@@ -115,21 +119,28 @@ def test_w3c_local_config_registers_the_real_issuer_and_verifiers(tmp_path: Path
     issuer_did = "did:web:interop.example.test:orgs:official-suite"
     w3c.write_local_config(
         output,
-        "https://interop.example.test/__test__/vc-api",
+        "https://interop.example.test/v1/vc-api",
         issuer_did,
+        "org-1",
+        "template-1",
+        "credential-policy-1",
+        "presentation-policy-1",
     )
     config = output.read_text(encoding="utf-8")
     assert "/credentials/issue" in config
     assert "/credentials/verify" in config
     assert "/presentations/verify" in config
     assert "issuers:" in config
-    assert f"id: '{issuer_did}'" in config
-    issuer_registration = config.split("issuers:", maxsplit=1)[1].split(
-        "verifiers:", maxsplit=1
-    )[0]
-    verifier_registration = config.split("verifiers:", maxsplit=1)[1].split(
-        "vpVerifiers:", maxsplit=1
-    )[0]
+    assert f'id: "{issuer_did}"' in config
+    assert "W3C_VC_API_KEY" in config
+    assert config.count("headers: { 'X-API-Key': apiKey }") == 3
+    assert "organization_id=org-1" in config
+    assert "credential_template_id=template-1" in config
+    assert "issuer_did=did%3Aweb%3Ainterop.example.test%3Aorgs%3Aofficial-suite" in config
+    assert "presentation_policy_id=credential-policy-1" in config
+    assert "presentation_policy_id=presentation-policy-1" in config
+    issuer_registration = config.split("issuers:", maxsplit=1)[1].split("verifiers:", maxsplit=1)[0]
+    verifier_registration = config.split("verifiers:", maxsplit=1)[1].split("vpVerifiers:", maxsplit=1)[0]
     assert "tags: ['vc2.0']" in issuer_registration
     assert "EnvelopingProof" not in issuer_registration
     assert "JOSE" not in issuer_registration
@@ -241,7 +252,14 @@ def test_w3c_evidence_records_no_stale_exclusion_and_preserves_immutable_stack(
     )
     monkeypatch.setattr(w3c, "revision", lambda _path: "a" * 40)
     # Even a zero process exit is not a pass without all three role sentinels.
-    w3c.write_evidence(output, w3c.load_manifest(), suite, "https://marty.test/__test__/vc-api", 0, stack)
+    w3c.write_evidence(
+        output,
+        w3c.load_manifest(),
+        suite,
+        "https://marty.test/v1/vc-api",
+        0,
+        stack,
+    )
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["result"] == {
         "exit_code": 0,
@@ -251,8 +269,6 @@ def test_w3c_evidence_records_no_stale_exclusion_and_preserves_immutable_stack(
         "executed_capabilities": [],
     }
     assert evidence["suite_checkout"]["official_upstream_unmodified"] is False
-    assert evidence["suite_checkout"]["compatibility_patch"]["upstream_pull_request"].endswith(
-        "/pull/174"
-    )
+    assert evidence["suite_checkout"]["compatibility_patch"]["upstream_pull_request"].endswith("/pull/174")
     assert evidence["exclusions"] == []
     assert evidence["marty"]["stack_manifest"]["images"][0]["digest"] == "sha256:" + "a" * 64

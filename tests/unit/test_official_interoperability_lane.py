@@ -184,7 +184,7 @@ def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(
         stack_manifest=tmp_path / "stack-manifest.json",
         output_dir=tmp_path / "evidence",
     )
-    exit_codes = iter((0, 0, 1, 0))
+    exit_codes = iter((0, 1, 0))
     diagnostics: list[str] = []
 
     monkeypatch.setattr(lane, "run", lambda *_args, **_kwargs: next(exit_codes))
@@ -198,6 +198,8 @@ def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(
             "w3c_template_id": "template",
             "w3c_credential_policy_id": "credential-policy",
             "w3c_presentation_policy_id": "presentation-policy",
+            "w3c_api_key_id": "api-key-id",
+            "w3c_api_key": "mk_test_fixture",
         },
     )
     monkeypatch.setattr(lane, "emit_w3c_issuance_diagnostic", diagnostics.append)
@@ -924,18 +926,16 @@ def test_public_proxy_diagnostic_selects_exact_compose_service(
     assert "upstream-connect" in capsys.readouterr().out
 
 
-def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_w3c_lane_uses_authenticated_public_vc_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
-    adapter_environment: dict[str, str] = {}
+    suite_environment: dict[str, str] = {}
+    suite_command: list[str] = []
 
     def fake_run(command: list[str], environment: dict[str, str], **_kwargs: object) -> int:
-        if "--include-w3c" in command and "up" in command:
-            events.append("adapter-up")
-            adapter_environment.update(environment)
-        elif "w3c_vc_conformance.py" in " ".join(command):
+        if "w3c_vc_conformance.py" in " ".join(command):
             events.append("suite")
+            suite_environment.update(environment)
+            suite_command.extend(command)
         return 0
 
     monkeypatch.setattr(lane, "run", fake_run)
@@ -949,6 +949,8 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
             "w3c_template_id": "00000000-0000-0000-0000-000000000002",
             "w3c_credential_policy_id": "00000000-0000-0000-0000-000000000003",
             "w3c_presentation_policy_id": "00000000-0000-0000-0000-000000000004",
+            "w3c_api_key_id": "00000000-0000-0000-0000-000000000005",
+            "w3c_api_key": "mk_test_fixture",
         },
     )
     args = type(
@@ -964,8 +966,14 @@ def test_w3c_lane_rechecks_public_readiness_after_enabling_adapter(
     )()
 
     assert lane.run_w3c(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test:18443"}) == 0
-    assert events == ["ready", "adapter-up", "ready", "suite"]
-    assert adapter_environment["W3C_VC_TEST_ISSUER_DID"].startswith("did:web:marty-oidf.test:orgs:")
+    assert events == ["ready", "suite"]
+    assert suite_environment["W3C_VC_API_KEY"] == "mk_test_fixture"
+    assert "https://marty-oidf.test:18443/v1/vc-api" in suite_command
+    assert "--organization-id" in suite_command
+    assert "--credential-template-id" in suite_command
+    assert "--credential-policy-id" in suite_command
+    assert "--presentation-policy-id" in suite_command
+    assert "mk_test_fixture" not in suite_command
 
 
 def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(

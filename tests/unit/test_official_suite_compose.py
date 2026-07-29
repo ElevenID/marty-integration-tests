@@ -280,7 +280,7 @@ def test_eudi_material_requires_the_eudi_project(tmp_path: Path) -> None:
                 "run1",
                 "--marty-ui",
                 str(marty_checkout(tmp_path)),
-                "--w3c",
+                "--oidf",
                 "--eudi-material",
                 str(tmp_path / "material"),
             ]

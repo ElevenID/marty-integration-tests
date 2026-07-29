@@ -96,7 +96,6 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         help="generated EUDI/TLS material; a complete external environment takes precedence",
     )
-    result.add_argument("--w3c", action="store_true", help="enable Marty's test-only W3C VC adapter")
     result.add_argument("--haip", action="store_true", help="enable Marty's HAIP verifier profile")
     result.add_argument(
         "--haip-material",
@@ -127,9 +126,7 @@ def configure_haip_environment(
     """Wire the public verifier certificate and independent wallet trust anchor into HAIP."""
     legacy_key_variable = "VERIFIER_" + "SIGNING_KEY_PEM"
     if environment.get(legacy_key_variable, "").strip():
-        raise ValueError(
-            "direct verifier signing-key input is unsupported; Marty signs as the issuer profile's DID"
-        )
+        raise ValueError("direct verifier signing-key input is unsupported; Marty signs as the issuer profile's DID")
     certificate = environment.get("VERIFIER_X509_CERT_PEM", "")
     has_certificate = bool(certificate.strip())
     if has_certificate:
@@ -428,8 +425,6 @@ def marty_command(
     if not script.is_file():
         raise ValueError(f"Marty conformance launcher is missing: {script}")
     command = [sys.executable, str(script), "--project", projects["marty"]]
-    if args.w3c:
-        command.append("--include-w3c")
     if args.haip if include_haip is None else include_haip:
         command.append("--haip")
     if args.local_build:
@@ -581,8 +576,8 @@ def execute(args: argparse.Namespace) -> int:
         raise ValueError("--haip-material requires --haip")
     if args.eudi_material is not None and not args.eudi:
         raise ValueError("--eudi-material requires --eudi")
-    if not any((args.oidf, args.eudi, args.w3c)):
-        raise ValueError("select at least one of --oidf, --eudi, or --w3c")
+    if not any((args.oidf, args.eudi)):
+        raise ValueError("select at least one of --oidf or --eudi")
 
     projects = project_names(args.run_id)
     environment = child_environment(

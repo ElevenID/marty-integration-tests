@@ -17,6 +17,7 @@ import urllib.request
 from hashlib import sha256, sha512
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlencode
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "w3c-vc-data-model-v2.json"
@@ -95,8 +96,7 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         or patch.get("base_commit") != suite["commit"]
         or not SHA.fullmatch(str(patch.get("commit", "")))
         or not DIGEST.fullmatch(str(patch.get("diff_sha256", "")))
-        or patch.get("upstream_pull_request")
-        != "https://github.com/w3c/vc-data-model-2.0-test-suite/pull/174"
+        or patch.get("upstream_pull_request") != "https://github.com/w3c/vc-data-model-2.0-test-suite/pull/174"
         or patch.get("pull_request_ref") != "refs/pull/174/head"
         or patch.get("paths") != ["tests/assertions.js"]
     ):
@@ -137,36 +137,77 @@ def validate_checkout(path: Path, manifest: dict) -> None:
     )
     actual_digest = f"sha256:{sha256(payload).hexdigest()}"
     if actual_digest != patch["diff_sha256"]:
-        raise ValueError(
-            f"W3C VC suite compatibility patch is {actual_digest}; expected {patch['diff_sha256']}"
-        )
+        raise ValueError(f"W3C VC suite compatibility patch is {actual_digest}; expected {patch['diff_sha256']}")
 
 
-def write_local_config(path: Path, adapter_base_url: str, issuer_id: str) -> None:
+def write_local_config(
+    path: Path,
+    adapter_base_url: str,
+    issuer_id: str,
+    organization_id: str,
+    credential_template_id: str,
+    credential_policy_id: str,
+    presentation_policy_id: str,
+) -> None:
     base = adapter_base_url.rstrip("/")
     if not base.startswith(("http://", "https://")):
         raise ValueError("adapter URL must be absolute http(s)")
     if not re.fullmatch(r"did:[a-z0-9]+:.+", issuer_id):
         raise ValueError("W3C issuer id must be the resolved issuer DID")
+    identifiers = {
+        "organization_id": organization_id,
+        "credential_template_id": credential_template_id,
+        "credential_policy_id": credential_policy_id,
+        "presentation_policy_id": presentation_policy_id,
+    }
+    if any(not value or len(value) > 192 for value in identifiers.values()):
+        raise ValueError("W3C VC API resource identifiers must be non-empty")
+    issue_query = urlencode(
+        {
+            "organization_id": organization_id,
+            "credential_template_id": credential_template_id,
+            "issuer_did": issuer_id,
+        }
+    )
+    credential_query = urlencode(
+        {
+            "organization_id": organization_id,
+            "presentation_policy_id": credential_policy_id,
+        }
+    )
+    presentation_query = urlencode(
+        {
+            "organization_id": organization_id,
+            "presentation_policy_id": presentation_policy_id,
+        }
+    )
+    issue_endpoint = f"{base}/credentials/issue?{issue_query}"
+    credential_endpoint = f"{base}/credentials/verify?{credential_query}"
+    presentation_endpoint = f"{base}/presentations/verify?{presentation_query}"
     path.write_text(
+        "const apiKey = process.env.W3C_VC_API_KEY;\n"
+        "if (!apiKey) { throw new Error('W3C_VC_API_KEY is required'); }\n"
         "module.exports = {\n"
         "  settings: { enableInteropTests: false, testAllImplementations: false },\n"
         "  implementations: [{\n"
-        "    name: 'ElevenID', implementation: 'Marty VC API test adapter',\n"
+        "    name: 'ElevenID', implementation: 'Marty public VC API',\n"
         # The issuer identity is the same DID resolved by the product API. The
         # vc2.0 tag selects the suite's embedded Data Integrity assertions;
         # EnvelopingProof would incorrectly select the JOSE-only matrix.
-        f"    issuers: [{{ id: '{issuer_id}',\n"
-        f"      endpoint: '{base}/credentials/issue', tags: ['vc2.0'],\n"
+        f"    issuers: [{{ id: {json.dumps(issuer_id)},\n"
+        f"      endpoint: {json.dumps(issue_endpoint)}, tags: ['vc2.0'],\n"
+        "      headers: { 'X-API-Key': apiKey },\n"
         "      supports: { vc: ['2.0'] } }],\n"
         "    verifiers: [{ id: 'marty-vc-verifier',\n"
-        f"      endpoint: '{base}/credentials/verify', tags: ['vc2.0'],\n"
+        f"      endpoint: {json.dumps(credential_endpoint)}, tags: ['vc2.0'],\n"
+        "      headers: { 'X-API-Key': apiKey },\n"
         "      supports: { vc: ['2.0'] } }],\n"
         "    vpVerifiers: [{ id: 'marty-vp-verifier',\n"
         # Marty verifies the official suite's eddsa-rdfc-2022 VPs through its
         # Data Integrity path. Do not claim the distinct JWT enveloping-proof
         # VP capability until that representation is supported end to end.
-        f"      endpoint: '{base}/presentations/verify', tags: ['vc2.0'],\n"
+        f"      endpoint: {json.dumps(presentation_endpoint)}, tags: ['vc2.0'],\n"
+        "      headers: { 'X-API-Key': apiKey },\n"
         "      options: { domain: 'github.com/w3c/vc-data-model-2.0-test-suite' },\n"
         "      supports: { vc: ['2.0'] } }]\n"
         "  }]\n};\n",
@@ -411,12 +452,16 @@ def run_suite(
     suite: Path,
     adapter_url: str,
     issuer_id: str,
+    organization_id: str,
+    credential_template_id: str,
+    credential_policy_id: str,
+    presentation_policy_id: str,
     output: Path,
     stack_manifest: Path,
     *,
     install: bool,
 ) -> int:
-    """Run the official W3C test command against the real test-only adapter.
+    """Run the official W3C test command against the authenticated public API.
 
     The upstream checkout is pinned before invoking its own ``npm test``
     command. Install is explicit because the upstream suite has no lockfile;
@@ -427,7 +472,15 @@ def run_suite(
     manifest = load_manifest()
     validate_checkout(suite, manifest)
     stack_manifest_metadata(stack_manifest)
-    write_local_config(suite / "localConfig.cjs", adapter_url, issuer_id)
+    write_local_config(
+        suite / "localConfig.cjs",
+        adapter_url,
+        issuer_id,
+        organization_id,
+        credential_template_id,
+        credential_policy_id,
+        presentation_policy_id,
+    )
     if install:
         install_result = install_dependencies(suite, manifest)
         if install_result:
@@ -467,11 +520,19 @@ def main() -> int:
     run = sub.add_parser("write-local-config")
     run.add_argument("--adapter-url", required=True)
     run.add_argument("--issuer-id", required=True)
+    run.add_argument("--organization-id", required=True)
+    run.add_argument("--credential-template-id", required=True)
+    run.add_argument("--credential-policy-id", required=True)
+    run.add_argument("--presentation-policy-id", required=True)
     run.add_argument("--output", type=Path, required=True)
     execute = sub.add_parser("run")
     execute.add_argument("--suite", type=Path, required=True)
     execute.add_argument("--adapter-url", required=True)
     execute.add_argument("--issuer-id", required=True)
+    execute.add_argument("--organization-id", required=True)
+    execute.add_argument("--credential-template-id", required=True)
+    execute.add_argument("--credential-policy-id", required=True)
+    execute.add_argument("--presentation-policy-id", required=True)
     execute.add_argument("--output-dir", type=Path, required=True)
     execute.add_argument(
         "--stack-manifest",
@@ -492,6 +553,10 @@ def main() -> int:
             args.suite.resolve(),
             args.adapter_url,
             args.issuer_id,
+            args.organization_id,
+            args.credential_template_id,
+            args.credential_policy_id,
+            args.presentation_policy_id,
             args.output_dir.resolve(),
             args.stack_manifest.resolve(),
             install=args.install,
@@ -499,7 +564,15 @@ def main() -> int:
     if args.command == "bootstrap-npm":
         print(bootstrap_npm(args.output.resolve(), manifest))
         return 0
-    write_local_config(args.output, args.adapter_url, args.issuer_id)
+    write_local_config(
+        args.output,
+        args.adapter_url,
+        args.issuer_id,
+        args.organization_id,
+        args.credential_template_id,
+        args.credential_policy_id,
+        args.presentation_policy_id,
+    )
     return 0
 
 

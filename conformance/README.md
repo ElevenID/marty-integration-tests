@@ -219,14 +219,14 @@ python scripts/official_suite_compose.py up \
   --marty-ui ../marty-ui \
   --oidf-runner /opt/openid-conformance-suite \
   --eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID" \
-  --oidf --eudi --w3c
+  --oidf --eudi
 
 # Capture results and logs, then always run:
 python scripts/official_suite_compose.py down \
   --marty-ui ../marty-ui \
   --oidf-runner /opt/openid-conformance-suite \
   --eudi-material "conformance/eudi-material/$OFFICIAL_SUITE_RUN_ID" \
-  --oidf --eudi --w3c
+  --oidf --eudi
 ```
 
 The launcher derives three distinct project names from the run ID. Marty starts
@@ -265,7 +265,7 @@ python scripts/eudi_test_material.py validate
 python scripts/official_suite_compose.py up \
   --marty-ui ../marty-ui \
   --oidf-runner /opt/openid-conformance-suite \
-  --oidf --eudi --w3c
+  --oidf --eudi
 ```
 
 A complete external TLS-directory and EUDI-keystore pair takes precedence if
@@ -445,11 +445,12 @@ matching verifier signing certificate and the official trust anchor.
 ## W3C VC Data Model v2
 
 `w3c-vc-data-model-v2.json` pins the official W3C test-suite revision and
-records the present proof-format boundary. A disposable stack enables the
-adapter only with `W3C_VC_TEST_ADAPTER=1` and assigns separate active fixture
-policies through `W3C_VC_TEST_CREDENTIAL_POLICY_ID` and
-`W3C_VC_TEST_PRESENTATION_POLICY_ID`. Both policies and both credential
-templates declare the native W3C VC Data Model v2 Data Integrity
+records the present proof-format boundary. The suite calls Marty's ordinary
+authenticated `/v1/vc-api` gateway boundary with a disposable organization-
+scoped API key carrying only `credentials:issue` and `credentials:read`.
+Fixture bootstrap creates separate active credential and presentation
+policies through the normal public administration API. Both policies and both
+credential templates declare the native W3C VC Data Model v2 Data Integrity
 representation. The credential policy omits presentation holder binding; the
 presentation policy verifies the official challenge and domain.
 
@@ -464,12 +465,20 @@ never use the inline ad-hoc evaluator.
 The official registration uses the product-resolved issuer DID as its issuer
 ID and advertises only the `vc2.0` Data Integrity capability. It does not tag
 Marty as `EnvelopingProof` or claim JOSE issuance in this lane.
+`W3C_VC_API_KEY` is the one-time value returned by the public API-key creation
+call during fixture bootstrap; keep it in the private job environment and
+never pass it on a command line or upload it as evidence.
 
 ```bash
+export W3C_VC_API_KEY='<disposable organization-scoped test key>'
 python scripts/w3c_vc_conformance.py validate
 python scripts/w3c_vc_conformance.py write-local-config \
-  --adapter-url https://stack.test.example/__test__/vc-api \
+  --adapter-url https://stack.test.example/v1/vc-api \
   --issuer-id did:web:stack.test.example:orgs:official-w3c \
+  --organization-id official-w3c \
+  --credential-template-id template-w3c \
+  --credential-policy-id policy-credential \
+  --presentation-policy-id policy-presentation \
   --output /opt/vc-data-model-2.0-test-suite/localConfig.cjs
 ```
 
@@ -492,8 +501,12 @@ under Python 3.12, then review the complete diff before merging.
 ```bash
 python scripts/w3c_vc_conformance.py run \
   --suite /opt/vc-data-model-2.0-test-suite \
-  --adapter-url https://stack.test.example/__test__/vc-api \
+  --adapter-url https://stack.test.example/v1/vc-api \
   --issuer-id did:web:stack.test.example:orgs:official-w3c \
+  --organization-id official-w3c \
+  --credential-template-id template-w3c \
+  --credential-policy-id policy-credential \
+  --presentation-policy-id policy-presentation \
   --stack-manifest /secure/work/stack-manifest.json \
   --output-dir reports/w3c-vc-v2 \
   --install

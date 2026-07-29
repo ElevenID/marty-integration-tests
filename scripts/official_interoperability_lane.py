@@ -787,9 +787,13 @@ def bootstrap_fixtures(
     if result:
         raise RuntimeError(f"{mode} public fixture bootstrap failed with exit code {result}")
     fixtures = json.loads(destination.read_text(encoding="utf-8"))
-    if not isinstance(fixtures, dict) or any(
-        not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in fixtures.values()
-    ):
+    if not isinstance(fixtures, dict):
+        raise RuntimeError(f"{mode} public fixture bootstrap returned invalid identifiers")
+    api_key = fixtures.get("w3c_api_key")
+    if mode == "w3c" and (not isinstance(api_key, str) or not api_key.startswith("mk_test_") or len(api_key) > 128):
+        raise RuntimeError("w3c public fixture bootstrap returned an invalid API key")
+    identifiers = {key: value for key, value in fixtures.items() if key != "w3c_api_key"}
+    if any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in identifiers.values()):
         raise RuntimeError(f"{mode} public fixture bootstrap returned invalid identifiers")
     return fixtures
 
@@ -995,26 +999,14 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
     base = [sys.executable, str(launcher), "--project", project]
-    include_w3c = False
     try:
         if run([*base, "up"], environment):
             emit_keycloak_initializer_diagnostic(args.run_id)
             return 1
         wait_for_public_stack(environment)
         fixtures = bootstrap_fixtures(args, environment, mode="w3c")
-        environment.update(
-            {
-                "W3C_VC_TEST_ORGANIZATION_ID": fixtures["organization_id"],
-                "W3C_VC_TEST_TEMPLATE_ID": fixtures["w3c_template_id"],
-                "W3C_VC_TEST_ISSUER_DID": fixtures["w3c_issuer_did"],
-                "W3C_VC_TEST_CREDENTIAL_POLICY_ID": fixtures["w3c_credential_policy_id"],
-                "W3C_VC_TEST_PRESENTATION_POLICY_ID": fixtures["w3c_presentation_policy_id"],
-            }
-        )
-        include_w3c = True
-        if run([*base, "--include-w3c", "--resume", "up"], environment):
-            return 1
-        wait_for_public_stack(environment)
+        suite_environment = dict(environment)
+        suite_environment["W3C_VC_API_KEY"] = fixtures["w3c_api_key"]
         result = run(
             [
                 sys.executable,
@@ -1023,16 +1015,24 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "--suite",
                 str(args.w3c_suite),
                 "--adapter-url",
-                f"{environment['OIDF_MARTY_GATEWAY_URL']}/__test__/vc-api",
+                f"{environment['OIDF_MARTY_GATEWAY_URL']}/v1/vc-api",
                 "--issuer-id",
                 fixtures["w3c_issuer_did"],
+                "--organization-id",
+                fixtures["organization_id"],
+                "--credential-template-id",
+                fixtures["w3c_template_id"],
+                "--credential-policy-id",
+                fixtures["w3c_credential_policy_id"],
+                "--presentation-policy-id",
+                fixtures["w3c_presentation_policy_id"],
                 "--stack-manifest",
                 str(args.stack_manifest),
                 "--output-dir",
                 str(args.output_dir / "raw" / "w3c-v2"),
                 "--install",
             ],
-            environment,
+            suite_environment,
         )
         if result:
             emit_w3c_issuance_diagnostic(args.run_id)
@@ -1042,11 +1042,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
             emit_public_proxy_diagnostic(project, environment)
         raise
     finally:
-        down = [*base]
-        if include_w3c:
-            down.append("--include-w3c")
-        down.append("down")
-        run(down, environment)
+        run([*base, "down"], environment)
 
 
 def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
