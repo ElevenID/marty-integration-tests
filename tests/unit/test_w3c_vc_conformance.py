@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -35,8 +36,8 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
         "vc_verifier",
         "vp_verifier",
     }
-    assert manifest["compatibility_patch"]["status"] == "upstream-pending"
-    assert manifest["compatibility_patch"]["paths"] == ["tests/assertions.js"]
+    assert manifest["official_suite"]["source_policy"] == "unmodified"
+    assert "compatibility_patch" not in manifest
     assert manifest["exclusions"] == []
 
 
@@ -45,6 +46,26 @@ def test_w3c_manifest_rejects_a_non_object(tmp_path: Path) -> None:
     manifest.write_text("[]", encoding="utf-8")
     with pytest.raises(ValueError, match="JSON object"):
         w3c.load_manifest(manifest)
+
+
+def test_w3c_checkout_rejects_any_tracked_source_change(tmp_path: Path) -> None:
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    subprocess.run(["git", "init"], cwd=suite, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Compliance Test"], cwd=suite, check=True)
+    subprocess.run(["git", "config", "user.email", "compliance@example.test"], cwd=suite, check=True)
+    package = suite / "package.json"
+    package.write_text('{"name":"official-suite"}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "package.json"], cwd=suite, check=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=suite, check=True, capture_output=True)
+    commit = w3c.revision(suite)
+    manifest = {"official_suite": {"commit": commit}}
+
+    w3c.validate_checkout(suite, manifest)
+    package.write_text('{"name":"locally-modified-suite"}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="byte-for-byte clean"):
+        w3c.validate_checkout(suite, manifest)
 
 
 def test_npm_command_uses_the_windows_launcher_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,11 +285,11 @@ def test_w3c_evidence_records_no_stale_exclusion_and_preserves_immutable_stack(
     assert evidence["result"] == {
         "exit_code": 0,
         "passed": False,
-        "evidence_class": "official-suite-with-reviewed-upstream-pending-runner-fix",
+        "evidence_class": "official-unmodified-suite",
         "required_capabilities": ["issuer", "vc_verifier", "vp_verifier"],
         "executed_capabilities": [],
     }
-    assert evidence["suite_checkout"]["official_upstream_unmodified"] is False
-    assert evidence["suite_checkout"]["compatibility_patch"]["upstream_pull_request"].endswith("/pull/174")
+    assert evidence["suite_checkout"]["official_upstream_unmodified"] is True
+    assert "compatibility_patch" not in evidence["suite_checkout"]
     assert evidence["exclusions"] == []
     assert evidence["marty"]["stack_manifest"]["images"][0]["digest"] == "sha256:" + "a" * 64

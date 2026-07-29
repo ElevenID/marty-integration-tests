@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,16 +23,35 @@ def test_all_suite_sources_are_exact_and_allowlisted() -> None:
     assert oidf_repository == "https://gitlab.com/openid/conformance-suite.git"
     assert w3c_repository == "https://github.com/w3c/vc-data-model-2.0-test-suite.git"
     assert len(oidf_commit) == len(w3c_commit) == 40
-    assert checkout.pinned_compatibility_patch("oidf") is None
-    patch = checkout.pinned_compatibility_patch("w3c")
-    assert patch is not None
-    assert patch["base_commit"] == w3c_commit
-    assert patch["commit"] == "ee3f93ce939161c889afd32591396473435c5ae7"
-    assert patch["paths"] == ["tests/assertions.js"]
-    assert patch["upstream_pull_request"].endswith("/pull/174")
+    oidf_manifest = json.loads((ROOT / "conformance" / "oidf-runner.json").read_text(encoding="utf-8"))
+    w3c_manifest = json.loads((ROOT / "conformance" / "w3c-vc-data-model-v2.json").read_text(encoding="utf-8"))
+    assert oidf_manifest["official_runner"]["source_policy"] == "unmodified"
+    assert w3c_manifest["official_suite"]["source_policy"] == "unmodified"
+    assert "compatibility_patch" not in w3c_manifest
 
 
 def test_checkout_refuses_to_reuse_nonempty_directory(tmp_path: Path) -> None:
     (tmp_path / "existing").write_text("do not replace", encoding="utf-8")
     with pytest.raises(FileExistsError, match="non-empty"):
         checkout.checkout("w3c", tmp_path)
+
+
+def test_checkout_verification_rejects_a_tracked_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Compliance Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "compliance@example.test"], cwd=tmp_path, check=True)
+    source = tmp_path / "official-test.py"
+    source.write_text("assert True\n", encoding="utf-8")
+    subprocess.run(["git", "add", "official-test.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=tmp_path, check=True, capture_output=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    monkeypatch.setattr(checkout, "pinned_source", lambda _name: ("https://example.test/suite.git", commit))
+
+    assert checkout.verify_checkout("oidf", tmp_path) == commit
+    source.write_text("assert False\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="byte-for-byte clean"):
+        checkout.verify_checkout("oidf", tmp_path)

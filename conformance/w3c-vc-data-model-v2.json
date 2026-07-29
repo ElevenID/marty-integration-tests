@@ -4,6 +4,7 @@
     "repository": "https://github.com/w3c/vc-data-model-2.0-test-suite.git",
     "commit": "1db599924e6601555933550e0e65925a6abbd0a8",
     "branch": "main",
+    "source_policy": "unmodified",
     "node": "24",
     "npm": "11.11.0",
     "npm_tarball": "https://registry.npmjs.org/npm/-/npm-11.11.0.tgz",
@@ -11,19 +12,6 @@
     "package_lock_path": "conformance/locks/w3c-vc-data-model-v2.npm-lock.json",
     "package_lock_sha256": "sha256:47769e63f449a60e05fa1569fec39813771bd5c22ce38161b42fe386ba2c4445",
     "review_cadence": "monthly"
-  },
-  "compatibility_patch": {
-    "status": "upstream-pending",
-    "reason": "Replace an invalid Chai should invocation that crashes two valid issuer assertions without changing any normative test condition.",
-    "upstream_pull_request": "https://github.com/w3c/vc-data-model-2.0-test-suite/pull/174",
-    "pull_request_ref": "refs/pull/174/head",
-    "base_commit": "1db599924e6601555933550e0e65925a6abbd0a8",
-    "commit": "ee3f93ce939161c889afd32591396473435c5ae7",
-    "paths": ["tests/assertions.js"],
-    "diff_sha256": "sha256:0888104bec5abed79e77a05e1620db94365eed5e61ea0de9b61a46b129391ff1",
-    "owner": "ElevenID",
-    "review_date": "2026-08-25",
-    "removal_condition": "Remove this patch and advance the official pin when upstream PR 174 is merged."
   },
   "adapter": {
     "path": "/v1/vc-api",

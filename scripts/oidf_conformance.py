@@ -36,6 +36,8 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         raise ValueError("official runner repository must be the OIDF conformance suite")
     if not SHA.fullmatch(runner.get("commit", "")):
         raise ValueError("official runner commit must be a full lowercase SHA")
+    if runner.get("source_policy") != "unmodified":
+        raise ValueError("official runner source policy must be unmodified")
     if not runner.get("release", "").startswith("release-v"):
         raise ValueError("official runner release must be an immutable release tag")
     return data
@@ -45,10 +47,8 @@ def validate_expected_failures() -> None:
     entries = json.loads((ROOT / "conformance" / "expected-failures.json").read_text(encoding="utf-8"))
     if not isinstance(entries, list):
         raise ValueError("expected failures must be a JSON list")
-    for entry in entries:
-        required = {"test-id", "issue", "owner", "expires"}
-        if not isinstance(entry, dict) or required - entry.keys():
-            raise ValueError("each expected failure requires test-id, issue, owner, and expires")
+    if entries:
+        raise ValueError("official OIDF evidence must not accept expected failures")
 
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
     if not isinstance(skips, list):
@@ -73,6 +73,12 @@ def validate_runner(path: Path, manifest: dict) -> None:
     expected = manifest["official_runner"]["commit"]
     if actual != expected:
         raise ValueError(f"OIDF runner is {actual}; expected pinned {expected}")
+    changed = subprocess.check_output(
+        ["git", "-C", str(path), "status", "--porcelain=v1", "--untracked-files=no"],
+        text=True,
+    ).strip()
+    if changed:
+        raise ValueError("OIDF runner tracked source is not byte-for-byte clean")
 
 
 def _validate_absolute_url(value: object, field: str) -> None:
@@ -335,6 +341,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print("Running the official OIDF plan:", profile["test_plan"])
     if args.interaction_script is None:
         result = subprocess.run(command, cwd=runner, check=False).returncode
+        validate_runner(runner, manifest)
         write_evidence(
             output,
             manifest,
@@ -418,6 +425,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     for hook in hooks:
         hook_result = hook.wait() or hook_result
     result = runner_result or hook_result
+    validate_runner(runner, manifest)
     write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
     return result
 

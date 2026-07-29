@@ -50,9 +50,6 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
     assert observation["upstreams"]["w3c_vc_data_model_v2"] == {
         "pinned_commit": w3c_manifest["official_suite"]["commit"],
         "latest_commit": "f" * 40,
-        "pinned_patch_commit": w3c_manifest["compatibility_patch"]["commit"],
-        "latest_patch_commit": "f" * 40,
-        "upstream_pull_request": w3c_manifest["compatibility_patch"]["upstream_pull_request"],
     }
 
 

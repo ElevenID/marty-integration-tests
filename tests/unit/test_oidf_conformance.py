@@ -19,6 +19,7 @@ SPEC.loader.exec_module(oidf)
 def test_pinned_official_runner_manifest_is_valid() -> None:
     manifest = oidf.load_manifest()
     assert manifest["official_runner"]["repository"].startswith("https://gitlab.com/openid/")
+    assert manifest["official_runner"]["source_policy"] == "unmodified"
     issuer = manifest["profiles"]["oid4vci-issuer"]
     assert issuer["status"] == "planned"
     assert "[credential_format=sd_jwt_vc]" in issuer["test_plan"]
@@ -42,8 +43,27 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert "[response_mode=direct_post.jwt]" in haip["test_plan"]
 
 
-def test_documented_optional_signed_metadata_skip_is_valid() -> None:
+def test_official_oidf_evidence_has_no_expected_failures() -> None:
     oidf.validate_expected_failures()
+    expected_failures = json.loads((ROOT / "conformance" / "expected-failures.json").read_text(encoding="utf-8"))
+    assert expected_failures == []
+
+
+def test_official_oidf_evidence_rejects_expected_failure_masking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conformance = tmp_path / "conformance"
+    conformance.mkdir()
+    (conformance / "expected-failures.json").write_text(
+        '[{"test-id":"would-hide-a-failure"}]\n',
+        encoding="utf-8",
+    )
+    (conformance / "expected-skips.json").write_text("[]\n", encoding="utf-8")
+    monkeypatch.setattr(oidf, "ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="must not accept expected failures"):
+        oidf.validate_expected_failures()
 
 
 def test_optional_encryption_skip_is_documented_narrowly() -> None:

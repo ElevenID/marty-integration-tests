@@ -961,18 +961,26 @@ def test_public_proxy_diagnostic_selects_exact_compose_service(
     assert "upstream-connect" in capsys.readouterr().out
 
 
-def test_w3c_lane_uses_authenticated_public_vc_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_w3c_lane_uses_authenticated_public_vc_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     events: list[str] = []
     suite_environment: dict[str, str] = {}
     suite_command: list[str] = []
+    lifecycle_environments: list[dict[str, str]] = []
 
     def fake_run(command: list[str], environment: dict[str, str], **_kwargs: object) -> int:
+        if "conformance_stack.py" in " ".join(command):
+            lifecycle_environments.append(dict(environment))
         if "w3c_vc_conformance.py" in " ".join(command):
             events.append("suite")
             suite_environment.update(environment)
             suite_command.extend(command)
         return 0
 
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setattr(lane, "run", fake_run)
     monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: events.append("ready"))
     monkeypatch.setattr(
@@ -1003,12 +1011,18 @@ def test_w3c_lane_uses_authenticated_public_vc_api(tmp_path: Path, monkeypatch: 
     assert lane.run_w3c(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test:18443"}) == 0
     assert events == ["ready", "suite"]
     assert suite_environment["W3C_VC_API_KEY"] == "mk_test_fixture"
+    assert suite_environment["RATE_LIMIT_RPM"] == lane.W3C_CONFORMANCE_RATE_LIMIT_RPM
+    assert lifecycle_environments
+    assert all(
+        environment["RATE_LIMIT_RPM"] == lane.W3C_CONFORMANCE_RATE_LIMIT_RPM for environment in lifecycle_environments
+    )
     assert "https://marty-oidf.test:18443/v1/vc-api" in suite_command
     assert "--organization-id" in suite_command
     assert "--credential-template-id" in suite_command
     assert "--credential-policy-id" in suite_command
     assert "--presentation-policy-id" in suite_command
     assert "mk_test_fixture" not in suite_command
+    assert "::add-mask::mk_test_fixture" in capsys.readouterr().out
 
 
 def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(

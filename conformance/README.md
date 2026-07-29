@@ -39,6 +39,10 @@ when financing is approved.
 Install and start a pinned copy of the official suite following its upstream
 instructions. The runner checkout must be at the commit recorded in
 `oidf-runner.json`; the helper refuses a different revision.
+The checkout must also remain byte-for-byte clean before and after every lane.
+Test selection and Marty configuration use the official runner's supported
+external interfaces; no upstream assertion or test implementation is edited,
+patched, or locally marked as passing.
 
 ```bash
 cp conformance/marty-issuer.example.json /secure/work/marty-issuer.json
@@ -448,6 +452,12 @@ matching verifier signing certificate and the official trust anchor.
 records the present proof-format boundary. The suite calls Marty's ordinary
 authenticated `/v1/vc-api` gateway boundary with a disposable organization-
 scoped API key carrying only `credentials:issue` and `credentials:read`.
+The official checkout is executed at that exact commit without modifying any
+tracked upstream file. Local configuration, the separately reviewed dependency
+lock, installed dependencies, and reports stay outside the tracked upstream
+source, and the runner verifies that the checkout is clean both before and
+after execution. An upstream test-runner defect remains a visible failure until
+the official repository merges a fix and the reviewed commit pin advances.
 Fixture bootstrap creates separate active credential and presentation
 policies through the normal public administration API. Both policies and both
 credential templates declare the native W3C VC Data Model v2 Data Integrity
@@ -607,7 +617,7 @@ The official interoperability workflow runs all four lanes monthly on the
 eighth day and remains manually dispatchable by lane. The separate monthly
 `official-suite-updates.yml` workflow checks upstreams on the first day and
 creates or refreshes one draft review PR when any official suite or the
-temporary W3C patch head has moved. Neither workflow changes a runner pin or
+official W3C commit has moved. Neither workflow changes a runner pin or
 dependency lock automatically, and the updater never merges.
 
 ## EUDI reference interoperability
@@ -684,9 +694,9 @@ drift, it creates or refreshes the stable
 commit revisions. It never silently switches versions, changes immutable
 pins, or merges. For OIDF, review an update by changing both the release and
 full commit in `oidf-runner.json`, then run the affected profile against the
-production-path stack before merging. Expected failures are allowed only in
-`expected-failures.json`, with an OIDF test id, issue URL, owner, and expiry
-date. Optional OIDF modules that Marty does not claim to support use the
+production-path stack before merging. `expected-failures.json` must remain
+empty: an official result cannot mask a failing executed test. Optional OIDF
+modules that Marty truthfully does not advertise use the
 separate `expected-skips.json`, which requires a matching test name,
 configuration pattern, rationale, owner, and expiry. The runner fails on a
 new skip, or when an expected skip stops occurring, so neither file is a
