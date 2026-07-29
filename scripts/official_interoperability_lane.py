@@ -116,6 +116,38 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
     "verifier-vct": re.compile(r"(?i)\bvct(?:_values)?\b"),
     "verifier-key-binding": re.compile(r"(?i)(?:key binding|kb-jwt|kb_jwt)"),
 }
+MDOC_RUNTIME_DIAGNOSTIC_CLASSES = {
+    "api-key-transport-type": re.compile(
+        r"(?i)(?:gRPC error validating API key|bad argument type for built-in operation)"
+    ),
+    "credential-format-undetected": re.compile(
+        r"(?i)(?:unsupported credential format(?:: unknown)?|credential format.*unknown)"
+    ),
+    "empty-disclosure-decode": re.compile(
+        r"(?i)(?:cannot construct a non-empty vec|empty issuer disclosure)"
+    ),
+    "issuer-signature-invalid": re.compile(
+        r"(?i)(?:issuer signature.{0,80}(?:invalid|failed)|issuer_signature_valid.{0,20}false)"
+    ),
+    "issuer-untrusted": re.compile(
+        r"(?i)(?:issuer.{0,80}(?:not trusted|untrusted)|issuer_trusted.{0,20}false)"
+    ),
+    "device-authentication-invalid": re.compile(
+        r"(?i)(?:device authentication.{0,80}(?:invalid|failed)|device_authentication_valid.{0,20}false)"
+    ),
+    "session-transcript-invalid": re.compile(
+        r"(?i)(?:session transcript.{0,80}(?:invalid|mismatch|failed)|invalid session transcript)"
+    ),
+    "required-claim-missing": re.compile(
+        r"(?i)(?:(?:required|requested) claim.{0,80}(?:missing|absent|not found)|"
+        r"missing.{0,80}(?:required|requested) claim)"
+    ),
+    "presentation-policy-denied": re.compile(
+        r"(?i)(?:presentation policy.{0,80}(?:denied|failed|rejected)|policy evaluation.{0,80}(?:denied|failed))"
+    ),
+    "presentation-invalid": re.compile(r"(?i)(?:invalid_presentation|invalid presentation)"),
+    "dcql-contract": re.compile(r"(?i)(?:\bdcql\b|mso_mdoc.{0,80}\bclaims\b)"),
+}
 STACK_ENV_KEYS = {
     "MARTY_UI_IMAGE",
     "MARTY_SERVICES_IMAGE",
@@ -598,6 +630,25 @@ def emit_eudi_runtime_diagnostic(path: Path) -> None:
     print("--- end EUDI runtime diagnostic ---", file=sys.stderr)
 
 
+def classify_mdoc_runtime_diagnostics(text: str) -> list[str]:
+    """Return fixed mdoc verifier categories without exposing source logs."""
+    categories = [name for name, pattern in MDOC_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)]
+    return categories or ["unclassified-runtime-failure"]
+
+
+def emit_mdoc_runtime_diagnostic(path: Path) -> None:
+    """Print only allowlisted mdoc verifier classes from the private log."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        categories = ["runtime-log-unavailable"]
+    else:
+        categories = classify_mdoc_runtime_diagnostics(text)
+    print("--- mdoc verifier runtime diagnostic (redacted) ---", file=sys.stderr)
+    print(f"categories={','.join(categories)}", file=sys.stderr)
+    print("--- end mdoc verifier runtime diagnostic ---", file=sys.stderr)
+
+
 def emit_public_proxy_diagnostic(project: str, environment: dict[str, str]) -> None:
     """Classify proxy failures before Compose teardown without publishing logs."""
     containers = subprocess.run(
@@ -877,6 +928,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     if not started:
         emit_keycloak_initializer_diagnostic(args.run_id)
         return 1
+    result = 1
     try:
         wait_for_public_stack(environment)
         fixture_prefix = "oid4vp_mdoc" if mdoc else "oid4vp"
@@ -903,7 +955,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             else standard_verifier_config(args.haip_material, environment["OIDF_MARTY_GATEWAY_URL"])
         )
         profile = "oid4vp-haip-verifier" if haip else "oid4vp-mdoc-verifier" if mdoc else "oid4vp-verifier"
-        return run(
+        result = run(
             [
                 sys.executable,
                 str(ROOT / "scripts" / "oidf_conformance.py"),
@@ -925,12 +977,16 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             environment,
         )
     finally:
+        compose_log = args.output_dir / "private" / "compose.log"
         run(
             compose_command(args, "logs", oidf=True, haip=True),
             environment,
-            capture=args.output_dir / "private" / "compose.log",
+            capture=compose_log,
         )
+        if mdoc and result:
+            emit_mdoc_runtime_diagnostic(compose_log)
         run(compose_command(args, "down", oidf=True, haip=True), environment)
+    return result
 
 
 def run_oid4vci_issuer(
