@@ -30,6 +30,7 @@ from haip_test_certificates import (  # noqa: E402
     load_verifier_environment,
 )
 from official_suite_checkout import verify_checkout  # noqa: E402
+from oidf_mdoc_binding_audit import audit as audit_oidf_mdoc_binding  # noqa: E402
 
 LANES = {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip", "w3c-v2", "eudi"}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
@@ -957,6 +958,13 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
 def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     haip = args.lane == "haip"
     mdoc = args.lane == "oid4vp-mdoc"
+    profile = (
+        "oid4vp-haip-verifier"
+        if haip
+        else "oid4vp-mdoc-verifier"
+        if mdoc
+        else "oid4vp-verifier"
+    )
     # Both verifier plans exercise Marty's native signed request_uri. The
     # x509_hash client identifier therefore requires a short-lived certificate
     # over the issuer profile's public DID key even when response encryption is
@@ -993,7 +1001,6 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             if haip
             else standard_verifier_config(args.haip_material, environment["OIDF_MARTY_GATEWAY_URL"])
         )
-        profile = "oid4vp-haip-verifier" if haip else "oid4vp-mdoc-verifier" if mdoc else "oid4vp-verifier"
         result = run(
             [
                 sys.executable,
@@ -1024,6 +1031,38 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         )
         if mdoc and result:
             emit_mdoc_runtime_diagnostic(compose_log)
+        if mdoc:
+            try:
+                binding_audit = audit_oidf_mdoc_binding(
+                    args.output_dir / "raw" / profile,
+                    compose_log,
+                )
+                binding_audit_path = (
+                    args.output_dir / "private" / "oidf-mdoc-binding-audit.json"
+                )
+                binding_audit_path.write_text(
+                    json.dumps(binding_audit, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                print("--- OIDF mdoc binding audit (redacted) ---")
+                for module in binding_audit["modules"]:
+                    mismatches = ",".join(
+                        field
+                        for field, matched in module["binding_matches"].items()
+                        if not matched
+                    )
+                    print(
+                        f"{module['test_name']}: status={module['status']} "
+                        f"mismatches={mismatches or 'none'}"
+                    )
+                print("--- end OIDF mdoc binding audit ---")
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                print(
+                    "--- OIDF mdoc binding audit (redacted) ---\n"
+                    f"diagnostic-unavailable={type(exc).__name__}\n"
+                    "--- end OIDF mdoc binding audit ---",
+                    file=sys.stderr,
+                )
         run(compose_command(args, "down", oidf=True, haip=True), environment)
     return result
 
