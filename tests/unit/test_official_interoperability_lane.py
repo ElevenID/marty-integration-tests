@@ -563,8 +563,10 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
 ) -> None:
     suite_environment: dict[str, str] = {}
     compose_commands: list[list[str]] = []
+    executed_commands: list[list[str]] = []
 
     def fake_run(command: list[str], environment: dict[str, str], **_kwargs: object) -> int:
+        executed_commands.append(command)
         if "oidf_conformance.py" in " ".join(command):
             suite_environment.update(environment)
         elif "official_suite_compose.py" in " ".join(command):
@@ -606,6 +608,7 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert "OIDF_MARTY_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "request_uri_signed"
+    assert any("oidf_marty_browser_smoke.py" in " ".join(command) for command in executed_commands)
     assert compose_commands
     assert all("--haip" in command for command in compose_commands)
 

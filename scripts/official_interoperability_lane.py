@@ -1031,7 +1031,16 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             if haip
             else standard_verifier_config(args.haip_material, environment["OIDF_MARTY_GATEWAY_URL"])
         )
-        result = run(
+        browser_result = 0
+        if args.lane == "oid4vp-final":
+            browser_result = run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "oidf_marty_browser_smoke.py"),
+                ],
+                environment,
+            )
+        official_result = run(
             [
                 sys.executable,
                 str(ROOT / "scripts" / "oidf_conformance.py"),
@@ -1052,6 +1061,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             ],
             environment,
         )
+        result = browser_result or official_result
     finally:
         compose_log = args.output_dir / "private" / "compose.log"
         run(

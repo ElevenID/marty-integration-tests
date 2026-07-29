@@ -47,6 +47,8 @@ def test_workflow_installs_only_frozen_verified_tooling() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "--require-hashes --only-binary=:all:" in text
     assert "requirements/official-py312.lock" in text
+    assert "python -m playwright install --with-deps chromium" in text
+    assert "matrix.lane == 'oid4vp-final'" in text
     assert "w3c_vc_conformance.py bootstrap-npm" in text
     assert "npm install --global" not in text
     assert "eudi_harness_provenance.py" in text
