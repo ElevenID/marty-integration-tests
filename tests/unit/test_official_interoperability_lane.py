@@ -1013,12 +1013,17 @@ def test_w3c_lane_uses_authenticated_public_vc_api(
     assert suite_environment["W3C_VC_API_KEY"] == "mk_test_fixture"
     assert suite_environment["RATE_LIMIT_RPM"] == lane.W3C_CONFORMANCE_RATE_LIMIT_RPM
     assert suite_environment["TOKEN_RATE_LIMIT"] == lane.W3C_CONFORMANCE_TOKEN_RATE_LIMIT
+    assert suite_environment["VCDM_RELATED_RESOURCE_URLS"] == ("https://www.w3.org/ns/credentials/v2")
     assert lifecycle_environments
     assert all(
         environment["RATE_LIMIT_RPM"] == lane.W3C_CONFORMANCE_RATE_LIMIT_RPM for environment in lifecycle_environments
     )
     assert all(
         environment["TOKEN_RATE_LIMIT"] == lane.W3C_CONFORMANCE_TOKEN_RATE_LIMIT
+        for environment in lifecycle_environments
+    )
+    assert all(
+        environment["VCDM_RELATED_RESOURCE_URLS"] == "https://www.w3.org/ns/credentials/v2"
         for environment in lifecycle_environments
     )
     assert "https://marty-oidf.test:18443/v1/vc-api" in suite_command

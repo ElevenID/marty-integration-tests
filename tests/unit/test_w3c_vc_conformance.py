@@ -57,6 +57,7 @@ def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
     assert manifest["official_suite"]["source_policy"] == "unmodified"
     assert "compatibility_patch" not in manifest
     assert manifest["exclusions"] == []
+    assert manifest["deployment"]["related_resource_allowlist"] == ["https://www.w3.org/ns/credentials/v2"]
 
 
 def test_w3c_manifest_rejects_a_non_object(tmp_path: Path) -> None:
