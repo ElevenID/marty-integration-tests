@@ -216,7 +216,9 @@ def test_mdoc_runtime_diagnostic_reports_only_fixed_categories(
     log.write_text(
         "token=must-not-be-reported\n"
         "Policy evaluation denied because a required claim is missing\n"
-        "issuer_signature_valid=false\n",
+        "issuer_signature_valid=false\n"
+        "mDoc verification outcome device_auth_error_kind=device-signature-invalid\n"
+        "mDoc verification outcome device_auth_error_kind=attacker-controlled-value\n",
         encoding="utf-8",
     )
 
@@ -226,6 +228,8 @@ def test_mdoc_runtime_diagnostic_reports_only_fixed_categories(
     assert "presentation-policy-denied" in output
     assert "required-claim-missing" in output
     assert "issuer-signature-invalid" in output
+    assert "device-auth-error-kind-device-signature-invalid" in output
+    assert "attacker-controlled-value" not in output
     assert "must-not-be-reported" not in output
 
 

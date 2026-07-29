@@ -182,6 +182,28 @@ MDOC_RUNTIME_DIAGNOSTIC_CLASSES = {
     "presentation-invalid": re.compile(r"(?i)(?:invalid_presentation|invalid presentation)"),
     "dcql-contract": re.compile(r"(?i)(?:\bdcql\b|mso_mdoc.{0,80}\bclaims\b)"),
 }
+MDOC_DEVICE_AUTH_ERROR_KINDS = frozenset(
+    {
+        "detached-issuer-auth",
+        "device-response-parse-failed",
+        "session-transcript-parse-failed",
+        "device-response-status-invalid",
+        "device-response-documents-missing",
+        "device-response-version-unsupported",
+        "mso-parse-failed",
+        "device-key-coordinates-missing",
+        "device-key-type-unsupported",
+        "device-auth-method-unsupported",
+        "device-signature-invalid",
+        "device-signature-processing-error",
+        "device-signature-malformed",
+        "device-signature-algorithm-mismatch",
+        "device-key-invalid",
+        "device-auth-cbor-error",
+        "unclassified",
+    }
+)
+MDOC_DEVICE_AUTH_ERROR_KIND = re.compile(r"\bdevice_auth_error_kind=([a-z0-9-]+)\b")
 STACK_ENV_KEYS = {
     "MARTY_UI_IMAGE",
     "MARTY_SERVICES_IMAGE",
@@ -673,6 +695,14 @@ def emit_eudi_runtime_diagnostic(path: Path) -> None:
 def classify_mdoc_runtime_diagnostics(text: str) -> list[str]:
     """Return fixed mdoc verifier categories without exposing source logs."""
     categories = [name for name, pattern in MDOC_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)]
+    observed_error_kinds = {
+        match.group(1)
+        for match in MDOC_DEVICE_AUTH_ERROR_KIND.finditer(text)
+        if match.group(1) in MDOC_DEVICE_AUTH_ERROR_KINDS
+    }
+    categories.extend(
+        f"device-auth-error-kind-{kind}" for kind in sorted(observed_error_kinds)
+    )
     return categories or ["unclassified-runtime-failure"]
 
 
