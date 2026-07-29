@@ -208,6 +208,37 @@ def test_w3c_lane_emits_issuance_diagnostic_when_the_official_suite_fails(
     assert diagnostics == ["w3c-v2-1"]
 
 
+def test_mdoc_runtime_diagnostic_reports_only_fixed_categories(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log = tmp_path / "compose.log"
+    log.write_text(
+        "token=must-not-be-reported\n"
+        "Policy evaluation denied because a required claim is missing\n"
+        "issuer_signature_valid=false\n",
+        encoding="utf-8",
+    )
+
+    lane.emit_mdoc_runtime_diagnostic(log)
+
+    output = capsys.readouterr().err
+    assert "presentation-policy-denied" in output
+    assert "required-claim-missing" in output
+    assert "issuer-signature-invalid" in output
+    assert "must-not-be-reported" not in output
+
+
+def test_mdoc_runtime_diagnostic_reports_unavailable_log(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    lane.emit_mdoc_runtime_diagnostic(tmp_path / "missing.log")
+
+    output = capsys.readouterr().err
+    assert "categories=runtime-log-unavailable" in output
+
+
 def test_material_environment_uses_private_generator_envelope(tmp_path: Path) -> None:
     for filename in ("tls.crt", "tls.key", "root-ca.pem", "truststore.jks", "keystore.jks"):
         (tmp_path / filename).write_text("fixture", encoding="utf-8")
@@ -625,14 +656,17 @@ def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
 ) -> None:
     command: list[str] = []
     suite_environment: dict[str, str] = {}
+    diagnostics: list[Path] = []
 
     def fake_run(actual: list[str], environment: dict[str, str], **_kwargs: object) -> int:
         if "oidf_conformance.py" in " ".join(actual):
             command.extend(actual)
             suite_environment.update(environment)
+            return 1
         return 0
 
     monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "emit_mdoc_runtime_diagnostic", diagnostics.append)
     monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
     monkeypatch.setattr(
         lane,
@@ -659,11 +693,12 @@ def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
         stack_manifest=tmp_path / "stack-manifest.json",
     )
 
-    assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 0
+    assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 1
     assert "oid4vp-mdoc-verifier" in command
     assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
     assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "mdoc-policy-1"
     assert suite_environment["OIDF_MARTY_VERIFIER_PROFILE"] == "standard"
+    assert diagnostics == [tmp_path / "output" / "private" / "compose.log"]
 
 
 def test_old_release_fails_before_any_compose_command(tmp_path: Path) -> None:
