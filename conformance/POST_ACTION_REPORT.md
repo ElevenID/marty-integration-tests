@@ -124,12 +124,13 @@ Manual investigation initially used reviewed tag and manifest overrides while
 cause a default or scheduled lane to test an obsolete pre-DID-first stack even
 while manually dispatched evidence used newer artifacts.
 
-Action completed: the checked-in pin now names `marty-ui` v1.1.49 and its
+Action completed: the checked-in pin now names `marty-ui` v1.1.66 and its
 independently verified manifest digest
-`sha256:abf954ffa8fe2cc763734b9e3b98b3f38d39d0ee98eb76649e31ba7b44d345c3`.
+`sha256:88e1b229dea3cae86a4c79c98add35d27ab9d13573b8699d78ba20a66ef78bd1`.
 Overrides remain available for controlled candidate testing, but the default
-is the latest stack that passed both its artifact-only release gate and the
-official OID4VCI issuer lane.
+is the latest stack that passed its artifact-only release gate and the native
+official OIDF ISO mDL verifier lane. Earlier immutable releases remain bound to
+their original evidence rather than being reinterpreted through this newer pin.
 
 ### 5. The old stack proved that the harness does not silently fall back
 
@@ -165,6 +166,49 @@ Scope: this is native official verifier coverage, not an OIDF mdoc issuer
 claim. The pinned upstream runner has no corresponding OID4VCI mdoc issuer
 plan. EUDI reference-library issuance and independent COSE/CBOR/X.509 checks
 remain the issuance evidence until such a plan is available.
+
+### 6b. The official ISO mDL lane exposed silent claim-contract loss
+
+The first cryptographically valid official presentations passed issuer
+signature, certificate trust, and device-authentication checks but were denied
+by Marty's presentation policy because the requested mdoc claim namespace had
+been lost at the public gateway. `marty-protocol` already defined the canonical
+`namespace` field; a duplicated gateway model omitted it, and its permissive
+validation silently discarded it before the credential-template service could
+map it to the ISO mdoc namespace and element identifier.
+
+[marty-ui#187](https://github.com/ElevenID/marty-ui/pull/187) preserves the
+canonical namespace across the public gateway and internal template boundary.
+The stricter model then exposed adjacent drift: valid protocol fields
+`description`, canonical `display`, and `derived_from` were also absent or
+reconstructed incorrectly. [marty-ui#189](https://github.com/ElevenID/marty-ui/pull/189)
+preserves those fields through the gateway, protobuf, service, and persistence
+layers and rejects unknown, duplicate, self-derived, or missing-source claims.
+[marty-integration-tests#186](https://github.com/ElevenID/marty-integration-tests/pull/186)
+uses the canonical public namespace in the ElevenID-owned fixture.
+
+The exact released v1.1.66 stack then passed all three active official modules:
+the happy flow, `request_uri_method=post`, and invalid-session-transcript
+negative. The official runner reported 134 successes, zero failures, and zero
+warnings, with no expected failures or skips. The invalid transcript was
+rejected because nonce and transcript bindings failed while issuer, trust,
+device-signature, response-URI, and presentation-definition bindings remained
+intact.
+
+This run used OIDF commit
+`dee9a25160e789f0f80517674693ef7989ab9fa1` from the unmodified
+`openid/conformance-suite` checkout. Its HEAD matched before and after
+execution; tracked, staged, and untracked state were clean after execution. No
+assertion, fixture, expected result, test selection, exclusion, or upstream
+source file was changed. All compatibility work remained in Marty product code,
+deployment, or the separately owned ElevenID harness.
+
+The lane exercised the authenticated public gateway, a disposable organization,
+tenant-scoped template, policy and flow resources, the public request URI and
+callback, and the normal flow/policy/template gRPC path. Signing remained
+issuer-profile mediated through managed custody. The test sent no public
+profile, KMS, service, or key selector. It proves one-organization public API
+behavior, not browser UI behavior or adversarial cross-tenant isolation.
 
 ### 7. W3C Data Integrity issuance was configuration-only and reconstructed the document
 
@@ -680,14 +724,16 @@ official-suite interoperability evidence, not an OIDF certification.
 ## Do the tests cheat?
 
 Official upstream suites are immutable evidence inputs. Each lane checks out
-the reviewed full commit, verifies a clean tracked state before execution, and
-verifies it again afterward. ElevenID must not patch assertions, fixtures,
-expected results, test selection, or exclusions to obtain a pass. Product,
-deployment, and harness code may adapt Marty to an upstream interface, but the
-adaptation must remain outside the upstream suite and be identified in the
-evidence classification. The W3C lane additionally executes the exact commit
-in a disposable worktree and records any upstream-owned runtime file mutation;
-every test/assertion or other tracked-source mutation invalidates the run.
+the reviewed full commit and treats the imported tree as read-only. ElevenID
+must not patch assertions, fixtures, expected results, test selection,
+exclusions, or any other upstream source to obtain a pass. Product, deployment,
+and harness code may adapt Marty to an upstream interface, but the adaptation
+must remain outside the upstream suite and be identified in the evidence
+classification. Source-integrity checks compare the exact HEAD and tracked,
+staged, and untracked state before and after execution. Any ElevenID-originated
+source mutation invalidates the run. If an upstream runner writes its own
+runtime report files, execution is isolated from the canonical checkout and
+those writes cannot alter tests or become a compatibility patch.
 
 No production-verification bypass has been found in the reviewed EUDI path:
 
@@ -816,7 +862,7 @@ service images remains required.
 | DID-first signed OID4VP request | Official OID4VP Final plan passes on immutable v1.1.38 | Keep the active profile green as the official runner updates |
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
-| mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
+| mdoc issuance/presentation | Native OIDF ISO mDL verifier evidence on immutable v1.1.66: happy flow, request-URI POST, and invalid-session-transcript negative; 134 successes, zero failures or warnings, plus EUDI and independent COSE/CBOR/X.509 issuance evidence | OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence; retain the exact upstream pin and rerun without patches as it advances |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
 | W3C VCDM v2 verification and issuance | Exact upstream commit `1db599924e6601555933550e0e65925a6abbd0a8` passes on GitHub from an unmodified disposable worktree against immutable v1.1.60; issuer, VC-verifier, and VP-verifier roles all execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
@@ -828,6 +874,8 @@ service images remains required.
 
 | Finding | Classification | Impact | Owner/remediation | Status and required evidence |
 | --- | --- | --- | --- | --- |
+| Public claim model silently dropped canonical mdoc `namespace` | Protocol drift | Cryptographically valid official mdoc presentations contained no requested claims and were denied by policy | `marty-ui#187` carries canonical namespace through the public gateway and maps it only at the internal template boundary; `marty-integration-tests#186` uses the published field | Remediated and released in v1.1.66; the unmodified OIDF ISO mDL verifier lane passes all three active modules with 134/0/0 conditions |
+| Public claim model omitted `description`, canonical `display`, and true `derived_from` | Protocol drift | Strict validation would reject valid protocol requests, while permissive validation had previously lost display and derivation semantics | `marty-ui#189` synchronizes gateway, protobuf, service, persistence, and response mapping and validates the claim graph | Remediated and released in v1.1.66; 625 focused tests, 173 persistence/flow tests, the complete PR matrix, release gates, and official mdoc lane pass |
 | W3C adapter reconstructed only `credentialSubject` | Bypass risk | Could pass top-level VCDM assertions without signing the tested document | `marty-core#72`, `marty-credentials#74`, `marty-ui#138` | Removed and released; v1.1.48 signs the complete supplied document and passes 59/59 official assertions |
 | W3C adapter performed suite-specific semantic validation | Adapted gap / bypass risk | Negative cases could pass before production code saw the input | `marty-ui#138` deletes adapter-owned validation; `marty-credentials#74` owns structural and allowlisted digest validation | Removed and released; production validators/verifiers own acceptance and the immutable official negative assertions pass |
 | W3C adapter duplicated the general UI issuance boundary | API bypass risk | Private template/resolver calls could drift from the API the UI is required to use | `marty-ui#138` calls the shared general `create_issuance` path with only organization, public issuer DID, template, and complete document | Removed and released; gateway regressions prohibit private resolver/template calls and v1.1.48 passes the official suite through the shared path |
@@ -911,6 +959,16 @@ service images remains required.
 | `marty-ui` v1.1.51, release commit `4a6d83da3f5325b25ecbe5055edbe01b6abefd40`, manifest `sha256:d3b792ef11cc3b4558e33fa407b275ca6fe8eb4ff21f44fd2421dd639da1df65`, run [30394311312](https://github.com/ElevenID/marty-ui/actions/runs/30394311312) | Every release job passed; the release uses the canonical public mdoc contract, contains no caller artifact-generation shortcut, and pins credentials issuance image `sha256:43f8a2de5dc8f6d66acfa0197f2a552a80a7c54317d93c5c99f45959b06dab2c` |
 | EUDI run [30395235968](https://github.com/ElevenID/marty-integration-tests/actions/runs/30395235968), exact harness `f618d5d46a12c792412eeb39f75e40f6e06cb0ee`, exact v1.1.51 manifest above | 55 tests: 47 passed, 8 failed, 0 skipped. All required replay, tampered-signature, expired-request, and missing-holder-binding negatives passed. Two SD-JWT failures exposed the DID-resolver x5c loss; two mdoc issuance and four mdoc presentation failures exposed the missing/wrong-location x5chain path. No failure was dismissed or converted to an expected pass |
 | OIDF mdoc verifier run [30395234162](https://github.com/ElevenID/marty-integration-tests/actions/runs/30395234162), exact harness and v1.1.51 manifest above | All three official modules were active with zero expected failures/skips, but each public flow start failed HTTP 422 because the adapter omitted required `organization_id`. The production API failed closed; the modules timed out in `WAITING`, and no mdoc compliance claim is credited |
+| `marty-ui` v1.1.66, release commit `c683976fc7b00a8356adc58b89b6331aaafe8d9b`, manifest `sha256:88e1b229dea3cae86a4c79c98add35d27ab9d13573b8699d78ba20a66ef78bd1`, run [30486641952](https://github.com/ElevenID/marty-ui/actions/runs/30486641952) | Immutable-input validation, UI/services/migrations builds, attestations, keyless signatures, SBOMs, anonymous artifact-only stack smoke, release upload, and manifest checksum/signature/attestation passed. The manifest pins UI `sha256:bbf355fb13b0fc32aad9388caec4cf861aa7673e1da2317bf5c2f2548fea3260`, services `sha256:9920e7b3ae067e4dd090e83cc69bab932c43b2a0fd2d67726ab1d6f3d7925ec8`, and migrations `sha256:baff3cc49029a04652b4304231c45805ae47fd18d6bf785cb7c310eb6d9172c3`. A transient GitHub/Sigstore OIDC response made the first service-signing attempt fail; rerunning the failed job passed without weakening the signing gate. |
+| Native OIDF ISO mDL verifier run against v1.1.66, official evidence archive digest `sha256:3fc43830b661e78daa69c8c86250f0468ce917064c4a8385fb6fd085c82fa176` | Exact official commit `dee9a25160e789f0f80517674693ef7989ab9fa1` passed the happy flow, `request_uri_method=post`, and invalid-session-transcript modules with 134 successes, zero failures, and zero warnings. There were no expected failures/skips; the upstream checkout remained exact and clean before and after; and public organization, DID-first flow, request-URI, callback, policy, template, trust, issuer-signature, and device-authentication paths were exercised. |
+
+The v1.1.66 image digests are signed, attested, and pinned, but the services and
+migrations images produced different digests when the failed release job was
+rerun from the same source commit. This does not weaken the released manifest,
+which names the successful signed outputs, but it is evidence that OCI builds
+are not yet byte-for-byte reproducible. Build timestamps and unfrozen base or
+OS-package inputs must be audited before the project claims reproducible image
+builds.
 
 The OID4VCI passing run is bound to harness commit
 `874aa50ba32a89a743ad6546758ad7fcf6c87886`, artifact ID `8700574000`, and
