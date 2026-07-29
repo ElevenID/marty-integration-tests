@@ -549,7 +549,7 @@ def test_oid4vci_lane_runs_official_plan_through_public_issuance(
         == 0
     )
     assert official_command[official_command.index("--profile") + 1] == "oid4vci-issuer"
-    assert "--allow-planned-profile" in official_command
+    assert "--allow-planned-profile" not in official_command
     assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
     assert suite_environment["OIDF_MARTY_CREDENTIAL_TEMPLATE_ID"] == "template-1"
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"

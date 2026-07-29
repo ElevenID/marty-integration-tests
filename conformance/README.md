@@ -330,7 +330,6 @@ python scripts/oidf_conformance.py run \
   --profile oid4vp-haip-verifier \
   --config /secure/work/haip-run1/marty-verifier-haip.json \
   --stack-manifest /secure/work/stack-manifest.json \
-  --allow-planned-profile \
   --output-dir reports/oidf/haip \
   --interaction-script scripts/oidf_marty_verifier.py
 ```
@@ -366,7 +365,6 @@ python scripts/oidf_conformance.py run \
   --profile oid4vp-verifier \
   --config /secure/work/marty-verifier.json \
   --stack-manifest /secure/work/stack-manifest.json \
-  --allow-planned-profile \
   --output-dir reports/oidf/verifier \
   --interaction-script scripts/oidf_marty_verifier.py
 ```
@@ -375,8 +373,10 @@ The standard verifier plan exercises Marty's native signed `request_uri`
 transport with the OIDF runner's `request_uri_signed` and `x509_hash`
 variants. The interaction bridge forwards the original public request URI and
 client identifier; it never decodes the JAR into a different front-channel
-transport. URL-query authorization requests are not currently a supported
-Marty production transport and are not claimed or synthesized by this suite.
+transport. Marty separately supports a signed Request Object passed by value
+in the standard `request` parameter. That is not the OIDF runner's
+`url_query` variant, which sends unsigned request parameters directly in the
+query, so no official URL-query pass is claimed or synthesized.
 
 ## Run the official ISO mDL verifier plan
 
