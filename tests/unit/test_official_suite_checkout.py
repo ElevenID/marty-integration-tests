@@ -55,3 +55,24 @@ def test_checkout_verification_rejects_a_tracked_change(
 
     with pytest.raises(ValueError, match="byte-for-byte clean"):
         checkout.verify_checkout("oidf", tmp_path)
+
+
+def test_checkout_verification_rejects_an_untracked_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Compliance Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "compliance@example.test"], cwd=tmp_path, check=True)
+    source = tmp_path / "official-test.py"
+    source.write_text("assert True\n", encoding="utf-8")
+    subprocess.run(["git", "add", "official-test.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=tmp_path, check=True, capture_output=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    monkeypatch.setattr(checkout, "pinned_source", lambda _name: ("https://example.test/suite.git", commit))
+
+    assert checkout.verify_checkout("w3c", tmp_path) == commit
+    (tmp_path / "local-compatibility-shim.py").write_text("assert True\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="byte-for-byte clean"):
+        checkout.verify_checkout("w3c", tmp_path)

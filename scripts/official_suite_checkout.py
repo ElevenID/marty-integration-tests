@@ -55,13 +55,13 @@ def run_git(*arguments: str, cwd: Path | None = None) -> None:
 
 
 def verify_checkout(name: str, output: Path) -> str:
-    """Prove the checkout is the reviewed commit with no tracked changes."""
+    """Prove the checkout is the reviewed commit with no source-tree changes."""
     _repository, commit = pinned_source(name)
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=output, text=True).strip()
     if actual != commit:
         raise ValueError(f"{name} checkout resolved {actual}; expected {commit}")
     changed = subprocess.check_output(
-        ["git", "status", "--porcelain=v1", "--untracked-files=no"],
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
         cwd=output,
         text=True,
     ).splitlines()
