@@ -35,7 +35,7 @@ LANES = {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip", "w3c-v2", "eud
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 W3C_API_KEY = re.compile(r"^mk_test_[A-Za-z0-9_-]{1,120}$")
-W3C_CONFORMANCE_RATE_LIMIT_RPM = "10000"
+W3C_CONFORMANCE_RATE_LIMIT_RPM = "100000"
 # Public OID4VCI credential-configuration identifiers are opaque JSON object
 # keys.  Marty uses a fragment-like suffix (for example, ``PID#sd-jwt``) to
 # distinguish formats for the same credential type, so ``#`` is intentional.

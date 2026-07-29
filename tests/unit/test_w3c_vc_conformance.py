@@ -68,6 +68,24 @@ def test_w3c_checkout_rejects_any_tracked_source_change(tmp_path: Path) -> None:
         w3c.validate_checkout(suite, manifest)
 
 
+def test_runtime_report_cleanup_preserves_tracked_upstream_sentinel(
+    tmp_path: Path,
+) -> None:
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    sentinel = reports / ".gitkeep"
+    sentinel.write_text("", encoding="utf-8")
+    (reports / "index.json").write_text("{}\n", encoding="utf-8")
+    nested = reports / "assets"
+    nested.mkdir()
+    (nested / "report.js").write_text("runtime output\n", encoding="utf-8")
+
+    w3c.clear_runtime_reports(tmp_path)
+
+    assert sentinel.is_file()
+    assert list(reports.iterdir()) == [sentinel]
+
+
 def test_npm_command_uses_the_windows_launcher_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("W3C_NPM_CLI", raising=False)
     monkeypatch.setattr(w3c.os, "name", "nt")

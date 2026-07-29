@@ -101,9 +101,23 @@ def validate_checkout(path: Path, manifest: dict) -> None:
             "--untracked-files=no",
         ],
         text=True,
-    ).strip()
+    ).splitlines()
     if changed:
-        raise ValueError("W3C VC suite tracked source is not byte-for-byte clean")
+        paths = ", ".join(line[3:] for line in changed)
+        raise ValueError(f"W3C VC suite tracked source is not byte-for-byte clean: {paths}")
+
+
+def clear_runtime_reports(suite: Path) -> None:
+    """Remove ignored report output without touching tracked upstream files."""
+    reports = suite / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    for path in reports.iterdir():
+        if path.name == ".gitkeep":
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
 
 def write_local_config(
@@ -451,8 +465,7 @@ def run_suite(
         if install_result:
             return install_result
     output.mkdir(parents=True, exist_ok=True)
-    shutil.rmtree(suite / "reports", ignore_errors=True)
-    (suite / "reports").mkdir(parents=True, exist_ok=True)
+    clear_runtime_reports(suite)
     (suite / "suite.log").unlink(missing_ok=True)
     result = subprocess.run(w3c_test_command(suite), cwd=suite, check=False).returncode
     # Configuration, lockfiles, dependencies, logs, and reports are ignored
