@@ -326,6 +326,18 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
     assert template["issuer_did"] == "did:web:issuer.example.com"
     assert "issuer_profile_id" not in template
     assert "auto_generate_artifacts" not in template
+    assert [
+        (
+            claim["name"],
+            claim["mdoc_namespace"],
+            claim["mdoc_element_identifier"],
+        )
+        for claim in template["claims"]
+    ] == [
+        ("family_name", "org.iso.18013.5.1", "family_name"),
+        ("given_name", "org.iso.18013.5.1", "given_name"),
+        ("birth_date", "org.iso.18013.5.1", "birth_date"),
+    ]
 
     policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,
@@ -341,6 +353,10 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
         "given_name",
         "birth_date",
     ]
+    template_claims = {claim["name"] for claim in template["claims"]}
+    assert {
+        claim["claim_name"] for claim in requirement["requested_claims"]
+    } <= template_claims
 
 
 def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:

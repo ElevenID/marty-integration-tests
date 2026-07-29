@@ -300,9 +300,27 @@ def template_payload(
                 }
             },
             "claims": [
-                {"name": "family_name", "display_name": "Family Name", "required": True},
-                {"name": "given_name", "display_name": "Given Name", "required": True},
-                {"name": "birth_date", "display_name": "Birth Date", "required": True},
+                {
+                    "name": "family_name",
+                    "display_name": "Family Name",
+                    "required": True,
+                    "mdoc_namespace": "org.iso.18013.5.1",
+                    "mdoc_element_identifier": "family_name",
+                },
+                {
+                    "name": "given_name",
+                    "display_name": "Given Name",
+                    "required": True,
+                    "mdoc_namespace": "org.iso.18013.5.1",
+                    "mdoc_element_identifier": "given_name",
+                },
+                {
+                    "name": "birth_date",
+                    "display_name": "Birth Date",
+                    "required": True,
+                    "mdoc_namespace": "org.iso.18013.5.1",
+                    "mdoc_element_identifier": "birth_date",
+                },
             ],
         }
     return {
