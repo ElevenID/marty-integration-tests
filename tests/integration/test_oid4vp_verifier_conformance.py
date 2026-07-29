@@ -199,6 +199,7 @@ def _session_headers() -> dict[str, str]:
 def _create_verification_session(
     policy_id: str | None = None,
     org_id: str = ORG_ID,
+    request_transport: str | None = None,
 ) -> dict:
     """POST /v1/flows/verify — create a presentation request session.
 
@@ -215,6 +216,8 @@ def _create_verification_session(
     }
     if policy_id or PRESENTATION_POLICY_ID:
         body["presentation_policy_id"] = policy_id or PRESENTATION_POLICY_ID
+    if request_transport is not None:
+        body["request_transport"] = request_transport
 
     resp = http(
         "POST",
@@ -598,6 +601,72 @@ def test_verifier_happy_flow_request_by_uri():
         R.fail("verifier_request_by_uri.request_uri_in_session",
                "OID4VP-1FINAL §5.2: request_uri not in session response "
                "(by-reference requests not supported or not default)")
+
+
+def test_verifier_happy_flow_request_by_value() -> None:
+    """OID4VP §5 / RFC 9101: a URL-query request carries one signed JAR.
+
+    This lane deliberately verifies the production gateway response. It does
+    not rebuild individual Authorization Request claims in the outer URL,
+    because that would test a non-standard unsigned adapter path rather than
+    the Request Object a wallet must verify.
+    """
+    print("\n--- §5 Authorization Request by value (signed JAR) ---")
+    try:
+        session = _create_verification_session(request_transport="url_query")
+    except RuntimeError as e:
+        R.fail("verifier_request_by_value.create", str(e))
+        return
+
+    auth_request = session.get("request_uri", "")
+    parsed = urllib.parse.urlparse(auth_request)
+    params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    if parsed.scheme != "openid4vp":
+        R.fail(
+            "verifier_request_by_value.uses_openid4vp_scheme",
+            f"expected openid4vp scheme, got {parsed.scheme!r}",
+        )
+        return
+    R.ok("verifier_request_by_value.uses_openid4vp_scheme")
+
+    if set(params) != {"client_id", "request"}:
+        R.fail(
+            "verifier_request_by_value.outer_parameters_are_minimal",
+            f"expected only client_id and request, got {sorted(params)}",
+        )
+        return
+    R.ok("verifier_request_by_value.outer_parameters_are_minimal")
+
+    request_values = params.get("request", [])
+    if len(request_values) != 1:
+        R.fail(
+            "verifier_request_by_value.contains_one_signed_request_object",
+            f"expected one request JAR, got {len(request_values)} values",
+        )
+        return
+    try:
+        request_object = _decode_jwt_payload(request_values[0])
+    except ValueError as e:
+        R.fail("verifier_request_by_value.request_is_jwt", str(e))
+        return
+    R.ok("verifier_request_by_value.request_is_jwt")
+
+    outer_client_id = params["client_id"][0]
+    if request_object.get("client_id") != outer_client_id:
+        R.fail(
+            "verifier_request_by_value.client_id_matches_signed_request",
+            "outer client_id does not match the profile-signed Request Object",
+        )
+        return
+    R.ok("verifier_request_by_value.client_id_matches_signed_request")
+
+    if not request_object.get("response_uri") or not request_object.get("nonce"):
+        R.fail(
+            "verifier_request_by_value.signed_request_has_required_claims",
+            "the signed Request Object is missing response_uri or nonce",
+        )
+        return
+    R.ok("verifier_request_by_value.signed_request_has_required_claims")
 
 
 # ---------------------------------------------------------------------------
@@ -1011,6 +1080,7 @@ def main() -> None:
     # C. Happy Flows
     test_verifier_happy_flow_direct_post()
     test_verifier_happy_flow_request_by_uri()
+    test_verifier_happy_flow_request_by_value()
     # D. Presentation Definition
     test_verifier_presentation_definition_structure()
     test_verifier_dcql_query()
