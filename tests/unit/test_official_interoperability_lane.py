@@ -608,7 +608,14 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert "OIDF_MARTY_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "request_uri_signed"
-    assert any("oidf_marty_browser_smoke.py" in " ".join(command) for command in executed_commands)
+    browser_command = next(
+        command
+        for command in executed_commands
+        if "oidf_marty_browser_smoke.py" in " ".join(command)
+    )
+    assert browser_command[browser_command.index("--output") + 1] == str(
+        args.output_dir / "raw" / "browser" / "browser-evidence.json"
+    )
     assert compose_commands
     assert all("--haip" in command for command in compose_commands)
 

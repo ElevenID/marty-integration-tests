@@ -1037,6 +1037,8 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 [
                     sys.executable,
                     str(ROOT / "scripts" / "oidf_marty_browser_smoke.py"),
+                    "--output",
+                    str(args.output_dir / "raw" / "browser" / "browser-evidence.json"),
                 ],
                 environment,
             )
