@@ -1,7 +1,7 @@
 # Protocol Compliance Post-Action Report
 
 Status: in progress  
-Last updated: 2026-07-28
+Last updated: 2026-07-29
 
 ## Purpose
 
@@ -679,6 +679,16 @@ official-suite interoperability evidence, not an OIDF certification.
 
 ## Do the tests cheat?
 
+Official upstream suites are immutable evidence inputs. Each lane checks out
+the reviewed full commit, verifies a clean tracked state before execution, and
+verifies it again afterward. ElevenID must not patch assertions, fixtures,
+expected results, test selection, or exclusions to obtain a pass. Product,
+deployment, and harness code may adapt Marty to an upstream interface, but the
+adaptation must remain outside the upstream suite and be identified in the
+evidence classification. The W3C lane additionally executes the exact commit
+in a disposable worktree and records any upstream-owned runtime file mutation;
+every test/assertion or other tracked-source mutation invalidates the run.
+
 No production-verification bypass has been found in the reviewed EUDI path:
 
 - Marty is reconstructed from a released stack manifest and digest-pinned,
@@ -769,6 +779,23 @@ isolation independently of role assignment.  Membership, RBAC, API-key,
 SCIM, result, audit, webhook, and error-message isolation remain separate
 required matrix rows.
 
+The Canvas mirror provenance audit added a second concrete isolation slice.
+The previously anonymous gateway route could query a delivery record,
+external Canvas credential ID, or canonical credential ID without a required
+organization, and its response exposed internal issuer-profile and mode
+fields. [marty-credentials#86](https://github.com/ElevenID/marty-credentials/pull/86)
+now requires the internal management credential plus an exact trusted
+organization header/query match, scopes every selector to that organization,
+returns a non-enumerating 404 for cross-tenant substitutions, and returns only
+the public issuer DID and credential-issuer URL.
+[marty-ui#177](https://github.com/ElevenID/marty-ui/pull/177) requires normal
+user authentication, selected-organization membership, and the
+`integration-connector:view` permission before the gateway calls issuance.
+Focused tests cover all three resource-ID substitution paths and a
+two-organization denial before the backend. This is useful production-boundary
+evidence, but it does not complete the wider RBAC, SCIM, result, audit, and
+webhook matrix.
+
 ## Does the suite use the UI's general API?
 
 The EUDI and OIDF paths use the same authenticated public gateway that the UI
@@ -793,7 +820,7 @@ service images remains required.
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
 | W3C VCDM v2 verification and issuance | Exact upstream commit `1db599924e6601555933550e0e65925a6abbd0a8` passes on GitHub from an unmodified disposable worktree against immutable v1.1.60; issuer, VC-verifier, and VP-verifier roles all execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
-| Multitenancy | One organization | Two-organization adversarial isolation matrix |
+| Multitenancy | Partial: two-organization template isolation plus Canvas delivery/external/canonical credential substitution and gateway authorization checks | Complete the two-organization RBAC, API-key, SCIM, result, audit, webhook, and error-leakage matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
 | Wider Marty feature model | Not covered by official suites | RBAC/SCIM, saved flows, vetting, devices, API keys, revocation, trust registries, notifications, audit, wallet profiles, DIDComm |
 
@@ -831,6 +858,7 @@ service images remains required.
 | OIDF mdoc verifier adapter omitted `organization_id` | Harness public-boundary defect | Every official module reached the production gateway, which correctly rejected `/v1/flows/verify` with HTTP 422 before request-object creation; the runner then timed out in `WAITING`, so the run provides no mdoc cryptographic evidence | Pass the disposable fixture organization through `OIDF_MARTY_ORGANIZATION_ID` and include it in the normal authenticated public flow request | Fixed locally with 57 focused tests; merge and immutable official rerun required |
 | Signed issuer metadata, batch issuance, holder-key attestation, and credential-response encryption are not advertised | Missing optional features | The active profile is narrower than the complete optional OID4VCI feature set | Keep explicit capability metadata and owned, expiring skip records; implement each only through a separately reviewed production path | Open by design; never represent these skipped modules as passed |
 | Official lanes use one organization | Missing evidence | Tenant isolation and cross-tenant DID resolution remain unproven | Two-organization adversarial matrix | Partial template isolation exists; full matrix remains open |
+| Canvas provenance accepted an unscoped organization and exposed issuer-profile internals | Public authorization/data-boundary defect | A guessed delivery, external credential, or canonical credential identifier could cross the intended tenant boundary; public responses leaked internal profile/mode metadata | `marty-credentials#86` requires trusted tenant context and scopes all selectors; `marty-ui#177` adds authentication, membership, permission, and internal service authentication | Released in v1.1.61 after all three selector substitutions, trusted-context mismatch, two-organization pre-backend denial, public response-shape regressions, full PR checks, and the artifact-only stack smoke passed |
 | Official lanes do not drive the browser | Missing evidence | UI request shapes and exclusive general-API use remain unproven | Released-stack Playwright issuance/verification smoke | Open |
 
 ## Immutable evidence collected
@@ -871,6 +899,8 @@ service images remains required.
 | Local clean-stack W3C v2 diagnostic against v1.1.59 manifest `sha256:79a319534c9de76b27e06473300f185d43c21baf87d39618d5357d3e6acf8d1`, suite report `sha256:3cf41766be230c01435b27b61c09826648980aa5e28e8bd878a182aa50ef1f35` | Passed the complete pinned suite with issuer, VC-verifier, and VP-verifier evidence after only deployment configuration was corrected. Evidence records `official_upstream_unmodified=true`, `disposable_exact_commit_worktree=true`, `test_or_assertion_source_modified=false`, and an empty exclusions list. This is remediation validation, not the final immutable GitHub release claim. |
 | `marty-ui` v1.1.60, release commit `a8a1e3626097d220131f0f6021b3d3c9cefa620e`, manifest `sha256:f11da15a32884b737d23632dec5a029edda25f5837e2a33c15a19d42243ae904`, run [30446107785](https://github.com/ElevenID/marty-ui/actions/runs/30446107785) | Every release job passed, including dependency provenance, anonymous digest pulls, signed images, no-commerce scan, and the artifact-only public stack smoke. |
 | Unmodified W3C v2 run [30446716188](https://github.com/ElevenID/marty-integration-tests/actions/runs/30446716188), sanitized artifact ID `8721818953`, artifact digest `sha256:2a5670c499ce8e5da352bb86547e2b37f5f7815318986e21014dafd15836bf5f`, summary `sha256:b3c63d3365148c9a6208c26de6aa524249e6b3bc300f1cc49c2e00b0b1904df9` | Passed against exact v1.1.60 artifacts and upstream commit `1db599924e6601555933550e0e65925a6abbd0a8`. Evidence records all three configured capabilities, `official_upstream_unmodified=true`, `disposable_exact_commit_worktree=true`, `test_or_assertion_source_modified=false`, no runtime source mutations, and no exclusions. |
+| `marty-credentials` v0.1.31, release commit `8def9c22cd0e4d2913ced6e5e3d1852c7b28e7db`, source run [30450485232](https://github.com/ElevenID/marty-credentials/actions/runs/30450485232), finalization run [30451746630](https://github.com/ElevenID/marty-credentials/actions/runs/30451746630) | Cross-platform Rust/Python/WASM artifacts, tests, checksums, SBOMs, signatures, provenance, and digest-first image publication passed. The attested issuance image `sha256:c5da4dbb1209d6e28ffd234077cdf391bb625360b401ec72329765fd8b9466e9` contains the organization-bound Canvas provenance lookup and public issuer response model. |
+| `marty-ui` v1.1.61, release commit `6ae8e47ff5af8800c2bf392ec684c583dd63a01d`, manifest `sha256:d8dea9e10d592b592833284abb3100daf5eef8640dd925f856828a08840f10b5`, run [30452533884](https://github.com/ElevenID/marty-ui/actions/runs/30452533884) | Every release job passed, including dependency and OCI provenance, signed images, no-commerce scanning, upgrade/rollback validation, the artifact-only public integration suite, and manifest attestation. The release pins credentials v0.1.31 and removes issuer-profile/mode metadata from the Canvas provenance UI. UI `sha256:848bb2e85a615ac44b57570a2c604b3aeeb44180ecaff78613dc863e8ce9e74e`, services `sha256:b0550e7485338b2de711db910f232bc9ca8b00642d319fc25fc20eaa871efe42`, and migrations `sha256:dfd317cf79085b6ae806c12025a95197a4e2bfee81f6362a9b25fcb6e3bb34dc` independently verify against GitHub attestations. No upstream official-suite source was changed or rerun to manufacture this product-boundary result. |
 | OID4VCI issuer run [30230312937](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312937), sanitized summary `sha256:eacc7f2d7fd9edc2ffec43e3faaa590d1c733d429c74bcdaf47c7e3f7189b444` | Metadata passed; interaction modules exposed missing official-runner client identities |
 | OID4VCI issuer run [30231686437](https://github.com/ElevenID/marty-integration-tests/actions/runs/30231686437), sanitized summary `sha256:4adb5cc1e43b14953fc3603a63f3e396a211890399d0de7914562e26a73852a9` | Authorization-server identity passed; exposed internal-template/public-configuration ID confusion |
 | OID4VCI issuer run [30232003181](https://github.com/ElevenID/marty-integration-tests/actions/runs/30232003181), sanitized summary `sha256:de313a9f8dc4338f1ff83dbb0ae60822dda6f468fc7b219f3f0b41e25412d1cb` | Reached issuer interaction; exposed selection of bare JWT VC `PID` instead of advertised SD-JWT `PID#sd-jwt` |
