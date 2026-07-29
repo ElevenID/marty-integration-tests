@@ -548,12 +548,11 @@ without weakening or spuriously breaking this evidence guard.
 The pinned official revision currently contains an invalid Chai invocation
 that crashes two otherwise valid issuer assertions. Until upstream
 [PR #174](https://github.com/w3c/vc-data-model-2.0-test-suite/pull/174) is
-merged, checkout applies only that PR's exact one-file delta after verifying
-its full commit, allowed path, and SHA-256. Evidence is explicitly classified
-as `official-suite-with-reviewed-upstream-pending-runner-fix` and records that
-the checkout is not unmodified official upstream. The monthly updater watches
-both upstream `main` and the PR head; the patch must be removed when upstream
-adopts the fix. It changes no normative assertion, skip, or expected result.
+merged, those assertions remain visible failures. The runner does not apply
+the PR, reproduce its delta, alter the affected assertion, or classify a
+patched run as official evidence. The monthly updater watches upstream
+`main` and the PR head so a reviewed pin update can adopt the upstream fix
+after it is merged.
 
 ## Certification later
 
