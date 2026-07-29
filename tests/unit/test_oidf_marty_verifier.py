@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
@@ -15,6 +16,41 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load OIDF verifier adapter")
 oidf_verifier = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(oidf_verifier)
+
+
+def test_windows_host_bridge_keeps_ca_and_hostname_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b'{"ok":true}\n200',
+            stderr=b"",
+        )
+
+    monkeypatch.setenv("CURL_CA_BUNDLE", "C:/conformance/root-ca.pem")
+    monkeypatch.setattr(
+        oidf_verifier,
+        "local_marty_resolve",
+        lambda _url: ["--resolve", "marty.test:443:127.0.0.1"],
+    )
+    monkeypatch.setattr(oidf_verifier, "curl_executable", lambda: "curl.exe")
+    monkeypatch.setattr(oidf_verifier.os, "name", "nt")
+    monkeypatch.setattr(oidf_verifier.subprocess, "run", run)
+
+    assert oidf_verifier.request_json("https://marty.test/request") == (
+        200,
+        {"ok": True},
+    )
+    command = captured["command"]
+    assert "--cacert" in command
+    assert command[command.index("--cacert") + 1] == "C:/conformance/root-ca.pem"
+    assert "--ssl-no-revoke" in command
+    assert "--insecure" not in command
 
 
 def test_local_resolver_is_limited_to_the_configured_public_marty_origin(
