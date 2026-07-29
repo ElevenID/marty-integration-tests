@@ -25,6 +25,10 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SRI_SHA512 = re.compile(r"^sha512-[A-Za-z0-9+/]+={0,2}$")
 REQUIRED_EVIDENCE_CAPABILITIES = frozenset({"issuer", "vc_verifier", "vp_verifier"})
+# The pinned upstream suite uses this tracked file as a runtime scratch document.
+# It is permitted to change only inside the disposable execution worktree. The
+# canonical checkout and every test/assertion source must remain clean.
+UPSTREAM_RUNTIME_MUTATIONS = frozenset({"reports/related-resource.json"})
 
 
 def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
@@ -107,17 +111,112 @@ def validate_checkout(path: Path, manifest: dict) -> None:
         raise ValueError(f"W3C VC suite tracked source is not byte-for-byte clean: {paths}")
 
 
+def tracked_changes(path: Path) -> list[tuple[str, str]]:
+    """Return tracked worktree changes as ``(status, repository path)``."""
+    lines = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(path),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=no",
+        ],
+        text=True,
+    ).splitlines()
+    changes: list[tuple[str, str]] = []
+    for line in lines:
+        if len(line) < 4:
+            raise ValueError("W3C VC suite returned malformed git status output")
+        status, repository_path = line[:2], line[3:].replace("\\", "/")
+        if " -> " in repository_path:
+            raise ValueError(f"W3C VC suite runtime renamed tracked source: {repository_path}")
+        changes.append((status, repository_path))
+    return changes
+
+
+def validate_runtime_checkout(path: Path, manifest: dict) -> list[str]:
+    """Allow only the upstream suite's declared runtime scratch mutation."""
+    actual = revision(path)
+    expected = manifest["official_suite"]["commit"]
+    if actual != expected:
+        raise ValueError(f"W3C VC runtime suite is {actual}; expected pinned {expected}")
+    changes = tracked_changes(path)
+    rejected = [
+        repository_path
+        for status, repository_path in changes
+        if status != " M" or repository_path not in UPSTREAM_RUNTIME_MUTATIONS
+    ]
+    if rejected:
+        raise ValueError(
+            "W3C VC disposable runtime changed test/assertion or undeclared tracked source: " + ", ".join(rejected)
+        )
+    return sorted(repository_path for _status, repository_path in changes)
+
+
+def create_runtime_worktree(
+    canonical_suite: Path,
+    runtime_suite: Path,
+    manifest: dict,
+) -> None:
+    """Create a disposable exact-commit worktree without touching canonical source."""
+    validate_checkout(canonical_suite, manifest)
+    if runtime_suite.exists():
+        raise ValueError(f"W3C VC disposable runtime already exists: {runtime_suite}")
+    runtime_suite.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_suite),
+            "worktree",
+            "add",
+            "--detach",
+            str(runtime_suite),
+            manifest["official_suite"]["commit"],
+        ],
+        check=True,
+    )
+    try:
+        validate_checkout(runtime_suite, manifest)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        remove_runtime_worktree(canonical_suite, runtime_suite)
+        raise
+
+
+def remove_runtime_worktree(canonical_suite: Path, runtime_suite: Path) -> None:
+    """Remove only the explicitly created disposable worktree."""
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_suite),
+            "worktree",
+            "remove",
+            "--force",
+            str(runtime_suite),
+        ],
+        check=True,
+    )
+
+
 def clear_runtime_reports(suite: Path) -> None:
-    """Remove ignored report output without touching tracked upstream files."""
+    """Remove report output without touching any tracked upstream file."""
     reports = suite / "reports"
     reports.mkdir(parents=True, exist_ok=True)
-    for path in reports.iterdir():
-        if path.name == ".gitkeep":
-            continue
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
+    tracked = {
+        repository_path.replace("\\", "/")
+        for repository_path in subprocess.check_output(
+            ["git", "-C", str(suite), "ls-files", "reports"],
+            text=True,
+        ).splitlines()
+    }
+    for path in sorted(reports.rglob("*"), reverse=True):
+        relative = path.relative_to(suite).as_posix()
+        if path.is_file() and relative not in tracked:
             path.unlink()
+        elif path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
 
 
 def write_local_config(
@@ -394,6 +493,7 @@ def write_evidence(
     adapter_url: str,
     result: int,
     stack_manifest: Path,
+    runtime_mutations: list[str] | None = None,
 ) -> None:
     executed_capabilities = report_executed_capabilities(output / "reports" / "index.json", manifest)
     artifacts = [
@@ -408,6 +508,11 @@ def write_evidence(
             "path": str(suite),
             "official_commit": revision(suite),
             "official_upstream_unmodified": True,
+        },
+        "suite_execution": {
+            "disposable_exact_commit_worktree": True,
+            "test_or_assertion_source_modified": False,
+            "upstream_owned_runtime_mutations": runtime_mutations or [],
         },
         "marty": {
             "commit": os.environ.get("MARTY_COMMIT", "unrecorded"),
@@ -442,55 +547,82 @@ def run_suite(
 ) -> int:
     """Run the official W3C test command against the authenticated public API.
 
-    The upstream checkout is pinned before invoking its own ``npm test``
-    command. Install is explicit because the upstream suite has no lockfile;
-    the repository-owned reviewed lock is copied into the checkout, verified,
-    and used with ``npm ci``. Upstream dependency changes therefore arrive only
-    through a reviewed manifest/lock update and cannot drift during a run.
+    The canonical upstream checkout is never used as an execution directory.
+    A detached disposable worktree at the exact pinned commit receives ignored
+    configuration/dependency inputs and the upstream suite's own runtime
+    outputs. Install is explicit because the upstream suite has no lockfile;
+    the repository-owned reviewed lock is copied into that disposable
+    worktree, verified, and used with ``npm ci``. Upstream dependency changes
+    therefore arrive only through a reviewed manifest/lock update and cannot
+    drift during a run.
     """
     manifest = load_manifest()
     validate_checkout(suite, manifest)
     stack_manifest_metadata(stack_manifest)
-    write_local_config(
-        suite / "localConfig.cjs",
-        adapter_url,
-        issuer_id,
-        organization_id,
-        credential_template_id,
-        credential_policy_id,
-        presentation_policy_id,
-    )
-    if install:
-        install_result = install_dependencies(suite, manifest)
-        if install_result:
-            return install_result
-    output.mkdir(parents=True, exist_ok=True)
-    clear_runtime_reports(suite)
-    (suite / "suite.log").unlink(missing_ok=True)
-    result = subprocess.run(w3c_test_command(suite), cwd=suite, check=False).returncode
-    # Configuration, lockfiles, dependencies, logs, and reports are ignored
-    # runtime inputs/outputs. The official suite's tracked source must remain
-    # byte-for-byte identical both before and after execution.
-    validate_checkout(suite, manifest)
-    report = suite / "reports" / "index.json"
-    executed_capabilities = report_executed_capabilities(report, manifest)
-    missing_capabilities = REQUIRED_EVIDENCE_CAPABILITIES - executed_capabilities
-    if result == 0 and missing_capabilities:
-        missing = ", ".join(sorted(missing_capabilities))
-        print(f"W3C VC suite did not prove required Marty capabilities: {missing}.", file=sys.stderr)
-        result = 1
-    for source in (suite / "reports", suite / "suite.log", suite / "package-lock.json"):
-        if source.is_file():
-            target = output / source.name
-            target.write_bytes(source.read_bytes())
-        elif source.is_dir():
-            for path in source.rglob("*"):
-                if path.is_file():
-                    target = output / "reports" / path.relative_to(source)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(path.read_bytes())
-    write_evidence(output, manifest, suite, adapter_url, result, stack_manifest)
-    return result
+    runtime_suite = output.parent / f".w3c-suite-runtime-{os.getpid()}"
+    create_runtime_worktree(suite, runtime_suite, manifest)
+    try:
+        write_local_config(
+            runtime_suite / "localConfig.cjs",
+            adapter_url,
+            issuer_id,
+            organization_id,
+            credential_template_id,
+            credential_policy_id,
+            presentation_policy_id,
+        )
+        if install:
+            install_result = install_dependencies(runtime_suite, manifest)
+            if install_result:
+                return install_result
+        output.mkdir(parents=True, exist_ok=True)
+        clear_runtime_reports(runtime_suite)
+        (runtime_suite / "suite.log").unlink(missing_ok=True)
+        # The command is the pinned upstream suite's own complete test matrix;
+        # no test files, assertions, expected results, or local patches are
+        # supplied by ElevenID.
+        result = subprocess.run(
+            w3c_test_command(runtime_suite),
+            cwd=runtime_suite,
+            check=False,
+        ).returncode
+        runtime_mutations = validate_runtime_checkout(runtime_suite, manifest)
+        validate_checkout(suite, manifest)
+        report = runtime_suite / "reports" / "index.json"
+        executed_capabilities = report_executed_capabilities(report, manifest)
+        missing_capabilities = REQUIRED_EVIDENCE_CAPABILITIES - executed_capabilities
+        if result == 0 and missing_capabilities:
+            missing = ", ".join(sorted(missing_capabilities))
+            print(f"W3C VC suite did not prove required Marty capabilities: {missing}.", file=sys.stderr)
+            result = 1
+        for source in (
+            runtime_suite / "reports",
+            runtime_suite / "suite.log",
+            runtime_suite / "package-lock.json",
+        ):
+            if source.is_file():
+                target = output / source.name
+                target.write_bytes(source.read_bytes())
+            elif source.is_dir():
+                for path in source.rglob("*"):
+                    if path.is_file():
+                        target = output / "reports" / path.relative_to(source)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(path.read_bytes())
+        write_evidence(
+            output,
+            manifest,
+            suite,
+            adapter_url,
+            result,
+            stack_manifest,
+            runtime_mutations,
+        )
+        validate_checkout(suite, manifest)
+        return result
+    finally:
+        remove_runtime_worktree(suite, runtime_suite)
+        validate_checkout(suite, manifest)
 
 
 def main() -> int:

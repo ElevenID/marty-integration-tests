@@ -36,6 +36,7 @@ RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 W3C_API_KEY = re.compile(r"^mk_test_[A-Za-z0-9_-]{1,120}$")
 W3C_CONFORMANCE_RATE_LIMIT_RPM = "100000"
+W3C_CONFORMANCE_TOKEN_RATE_LIMIT = "100000"
 # Public OID4VCI credential-configuration identifiers are opaque JSON object
 # keys.  Marty uses a fragment-like suffix (for example, ``PID#sd-jwt``) to
 # distinguish formats for the same credential type, so ``#`` is intentional.
@@ -1062,6 +1063,11 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # the production limiter enabled with a finite, disposable-stack budget so
     # transport throttling does not masquerade as a normative VCDM failure.
     environment["RATE_LIMIT_RPM"] = W3C_CONFORMANCE_RATE_LIMIT_RPM
+    # Every official issuance follows the real OID4VCI flow and redeems a
+    # pre-authorized code. Raise that independently enforced token-endpoint
+    # limiter only for this disposable stack; the production default remains
+    # 30 requests per window.
+    environment["TOKEN_RATE_LIMIT"] = W3C_CONFORMANCE_TOKEN_RATE_LIMIT
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
     base = [sys.executable, str(launcher), "--project", project]
