@@ -200,13 +200,13 @@ def invoke_flow_command(command: Path, payload: dict[str, Any]) -> str:
 
 
 def authorization_request_parameters(value: str) -> tuple[str, dict[str, str]]:
-    """Return the request URI and its security-relevant outer parameters.
+    """Return a signed request reference or JAR and its outer parameters.
 
     ``request_uri_method`` is an authorization-URL parameter, not a JAR
-    claim.  Keeping it alongside ``client_id`` lets the official wallet
-    exercise POST retrieval itself and send its own ``wallet_nonce`` to the
-    unchanged Marty production endpoint.  Duplicate outer parameters are
-    rejected instead of choosing an attacker-controlled first value.
+    claim.  A URL-query request instead contains exactly one opaque signed
+    Request Object in `request`; the adapter never expands its claims.  In
+    both cases duplicate outer parameters are rejected instead of choosing an
+    attacker-controlled first value.
     """
     parsed = urlparse(value)
     if parsed.scheme in {"http", "https"}:
@@ -225,6 +225,18 @@ def authorization_request_parameters(value: str) -> tuple[str, dict[str, str]]:
             if value == "":
                 raise ValueError(f"Marty authorization request has an empty {name}")
             return value
+
+        request_object = one_parameter("request")
+        if request_object is not None:
+            if set(query) != {"client_id", "request"}:
+                raise ValueError(
+                    "Marty URL-query authorization request must contain only client_id and request"
+                )
+            outer_client_id = one_parameter("client_id", required=True)
+            return request_object, {
+                "client_id": outer_client_id or "",
+                "request": request_object,
+            }
 
         request_uri = one_parameter("request_uri", required=True) or ""
         outer = {}
@@ -249,6 +261,11 @@ def decode_request_object(request_uri: str, *, insecure: bool) -> dict[str, Any]
     )
     if status != 200 or not isinstance(raw, str):
         raise RuntimeError(f"Marty request_uri returned HTTP {status}, not a signed request object")
+    return decode_compact_request_object(raw)
+
+
+def decode_compact_request_object(raw: str) -> dict[str, Any]:
+    """Decode a compact signed Request Object without changing its value."""
     parts = raw.split(".")
     if len(parts) != 3:
         raise RuntimeError("Marty request object is not a compact signed JWT")
@@ -285,11 +302,29 @@ def call_mock_wallet(
     # Only the isolated upstream runner's fixed local certificate may use its
     # explicitly named local-runner exception.
     outer = outer_parameters or {}
-    if request_method != "request_uri_signed":
+    if request_method not in {"request_uri_signed", "url_query_signed"}:
         raise ValueError(
-            "OIDF_VERIFIER_REQUEST_METHOD must be request_uri_signed; "
-            "rewriting a signed request object as URL-query parameters is prohibited"
+            "OIDF_VERIFIER_REQUEST_METHOD must be request_uri_signed or url_query_signed"
         )
+    if request_method == "url_query_signed":
+        signed_request = request_uri
+        if outer.get("request") != signed_request:
+            raise RuntimeError("URL-query request does not preserve the signed Request Object")
+        claims = decode_compact_request_object(signed_request)
+        signed_client_id = claims.get("client_id")
+        outer_client_id = outer.get("client_id")
+        if not isinstance(signed_client_id, str) or not signed_client_id:
+            raise RuntimeError("signed request object has no client_id")
+        if not outer_client_id:
+            raise RuntimeError("URL-query authorization request has no outer client_id")
+        if outer_client_id != signed_client_id:
+            raise RuntimeError("outer client_id does not match signed request object client_id")
+        url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(
+            {"client_id": outer_client_id, "request": signed_request}
+        )
+        submit_to_official_wallet(url, insecure=conformance_insecure)
+        return
+
     retrieval_method = outer.get("request_uri_method")
     outer_client_id = outer.get("client_id")
     if retrieval_method == "post":

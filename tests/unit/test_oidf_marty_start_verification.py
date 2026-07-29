@@ -40,6 +40,7 @@ def test_flow_body_selects_post_only_for_the_official_signed_post_module(
         "issuer_did": "did:web:verifier.example",
         "expiry_minutes": 15,
         "oid4vp_profile": "haip",
+        "request_transport": "request_uri",
         "request_uri_method": "post",
     }
 
@@ -86,12 +87,29 @@ def test_flow_body_does_not_force_other_transports_to_post(
     assert body["request_uri_method"] == "get"
 
 
-def test_flow_body_rejects_url_query_transport_adaptation(
+def test_flow_body_selects_native_signed_url_query_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
 
-    with pytest.raises(ValueError, match="adaptation is prohibited"):
+    body = oidf_start.flow_body(
+        {
+            "test_id": "module-1",
+            "test_name": "oid4vp-1final-verifier-happy-flow",
+            "request_method": "url_query_signed",
+        }
+    )
+
+    assert body["request_transport"] == "url_query"
+    assert body["request_uri_method"] == "get"
+
+
+def test_flow_body_rejects_unknown_request_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
+
+    with pytest.raises(ValueError, match="url_query_signed"):
         oidf_start.flow_body(
             {
                 "test_id": "module-1",

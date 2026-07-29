@@ -95,6 +95,30 @@ def test_authorization_request_rejects_duplicate_security_parameters() -> None:
         oidf_verifier.authorization_request_parameters(value)
 
 
+def test_authorization_request_preserves_native_signed_url_query_request() -> None:
+    signed_request = "eyJhbGciOiJFUzI1NiJ9.eyJjbGllbnRfaWQiOiJ4NTA5X2hhc2g6YWJjIn0.signature"
+    authorization_request = "openid4vp://authorize?" + urlencode(
+        {"client_id": "x509_hash:abc", "request": signed_request}
+    )
+
+    assert oidf_verifier.authorization_request_parameters(authorization_request) == (
+        signed_request,
+        {"client_id": "x509_hash:abc", "request": signed_request},
+    )
+
+
+def test_url_query_rejects_unsigned_or_extra_outer_parameters() -> None:
+    value = "openid4vp://authorize?" + urlencode(
+        {
+            "client_id": "x509_hash:abc",
+            "request": "header.payload.signature",
+            "nonce": "must-be-inside-the-jar",
+        }
+    )
+    with pytest.raises(ValueError, match="only client_id and request"):
+        oidf_verifier.authorization_request_parameters(value)
+
+
 def test_signed_post_forwards_outer_method_and_leaves_wallet_nonce_to_official_wallet(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,20 +168,41 @@ def test_signed_get_rejects_outer_and_signed_client_id_mismatch(monkeypatch: pyt
         )
 
 
-def test_url_query_transport_adaptation_is_rejected(
+def test_native_url_query_forwards_the_unchanged_signed_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    calls: list[str] = []
+    signed_request = "eyJhbGciOiJFUzI1NiJ9.eyJjbGllbnRfaWQiOiJ4NTA5X2hhc2g6YWJjIn0.signature"
     monkeypatch.setattr(
         oidf_verifier,
         "request_json",
-        lambda *_args, **_kwargs: pytest.fail("rejected transport must not call either endpoint"),
+        lambda url, **_kwargs: calls.append(url) or (200, {}),
     )
-    with pytest.raises(ValueError, match="rewriting a signed request object"):
+    oidf_verifier.call_mock_wallet(
+        "https://runner.example/authorize",
+        signed_request,
+        request_method="url_query_signed",
+        conformance_insecure=False,
+        outer_parameters={"client_id": "x509_hash:abc", "request": signed_request},
+    )
+
+    assert parse_qs(urlparse(calls[0]).query) == {
+        "client_id": ["x509_hash:abc"],
+        "request": [signed_request],
+    }
+
+
+def test_url_query_rejects_changed_signed_request_object() -> None:
+    with pytest.raises(RuntimeError, match="does not preserve"):
         oidf_verifier.call_mock_wallet(
             "https://runner.example/authorize",
-            "https://marty.example/request.jwt",
-            request_method="url_query",
+            "eyJhbGciOiJFUzI1NiJ9.eyJjbGllbnRfaWQiOiJ4NTA5X2hhc2g6YWJjIn0.signature",
+            request_method="url_query_signed",
             conformance_insecure=False,
+            outer_parameters={
+                "client_id": "x509_hash:abc",
+                "request": "different.request.object",
+            },
         )
 
 
