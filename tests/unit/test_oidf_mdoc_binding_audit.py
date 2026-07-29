@@ -26,6 +26,9 @@ def _write_export(
 ) -> dict[str, str]:
     client_id = "x509_hash:client"
     response_uri = f"https://verifier.example/v1/flows/instances/{flow_id}/submit"
+    presentation = (
+        base64.urlsafe_b64encode(b"official-device-response").rstrip(b"=").decode()
+    )
     payload = {
         "testInfo": {"testName": test_name},
         "results": [
@@ -37,7 +40,8 @@ def _write_export(
                     "response_uri": response_uri,
                     "jwkThumbprint_b64": "<null>",
                 },
-            }
+            },
+            {"vp_token": {"credential-query": [presentation]}},
         ],
     }
     export_dir.mkdir()
@@ -50,6 +54,10 @@ def _write_export(
         "nonce": audit_module.digest(nonce),
         "response_uri": audit_module.digest(response_uri),
         "response_key": "none",
+        "presentation": audit_module.digest(presentation),
+        "device_response": audit_module.digest(
+            audit_module.decode_b64(presentation)
+        ),
     }
 
 
@@ -61,9 +69,11 @@ def _write_log(path: Path, values: dict[str, str]) -> None:
         f"client_id_sha256={values['client_id']} "
         f"nonce_sha256={values['nonce']} "
         f"response_uri_sha256={values['response_uri']} "
-        f"response_key_thumbprint_sha256={values['response_key']}\n"
+        f"response_key_thumbprint_sha256={values['response_key']} "
+        f"presentation_sha256={values['presentation']}\n"
         "presentation-policy | mDoc verification binding "
         f"transcript_sha256={values['transcript']} "
+        f"device_response_sha256={values['device_response']} "
         "issuer_signature_valid=True issuer_trusted=True "
         "device_authentication_valid=True\n",
         encoding="utf-8",
