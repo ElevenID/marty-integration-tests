@@ -513,6 +513,13 @@ receives finite higher budgets because every official issuance redeems a real
 pre-authorized token; this prevents infrastructure throttling from being
 misclassified as a normative VCDM result.
 
+The manifest also records the exact HTTPS URLs used by the pinned suite's
+`relatedResource` fixtures. The lane passes that reviewed list into the
+product's fail-closed related-resource validator. This is deployment policy,
+not a test patch: issuance still retrieves each resource, computes its digest,
+and rejects a mismatch. Ordinary deployments retain the empty fail-closed
+default. A monthly suite-pin update must review this URL list explicitly.
+
 The workflow does not replace the runner's global npm. It downloads the exact
 npm tarball URL recorded in the manifest, verifies the recorded registry
 SHA-512 integrity before extracting it, and invokes that private `npm-cli.js`
@@ -545,14 +552,9 @@ verifier, and VP verifier. The reviewed row markers live with the suite pin;
 there is deliberately no fixed total-case count, so upstream may add tests
 without weakening or spuriously breaking this evidence guard.
 
-The pinned official revision currently contains an invalid Chai invocation
-that crashes two otherwise valid issuer assertions. Until upstream
-[PR #174](https://github.com/w3c/vc-data-model-2.0-test-suite/pull/174) is
-merged, those assertions remain visible failures. The runner does not apply
-the PR, reproduce its delta, alter the affected assertion, or classify a
-patched run as official evidence. The monthly updater watches upstream
-`main` and the PR head so a reviewed pin update can adopt the upstream fix
-after it is merged.
+The runner never applies an upstream pull request or local compatibility patch.
+Monthly updates advance only to a reviewed upstream commit and rerun the
+complete suite from a new detached worktree.
 
 ## Certification later
 

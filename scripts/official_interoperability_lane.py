@@ -37,6 +37,7 @@ DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 W3C_API_KEY = re.compile(r"^mk_test_[A-Za-z0-9_-]{1,120}$")
 W3C_CONFORMANCE_RATE_LIMIT_RPM = "100000"
 W3C_CONFORMANCE_TOKEN_RATE_LIMIT = "100000"
+W3C_MANIFEST = ROOT / "conformance" / "w3c-vc-data-model-v2.json"
 # Public OID4VCI credential-configuration identifiers are opaque JSON object
 # keys.  Marty uses a fragment-like suffix (for example, ``PID#sd-jwt``) to
 # distinguish formats for the same credential type, so ``#`` is intentional.
@@ -55,6 +56,38 @@ PROXY_DIAGNOSTIC_CLASSES = {
     "upstream-timeout": re.compile(r"(?i)(?:upstream timed out|connection timed out)"),
     "no-live-upstream": re.compile(r"(?i)no live upstreams"),
 }
+
+
+def w3c_related_resource_allowlist() -> str:
+    """Return the reviewed exact-URL allowlist for the pinned official lane."""
+    manifest = json.loads(W3C_MANIFEST.read_text(encoding="utf-8"))
+    values = manifest.get("deployment", {}).get("related_resource_allowlist")
+    if not isinstance(values, list) or not values:
+        raise ValueError("W3C deployment related-resource allowlist must be non-empty")
+
+    reviewed: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value:
+            raise ValueError("W3C related-resource allowlist entries must be strings")
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "W3C related-resource allowlist entries must be exact HTTPS URLs "
+                "without credentials, query strings, or fragments"
+            )
+        reviewed.append(value)
+    if len(set(reviewed)) != len(reviewed):
+        raise ValueError("W3C related-resource allowlist entries must be unique")
+    return ",".join(reviewed)
+
+
 EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
     "tls-trust": re.compile(
         r"(?i)(?:PKIX path building failed|SSLHandshakeException|"
@@ -1068,6 +1101,11 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # limiter only for this disposable stack; the production default remains
     # 30 requests per window.
     environment["TOKEN_RATE_LIMIT"] = W3C_CONFORMANCE_TOKEN_RATE_LIMIT
+    # This configures the product's fail-closed related-resource validator; it
+    # does not alter the pinned upstream suite, its fixtures, or its expected
+    # results. The reviewed exact URL is versioned beside the suite pin so a
+    # monthly upstream update must review deployment inputs explicitly.
+    environment["VCDM_RELATED_RESOURCE_URLS"] = w3c_related_resource_allowlist()
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
     base = [sys.executable, str(launcher), "--project", project]
