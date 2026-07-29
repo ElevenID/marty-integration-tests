@@ -24,10 +24,12 @@ FLOW_BINDING = re.compile(
     rf"transcript_sha256=(?P<transcript>{HEX}) "
     rf"client_id_sha256=(?P<client_id>{HEX}) nonce_sha256=(?P<nonce>{HEX}) "
     rf"response_uri_sha256=(?P<response_uri>{HEX}) "
-    rf"response_key_thumbprint_sha256=(?P<response_key>{HEX}|none)"
+    rf"response_key_thumbprint_sha256=(?P<response_key>{HEX}|none) "
+    rf"presentation_sha256=(?P<presentation>{HEX})"
 )
 POLICY_BINDING = re.compile(
     rf"mDoc verification binding transcript_sha256=(?P<transcript>{HEX}) "
+    rf"device_response_sha256=(?P<device_response>{HEX}) "
     r"issuer_signature_valid=(?P<issuer_signature>True|False) "
     r"issuer_trusted=(?P<issuer_trusted>True|False) "
     r"device_authentication_valid=(?P<device_authentication>True|False)"
@@ -39,6 +41,8 @@ FIELDS = (
     "nonce",
     "response_uri",
     "response_key",
+    "presentation",
+    "device_response",
 )
 
 
@@ -49,6 +53,22 @@ def digest(value: bytes | str) -> str:
 
 def decode_b64(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _official_presentation(records: list[dict[str, Any]], name: str) -> str:
+    for record in records:
+        value = record.get("vp_token")
+        if not isinstance(value, dict) or len(value) != 1:
+            continue
+        presentations = next(iter(value.values()))
+        if (
+            isinstance(presentations, list)
+            and len(presentations) == 1
+            and isinstance(presentations[0], str)
+            and presentations[0]
+        ):
+            return presentations[0]
+    raise ValueError(f"{name} has no one-query/one-presentation mdoc response")
 
 
 def _official_modules(export_dir: Path) -> list[dict[str, Any]]:
@@ -97,6 +117,7 @@ def _official_modules(export_dir: Path) -> list[dict[str, Any]]:
             test_name = test_info.get("testName")
             if not isinstance(test_name, str) or not test_name:
                 raise ValueError(f"{name} has no official test name")
+            presentation = _official_presentation(records, name)
             modules.append(
                 {
                     "test_name": test_name,
@@ -106,6 +127,8 @@ def _official_modules(export_dir: Path) -> list[dict[str, Any]]:
                     "nonce": digest(nonce),
                     "response_uri": digest(response_uri),
                     "response_key": response_key,
+                    "presentation": digest(presentation),
+                    "device_response": digest(decode_b64(presentation)),
                 }
             )
     if not modules:
@@ -113,7 +136,9 @@ def _official_modules(export_dir: Path) -> list[dict[str, Any]]:
     return modules
 
 
-def _runtime_bindings(compose_log: Path) -> tuple[dict[str, dict[str, str]], set[str]]:
+def _runtime_bindings(
+    compose_log: Path,
+) -> tuple[dict[str, dict[str, str]], set[tuple[str, str]]]:
     text = compose_log.read_text(encoding="utf-8", errors="replace")
     flows: dict[str, dict[str, str]] = {}
     for match in FLOW_BINDING.finditer(text):
@@ -123,15 +148,16 @@ def _runtime_bindings(compose_log: Path) -> tuple[dict[str, dict[str, str]], set
         if previous is not None and previous != values:
             raise ValueError("one Marty flow emitted conflicting mdoc binding diagnostics")
         flows[flow] = values
-    policy_transcripts = {
-        match.group("transcript") for match in POLICY_BINDING.finditer(text)
+    policy_presentations = {
+        (match.group("transcript"), match.group("device_response"))
+        for match in POLICY_BINDING.finditer(text)
     }
-    return flows, policy_transcripts
+    return flows, policy_presentations
 
 
 def audit(export_dir: Path, compose_log: Path) -> dict[str, Any]:
     official_modules = _official_modules(export_dir)
-    runtime_flows, policy_transcripts = _runtime_bindings(compose_log)
+    runtime_flows, policy_presentations = _runtime_bindings(compose_log)
     modules: list[dict[str, Any]] = []
     for official in official_modules:
         runtime = runtime_flows.get(official["flow"])
@@ -144,8 +170,13 @@ def audit(export_dir: Path, compose_log: Path) -> dict[str, Any]:
             matches = {
                 field: official[field] == runtime[field]
                 for field in FIELDS
+                if field != "device_response"
             }
-            forwarded = runtime["transcript"] in policy_transcripts
+            forwarded = (
+                runtime["transcript"],
+                official["device_response"],
+            ) in policy_presentations
+            matches["device_response"] = forwarded
             binding_matches = all(matches.values())
             expected = not negative
             status = (
