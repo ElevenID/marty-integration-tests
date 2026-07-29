@@ -135,6 +135,13 @@ def exercise_verification(page: Page, base_url: str) -> dict[str, object]:
     options.first.click()
     page.get_by_role("button", name="Next").click()
     page.get_by_label("Verification Purpose").fill(VERIFICATION_PURPOSE)
+    issuer_did = page.get_by_label("Issuer DID")
+    if issuer_did.count() > 0:
+        issuer_did.click()
+        public_dids = page.get_by_role("option").filter(has_text="did:")
+        if public_dids.count() < 1:
+            raise AssertionError("released stack exposes no public issuer DID choice")
+        public_dids.first.click()
 
     with page.expect_response(
         lambda response: response.request.method == "POST" and public_path(response.url) == "/v1/flows/verify",
