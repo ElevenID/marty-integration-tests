@@ -13,9 +13,11 @@ import json
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from playwright.sync_api import Page, Request, Response, sync_playwright
+if TYPE_CHECKING:
+    from playwright.sync_api import Page, Request, Response
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from oidf_marty_public_login import login, public_origin, required_env  # noqa: E402
@@ -161,6 +163,8 @@ def exercise_verification(page: Page, base_url: str) -> dict[str, object]:
 
 
 def main() -> int:
+    from playwright.sync_api import sync_playwright
+
     base_url = public_origin(required_env("OIDF_MARTY_GATEWAY_URL"))
     email = required_env("OIDF_MARTY_OPERATOR_EMAIL")
     password = required_env("OIDF_MARTY_OPERATOR_PASSWORD")
