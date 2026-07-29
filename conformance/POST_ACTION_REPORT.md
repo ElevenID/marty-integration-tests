@@ -765,12 +765,16 @@ No W3C pass may be claimed merely because the adapter rejects an invalid
 fixture. Every negative assertion must be traceable to a shared production
 validator or explicitly labeled adapted until that gap is removed.
 
-OID4VP URL-query is not an adapted path. Marty supports the native signed
-`request_uri` transport, including the OID4VP `request_uri_method=post`
-wallet-nonce exchange. The OIDF adapter rejects any request method other than
-`request_uri_signed`; it does not unpack a signed JAR and re-encode its claims
-as URL-query parameters. URL-query remains explicitly unsupported until the
-product implements it as a separately reviewed transport.
+OID4VP URL-query requires a precise qualification. Marty supports the native
+signed `request_uri` transport, including the OID4VP
+`request_uri_method=post` wallet-nonce exchange, and separately supports a
+signed Request Object passed by value in the standard `request` parameter.
+The OIDF runner's `url_query` variant instead sends unsigned request parameters
+directly in the query. The active official lane uses only
+`request_uri_signed`; the adapter does not unpack a signed JAR or relabel the
+signed by-value mode as an official URL-query pass. The upstream `url_query`
+variant remains untested until Marty implements that exact production
+transport and the unchanged official variant passes.
 
 ## Does the suite use Marty Protocol abstractions?
 
@@ -844,15 +848,20 @@ webhook matrix.
 
 ## Does the suite use the UI's general API?
 
-The EUDI and OIDF paths use the same authenticated public gateway that the UI
-is expected to use. They do not call KMS or the issuer signing service
-directly. That is useful API-boundary evidence.
+The EUDI and OIDF paths use the same authenticated public gateway as the UI.
+They do not call KMS or the issuer signing service directly. The released-stack
+browser smoke now also drives the real UI through login, organization
+selection, verification configuration, and submission. Run
+[30497973782](https://github.com/ElevenID/marty-integration-tests/actions/runs/30497973782)
+used exact `marty-ui` v1.1.68 artifacts and harness commit
+`1e0ccad894bd59d4f2392414c9bb791b49329eda`; the browser selected the public
+tenant DID `did:web:marty-oidf.test:orgs:marty`, observed no private selectors,
+and submitted verification through `/v1/flows/verify` and the ordinary
+application/claim endpoints.
 
-They do not drive the browser UI. Consequently they cannot prove that UI
-forms omit deprecated selectors, generated clients match runtime responses,
-or browser issuance and verification use only the supported general API.
-A Playwright issuance-and-verification smoke test against released UI and
-service images remains required.
+This closes the released-browser verification slice. Browser issuance and the
+broader generated-client response contract remain separate coverage work; the
+official suite itself remains API-driven and unmodified.
 
 ## Features and gaps exposed
 
@@ -863,9 +872,9 @@ service images remains required.
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | Native OIDF ISO mDL verifier evidence on immutable v1.1.66: happy flow, request-URI POST, and invalid-session-transcript negative; 134 successes, zero failures or warnings, plus EUDI and independent COSE/CBOR/X.509 issuance evidence | OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence; retain the exact upstream pin and rerun without patches as it advances |
-| OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
+| OID4VP URL-query transport | Product supports a signed Request Object by value; the active official lane covers signed `request_uri` only | The OIDF runner's `url_query` variant is unsigned direct-query transport and remains untested; implement and run that exact unchanged variant before claiming it |
 | W3C VCDM v2 verification and issuance | Exact upstream commit `1db599924e6601555933550e0e65925a6abbd0a8` passes on GitHub from an unmodified disposable worktree against immutable v1.1.60; issuer, VC-verifier, and VP-verifier roles all execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
-| UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
+| UI issuance/verification | Released v1.1.68 browser verification smoke proves public DID selection, no private selectors, and general gateway API submission | Add an equivalent browser issuance journey and continue generated-client response drift checks |
 | Multitenancy | Partial: two-organization template isolation plus Canvas delivery/external/canonical credential substitution and gateway authorization checks | Complete the two-organization RBAC, API-key, SCIM, result, audit, webhook, and error-leakage matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
 | Wider Marty feature model | Not covered by official suites | RBAC/SCIM, saved flows, vetting, devices, API keys, revocation, trust registries, notifications, audit, wallet profiles, DIDComm |
@@ -907,7 +916,7 @@ service images remains required.
 | Signed issuer metadata, batch issuance, holder-key attestation, and credential-response encryption are not advertised | Missing optional features | The active profile is narrower than the complete optional OID4VCI feature set | Keep explicit capability metadata and owned, expiring skip records; implement each only through a separately reviewed production path | Open by design; never represent these skipped modules as passed |
 | Official lanes use one organization | Missing evidence | Tenant isolation and cross-tenant DID resolution remain unproven | Two-organization adversarial matrix | Partial template isolation exists; full matrix remains open |
 | Canvas provenance accepted an unscoped organization and exposed issuer-profile internals | Public authorization/data-boundary defect | A guessed delivery, external credential, or canonical credential identifier could cross the intended tenant boundary; public responses leaked internal profile/mode metadata | `marty-credentials#86` requires trusted tenant context and scopes all selectors; `marty-ui#177` adds authentication, membership, permission, and internal service authentication | Released in v1.1.61 after all three selector substitutions, trusted-context mismatch, two-organization pre-backend denial, public response-shape regressions, full PR checks, and the artifact-only stack smoke passed |
-| Official lanes do not drive the browser | Missing evidence | UI request shapes and exclusive general-API use remain unproven | Released-stack Playwright issuance/verification smoke | Open |
+| Official lanes do not drive the browser | Missing evidence | API-only official lanes could not prove UI request shapes or private-selector absence | Released-stack Playwright verification smoke in run 30497973782 selected the public DID, observed no private selectors, and used the ordinary gateway API | Verification slice complete; browser issuance remains open |
 
 ## Immutable evidence collected
 
@@ -961,6 +970,9 @@ service images remains required.
 | OIDF mdoc verifier run [30395234162](https://github.com/ElevenID/marty-integration-tests/actions/runs/30395234162), exact harness and v1.1.51 manifest above | All three official modules were active with zero expected failures/skips, but each public flow start failed HTTP 422 because the adapter omitted required `organization_id`. The production API failed closed; the modules timed out in `WAITING`, and no mdoc compliance claim is credited |
 | `marty-ui` v1.1.66, release commit `c683976fc7b00a8356adc58b89b6331aaafe8d9b`, manifest `sha256:88e1b229dea3cae86a4c79c98add35d27ab9d13573b8699d78ba20a66ef78bd1`, run [30486641952](https://github.com/ElevenID/marty-ui/actions/runs/30486641952) | Immutable-input validation, UI/services/migrations builds, attestations, keyless signatures, SBOMs, anonymous artifact-only stack smoke, release upload, and manifest checksum/signature/attestation passed. The manifest pins UI `sha256:bbf355fb13b0fc32aad9388caec4cf861aa7673e1da2317bf5c2f2548fea3260`, services `sha256:9920e7b3ae067e4dd090e83cc69bab932c43b2a0fd2d67726ab1d6f3d7925ec8`, and migrations `sha256:baff3cc49029a04652b4304231c45805ae47fd18d6bf785cb7c310eb6d9172c3`. A transient GitHub/Sigstore OIDC response made the first service-signing attempt fail; rerunning the failed job passed without weakening the signing gate. |
 | Native OIDF ISO mDL verifier run against v1.1.66, official evidence archive digest `sha256:3fc43830b661e78daa69c8c86250f0468ce917064c4a8385fb6fd085c82fa176` | Exact official commit `dee9a25160e789f0f80517674693ef7989ab9fa1` passed the happy flow, `request_uri_method=post`, and invalid-session-transcript modules with 134 successes, zero failures, and zero warnings. There were no expected failures/skips; the upstream checkout remained exact and clean before and after; and public organization, DID-first flow, request-URI, callback, policy, template, trust, issuer-signature, and device-authentication paths were exercised. |
+| `marty-ui` v1.1.68, release commit `cd009001e05253a921cbe8ad99723a313e83c47b`, manifest `sha256:ac513fbae303a66a9688cc3a84d6d5074d08f14b5a34819f9367d6b65f43f202`, run [30497503068](https://github.com/ElevenID/marty-ui/actions/runs/30497503068) | All release and provenance jobs passed. Signed, attested images are pinned as UI `sha256:7bcf3e60c23a1a3ab8029c509b0a6c7181f31abf0c310f8f51600bfb815a4a43`, services `sha256:06521dc884185f1c8e1adb7a54ed92cdca95b76edf4d185e3df7facdb02511db`, and migrations `sha256:8a88a0f01cc4064bf9456ed575fe26b09a0d0aecfcdf93e640db6430e52c108f`. |
+| OID4VP Final plus released-browser run [30497973782](https://github.com/ElevenID/marty-integration-tests/actions/runs/30497973782), sanitized artifact ID `8742444913`, artifact digest `sha256:6c31fd336f1e3567f84855177959285563f480dbc04ad5cc0cffc64542b94a6c` | Exact unmodified OIDF commit `dee9a25160e789f0f80517674693ef7989ab9fa1` passed 11 modules with 417 successes, zero failures, and zero warnings against exact v1.1.68 artifacts. The released UI smoke selected the tenant public DID, observed no profile/service/key/KMS selectors, and submitted through the normal public verification API. |
+| OID4VCI issuer run [30498507453](https://github.com/ElevenID/marty-integration-tests/actions/runs/30498507453), sanitized artifact ID `8742622063`, artifact digest `sha256:e91f36d42dae0a97817c75dda0c89d59f25fd0e5a5bf763a0b717353dd960ea1` | Exact unmodified OIDF commit `dee9a25160e789f0f80517674693ef7989ab9fa1` passed every active module against exact v1.1.68 artifacts: 16 modules, 1,015 successful conditions, zero failures, and zero warnings. Four optional capabilities Marty does not advertise remain explicit, owned, expiring skips; there are no expected failures. The source checkout was exact and clean before and after execution. |
 
 The v1.1.66 image digests are signed, attested, and pinned, but the services and
 migrations images produced different digests when the failed release job was
@@ -970,9 +982,9 @@ are not yet byte-for-byte reproducible. Build timestamps and unfrozen base or
 OS-package inputs must be audited before the project claims reproducible image
 builds.
 
-The OID4VCI passing run is bound to harness commit
-`874aa50ba32a89a743ad6546758ad7fcf6c87886`, artifact ID `8700574000`, and
-the exact v1.1.49 stack manifest above.
+The current OID4VCI passing run is bound to harness commit
+`1e0ccad894bd59d4f2392414c9bb791b49329eda`, artifact ID `8742622063`, and
+the exact v1.1.68 stack manifest above.
 
 ## Completion criteria for this report
 

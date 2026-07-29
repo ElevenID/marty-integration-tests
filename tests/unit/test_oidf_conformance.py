@@ -21,10 +21,11 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert manifest["official_runner"]["repository"].startswith("https://gitlab.com/openid/")
     assert manifest["official_runner"]["source_policy"] == "unmodified"
     issuer = manifest["profiles"]["oid4vci-issuer"]
-    assert issuer["status"] == "planned"
+    assert issuer["status"] == "active"
     assert "[credential_format=sd_jwt_vc]" in issuer["test_plan"]
     assert "[client_auth_type=private_key_jwt]" in issuer["test_plan"]
-    assert "no issuer modules for client_auth_type=none" in issuer["qualification"]
+    assert "not an OIDF certification claim" in issuer["qualification"]
+    assert "private_key_jwt clients end to end" in issuer["qualification"]
     verifier = manifest["profiles"]["oid4vp-verifier"]
     assert verifier["status"] == "active"
     assert "not currently a certifiable" in verifier["qualification"]
@@ -258,28 +259,17 @@ def test_planned_verifier_requires_explicit_attested_pre_activation_run(tmp_path
     assert oidf.execution_mode("oid4vp-verifier", profile, allow_planned=True, stack_manifest=stack) == "pre-activation"
 
 
-def test_issuer_profile_remains_pre_activation_until_client_auth_is_enforced(
-    tmp_path: Path,
-) -> None:
+def test_activated_issuer_profile_no_longer_needs_pre_activation_switch() -> None:
     profile = oidf.load_manifest()["profiles"]["oid4vci-issuer"]
-    stack = tmp_path / "stack.json"
-    stack.write_text('{"schema":"marty.stack/v1"}', encoding="utf-8")
 
-    with pytest.raises(ValueError, match="not active"):
-        oidf.execution_mode(
-            "oid4vci-issuer",
-            profile,
-            allow_planned=False,
-            stack_manifest=stack,
-        )
     assert (
         oidf.execution_mode(
             "oid4vci-issuer",
             profile,
-            allow_planned=True,
-            stack_manifest=stack,
+            allow_planned=False,
+            stack_manifest=None,
         )
-        == "pre-activation"
+        == "active"
     )
 
 
