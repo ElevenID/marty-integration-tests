@@ -498,6 +498,41 @@ def response_id(value: object, resource: str) -> str:
     return identifier
 
 
+def create_disposable_vc_api_key(
+    gateway_url: str,
+    session_id: str,
+    *,
+    organization_id: str,
+    run_id: str,
+    request: Callable[..., object],
+) -> tuple[str, str]:
+    """Create the least-privilege key used by the official W3C client."""
+    created = request(
+        gateway_url,
+        session_id,
+        f"/v1/api-keys?{urlencode({'organization_id': organization_id})}",
+        method="POST",
+        json_body={
+            "name": f"Official W3C VC API {run_id}",
+            "description": "Disposable key for one official VCDM v2 suite run",
+            "scopes": ["credentials:issue", "credentials:read"],
+            "is_test": True,
+        },
+    )
+    key_id = response_id(created, "W3C VC API key")
+    raw_key = created.get("key") if isinstance(created, dict) else None
+    scopes = created.get("scopes") if isinstance(created, dict) else None
+    if (
+        not isinstance(raw_key, str)
+        or not raw_key.startswith("mk_test_")
+        or not isinstance(scopes, list)
+        or len(scopes) != 2
+        or set(scopes) != {"credentials:issue", "credentials:read"}
+    ):
+        raise RuntimeError("public API did not return the expected least-privilege test key")
+    return key_id, raw_key
+
+
 def oid4vci_configuration_id(
     metadata: object,
     *,
@@ -1036,6 +1071,16 @@ def bootstrap(
             if activated_trust_profile_id != trust_profile_id:
                 raise RuntimeError("activated OID4VP trust profile id changed unexpectedly")
             result[f"{prefix}_trust_profile_id"] = trust_profile_id
+        if w3c:
+            api_key_id, api_key = create_disposable_vc_api_key(
+                gateway_url,
+                session_id,
+                organization_id=organization_id,
+                run_id=run_id,
+                request=request,
+            )
+            result["w3c_api_key_id"] = api_key_id
+            result["w3c_api_key"] = api_key
     return result
 
 

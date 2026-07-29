@@ -146,6 +146,11 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "policy-2"},
             {"id": "policy-3"},
             {"id": "policy-3"},
+            {
+                "id": "w3c-api-key-1",
+                "key": "mk_test_fixture",
+                "scopes": ["credentials:issue", "credentials:read"],
+            },
         ]
     )
 
@@ -184,6 +189,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert result["w3c_presentation_template_id"] == "template-3"
     assert result["w3c_credential_policy_id"] == "policy-2"
     assert result["w3c_presentation_policy_id"] == "policy-3"
+    assert result["w3c_api_key_id"] == "w3c-api-key-1"
+    assert result["w3c_api_key"] == "mk_test_fixture"
     assert "w3c_policy_id" not in result
     assert calls[0][0].startswith("/v1/signing-keys/config/resolve?")
     assert calls[0][2] == {
@@ -228,6 +235,13 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[17][2]["credential_payload_format"] == "ldp_vc"
     assert calls[18][2]["credential_payload_format"] == "ldp_vc"
     assert calls[19][2]["holder_binding"] == {"required": False}
+    assert calls[23][0].startswith("/v1/api-keys?organization_id=")
+    assert calls[23][2] == {
+        "name": "Official W3C VC API run-1",
+        "description": "Disposable key for one official VCDM v2 suite run",
+        "scopes": ["credentials:issue", "credentials:read"],
+        "is_test": True,
+    }
     requirement = calls[19][2]["credential_requirements"][0]
     assert requirement["credential_template_id"] == "template-2"
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_di"

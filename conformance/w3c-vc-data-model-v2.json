@@ -26,11 +26,12 @@
     "removal_condition": "Remove this patch and advance the official pin when upstream PR 174 is merged."
   },
   "adapter": {
-    "path": "/__test__/vc-api",
-    "enable_environment": "W3C_VC_TEST_ADAPTER=1",
-    "credential_policy_environment": "W3C_VC_TEST_CREDENTIAL_POLICY_ID",
-    "presentation_policy_environment": "W3C_VC_TEST_PRESENTATION_POLICY_ID",
-    "target": "Marty gateway -> presentation-policy evaluator"
+    "path": "/v1/vc-api",
+    "authentication": "disposable organization-scoped API key",
+    "required_scopes": ["credentials:issue", "credentials:read"],
+    "issuer_selection": ["organization_id", "credential_template_id", "issuer_did"],
+    "verification_selection": ["organization_id", "presentation_policy_id"],
+    "target": "Marty gateway -> ordinary issuance and presentation-policy services"
   },
   "supported": {
     "serializations": ["w3c_vcdm_v2_di"],
