@@ -452,12 +452,19 @@ matching verifier signing certificate and the official trust anchor.
 records the present proof-format boundary. The suite calls Marty's ordinary
 authenticated `/v1/vc-api` gateway boundary with a disposable organization-
 scoped API key carrying only `credentials:issue` and `credentials:read`.
-The official checkout is executed at that exact commit without modifying any
-tracked upstream file. Local configuration, the separately reviewed dependency
-lock, installed dependencies, and reports stay outside the tracked upstream
-source, and the runner verifies that the checkout is clean both before and
-after execution. An upstream test-runner defect remains a visible failure until
-the official repository merges a fix and the reviewed commit pin advances.
+The canonical official checkout is kept at that exact commit and is never used
+as the execution directory. The runner verifies it is byte-for-byte clean,
+creates a detached disposable worktree at the same commit, and runs the
+upstream suite's own complete test command there. No ElevenID patch, assertion,
+expected result, or test selection is applied. Local configuration, the
+separately reviewed dependency lock, installed dependencies, and reports exist
+only in the disposable worktree. The suite itself rewrites its tracked
+`reports/related-resource.json` scratch document; the runner records and allows
+only that upstream-owned runtime mutation, rejects a change to any test,
+assertion, or other tracked path, removes the disposable worktree, and verifies
+the canonical checkout is still clean. An upstream test-runner defect remains a
+visible failure until the official repository merges a fix and the reviewed
+commit pin advances.
 Fixture bootstrap creates separate active credential and presentation
 policies through the normal public administration API. Both policies and both
 credential templates declare the native W3C VC Data Model v2 Data Integrity
@@ -499,6 +506,12 @@ recreates that lock, rejects it unless its SHA-256 matches the reviewed
 manifest value, and copies it with the official reports into the private
 evidence directory. A suite update therefore changes its commit, npm version
 when necessary, and reviewed lock digest together.
+
+The official matrix uses the normal production gateway and OID4VCI token
+limiters. Their production defaults are not weakened. The disposable W3C stack
+receives finite higher budgets because every official issuance redeems a real
+pre-authorized token; this prevents infrastructure throttling from being
+misclassified as a normative VCDM result.
 
 The workflow does not replace the runner's global npm. It downloads the exact
 npm tarball URL recorded in the manifest, verifies the recorded registry

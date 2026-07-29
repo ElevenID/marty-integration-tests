@@ -16,6 +16,24 @@ w3c = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(w3c)
 
 
+def initialize_official_suite(path: Path) -> tuple[Path, dict[str, object]]:
+    path.mkdir()
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Compliance Test"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "compliance@example.test"], cwd=path, check=True)
+    (path / "package.json").write_text('{"name":"official-suite"}\n', encoding="utf-8")
+    reports = path / "reports"
+    reports.mkdir()
+    (reports / ".gitkeep").write_text("", encoding="utf-8")
+    (reports / "related-resource.json").write_text("{}\n", encoding="utf-8")
+    tests = path / "tests"
+    tests.mkdir()
+    (tests / "assertions.js").write_text("export const official = true;\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=path, check=True, capture_output=True)
+    return path, {"official_suite": {"commit": w3c.revision(path)}}
+
+
 def test_pinned_w3c_vc_suite_manifest_is_valid() -> None:
     manifest = w3c.load_manifest()
     assert manifest["official_suite"]["repository"].startswith("https://github.com/w3c/")
@@ -49,17 +67,8 @@ def test_w3c_manifest_rejects_a_non_object(tmp_path: Path) -> None:
 
 
 def test_w3c_checkout_rejects_any_tracked_source_change(tmp_path: Path) -> None:
-    suite = tmp_path / "suite"
-    suite.mkdir()
-    subprocess.run(["git", "init"], cwd=suite, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Compliance Test"], cwd=suite, check=True)
-    subprocess.run(["git", "config", "user.email", "compliance@example.test"], cwd=suite, check=True)
+    suite, manifest = initialize_official_suite(tmp_path / "suite")
     package = suite / "package.json"
-    package.write_text('{"name":"official-suite"}\n', encoding="utf-8")
-    subprocess.run(["git", "add", "package.json"], cwd=suite, check=True)
-    subprocess.run(["git", "commit", "-m", "fixture"], cwd=suite, check=True, capture_output=True)
-    commit = w3c.revision(suite)
-    manifest = {"official_suite": {"commit": commit}}
 
     w3c.validate_checkout(suite, manifest)
     package.write_text('{"name":"locally-modified-suite"}\n', encoding="utf-8")
@@ -71,19 +80,62 @@ def test_w3c_checkout_rejects_any_tracked_source_change(tmp_path: Path) -> None:
 def test_runtime_report_cleanup_preserves_tracked_upstream_sentinel(
     tmp_path: Path,
 ) -> None:
-    reports = tmp_path / "reports"
-    reports.mkdir()
+    suite, _manifest = initialize_official_suite(tmp_path / "suite")
+    reports = suite / "reports"
     sentinel = reports / ".gitkeep"
-    sentinel.write_text("", encoding="utf-8")
+    tracked_runtime_file = reports / "related-resource.json"
     (reports / "index.json").write_text("{}\n", encoding="utf-8")
     nested = reports / "assets"
     nested.mkdir()
     (nested / "report.js").write_text("runtime output\n", encoding="utf-8")
 
-    w3c.clear_runtime_reports(tmp_path)
+    w3c.clear_runtime_reports(suite)
 
     assert sentinel.is_file()
-    assert list(reports.iterdir()) == [sentinel]
+    assert tracked_runtime_file.read_text(encoding="utf-8") == "{}\n"
+    assert sorted(path.name for path in reports.iterdir()) == [".gitkeep", "related-resource.json"]
+
+
+def test_disposable_runtime_allows_only_upstream_owned_scratch_mutation(
+    tmp_path: Path,
+) -> None:
+    suite, manifest = initialize_official_suite(tmp_path / "suite")
+    (suite / "reports" / "related-resource.json").write_text(
+        '{"generatedBy":"official-suite"}\n',
+        encoding="utf-8",
+    )
+
+    assert w3c.validate_runtime_checkout(suite, manifest) == ["reports/related-resource.json"]
+
+    (suite / "tests" / "assertions.js").write_text(
+        "export const official = false;\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="test/assertion"):
+        w3c.validate_runtime_checkout(suite, manifest)
+
+
+def test_official_suite_executes_in_exact_disposable_worktree(
+    tmp_path: Path,
+) -> None:
+    canonical, manifest = initialize_official_suite(tmp_path / "canonical")
+    runtime = tmp_path / "runtime"
+
+    w3c.create_runtime_worktree(canonical, runtime, manifest)
+    try:
+        assert w3c.revision(runtime) == manifest["official_suite"]["commit"]
+        (runtime / "reports" / "related-resource.json").write_text(
+            '{"runtime":true}\n',
+            encoding="utf-8",
+        )
+        assert w3c.validate_runtime_checkout(runtime, manifest) == ["reports/related-resource.json"]
+        w3c.validate_checkout(canonical, manifest)
+        assert (canonical / "reports" / "related-resource.json").read_text(encoding="utf-8") == "{}\n"
+    finally:
+        w3c.remove_runtime_worktree(canonical, runtime)
+
+    assert not runtime.exists()
+    w3c.validate_checkout(canonical, manifest)
 
 
 def test_npm_command_uses_the_windows_launcher_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -309,5 +361,10 @@ def test_w3c_evidence_records_no_stale_exclusion_and_preserves_immutable_stack(
     }
     assert evidence["suite_checkout"]["official_upstream_unmodified"] is True
     assert "compatibility_patch" not in evidence["suite_checkout"]
+    assert evidence["suite_execution"] == {
+        "disposable_exact_commit_worktree": True,
+        "test_or_assertion_source_modified": False,
+        "upstream_owned_runtime_mutations": [],
+    }
     assert evidence["exclusions"] == []
     assert evidence["marty"]["stack_manifest"]["images"][0]["digest"] == "sha256:" + "a" * 64
