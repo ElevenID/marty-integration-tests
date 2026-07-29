@@ -64,9 +64,10 @@ def verify_checkout(name: str, output: Path) -> str:
         ["git", "status", "--porcelain=v1", "--untracked-files=no"],
         cwd=output,
         text=True,
-    ).strip()
+    ).splitlines()
     if changed:
-        raise ValueError(f"{name} official checkout is not byte-for-byte clean")
+        paths = ", ".join(line[3:] for line in changed)
+        raise ValueError(f"{name} official checkout is not byte-for-byte clean: {paths}")
     return commit
 
 
