@@ -520,12 +520,13 @@ transport surface: it is gated, calls the shared general issuance/public
 verification paths, performs no suite-owned semantic acceptance, and provides
 no evidence for a generally supported public VC-API product.
 
-The upstream suite is pinned at
-`1db599924e6601555933550e0e65925a6abbd0a8` with the reviewed one-file
-compatibility patch from upstream PR 174. That patch repairs an invalid Chai
-invocation without changing a normative condition. The evidence is not
-described as an unmodified upstream run; the patch must be removed when
-upstream merges the fix and the monthly pin advances.
+Historical run 30382577365 used the reviewed one-file change proposed in
+upstream PR 174 to work around an invalid Chai invocation. It is now classified
+only as adapted runner evidence and cannot support an official-unmodified
+compliance claim. The local patch mechanism has been removed. Current runs use
+the exact pinned official commit with a clean-check before and after execution;
+the upstream assertion defect remains visible until the official repository
+merges its fix and the reviewed commit pin advances.
 
 ### 8. The OID4VCI runner lacked its emulated wallet identities
 
@@ -790,7 +791,7 @@ service images remains required.
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | EUDI libraries plus independent COSE/CBOR/X.509 checks; scheduled native OIDF ISO mDL verifier lane | Run and retain immutable official verifier evidence; OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence |
 | OID4VP URL-query transport | Explicitly unsupported; the official adapter accepts only native signed `request_uri` and rejects JAR-to-query rewriting | Do not claim URL-query coverage; implement it only as a separately reviewed product transport |
-| W3C VCDM v2 verification and issuance | v1.1.48 passes 59/59 normative assertions with issuer, VC-verifier, and VP-verifier evidence through DID-first, profile-mediated managed signing and production cryptographic verification | Native implementation evidence; the official VC-API entry shape remains adapted, and the reviewed PR 174 runner patch must be removed when upstream merges it |
+| W3C VCDM v2 verification and issuance | v1.1.48 passed 59/59 assertions in a historical adapted-runner run; the product paths remain valuable regression evidence, but a fresh unmodified-suite run is required for an official compliance claim | Run the exact official commit unmodified; the VC-API entry shape remains adapted, and upstream PR 174 is tracked without applying it locally |
 | UI issuance/verification | API paths only | Browser-driven released-stack smoke tests |
 | Multitenancy | One organization | Two-organization adversarial isolation matrix |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
@@ -856,7 +857,7 @@ service images remains required.
 | `marty-ui` v1.1.47, release commit `ac0b7809fc20c2ed8ecf0bef0ebdeffe73d1ea4a`, manifest `sha256:da7f476dfa4bcc8cb6352b2aa5b32efbaf265f6257c883a2c6cefba44ec783e3`, run [30379854048](https://github.com/ElevenID/marty-ui/actions/runs/30379854048) | All five release jobs passed; manifest checksum and attestation verify; anonymous digest access and OCI attestations verify for UI `sha256:d253b76f6d40c0e0ff727d4d2e8ee7702d856fde31f54dfc36008d423d7adf5f`, services `sha256:611e121a4df22b2e59b95a2b2fe04a2bf4e8d87f6402cf5ee6363f7112cdfa59`, and migrations `sha256:da259f3ebd8595688d513da7f75a3141a51edc486fbf3e29bdf91c70eeac7325` |
 | W3C v2 run [30380594927](https://github.com/ElevenID/marty-integration-tests/actions/runs/30380594927), sanitized artifact `official-w3c-v2-30380594927-1`, artifact digest `sha256:92161f74ed38a98d83ef45803da7d69480f424d60fc6a4031c9f01d3b0283be7`, summary `sha256:7adf65a1fea8d4dec3a458f84b49bdf087a22efad9c38f7691f85d905f19bcca` | Exact official commit `1db599924e6601555933550e0e65925a6abbd0a8` passed 57 normative assertions and failed two exact-DID verifier assertions; it proves the release-coherence and issuance-validity fixes and exposes one public DID-document alias mismatch |
 | `marty-ui` v1.1.48, release commit `56147d7cc2af1fc4d9c6d6472e97bc7ca3512faf`, manifest `sha256:dadff3abe5fd721148c53a9b99f5b86473e8fcd3a80b41962dcf73ee7a1639be`, run [30381800023](https://github.com/ElevenID/marty-ui/actions/runs/30381800023) | All five release jobs passed; the independently downloaded manifest matches `SHA256SUMS` and its provenance verifies; anonymous digest access and OCI attestations verify for UI `sha256:4b3c4fec9f7169531e4cc7efed3e866b6f3c967b3957656481ebfbc49eeec446`, services `sha256:4044102f32d3e80915d641780e7b7dac7fe4f9d9d51e806a2427bd7a7d78f436`, and migrations `sha256:786dc77a1817c7be7f09d6b401018e013ea0a158576c99c79499a26df2b6aecc` |
-| W3C v2 run [30382577365](https://github.com/ElevenID/marty-integration-tests/actions/runs/30382577365), sanitized artifact `official-w3c-v2-30382577365-1`, artifact digest `sha256:ecae45c7972e0e9b589c6eea9d51a21559470c6164088f601b70ba9a8ee6dbea`, summary `sha256:4f2dd455dfc0dacc921359b55b6ab5888439f375890757e31c74b87d455c5a60` | Exact official commit `1db599924e6601555933550e0e65925a6abbd0a8` plus the declared PR 174 Chai compatibility patch passed 59/59 assertions; the evidence guard proved `issuer`, `vc_verifier`, and `vp_verifier` against exact v1.1.48 artifacts |
+| W3C v2 run [30382577365](https://github.com/ElevenID/marty-integration-tests/actions/runs/30382577365), sanitized artifact `official-w3c-v2-30382577365-1`, artifact digest `sha256:ecae45c7972e0e9b589c6eea9d51a21559470c6164088f601b70ba9a8ee6dbea`, summary `sha256:4f2dd455dfc0dacc921359b55b6ab5888439f375890757e31c74b87d455c5a60` | Historical adapted-runner evidence: official base commit `1db599924e6601555933550e0e65925a6abbd0a8` plus the proposed PR 174 assertion fix passed 59/59 against v1.1.48. It is not an unmodified official-suite pass and is retained only as product-path regression evidence. |
 | OID4VCI issuer run [30230312937](https://github.com/ElevenID/marty-integration-tests/actions/runs/30230312937), sanitized summary `sha256:eacc7f2d7fd9edc2ffec43e3faaa590d1c733d429c74bcdaf47c7e3f7189b444` | Metadata passed; interaction modules exposed missing official-runner client identities |
 | OID4VCI issuer run [30231686437](https://github.com/ElevenID/marty-integration-tests/actions/runs/30231686437), sanitized summary `sha256:4adb5cc1e43b14953fc3603a63f3e396a211890399d0de7914562e26a73852a9` | Authorization-server identity passed; exposed internal-template/public-configuration ID confusion |
 | OID4VCI issuer run [30232003181](https://github.com/ElevenID/marty-integration-tests/actions/runs/30232003181), sanitized summary `sha256:de313a9f8dc4338f1ff83dbb0ae60822dda6f468fc7b219f3f0b41e25412d1cb` | Reached issuer interaction; exposed selection of bare JWT VC `PID` instead of advertised SD-JWT `PID#sd-jwt` |

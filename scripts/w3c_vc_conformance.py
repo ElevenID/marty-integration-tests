@@ -25,21 +25,6 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SRI_SHA512 = re.compile(r"^sha512-[A-Za-z0-9+/]+={0,2}$")
 REQUIRED_EVIDENCE_CAPABILITIES = frozenset({"issuer", "vc_verifier", "vp_verifier"})
-COMPATIBILITY_PATCH_FIELDS = frozenset(
-    {
-        "status",
-        "reason",
-        "upstream_pull_request",
-        "pull_request_ref",
-        "base_commit",
-        "commit",
-        "paths",
-        "diff_sha256",
-        "owner",
-        "review_date",
-        "removal_condition",
-    }
-)
 
 
 def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
@@ -53,6 +38,8 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         raise ValueError("W3C VC suite must use the official repository")
     if not SHA.fullmatch(suite.get("commit", "")):
         raise ValueError("W3C VC suite commit must be a full lowercase SHA")
+    if suite.get("source_policy") != "unmodified":
+        raise ValueError("W3C VC suite source policy must be unmodified")
     if suite.get("node") != "24":
         raise ValueError("W3C VC suite must run on Node 24")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", suite.get("npm", "")):
@@ -88,19 +75,8 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     for exclusion in data.get("exclusions", []):
         if not {"capability", "reason", "owner", "review_date"} <= exclusion.keys():
             raise ValueError("every W3C exclusion needs capability, reason, owner, and review_date")
-    patch = data.get("compatibility_patch")
-    if not isinstance(patch, dict) or set(patch) != COMPATIBILITY_PATCH_FIELDS:
-        raise ValueError("W3C VC suite must fully describe its upstream-pending compatibility patch")
-    if (
-        patch.get("status") != "upstream-pending"
-        or patch.get("base_commit") != suite["commit"]
-        or not SHA.fullmatch(str(patch.get("commit", "")))
-        or not DIGEST.fullmatch(str(patch.get("diff_sha256", "")))
-        or patch.get("upstream_pull_request") != "https://github.com/w3c/vc-data-model-2.0-test-suite/pull/174"
-        or patch.get("pull_request_ref") != "refs/pull/174/head"
-        or patch.get("paths") != ["tests/assertions.js"]
-    ):
-        raise ValueError("W3C VC compatibility patch is not the reviewed upstream PR 174 delta")
+    if "compatibility_patch" in data:
+        raise ValueError("W3C VC suite source must not contain a compatibility patch")
     return cast(dict[str, Any], data)
 
 
@@ -115,29 +91,19 @@ def validate_checkout(path: Path, manifest: dict) -> None:
     expected = manifest["official_suite"]["commit"]
     if actual != expected:
         raise ValueError(f"W3C VC suite is {actual}; expected pinned {expected}")
-    patch = manifest["compatibility_patch"]
     changed = subprocess.check_output(
-        ["git", "-C", str(path), "diff", "--cached", "--name-only", expected],
-        text=True,
-    ).splitlines()
-    if changed != patch["paths"]:
-        raise ValueError(f"W3C VC suite compatibility patch changed unexpected paths: {changed}")
-    payload = subprocess.check_output(
         [
             "git",
             "-C",
             str(path),
-            "diff",
-            "--cached",
-            "--binary",
-            expected,
-            "--",
-            *patch["paths"],
-        ]
-    )
-    actual_digest = f"sha256:{sha256(payload).hexdigest()}"
-    if actual_digest != patch["diff_sha256"]:
-        raise ValueError(f"W3C VC suite compatibility patch is {actual_digest}; expected {patch['diff_sha256']}")
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=no",
+        ],
+        text=True,
+    ).strip()
+    if changed:
+        raise ValueError("W3C VC suite tracked source is not byte-for-byte clean")
 
 
 def write_local_config(
@@ -427,8 +393,7 @@ def write_evidence(
         "suite_checkout": {
             "path": str(suite),
             "official_commit": revision(suite),
-            "official_upstream_unmodified": False,
-            "compatibility_patch": manifest["compatibility_patch"],
+            "official_upstream_unmodified": True,
         },
         "marty": {
             "commit": os.environ.get("MARTY_COMMIT", "unrecorded"),
@@ -439,7 +404,7 @@ def write_evidence(
         "result": {
             "exit_code": result,
             "passed": result == 0 and executed_capabilities >= REQUIRED_EVIDENCE_CAPABILITIES,
-            "evidence_class": "official-suite-with-reviewed-upstream-pending-runner-fix",
+            "evidence_class": "official-unmodified-suite",
             "required_capabilities": sorted(REQUIRED_EVIDENCE_CAPABILITIES),
             "executed_capabilities": sorted(executed_capabilities),
         },
@@ -490,6 +455,10 @@ def run_suite(
     (suite / "reports").mkdir(parents=True, exist_ok=True)
     (suite / "suite.log").unlink(missing_ok=True)
     result = subprocess.run(w3c_test_command(suite), cwd=suite, check=False).returncode
+    # Configuration, lockfiles, dependencies, logs, and reports are ignored
+    # runtime inputs/outputs. The official suite's tracked source must remain
+    # byte-for-byte identical both before and after execution.
+    validate_checkout(suite, manifest)
     report = suite / "reports" / "index.json"
     executed_capabilities = report_executed_capabilities(report, manifest)
     missing_capabilities = REQUIRED_EVIDENCE_CAPABILITIES - executed_capabilities

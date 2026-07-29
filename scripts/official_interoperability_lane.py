@@ -29,10 +29,13 @@ from haip_test_certificates import (  # noqa: E402
     OID4VP_TRUST_ANCHOR_FILE_ENV,
     load_verifier_environment,
 )
+from official_suite_checkout import verify_checkout  # noqa: E402
 
 LANES = {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip", "w3c-v2", "eudi"}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
+W3C_API_KEY = re.compile(r"^mk_test_[A-Za-z0-9_-]{1,120}$")
+W3C_CONFORMANCE_RATE_LIMIT_RPM = "10000"
 # Public OID4VCI credential-configuration identifiers are opaque JSON object
 # keys.  Marty uses a fragment-like suffix (for example, ``PID#sd-jwt``) to
 # distinguish formats for the same credential type, so ``#`` is intentional.
@@ -123,15 +126,11 @@ MDOC_RUNTIME_DIAGNOSTIC_CLASSES = {
     "credential-format-undetected": re.compile(
         r"(?i)(?:unsupported credential format(?:: unknown)?|credential format.*unknown)"
     ),
-    "empty-disclosure-decode": re.compile(
-        r"(?i)(?:cannot construct a non-empty vec|empty issuer disclosure)"
-    ),
+    "empty-disclosure-decode": re.compile(r"(?i)(?:cannot construct a non-empty vec|empty issuer disclosure)"),
     "issuer-signature-invalid": re.compile(
         r"(?i)(?:issuer signature.{0,80}(?:invalid|failed)|issuer_signature_valid.{0,20}false)"
     ),
-    "issuer-untrusted": re.compile(
-        r"(?i)(?:issuer.{0,80}(?:not trusted|untrusted)|issuer_trusted.{0,20}false)"
-    ),
+    "issuer-untrusted": re.compile(r"(?i)(?:issuer.{0,80}(?:not trusted|untrusted)|issuer_trusted.{0,20}false)"),
     "device-authentication-invalid": re.compile(
         r"(?i)(?:device authentication.{0,80}(?:invalid|failed)|device_authentication_valid.{0,20}false)"
     ),
@@ -501,6 +500,12 @@ def run(command: list[str], environment: dict[str, str], *, capture: Path | None
     return completed.returncode
 
 
+def mask_github_secret(value: str) -> None:
+    """Mask a validated disposable secret before third-party suite output."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::add-mask::{value}", flush=True)
+
+
 def redact_initializer_log(text: str) -> str:
     """Preserve actionable initializer output without exposing disposable secrets."""
     return INITIALIZER_SECRET.sub(r"\1<redacted>", text)
@@ -841,7 +846,7 @@ def bootstrap_fixtures(
     if not isinstance(fixtures, dict):
         raise RuntimeError(f"{mode} public fixture bootstrap returned invalid identifiers")
     api_key = fixtures.get("w3c_api_key")
-    if mode == "w3c" and (not isinstance(api_key, str) or not api_key.startswith("mk_test_") or len(api_key) > 128):
+    if mode == "w3c" and (not isinstance(api_key, str) or not W3C_API_KEY.fullmatch(api_key)):
         raise RuntimeError("w3c public fixture bootstrap returned an invalid API key")
     identifiers = {key: value for key, value in fixtures.items() if key != "w3c_api_key"}
     if any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in identifiers.values()):
@@ -1052,6 +1057,11 @@ def run_oid4vci_issuer(
 
 
 def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
+    environment = dict(environment)
+    # The official suite intentionally exercises a dense request matrix. Keep
+    # the production limiter enabled with a finite, disposable-stack budget so
+    # transport throttling does not masquerade as a normative VCDM failure.
+    environment["RATE_LIMIT_RPM"] = W3C_CONFORMANCE_RATE_LIMIT_RPM
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
     base = [sys.executable, str(launcher), "--project", project]
@@ -1061,6 +1071,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
             return 1
         wait_for_public_stack(environment)
         fixtures = bootstrap_fixtures(args, environment, mode="w3c")
+        mask_github_secret(fixtures["w3c_api_key"])
         suite_environment = dict(environment)
         suite_environment["W3C_VC_API_KEY"] = fixtures["w3c_api_key"]
         result = run(
@@ -1198,13 +1209,26 @@ def main(argv: list[str] | None = None) -> int:
     args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     environment, _metadata = base_environment(args)
-    if args.lane == "oid4vci-issuer":
-        return run_oid4vci_issuer(args, environment)
-    if args.lane in {"oid4vp-final", "oid4vp-mdoc", "haip"}:
-        return run_oidf(args, environment)
-    if args.lane == "w3c-v2":
-        return run_w3c(args, environment)
-    return run_eudi(args, environment)
+    official_checkout = (
+        ("w3c", args.w3c_suite)
+        if args.lane == "w3c-v2"
+        else ("oidf", args.oidf_runner)
+        if args.lane in {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip"}
+        else None
+    )
+    if official_checkout:
+        verify_checkout(*official_checkout)
+    try:
+        if args.lane == "oid4vci-issuer":
+            return run_oid4vci_issuer(args, environment)
+        if args.lane in {"oid4vp-final", "oid4vp-mdoc", "haip"}:
+            return run_oidf(args, environment)
+        if args.lane == "w3c-v2":
+            return run_w3c(args, environment)
+        return run_eudi(args, environment)
+    finally:
+        if official_checkout:
+            verify_checkout(*official_checkout)
 
 
 if __name__ == "__main__":
