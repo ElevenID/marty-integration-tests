@@ -117,6 +117,15 @@ def request_json(
             "30",
             *resolver,
         ]
+        ca_bundle = os.environ.get("CURL_CA_BUNDLE", "").strip()
+        if ca_bundle:
+            command.extend(["--cacert", ca_bundle])
+        if os.name == "nt":
+            # Schannel attempts online revocation checks even for this
+            # short-lived, private conformance CA. It cannot have a public
+            # revocation endpoint, so limit this relaxation to the Windows
+            # host bridge while retaining certificate and hostname checks.
+            command.append("--ssl-no-revoke")
         if insecure:
             command.append("--insecure")
         for name, value in (headers or {}).items():

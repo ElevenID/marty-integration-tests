@@ -329,8 +329,8 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
     assert [
         (
             claim["name"],
-            claim["mdoc_namespace"],
-            claim["mdoc_element_identifier"],
+            claim["namespace"],
+            claim["name"],
         )
         for claim in template["claims"]
     ] == [
