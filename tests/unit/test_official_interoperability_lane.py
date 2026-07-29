@@ -584,6 +584,9 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
             "oid4vp_policy_id": "policy-1",
             "oid4vp_trust_profile_id": "trust-1",
             "oid4vp_issuer_did": "did:web:marty.test:orgs:org-1",
+            "browser_credential_template_id": "browser-credential-1",
+            "browser_application_template_id": "browser-application-1",
+            "browser_flow_id": "browser-flow-1",
         },
     )
     monkeypatch.setattr(
@@ -607,11 +610,11 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert suite_environment["OIDF_MARTY_TRUST_PROFILE_ID"] == "trust-1"
     assert "OIDF_MARTY_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
+    assert suite_environment["OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID"] == "browser-credential-1"
+    assert suite_environment["OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID"] == "browser-application-1"
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "request_uri_signed"
     browser_command = next(
-        command
-        for command in executed_commands
-        if "oidf_marty_browser_smoke.py" in " ".join(command)
+        command for command in executed_commands if "oidf_marty_browser_smoke.py" in " ".join(command)
     )
     assert browser_command[browser_command.index("--output") + 1] == str(
         args.output_dir / "raw" / "browser" / "browser-evidence.json"

@@ -347,6 +347,232 @@ def template_payload(
     }
 
 
+def browser_credential_template_payload(
+    organization_id: str,
+    compliance_profile_id: str,
+    issuer_did: str,
+    revocation_profile_id: str,
+    *,
+    gateway_url: str,
+    run_id: str,
+) -> dict[str, object]:
+    """Build a disposable DID-bound credential for the real applicant UI."""
+    return {
+        "organization_id": organization_id,
+        "name": f"Official Browser Member Credential {run_id}",
+        "description": (
+            "Disposable credential used to prove the released applicant UI "
+            "reaches Marty's public DID-first issuance boundary"
+        ),
+        "credential_type": "MemberCredential",
+        "vct": f"{gateway_url.rstrip('/')}/credentials/OfficialBrowserMemberCredential",
+        "supported_formats": ["sd_jwt_vc"],
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "compliance_profile_id": compliance_profile_id,
+        "issuer_did": issuer_did,
+        "revocation_profile_id": revocation_profile_id,
+        "schema_uri": {
+            "type": "object",
+            "properties": {
+                "email": {"type": "string", "format": "email"},
+                "given_name": {"type": "string"},
+                "family_name": {"type": "string"},
+                "member_id": {"type": "string"},
+                "organization_id": {"type": "string"},
+                "role": {"type": "string"},
+            },
+            "required": ["email"],
+        },
+        "claims": [
+            {"name": "email", "display_name": "Email", "required": True},
+            {"name": "given_name", "display_name": "Given Name", "required": False},
+            {"name": "family_name", "display_name": "Family Name", "required": False},
+            {"name": "member_id", "display_name": "Member ID", "required": False},
+            {
+                "name": "organization_id",
+                "display_name": "Organization ID",
+                "required": False,
+            },
+            {"name": "role", "display_name": "Role", "required": False},
+        ],
+    }
+
+
+def browser_application_template_payload(
+    organization_id: str,
+    credential_template_id: str,
+    *,
+    run_id: str,
+) -> dict[str, object]:
+    """Build the public applicant workflow linked to the disposable credential."""
+    return {
+        "organization_id": organization_id,
+        "name": f"Official Browser Member Application {run_id}",
+        "description": "One-click application through the released applicant UI",
+        "credential_template_id": credential_template_id,
+        "form_fields": [
+            {
+                "field_id": "email",
+                "label": "Email",
+                "field_type": "EMAIL",
+                "required": True,
+                "claim_mapping": "email",
+            }
+        ],
+        "claim_collection_rules": [
+            {
+                "claim_name": "email",
+                "source": "FORM_FIELD",
+                "source_config": {"field_id": "email"},
+            }
+        ],
+        "approval_strategy": "AUTO",
+        "application_validity_days": 1,
+    }
+
+
+def browser_issuance_flow_payload(
+    organization_id: str,
+    credential_template_id: str,
+    *,
+    run_id: str,
+) -> dict[str, object]:
+    """Build the normal application-approved OID4VCI extension flow."""
+    return {
+        "organization_id": organization_id,
+        "name": f"Official Browser Issuance {run_id}",
+        "description": "Disposable released-browser OID4VCI issuance flow",
+        "flow_type": "custom",
+        "approval_strategy": "AUTO",
+        "credential_template_id": credential_template_id,
+        "trigger": {
+            "trigger_type": "WEBHOOK",
+            "config": {"event_type": "APPLICATION_APPROVED"},
+        },
+        "extension": {
+            "extension_uri": "urn:elevenid:official-browser-issuance",
+            "extension_version": "1.0.0",
+            "extends_flow_type": "oid4vci_pre_authorized",
+            "entry_step_id": "create_offer",
+            "steps": [
+                {
+                    "step_id": "create_offer",
+                    "action": "create_offer",
+                    "config": {},
+                }
+            ],
+            "transitions": [],
+            "config": {},
+        },
+    }
+
+
+def bootstrap_browser_issuance(
+    gateway_url: str,
+    session_id: str,
+    *,
+    organization_id: str,
+    issuer_did: str,
+    revocation_profile_id: str,
+    run_id: str,
+    request: Callable[..., object],
+) -> dict[str, str]:
+    """Create the disposable product-path resources separately from OIDF."""
+    compliance = request(
+        gateway_url,
+        session_id,
+        "/v1/compliance-profiles",
+        method="POST",
+        json_body=compliance_profile_payload(
+            organization_id,
+            w3c=False,
+            run_id=f"browser-{run_id}",
+            oid4vci=True,
+        ),
+    )
+    compliance_profile_id = response_id(
+        compliance,
+        "browser issuance compliance profile",
+    )
+    credential = request(
+        gateway_url,
+        session_id,
+        "/v1/credential-templates",
+        method="POST",
+        json_body=browser_credential_template_payload(
+            organization_id,
+            compliance_profile_id,
+            issuer_did,
+            revocation_profile_id,
+            gateway_url=gateway_url,
+            run_id=run_id,
+        ),
+    )
+    credential_template_id = response_id(
+        credential,
+        "browser issuance credential template",
+    )
+    activated_credential = request(
+        gateway_url,
+        session_id,
+        f"/v1/credential-templates/{credential_template_id}/activate",
+        method="POST",
+    )
+    if response_id(activated_credential, "activated browser credential template") != credential_template_id:
+        raise RuntimeError("activated browser credential template id changed unexpectedly")
+
+    application = request(
+        gateway_url,
+        session_id,
+        "/v1/application-templates",
+        method="POST",
+        json_body=browser_application_template_payload(
+            organization_id,
+            credential_template_id,
+            run_id=run_id,
+        ),
+    )
+    application_template_id = response_id(
+        application,
+        "browser issuance application template",
+    )
+    activated_application = request(
+        gateway_url,
+        session_id,
+        f"/v1/application-templates/{application_template_id}/activate",
+        method="POST",
+    )
+    if response_id(activated_application, "activated browser application template") != application_template_id:
+        raise RuntimeError("activated browser application template id changed unexpectedly")
+
+    flow = request(
+        gateway_url,
+        session_id,
+        "/v1/flows/definitions",
+        method="POST",
+        json_body=browser_issuance_flow_payload(
+            organization_id,
+            credential_template_id,
+            run_id=run_id,
+        ),
+    )
+    flow_id = response_id(flow, "browser issuance flow")
+    activated_flow = request(
+        gateway_url,
+        session_id,
+        f"/v1/flows/definitions/{flow_id}/activate",
+        method="POST",
+    )
+    if response_id(activated_flow, "activated browser issuance flow") != flow_id:
+        raise RuntimeError("activated browser issuance flow id changed unexpectedly")
+
+    return {
+        "browser_credential_template_id": credential_template_id,
+        "browser_application_template_id": application_template_id,
+        "browser_flow_id": flow_id,
+    }
+
+
 def policy_payload(
     organization_id: str,
     template_id: str,
@@ -1086,6 +1312,18 @@ def bootstrap(
             if activated_trust_profile_id != trust_profile_id:
                 raise RuntimeError("activated OID4VP trust profile id changed unexpectedly")
             result[f"{prefix}_trust_profile_id"] = trust_profile_id
+            if mode == "oid4vp":
+                result.update(
+                    bootstrap_browser_issuance(
+                        gateway_url,
+                        session_id,
+                        organization_id=organization_id,
+                        issuer_did=profile_payload["issuer_did"],
+                        revocation_profile_id=revocation_profile_id,
+                        run_id=run_id,
+                        request=request,
+                    )
+                )
         if w3c:
             api_key_id, api_key = create_disposable_vc_api_key(
                 gateway_url,

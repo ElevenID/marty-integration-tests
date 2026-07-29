@@ -381,13 +381,16 @@ query, so no official URL-query pass is claimed or synthesized.
 The `oid4vp-final` lane also runs an ElevenID-owned released-browser smoke as
 separate product-path evidence. It drives the exact released UI through the
 applicant catalog, application creation, submission, credential claim, and
-verification session. The smoke binds the selected public credential
-template's `organization_id + issuer_did` to the active application template,
-rejects every profile/service/key/KMS selector in public requests and
-responses, and records only public IDs, paths, status codes, and whether a
-credential offer was produced. Its sanitized result appears under
-`browser_evidence`; it never changes an official suite result or compensates
-for an official failure.
+verification session. Before opening the browser, the ElevenID-owned bootstrap
+creates a disposable DID-bound credential template, linked active application
+template, and ordinary application-approved OID4VCI flow through the public
+gateway. The smoke selects those exact fixture IDs rather than relying on
+ambient demo or seed records. It binds the public credential template's
+`organization_id + issuer_did` to the linked application template, rejects
+every profile/service/key/KMS selector in public requests and responses, and
+records only public IDs, paths, status codes, and whether a credential offer
+was produced. Its sanitized result appears under `browser_evidence`; it never
+changes an official suite result or compensates for an official failure.
 
 ## Run the official ISO mDL verifier plan
 

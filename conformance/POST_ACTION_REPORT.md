@@ -210,6 +210,41 @@ issuer-profile mediated through managed custody. The test sent no public
 profile, KMS, service, or key selector. It proves one-organization public API
 behavior, not browser UI behavior or adversarial cross-tenant isolation.
 
+### 6c. Released-browser evidence exposed a legacy DID-binding bypass
+
+The first released-browser product-path run against immutable `marty-ui`
+v1.1.68 failed before applying for a credential because the active seeded
+`Member Login Credential` had no public `issuer_did`. The same template had
+previously issued successfully. Source review showed why: the artifact-pipeline
+migration added the DID column and populated internal `issuer_profile_id`,
+remote-signing mode, and KMS key metadata, but never backfilled the public DID.
+The legacy flow could therefore reach managed signing through internal profile
+state even though the catalog did not expose the DID-first identity required by
+the public contract.
+
+This failure came from the separate ElevenID-owned browser smoke in
+[run 30499787424](https://github.com/ElevenID/marty-integration-tests/actions/runs/30499787424).
+The exact unmodified OIDF suite in the same run remained green: 11 modules,
+417 successes, zero failures, and zero warnings. No upstream assertion,
+fixture, expected result, test selection, exclusion, or source file was changed
+to obtain either result.
+
+Remediation in progress:
+
+- [marty-ui#194](https://github.com/ElevenID/marty-ui/pull/194) adds a one-way
+  migration that binds active Marty templates already using a KMS-backed remote
+  issuer profile to that profile's public `did:web` identity. Existing non-empty
+  DID bindings are preserved.
+- The ElevenID harness now creates a disposable DID-bound MemberCredential,
+  linked active Application Template, and normal application-approved OID4VCI
+  flow through the public gateway. The released browser selects those exact
+  fixture IDs, so evidence no longer depends on ambient demo data.
+- Public browser requests and responses continue to reject issuer-profile,
+  signing-service, key-reference, KMS-provider, and custody selectors.
+
+A fresh immutable marty-ui release and exact-stack rerun are required before
+this item can be marked corrected.
+
 ### 7. W3C Data Integrity issuance was configuration-only and reconstructed the document
 
 The official W3C lane stopped at the public credential-template API with HTTP

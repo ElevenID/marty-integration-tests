@@ -37,7 +37,6 @@ FORBIDDEN_PUBLIC_SELECTORS = {
     "provider_selector",
     "providerSelector",
 }
-ISSUANCE_TEMPLATE_NAME = "Member Login Credential"
 VERIFICATION_PURPOSE = "Released-stack browser DID-first smoke"
 
 
@@ -88,27 +87,34 @@ def collection_items(value: object, *, location: str) -> list[dict[str, object]]
 def issuance_binding(
     credential_templates: object,
     application_templates: object,
+    *,
+    expected_credential_template_id: str,
+    expected_application_template_id: str,
 ) -> dict[str, str]:
-    """Resolve the exact public DID binding selected by the browser catalog."""
+    """Resolve the exact disposable public DID binding used by the browser."""
     assert_no_private_selectors(credential_templates, location="credential templates")
     assert_no_private_selectors(application_templates, location="application templates")
     credentials = collection_items(credential_templates, location="credential templates")
     matches = [
         item
         for item in credentials
-        if item.get("name") == ISSUANCE_TEMPLATE_NAME
+        if str(item.get("id") or "").strip() == expected_credential_template_id
         and str(item.get("status") or "").strip().upper() == "ACTIVE"
     ]
     if len(matches) != 1:
         raise AssertionError(
-            f"browser catalog resolved {len(matches)} active {ISSUANCE_TEMPLATE_NAME!r} templates"
+            "browser catalog did not resolve exactly one active disposable "
+            f"credential template {expected_credential_template_id}"
         )
     credential = matches[0]
     credential_template_id = str(credential.get("id") or "").strip()
+    credential_template_name = str(credential.get("name") or "").strip()
     organization_id = str(credential.get("organization_id") or "").strip()
     issuer_did = str(credential.get("issuer_did") or "").strip()
     if not credential_template_id:
         raise AssertionError("browser issuance template has no public id")
+    if not credential_template_name:
+        raise AssertionError("browser issuance template has no public name")
     if not organization_id:
         raise AssertionError("browser issuance template has no organization_id")
     if not issuer_did.startswith("did:"):
@@ -118,7 +124,8 @@ def issuance_binding(
     application_matches = [
         item
         for item in applications
-        if str(item.get("credential_template_id") or "").strip() == credential_template_id
+        if str(item.get("id") or "").strip() == expected_application_template_id
+        and str(item.get("credential_template_id") or "").strip() == credential_template_id
         and str(item.get("status") or "").strip().upper() == "ACTIVE"
     ]
     if len(application_matches) != 1:
@@ -136,6 +143,7 @@ def issuance_binding(
     return {
         "credential_template_id": credential_template_id,
         "application_template_id": application_template_id,
+        "credential_template_name": credential_template_name,
         "organization_id": organization_id,
         "issuer_did": issuer_did,
     }
@@ -173,19 +181,23 @@ def open_org_console(page: Page, base_url: str) -> None:
     )
 
 
-def exercise_issuance(page: Page, base_url: str) -> dict[str, object]:
+def exercise_issuance(
+    page: Page,
+    base_url: str,
+    *,
+    credential_template_id: str,
+    application_template_id: str,
+) -> dict[str, object]:
     with (
         page.expect_response(
             lambda response: (
-                response.request.method == "GET"
-                and public_path(response.url) == "/v1/credential-templates"
+                response.request.method == "GET" and public_path(response.url) == "/v1/credential-templates"
             ),
             timeout=30_000,
         ) as credential_templates_info,
         page.expect_response(
             lambda response: (
-                response.request.method == "GET"
-                and public_path(response.url) == "/v1/application-templates"
+                response.request.method == "GET" and public_path(response.url) == "/v1/application-templates"
             ),
             timeout=30_000,
         ) as application_templates_info,
@@ -208,9 +220,11 @@ def exercise_issuance(page: Page, base_url: str) -> dict[str, object]:
     binding = issuance_binding(
         credential_templates_response.json(),
         application_templates_response.json(),
+        expected_credential_template_id=credential_template_id,
+        expected_application_template_id=application_template_id,
     )
 
-    card = page.locator(".MuiCard-root").filter(has_text=ISSUANCE_TEMPLATE_NAME).first
+    card = page.locator(".MuiCard-root").filter(has_text=binding["credential_template_name"]).first
     card.wait_for(timeout=30_000)
     card.get_by_role("button", name="Apply").click()
     page.wait_for_url("**/console/applicant/apply/**", timeout=15_000)
@@ -219,24 +233,15 @@ def exercise_issuance(page: Page, base_url: str) -> dict[str, object]:
     issue.wait_for(timeout=30_000)
     with (
         page.expect_response(
-            lambda response: (
-                response.request.method == "POST"
-                and public_path(response.url) == "/v1/me/applications"
-            ),
+            lambda response: response.request.method == "POST" and public_path(response.url) == "/v1/me/applications",
             timeout=30_000,
         ) as application_info,
         page.expect_response(
-            lambda response: (
-                response.request.method == "POST"
-                and public_path(response.url).endswith("/submit")
-            ),
+            lambda response: response.request.method == "POST" and public_path(response.url).endswith("/submit"),
             timeout=30_000,
         ) as submit_info,
         page.expect_response(
-            lambda response: (
-                response.request.method == "POST"
-                and public_path(response.url).endswith("/claim")
-            ),
+            lambda response: response.request.method == "POST" and public_path(response.url).endswith("/claim"),
             timeout=30_000,
         ) as claim_info,
     ):
@@ -345,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
     base_url = public_origin(required_env("OIDF_MARTY_GATEWAY_URL"))
     email = required_env("OIDF_MARTY_OPERATOR_EMAIL")
     password = required_env("OIDF_MARTY_OPERATOR_PASSWORD")
+    credential_template_id = required_env("OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID")
+    application_template_id = required_env("OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID")
     session_id = login(base_url, email, password)
 
     request_records: list[dict[str, object]] = []
@@ -390,7 +397,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         try:
-            issuance = exercise_issuance(page, base_url)
+            issuance = exercise_issuance(
+                page,
+                base_url,
+                credential_template_id=credential_template_id,
+                application_template_id=application_template_id,
+            )
             verification = exercise_verification(page, base_url)
         finally:
             context.close()

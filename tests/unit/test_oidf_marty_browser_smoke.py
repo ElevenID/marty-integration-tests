@@ -37,7 +37,7 @@ def test_browser_issuance_binding_requires_one_public_did_bound_template() -> No
         [
             {
                 "id": "credential-1",
-                "name": browser_smoke.ISSUANCE_TEMPLATE_NAME,
+                "name": "Official Browser Member Credential run-1",
                 "status": "active",
                 "organization_id": "org-1",
                 "issuer_did": "did:web:issuer.example:orgs:org-1",
@@ -53,11 +53,14 @@ def test_browser_issuance_binding_requires_one_public_did_bound_template() -> No
                 }
             ]
         },
+        expected_credential_template_id="credential-1",
+        expected_application_template_id="application-template-1",
     )
 
     assert binding == {
         "credential_template_id": "credential-1",
         "application_template_id": "application-template-1",
+        "credential_template_name": "Official Browser Member Credential run-1",
         "organization_id": "org-1",
         "issuer_did": "did:web:issuer.example:orgs:org-1",
     }
@@ -86,7 +89,7 @@ def test_browser_issuance_binding_fails_closed(
 ) -> None:
     credential = {
         "id": "credential-1",
-        "name": browser_smoke.ISSUANCE_TEMPLATE_NAME,
+        "name": "Official Browser Member Credential run-1",
         "status": "active",
         "organization_id": "org-1",
         "issuer_did": "did:web:issuer.example:orgs:org-1",
@@ -101,7 +104,12 @@ def test_browser_issuance_binding_fails_closed(
     }
 
     with pytest.raises(AssertionError, match=message):
-        browser_smoke.issuance_binding([credential], [application])
+        browser_smoke.issuance_binding(
+            [credential],
+            [application],
+            expected_credential_template_id="credential-1",
+            expected_application_template_id="application-template-1",
+        )
 
 
 @pytest.mark.parametrize(
@@ -128,6 +136,7 @@ def test_browser_issuance_application_request_cannot_change_binding(
     binding = {
         "credential_template_id": "credential-1",
         "application_template_id": "application-template-1",
+        "credential_template_name": "Official Browser Member Credential run-1",
         "organization_id": "org-1",
         "issuer_did": "did:web:issuer.example:orgs:org-1",
     }
