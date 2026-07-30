@@ -435,7 +435,8 @@ fails explicitly while it is expired. Do not replace the certificate in the
 imported checkout, disable Marty certificate-time validation, or record an
 expected failure to manufacture a pass. Retain the last pre-expiry official
 evidence and rerun the exact reviewed upstream release or commit once OIDF
-publishes renewed material.
+publishes renewed material. Track that upstream dependency in
+[marty-integration-tests#217](https://github.com/ElevenID/marty-integration-tests/issues/217).
 
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
