@@ -382,6 +382,9 @@ Run
 passed all ten official modules against immutable `marty-ui` v1.1.73 with
 273 successful conditions, zero failures, zero warnings, and no expected
 failures or skips. The pinned OIDF checkout remained unmodified.
+The follow-up default-pin
+[active run 30509798974](https://github.com/ElevenID/marty-integration-tests/actions/runs/30509798974)
+repeated the pass after promotion and records `execution_mode=active`.
 
 The `oid4vp-final` lane also runs an ElevenID-owned released-browser smoke as
 separate product-path evidence. It drives the exact released UI through the
