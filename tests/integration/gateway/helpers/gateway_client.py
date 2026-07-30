@@ -17,6 +17,17 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_FLOW_TYPE_ALIASES = {
+    "issuance": "oid4vci_pre_authorized",
+    "issuance_oid4vci": "oid4vci_pre_authorized",
+    "verification": "oid4vp_presentation",
+    "verification_oid4vp": "oid4vp_presentation",
+    "presentation": "oid4vp_presentation",
+    "renewal": "credential_renewal",
+    "revocation": "credential_revocation",
+    "siop_v2": "siopv2",
+}
+
 
 class GatewayClientError(Exception):
     """Base exception for gateway client errors"""
@@ -1133,26 +1144,48 @@ class GatewayClient:
         organization_id: str,
         name: str,
         flow_type: Optional[str] = None,
-        type: Optional[str] = None,
-        steps: Optional[List[Dict]] = None,
+        description: Optional[str] = None,
+        approval_strategy: Literal[
+            "AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"
+        ] = "AUTO",
+        hooks: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        trigger: Optional[Dict[str, Any]] = None,
+        extension: Optional[Dict[str, Any]] = None,
         trust_profile_id: Optional[str] = None,
         credential_template_id: Optional[str] = None,
+        application_template_id: Optional[str] = None,
         presentation_policy_id: Optional[str] = None,
+        delivery_destination_profile_id: Optional[str] = None,
+        deployment_profile_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Create a flow definition"""
-        ft = flow_type or type or "issuance"
+        """Create a flow definition using the current public gateway contract."""
+        selected_type = flow_type or "oid4vci_pre_authorized"
+        canonical_type = _FLOW_TYPE_ALIASES.get(selected_type, selected_type)
+        payload: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "name": name,
+            "flow_type": canonical_type,
+            "approval_strategy": approval_strategy,
+            "hooks": hooks or {},
+            "deployment_profile_ids": deployment_profile_ids or [],
+        }
+        optional_fields = {
+            "description": description,
+            "trigger": trigger,
+            "extension": extension,
+            "trust_profile_id": trust_profile_id,
+            "credential_template_id": credential_template_id,
+            "application_template_id": application_template_id,
+            "presentation_policy_id": presentation_policy_id,
+            "delivery_destination_profile_id": delivery_destination_profile_id,
+        }
+        payload.update(
+            {field: value for field, value in optional_fields.items() if value is not None}
+        )
         return await self._request(
             "POST",
             "/v1/flows/definitions",
-            json={
-                "organization_id": organization_id,
-                "name": name,
-                "flow_type": ft,
-                "steps": steps or [],
-                "trust_profile_id": trust_profile_id,
-                "credential_template_id": credential_template_id,
-                "presentation_policy_id": presentation_policy_id,
-            },
+            json=payload,
         )
 
     async def get_flow_definition(self, flow_def_id: str) -> Dict[str, Any]:
