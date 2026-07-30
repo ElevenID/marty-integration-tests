@@ -16,6 +16,42 @@ def _unsigned_jwt(payload: dict[str, str]) -> str:
 
 
 @pytest.mark.asyncio
+async def test_initialize_transaction_uses_configured_reference_intended_use() -> None:
+    client = EUDIVerifierClient(
+        "https://verifier.example:8443",
+        intended_use_id="reference-use",
+    )
+    response = httpx.Response(
+        200,
+        json={
+            "transaction_id": "transaction-1",
+            "request_uri": "https://verifier.example:8443/wallet/request.jwt/request-1",
+        },
+        request=httpx.Request("POST", "https://verifier.example:8443/ui/presentations"),
+    )
+    post = AsyncMock(return_value=response)
+    client.client.post = post
+
+    try:
+        await client.initialize_transaction(
+            dcql_query={"credentials": [{"id": "credential", "format": "dc+sd-jwt"}]},
+            nonce="nonce-1",
+        )
+    finally:
+        await client.close()
+
+    assert post.await_args.kwargs["json"] == {
+        "dcql_query": {
+            "credentials": [{"id": "credential", "format": "dc+sd-jwt"}],
+        },
+        "response_mode": "direct_post",
+        "jar_mode": "by_reference",
+        "intended_use_id": "reference-use",
+        "nonce": "nonce-1",
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_request_object_uses_same_origin_absolute_uri_unchanged() -> None:
     client = EUDIVerifierClient("https://verifier.example:8443")
     request_uri = "https://verifier.example:8443/wallet/request.jwt/request-1?transaction_data=one%2Ftwo"
