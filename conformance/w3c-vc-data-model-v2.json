@@ -2,7 +2,7 @@
   "schema": "elevenid.official-vc-suite/v1",
   "official_suite": {
     "repository": "https://github.com/w3c/vc-data-model-2.0-test-suite.git",
-    "commit": "1db599924e6601555933550e0e65925a6abbd0a8",
+    "commit": "e92936564867da9150b99b167fe1c73b9370ad6c",
     "branch": "main",
     "source_policy": "unmodified",
     "node": "24",
