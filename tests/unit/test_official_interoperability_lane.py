@@ -623,7 +623,7 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert all("--haip" in command for command in compose_commands)
 
 
-def test_oidf_url_query_lane_runs_the_exact_planned_direct_query_profile(
+def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -674,7 +674,7 @@ def test_oidf_url_query_lane_runs_the_exact_planned_direct_query_profile(
     assert official_command[official_command.index("--profile") + 1] == (
         "oid4vp-url-query-verifier"
     )
-    assert "--allow-planned-profile" in official_command
+    assert "--allow-planned-profile" not in official_command
     assert suite_environment["OIDF_MARTY_VERIFIER_PROFILE"] == "standard"
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "url_query"
     assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"

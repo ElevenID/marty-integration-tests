@@ -1085,8 +1085,6 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "--interaction-script",
                 str(ROOT / "scripts" / "oidf_marty_verifier.py"),
             ]
-        if url_query:
-            official_command.append("--allow-planned-profile")
         official_result = run(
             official_command,
             environment,

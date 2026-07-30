@@ -34,11 +34,11 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert "[request_method=request_uri_signed]" in verifier["test_plan"]
     assert "[client_id_prefix=x509_hash]" in verifier["test_plan"]
     url_query = manifest["profiles"]["oid4vp-url-query-verifier"]
-    assert url_query["status"] == "planned"
+    assert url_query["status"] == "active"
     assert "[request_method=url_query]" in url_query["test_plan"]
     assert "[client_id_prefix=redirect_uri]" in url_query["test_plan"]
-    assert "exact unchanged official variant" in url_query["reason"]
-    assert "not Marty's separate signed by-value Request Object" in url_query["qualification"]
+    assert "Exact unmodified OIDF release-v5.2.0 evidence" in url_query["qualification"]
+    assert "distinct from Marty's signed by-value Request Object" in url_query["qualification"]
     mdoc = manifest["profiles"]["oid4vp-mdoc-verifier"]
     assert mdoc["status"] == "active"
     assert "[credential_format=iso_mdl]" in mdoc["test_plan"]
@@ -307,7 +307,15 @@ def test_activated_issuer_profile_no_longer_needs_pre_activation_switch() -> Non
     )
 
 
-@pytest.mark.parametrize("profile_name", ["oid4vp-verifier", "oid4vp-mdoc-verifier", "oid4vp-haip-verifier"])
+@pytest.mark.parametrize(
+    "profile_name",
+    [
+        "oid4vp-verifier",
+        "oid4vp-url-query-verifier",
+        "oid4vp-mdoc-verifier",
+        "oid4vp-haip-verifier",
+    ],
+)
 def test_activated_verifier_profiles_no_longer_need_pre_activation_switch(
     profile_name: str,
 ) -> None:

@@ -124,15 +124,15 @@ Manual investigation initially used reviewed tag and manifest overrides while
 cause a default or scheduled lane to test an obsolete pre-DID-first stack even
 while manually dispatched evidence used newer artifacts.
 
-Action completed: the checked-in pin now names `marty-ui` v1.1.72 and its
+Action completed: the checked-in pin now names `marty-ui` v1.1.73 and its
 independently verified manifest digest
-`sha256:792b00ccd367044d51ff7ece87e3303513536ade7cd77fe276c2d5a73968031f`.
+`sha256:0d97218e5edea4626b6af75140f478f79e6fbf794f98b2f889a210e7674ce0a7`.
 Overrides remain available for controlled candidate testing, but the default
 is the latest stack that passed its artifact-only release gate, released-browser
-issuance and verification journey, and unmodified OIDF OID4VP Final verifier
-lane. Earlier immutable releases, including the v1.1.66 native ISO mDL result,
-remain bound to their original evidence rather than being reinterpreted through
-this newer pin.
+issuance and verification journey, unmodified OIDF OID4VP Final verifier lane,
+and the active direct URL-query verifier lane. Earlier immutable releases,
+including the v1.1.66 native ISO mDL result, remain bound to their original
+evidence rather than being reinterpreted through this newer pin.
 
 ### 5. The old stack proved that the harness does not silently fall back
 
@@ -888,11 +888,20 @@ signed `request_uri` transport, including the OID4VP
 `request_uri_method=post` wallet-nonce exchange, and separately supports a
 signed Request Object passed by value in the standard `request` parameter.
 The OIDF runner's `url_query` variant instead sends unsigned request parameters
-directly in the query. The active official lane uses only
-`request_uri_signed`; the adapter does not unpack a signed JAR or relabel the
-signed by-value mode as an official URL-query pass. The upstream `url_query`
-variant remains untested until Marty implements that exact production
-transport and the unchanged official variant passes.
+directly in the query. Marty now exposes that exact production transport as
+`request_transport=url_query`, derives the required
+`redirect_uri:<response-uri>` client identifier, and performs no Request
+Object signing. Signed by-value behavior remains available separately as
+`request_transport=request_object`.
+
+Run
+[30509192015](https://github.com/ElevenID/marty-integration-tests/actions/runs/30509192015)
+used immutable `marty-ui` v1.1.73 and the exact unmodified OIDF
+`release-v5.2.0` commit
+`dee9a25160e789f0f80517674693ef7989ab9fa1`. All ten official modules passed
+with 273 successful conditions, zero failures, zero warnings, and no expected
+failures or skips. The adapter forwarded the exact raw direct-query parameters
+to the official wallet and did not unpack, synthesize, or repair a signed JAR.
 
 ## Does the suite use Marty Protocol abstractions?
 
@@ -992,7 +1001,7 @@ remains API-driven and unmodified.
 | HAIP request-object trust | Official HAIP verifier plan passes on immutable v1.1.38 | Keep the active pre-certification profile green; fund certification separately |
 | SD-JWT holder binding | Official-library KB-JWT and missing-key negative exposed a v1.1.38 fail-open policy interaction; marty-ui#126 makes OID4VP context authoritative | Release and prove corrupted holder signatures finalize as deny |
 | mdoc issuance/presentation | Native OIDF ISO mDL verifier evidence on immutable v1.1.66: happy flow, request-URI POST, and invalid-session-transcript negative; 134 successes, zero failures or warnings, plus EUDI and independent COSE/CBOR/X.509 issuance evidence | OIDF has no suitable mdoc issuer plan, so keep issuance claims limited to EUDI/reference evidence; retain the exact upstream pin and rerun without patches as it advances |
-| OID4VP URL-query transport | Product supports a signed Request Object by value; the active official lane covers signed `request_uri` only | The OIDF runner's `url_query` variant is unsigned direct-query transport and remains untested; implement and run that exact unchanged variant before claiming it |
+| OID4VP URL-query transport | Exact unmodified OIDF `url_query` + `redirect_uri` plan passes against immutable v1.1.73: ten modules, 273 successes, zero failures/warnings, and no exclusions; signed by-value Request Objects remain a separate `request_object` transport | Keep the active profile green as the pinned official runner advances; do not merge the two transport claims |
 | W3C VCDM v2 verification and issuance | Exact upstream commit `1db599924e6601555933550e0e65925a6abbd0a8` passes on GitHub from an unmodified disposable worktree against immutable v1.1.60; issuer, VC-verifier, and VP-verifier roles all execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
 | UI issuance/verification | Released v1.1.72 browser smoke completes disposable application, submit, claim, credential-offer, and signed-verification journeys using public DIDs; no private selector or issuer-profile collection request is observed | Add adversarial cross-tenant browser cases and continue generated-client response drift checks |
 | Multitenancy | Partial: two-organization template isolation plus Canvas delivery/external/canonical credential substitution and gateway authorization checks | Complete the two-organization RBAC, API-key, SCIM, result, audit, webhook, and error-leakage matrix |
@@ -1038,6 +1047,7 @@ remains API-driven and unmodified.
 | Canvas provenance accepted an unscoped organization and exposed issuer-profile internals | Public authorization/data-boundary defect | A guessed delivery, external credential, or canonical credential identifier could cross the intended tenant boundary; public responses leaked internal profile/mode metadata | `marty-credentials#86` requires trusted tenant context and scopes all selectors; `marty-ui#177` adds authentication, membership, permission, and internal service authentication | Released in v1.1.61 after all three selector substitutions, trusted-context mismatch, two-organization pre-backend denial, public response-shape regressions, full PR checks, and the artifact-only stack smoke passed |
 | Ordinary dashboard and template-authoring journeys fetched internal issuer profiles | Public abstraction leak | A transient dashboard route and credential-template wizard received custody coordinates even though verification itself used the public DID projection | `marty-ui#204` moves ordinary readiness and authoring to `/issuer-identities`; profile administration remains isolated to authorized setup pages | Released in v1.1.72; run 30506329100 completes browser issuance and verification with no private selectors or issuer-profile collection request |
 | Official lanes do not drive the browser | Missing evidence | API-only official lanes could not prove UI request shapes or private-selector absence | Released-stack Playwright smoke in run 30506329100 selected public DIDs and completed ordinary application, submit, claim, offer, and verification routes | One-organization issuance/verification slice complete; adversarial cross-tenant browser coverage remains open |
+| Marty called a signed by-value Request Object `url_query` | Protocol/transport drift | The name did not match the official OIDF runner, so signed behavior could have been misrepresented as direct-query compliance | `marty-protocol#15` defines `request_uri`, `request_object`, and direct unsigned `url_query`; `marty-ui#206` implements the direct production path while retaining signed by-value behavior separately; `marty-integration-tests#200` forwards the exact raw query to the unchanged official wallet | Released in v1.1.73; run 30509192015 passes all ten official URL-query modules with 273/0/0 conditions and no expected failures/skips |
 
 ## Immutable evidence collected
 
@@ -1096,6 +1106,8 @@ remains API-driven and unmodified.
 | OID4VP Final plus released-browser run [30504449794](https://github.com/ElevenID/marty-integration-tests/actions/runs/30504449794) against v1.1.71 | Exact unmodified OIDF commit `dee9a25160e789f0f80517674693ef7989ab9fa1` remained green at 417/0/0, while the ElevenID-owned browser check failed on an internal issuer-profile collection request. No official assertion was weakened to hide the product leak. |
 | `marty-ui` v1.1.72, release commit `28ec57babcb8ff69f80d06c0f933476623f9caaa`, manifest `sha256:792b00ccd367044d51ff7ece87e3303513536ade7cd77fe276c2d5a73968031f`, run [30505939766](https://github.com/ElevenID/marty-ui/actions/runs/30505939766) | All immutable-input, UI/services/migrations build, provenance, keyless signature, SBOM, anonymous artifact-only smoke, and manifest publication jobs passed. Images are pinned as UI `sha256:0c1f2b46c358cdfceb493a83d4c790ece1c9c8b3a4c95b6677c13b405c51f3ef`, services `sha256:b2e5dc657f70cb057ffe5006683f319791e0cb2dc9f61a9f874e7e07963cfcd4`, and migrations `sha256:41573a989d11c73702badb7495d80e81b8c98ff5a49bb6fc68aa8a15f53be29e`. |
 | OID4VP Final plus released-browser run [30506329100](https://github.com/ElevenID/marty-integration-tests/actions/runs/30506329100), sanitized artifact ID `8745544253`, artifact digest `sha256:6606490c0aec5dc5e43660d6a2bdb54f7e3260ba8f2c16f2d3d6e985e3a7c16f`, summary `sha256:af19e954f26d4501f3548ac9ba1d2f6ce9da87639baef8d991f445b629ee691f` | Exact v1.1.72 artifacts and harness `f3d23e91fd326f47e967a419a0bcc168af80125b` passed. The browser completed application, submit, claim, credential-offer, and signed-verification paths with no private selector or internal profile request. Exact unmodified OIDF commit `dee9a25160e789f0f80517674693ef7989ab9fa1` passed 11 modules with 417 successes, zero failures, zero warnings, and no expected failures/skips. |
+| `marty-ui` v1.1.73, release commit `060e12799e110a2e662543fd18d79c7ee9441a2b`, manifest `sha256:0d97218e5edea4626b6af75140f478f79e6fbf794f98b2f889a210e7674ce0a7`, run [30508843494](https://github.com/ElevenID/marty-ui/actions/runs/30508843494) | All immutable-input, provenance, UI/services/migrations build, keyless signature, SBOM, anonymous artifact-only smoke, upgrade/rollback, and manifest publication jobs passed. Images are pinned as UI `sha256:f429c26b9c3457f2615322de0286ba9369db817311864ea949e514c1df4576b6`, services `sha256:bab16989d2dd55ac88974b5dbe33cd9e44566287e7bd9ef17067ab90a16a115e`, and migrations `sha256:07b6807f8310aae6f3049ee3e51151ffef576cca7e51399068cc9a3fbec0dc1a`. |
+| Direct OID4VP URL-query run [30509192015](https://github.com/ElevenID/marty-integration-tests/actions/runs/30509192015), sanitized artifact ID `8746500090`, artifact digest `sha256:0e7db020196aa8deb07a2c49aba37e03540b555795c9a4d7a4aded21f4948dc8`, summary `sha256:881edd005432620339bdbf25548436fb266ca4d10938b5d4ae7f148d2d485704` | Exact v1.1.73 artifacts and harness `b4be1df46aa7d3ba1c6fc12a3f75b3ea8e86bed1` passed in pre-activation mode. Exact unmodified OIDF commit `dee9a25160e789f0f80517674693ef7989ab9fa1` ran the `url_query` + `redirect_uri` plan: all ten official modules passed with 273 successes, zero failures, zero warnings, and no expected failures/skips. This row activates the profile; future runs use active mode. |
 | OID4VCI issuer run [30499049492](https://github.com/ElevenID/marty-integration-tests/actions/runs/30499049492), sanitized artifact ID `8742812832`, artifact digest `sha256:2791885fd090a180bb0f96cf34859a226f7f8bb15065c97ba2c7926a25b91e09` | Exact unmodified OIDF commit `dee9a25160e789f0f80517674693ef7989ab9fa1` passed every active module against exact v1.1.68 artifacts in active execution mode: 16 modules, 1,015 successful conditions, zero failures, and zero warnings. Four optional capabilities Marty does not advertise remain explicit, owned, expiring skips; there are no expected failures. The source checkout was exact and clean before and after execution. |
 
 The v1.1.66 image digests are signed, attested, and pinned, but the services and
