@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,41 @@ def test_official_oidf_evidence_rejects_expected_failure_masking(
 
     with pytest.raises(ValueError, match="must not accept expected failures"):
         oidf.validate_expected_failures()
+
+
+def test_official_runner_rejects_untracked_local_test_shims(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Compliance Test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "compliance@example.test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    runner_script = tmp_path / "scripts" / "run-test-plan.py"
+    runner_script.parent.mkdir()
+    runner_script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "official fixture"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    commit = oidf.git_revision(tmp_path)
+    manifest = {"official_runner": {"commit": commit}}
+
+    oidf.validate_runner(tmp_path, manifest)
+    (tmp_path / "local-pass-shim.py").write_text(
+        "assert True\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="byte-for-byte clean"):
+        oidf.validate_runner(tmp_path, manifest)
 
 
 def test_optional_encryption_skip_is_documented_narrowly() -> None:
