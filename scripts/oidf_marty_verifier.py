@@ -433,7 +433,10 @@ def main() -> int:
             raise
         print(f"OIDF module {args.test_id} finished before duplicate verifier interaction")
         return 0
-    print(f"Submitted real Marty request URI to OIDF module {args.test_id} ({args.test_name})")
+    print(
+        f"Submitted real Marty authorization request to OIDF module "
+        f"{args.test_id} ({args.test_name})"
+    )
     return 0
 
 

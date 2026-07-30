@@ -374,9 +374,14 @@ transport with the OIDF runner's `request_uri_signed` and `x509_hash`
 variants. The interaction bridge forwards the original public request URI and
 client identifier; it never decodes the JAR into a different front-channel
 transport. Marty separately supports a signed Request Object passed by value
-in the standard `request` parameter. That is not the OIDF runner's
-`url_query` variant, which sends unsigned request parameters directly in the
-query, so no official URL-query pass is claimed or synthesized.
+in the standard `request` parameter. The separate `oid4vp-url-query` lane
+exercises the OIDF runner's direct unsigned `url_query` variant with
+`client_id_prefix=redirect_uri`; it never relabels or unpacks a signed JAR.
+Run
+[30509192015](https://github.com/ElevenID/marty-integration-tests/actions/runs/30509192015)
+passed all ten official modules against immutable `marty-ui` v1.1.73 with
+273 successful conditions, zero failures, zero warnings, and no expected
+failures or skips. The pinned OIDF checkout remained unmodified.
 
 The `oid4vp-final` lane also runs an ElevenID-owned released-browser smoke as
 separate product-path evidence. It drives the exact released UI through the
