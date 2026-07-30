@@ -32,7 +32,15 @@ from haip_test_certificates import (  # noqa: E402
 from official_suite_checkout import verify_checkout  # noqa: E402
 from oidf_mdoc_binding_audit import audit as audit_oidf_mdoc_binding  # noqa: E402
 
-LANES = {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip", "w3c-v2", "eudi"}
+LANES = {
+    "oid4vci-issuer",
+    "oid4vp-final",
+    "oid4vp-url-query",
+    "oid4vp-mdoc",
+    "haip",
+    "w3c-v2",
+    "eudi",
+}
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 W3C_API_KEY = re.compile(r"^mk_test_[A-Za-z0-9_-]{1,120}$")
@@ -930,13 +938,25 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         )
     if args.lane == "haip" and "--haip" not in launcher.read_text(encoding="utf-8"):
         raise ValueError("released marty-ui conformance launcher does not support --haip")
-    if args.lane in {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip"} and (
+    if args.lane in {
+        "oid4vci-issuer",
+        "oid4vp-final",
+        "oid4vp-url-query",
+        "oid4vp-mdoc",
+        "haip",
+    } and (
         args.oidf_runner is None or not args.oidf_runner.is_dir()
     ):
         raise ValueError(f"{args.lane} requires the exact pinned OIDF runner checkout")
     if args.lane == "w3c-v2" and (args.w3c_suite is None or not args.w3c_suite.is_dir()):
         raise ValueError("w3c-v2 requires the exact pinned W3C suite checkout")
-    if args.lane in {"oid4vp-final", "oid4vp-mdoc", "haip", "eudi"} and (
+    if args.lane in {
+        "oid4vp-final",
+        "oid4vp-url-query",
+        "oid4vp-mdoc",
+        "haip",
+        "eudi",
+    } and (
         args.haip_material is None or not args.haip_material.is_dir()
     ):
         raise ValueError(f"{args.lane} requires generated verifier test material")
@@ -986,12 +1006,21 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
 def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     haip = args.lane == "haip"
     mdoc = args.lane == "oid4vp-mdoc"
-    profile = "oid4vp-haip-verifier" if haip else "oid4vp-mdoc-verifier" if mdoc else "oid4vp-verifier"
-    # Both verifier plans exercise Marty's native signed request_uri. The
-    # x509_hash client identifier therefore requires a short-lived certificate
-    # over the issuer profile's public DID key even when response encryption is
-    # the standard direct_post mode. Request signing still happens only through
-    # the issuer profile and managed custody.
+    url_query = args.lane == "oid4vp-url-query"
+    profile = (
+        "oid4vp-haip-verifier"
+        if haip
+        else "oid4vp-mdoc-verifier"
+        if mdoc
+        else "oid4vp-url-query-verifier"
+        if url_query
+        else "oid4vp-verifier"
+    )
+    # Signed request_uri plans use an x509_hash client identifier and require a
+    # short-lived certificate over the issuer profile's public DID key.
+    # Request signing still happens only through the issuer profile and managed
+    # custody. The url_query plan is deliberately unsigned and instead uses the
+    # upstream plan's redirect_uri client identifier.
     up = compose_command(args, "up", oidf=True, haip=True)
     started = run(up, environment) == 0
     if not started:
@@ -1018,7 +1047,9 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "OIDF_CONFORMANCE_INSECURE_TLS": "1",
                 "OIDF_VERIFIER_COMMAND": str((ROOT / "scripts" / "oidf_marty_start_verification.py").resolve()),
                 "OIDF_MARTY_VERIFIER_PROFILE": "haip" if haip else "standard",
-                "OIDF_VERIFIER_REQUEST_METHOD": "request_uri_signed",
+                "OIDF_VERIFIER_REQUEST_METHOD": (
+                    "url_query" if url_query else "request_uri_signed"
+                ),
             }
         )
         config = (
@@ -1037,8 +1068,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 ],
                 environment,
             )
-        official_result = run(
-            [
+        official_command = [
                 sys.executable,
                 str(ROOT / "scripts" / "oidf_conformance.py"),
                 "run",
@@ -1054,7 +1084,11 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 str(args.output_dir / "raw" / profile),
                 "--interaction-script",
                 str(ROOT / "scripts" / "oidf_marty_verifier.py"),
-            ],
+            ]
+        if url_query:
+            official_command.append("--allow-planned-profile")
+        official_result = run(
+            official_command,
             environment,
         )
         result = browser_result or official_result
@@ -1322,7 +1356,14 @@ def main(argv: list[str] | None = None) -> int:
         ("w3c", args.w3c_suite)
         if args.lane == "w3c-v2"
         else ("oidf", args.oidf_runner)
-        if args.lane in {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip"}
+        if args.lane
+        in {
+            "oid4vci-issuer",
+            "oid4vp-final",
+            "oid4vp-url-query",
+            "oid4vp-mdoc",
+            "haip",
+        }
         else None
     )
     if official_checkout:
@@ -1330,7 +1371,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.lane == "oid4vci-issuer":
             return run_oid4vci_issuer(args, environment)
-        if args.lane in {"oid4vp-final", "oid4vp-mdoc", "haip"}:
+        if args.lane in {
+            "oid4vp-final",
+            "oid4vp-url-query",
+            "oid4vp-mdoc",
+            "haip",
+        }:
             return run_oidf(args, environment)
         if args.lane == "w3c-v2":
             return run_w3c(args, environment)

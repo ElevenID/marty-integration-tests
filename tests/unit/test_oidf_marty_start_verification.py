@@ -87,7 +87,7 @@ def test_flow_body_does_not_force_other_transports_to_post(
     assert body["request_uri_method"] == "get"
 
 
-def test_flow_body_selects_native_signed_url_query_transport(
+def test_flow_body_selects_native_direct_url_query_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
@@ -96,7 +96,7 @@ def test_flow_body_selects_native_signed_url_query_transport(
         {
             "test_id": "module-1",
             "test_name": "oid4vp-1final-verifier-happy-flow",
-            "request_method": "url_query_signed",
+            "request_method": "url_query",
         }
     )
 
@@ -109,12 +109,12 @@ def test_flow_body_rejects_unknown_request_method(
 ) -> None:
     monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
 
-    with pytest.raises(ValueError, match="url_query_signed"):
+    with pytest.raises(ValueError, match="url_query"):
         oidf_start.flow_body(
             {
                 "test_id": "module-1",
                 "test_name": "oid4vp-1final-verifier-happy-flow",
-                "request_method": "url_query",
+                "request_method": "url_query_signed",
             }
         )
 

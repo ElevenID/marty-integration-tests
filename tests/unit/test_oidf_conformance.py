@@ -33,6 +33,12 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert "oid4vp-1final-verifier-test-plan" in verifier["test_plan"]
     assert "[request_method=request_uri_signed]" in verifier["test_plan"]
     assert "[client_id_prefix=x509_hash]" in verifier["test_plan"]
+    url_query = manifest["profiles"]["oid4vp-url-query-verifier"]
+    assert url_query["status"] == "planned"
+    assert "[request_method=url_query]" in url_query["test_plan"]
+    assert "[client_id_prefix=redirect_uri]" in url_query["test_plan"]
+    assert "exact unchanged official variant" in url_query["reason"]
+    assert "not Marty's separate signed by-value Request Object" in url_query["qualification"]
     mdoc = manifest["profiles"]["oid4vp-mdoc-verifier"]
     assert mdoc["status"] == "active"
     assert "[credential_format=iso_mdl]" in mdoc["test_plan"]
@@ -246,6 +252,34 @@ def test_signed_request_uri_requires_a_runner_trust_anchor(tmp_path: Path) -> No
         oidf.validate_config(config, "oid4vp-haip-verifier")
 
 
+def test_direct_url_query_does_not_require_a_request_object_trust_anchor(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "verifier.json"
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {
+                    "signing_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "x",
+                        "y": "y",
+                        "d": "d",
+                    }
+                },
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-1.0-final",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    oidf.validate_config(config, "oid4vp-url-query-verifier")
+
+
 def test_planned_verifier_requires_explicit_attested_pre_activation_run(tmp_path: Path) -> None:
     profile = dict(oidf.load_manifest()["profiles"]["oid4vp-verifier"])
     profile["status"] = "planned"
@@ -296,6 +330,9 @@ def test_verifier_interaction_environment_matches_the_official_plan(monkeypatch:
     oidf.validate_verifier_interaction_environment("oid4vp-verifier")
 
     oidf.validate_verifier_interaction_environment("oid4vp-mdoc-verifier")
+
+    monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "url_query")
+    oidf.validate_verifier_interaction_environment("oid4vp-url-query-verifier")
 
     monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
     monkeypatch.setenv("OIDF_VERIFIER_REQUEST_METHOD", "request_uri_signed")

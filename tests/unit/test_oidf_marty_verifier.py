@@ -131,28 +131,47 @@ def test_authorization_request_rejects_duplicate_security_parameters() -> None:
         oidf_verifier.authorization_request_parameters(value)
 
 
-def test_authorization_request_preserves_native_signed_url_query_request() -> None:
-    signed_request = "eyJhbGciOiJFUzI1NiJ9.eyJjbGllbnRfaWQiOiJ4NTA5X2hhc2g6YWJjIn0.signature"
-    authorization_request = "openid4vp://authorize?" + urlencode(
-        {"client_id": "x509_hash:abc", "request": signed_request}
-    )
-
-    assert oidf_verifier.authorization_request_parameters(authorization_request) == (
-        signed_request,
-        {"client_id": "x509_hash:abc", "request": signed_request},
-    )
-
-
-def test_url_query_rejects_unsigned_or_extra_outer_parameters() -> None:
-    value = "openid4vp://authorize?" + urlencode(
+def direct_url_query_authorization_request() -> str:
+    return "openid4vp://authorize?" + urlencode(
         {
-            "client_id": "x509_hash:abc",
-            "request": "header.payload.signature",
-            "nonce": "must-be-inside-the-jar",
+            "response_type": "vp_token",
+            "client_id": "redirect_uri:https://marty.example/response",
+            "nonce": "flow-owned-nonce",
+            "response_mode": "direct_post",
+            "response_uri": "https://marty.example/response",
+            "state": "flow-owned-state",
+            "dcql_query": '{"credentials":[{"id":"credential","format":"dc+sd-jwt"}]}',
         }
     )
-    with pytest.raises(ValueError, match="only client_id and request"):
-        oidf_verifier.authorization_request_parameters(value)
+
+
+def test_authorization_request_preserves_native_direct_url_query_request() -> None:
+    authorization_request = direct_url_query_authorization_request()
+    assert oidf_verifier.authorization_request_parameters(authorization_request) == (
+        authorization_request,
+        {"url_query": urlparse(authorization_request).query},
+    )
+
+
+@pytest.mark.parametrize("prohibited_parameter", ["request", "request_uri"])
+def test_url_query_rejects_request_object_transports(
+    prohibited_parameter: str,
+) -> None:
+    value = "openid4vp://authorize?" + urlencode(
+        {
+            "client_id": "redirect_uri:https://marty.example/response",
+            "nonce": "flow-owned-nonce",
+            prohibited_parameter: "header.payload.signature",
+        }
+    )
+    with pytest.raises(RuntimeError, match="must not contain"):
+        oidf_verifier.call_mock_wallet(
+            "https://runner.example/authorize",
+            value,
+            request_method="url_query",
+            conformance_insecure=False,
+            outer_parameters={"url_query": urlparse(value).query},
+        )
 
 
 def test_signed_post_forwards_outer_method_and_leaves_wallet_nonce_to_official_wallet(
@@ -204,11 +223,12 @@ def test_signed_get_rejects_outer_and_signed_client_id_mismatch(monkeypatch: pyt
         )
 
 
-def test_native_url_query_forwards_the_unchanged_signed_request(
+def test_native_url_query_forwards_the_unchanged_direct_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    signed_request = "eyJhbGciOiJFUzI1NiJ9.eyJjbGllbnRfaWQiOiJ4NTA5X2hhc2g6YWJjIn0.signature"
+    authorization_request = direct_url_query_authorization_request()
+    raw_query = urlparse(authorization_request).query
     monkeypatch.setattr(
         oidf_verifier,
         "request_json",
@@ -216,29 +236,27 @@ def test_native_url_query_forwards_the_unchanged_signed_request(
     )
     oidf_verifier.call_mock_wallet(
         "https://runner.example/authorize",
-        signed_request,
-        request_method="url_query_signed",
+        authorization_request,
+        request_method="url_query",
         conformance_insecure=False,
-        outer_parameters={"client_id": "x509_hash:abc", "request": signed_request},
+        outer_parameters={"url_query": raw_query},
     )
 
-    assert parse_qs(urlparse(calls[0]).query) == {
-        "client_id": ["x509_hash:abc"],
-        "request": [signed_request],
-    }
+    assert urlparse(calls[0]).query == raw_query
+    assert "request=" not in raw_query
+    assert "request_uri=" not in raw_query
 
 
-def test_url_query_rejects_changed_signed_request_object() -> None:
-    with pytest.raises(RuntimeError, match="does not preserve"):
+def test_url_query_rejects_changed_direct_parameters() -> None:
+    authorization_request = direct_url_query_authorization_request()
+    raw_query = urlparse(authorization_request).query
+    with pytest.raises(RuntimeError, match="must preserve"):
         oidf_verifier.call_mock_wallet(
             "https://runner.example/authorize",
-            "eyJhbGciOiJFUzI1NiJ9.eyJjbGllbnRfaWQiOiJ4NTA5X2hhc2g6YWJjIn0.signature",
-            request_method="url_query_signed",
+            authorization_request,
+            request_method="url_query",
             conformance_insecure=False,
-            outer_parameters={
-                "client_id": "x509_hash:abc",
-                "request": "different.request.object",
-            },
+            outer_parameters={"url_query": raw_query + "&changed=true"},
         )
 
 

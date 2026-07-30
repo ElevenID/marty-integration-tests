@@ -48,9 +48,9 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload.get("test_name"), str) or not payload["test_name"]:
         raise ValueError("OIDF module test_name is required")
     request_method = payload.get("request_method", "request_uri_signed")
-    if request_method not in {"request_uri_signed", "url_query_signed"}:
+    if request_method not in {"request_uri_signed", "url_query"}:
         raise ValueError(
-            "OIDF request_method must be request_uri_signed or url_query_signed"
+            "OIDF request_method must be request_uri_signed or url_query"
         )
     profile = os.environ.get("OIDF_MARTY_VERIFIER_PROFILE", "standard")
     if profile not in {"standard", "haip"}:
@@ -67,11 +67,11 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         "issuer_did": required_env("OIDF_MARTY_ISSUER_DID"),
         "expiry_minutes": int(os.environ.get("OIDF_MARTY_FLOW_EXPIRY_MINUTES", "15")),
         "oid4vp_profile": profile,
-        # A URL-query flow is still a signed Request Object.  It carries the
-        # opaque JAR in `request`; it never converts its claims into unsigned
-        # URL parameters.
+        # Match the unchanged OIDF variant literally. request_uri_signed uses
+        # a profile-signed JAR by reference; url_query carries the product's
+        # direct unsigned OID4VP authorization parameters.
         "request_transport": (
-            "url_query" if request_method == "url_query_signed" else "request_uri"
+            "url_query" if request_method == "url_query" else "request_uri"
         ),
         # Select POST retrieval only for the official module that verifies
         # the OID4VP 5.10 wallet_nonce round trip.  The ordinary signed-JAR

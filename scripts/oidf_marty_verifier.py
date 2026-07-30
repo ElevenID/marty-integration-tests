@@ -209,13 +209,13 @@ def invoke_flow_command(command: Path, payload: dict[str, Any]) -> str:
 
 
 def authorization_request_parameters(value: str) -> tuple[str, dict[str, str]]:
-    """Return a signed request reference or JAR and its outer parameters.
+    """Return one untouched authorization transport and its outer metadata.
 
     ``request_uri_method`` is an authorization-URL parameter, not a JAR
-    claim.  A URL-query request instead contains exactly one opaque signed
-    Request Object in `request`; the adapter never expands its claims.  In
-    both cases duplicate outer parameters are rejected instead of choosing an
-    attacker-controlled first value.
+    claim. Direct URL-query has no Request Object at all; its exact raw query
+    string is forwarded to the official wallet without adding, deleting, or
+    rewriting an authorization parameter. Duplicate parameters are rejected
+    instead of choosing an attacker-controlled first value.
     """
     parsed = urlparse(value)
     if parsed.scheme in {"http", "https"}:
@@ -223,11 +223,17 @@ def authorization_request_parameters(value: str) -> tuple[str, dict[str, str]]:
         outer: dict[str, str] = {}
     else:
         query = parse_qs(parsed.query, keep_blank_values=True)
+        duplicate_parameters = sorted(
+            name for name, values in query.items() if len(values) > 1
+        )
+        if duplicate_parameters:
+            raise ValueError(
+                "Marty authorization request contains duplicate "
+                + ", ".join(duplicate_parameters)
+            )
 
         def one_parameter(name: str, *, required: bool = False) -> str | None:
             values = query.get(name, [])
-            if len(values) > 1:
-                raise ValueError(f"Marty authorization request contains duplicate {name}")
             value = values[0] if values else None
             if required and not value:
                 raise ValueError(f"Marty authorization request has no {name}")
@@ -247,7 +253,12 @@ def authorization_request_parameters(value: str) -> tuple[str, dict[str, str]]:
                 "request": request_object,
             }
 
-        request_uri = one_parameter("request_uri", required=True) or ""
+        request_uri_parameter = one_parameter("request_uri")
+        if request_uri_parameter is None:
+            if not parsed.query:
+                raise ValueError("Marty URL-query authorization request is empty")
+            return value, {"url_query": parsed.query}
+        request_uri = request_uri_parameter
         outer = {}
         for name in ("client_id", "request_uri_method"):
             parameter = one_parameter(name)
@@ -311,26 +322,28 @@ def call_mock_wallet(
     # Only the isolated upstream runner's fixed local certificate may use its
     # explicitly named local-runner exception.
     outer = outer_parameters or {}
-    if request_method not in {"request_uri_signed", "url_query_signed"}:
+    if request_method not in {"request_uri_signed", "url_query"}:
         raise ValueError(
-            "OIDF_VERIFIER_REQUEST_METHOD must be request_uri_signed or url_query_signed"
+            "OIDF_VERIFIER_REQUEST_METHOD must be request_uri_signed or url_query"
         )
-    if request_method == "url_query_signed":
-        signed_request = request_uri
-        if outer.get("request") != signed_request:
-            raise RuntimeError("URL-query request does not preserve the signed Request Object")
-        claims = decode_compact_request_object(signed_request)
-        signed_client_id = claims.get("client_id")
-        outer_client_id = outer.get("client_id")
-        if not isinstance(signed_client_id, str) or not signed_client_id:
-            raise RuntimeError("signed request object has no client_id")
-        if not outer_client_id:
-            raise RuntimeError("URL-query authorization request has no outer client_id")
-        if outer_client_id != signed_client_id:
-            raise RuntimeError("outer client_id does not match signed request object client_id")
-        url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(
-            {"client_id": outer_client_id, "request": signed_request}
-        )
+    if request_method == "url_query":
+        parsed = urlparse(request_uri)
+        raw_query = outer.get("url_query")
+        if (
+            parsed.scheme != "openid4vp"
+            or parsed.fragment
+            or not raw_query
+            or parsed.query != raw_query
+        ):
+            raise RuntimeError(
+                "URL-query transport must preserve one complete openid4vp authorization request"
+            )
+        query = parse_qs(raw_query, keep_blank_values=True)
+        if "request" in query or "request_uri" in query:
+            raise RuntimeError(
+                "OIDF url_query transport must not contain a Request Object or request_uri"
+            )
+        url = endpoint + ("&" if "?" in endpoint else "?") + raw_query
         submit_to_official_wallet(url, insecure=conformance_insecure)
         return
 

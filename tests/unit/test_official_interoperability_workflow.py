@@ -18,7 +18,15 @@ def test_workflow_is_manual_and_monthly_with_isolated_standard_runner_lanes() ->
     assert "inputs.lane || 'all'" in text
     assert "pull_request:" not in text
     assert "runs-on: ubuntu-latest" in text
-    for lane in ("oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip", "w3c-v2", "eudi"):
+    for lane in (
+        "oid4vci-issuer",
+        "oid4vp-final",
+        "oid4vp-url-query",
+        "oid4vp-mdoc",
+        "haip",
+        "w3c-v2",
+        "eudi",
+    ):
         assert lane in text
     assert "fail-fast: false" in text
 
