@@ -178,3 +178,21 @@ async def test_create_standard_flow_uses_current_public_contract() -> None:
     assert "steps" not in payload
     assert "type" not in payload
     assert "trust_profile_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_activate_credential_template_uses_public_gateway() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(return_value={"id": "template-1", "status": "active"})
+    client._request = request
+
+    try:
+        result = await client.activate_credential_template("template-1")
+    finally:
+        await client.close()
+
+    assert result["status"] == "active"
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/credential-templates/template-1/activate",
+    )

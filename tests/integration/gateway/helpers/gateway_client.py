@@ -404,6 +404,13 @@ class GatewayClient:
         """Get credential template by ID"""
         return await self._request("GET", f"/v1/credential-templates/{template_id}")
 
+    async def activate_credential_template(self, template_id: str) -> Dict[str, Any]:
+        """Activate a credential template through the public gateway."""
+        return await self._request(
+            "POST",
+            f"/v1/credential-templates/{template_id}/activate",
+        )
+
     async def validate_credential_template_artifacts(self, template_id: str) -> Dict[str, Any]:
         """Validate cryptographic artifacts for a credential template."""
         return await self._request(
