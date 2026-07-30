@@ -12,8 +12,12 @@ import stat
 import sys
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -653,7 +657,11 @@ def official_signer_public_jwk(config_path: Path) -> dict[str, str]:
     }
 
 
-def official_mdoc_trust_anchor(runner_source: Path) -> str:
+def official_mdoc_trust_anchor(
+    runner_source: Path,
+    *,
+    now: datetime | None = None,
+) -> str:
     """Read the mock mdoc issuer certificate from the exact OIDF runner source.
 
     The verifier plan's mdoc wallet does not use ``credential.signing_jwk``.
@@ -679,7 +687,26 @@ def official_mdoc_trust_anchor(runner_source: Path) -> str:
             matches.append(certificate)
     if len(matches) != 1:
         raise ValueError("exact OIDF runner source must expose exactly one documentSignerCert mdoc trust anchor")
-    return matches[0]
+    certificate_pem = matches[0]
+    certificate = x509.load_pem_x509_certificate(certificate_pem.encode("ascii"))
+    checked_at = now or datetime.now(UTC)
+    if checked_at.tzinfo is None:
+        raise ValueError("OIDF mdoc certificate validation time must be timezone-aware")
+    not_before = certificate.not_valid_before_utc
+    not_after = certificate.not_valid_after_utc
+    fingerprint = certificate.fingerprint(hashes.SHA256()).hex()
+    if checked_at < not_before:
+        raise ValueError(
+            "official OIDF mdoc documentSignerCert is not valid yet: "
+            f"not_before={not_before.isoformat()} sha256={fingerprint}"
+        )
+    if checked_at >= not_after:
+        raise ValueError(
+            "official OIDF mdoc documentSignerCert has expired: "
+            f"not_after={not_after.isoformat()} sha256={fingerprint}; "
+            "do not bypass certificate validation or modify the imported suite"
+        )
+    return certificate_pem
 
 
 def trust_profile_payload(

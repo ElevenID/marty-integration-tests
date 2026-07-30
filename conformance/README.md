@@ -63,15 +63,15 @@ for reproducible evidence, and passes the configuration relative to the runner
 checkout so Windows drive letters cannot be parsed as test-plan syntax. The official suite URL can be supplied with
 `CONFORMANCE_SERVER` when it is not using its normal local default.
 
-Marty's current authorization-server metadata and pre-authorized public-wallet
-flow support `client_auth_type=none`. OIDF release-v5.2.0, however, declares
-every issuer module inapplicable to that variant. The executable official plan
-therefore remains explicitly `planned` and uses `private_key_jwt` only as
-pre-activation interoperability evidence. It must not be described as a pass or
-activated until Marty registers the two official wallet public keys and rejects
-missing, invalid, expired, replayed, wrong-audience, and cross-client
-assertions. The lane separately validates the production credential-issuer
-metadata before creating and selecting the public credential configuration.
+Marty's public-wallet flow supports `client_auth_type=none`, while the active
+official interoperability profile deliberately exercises registered
+`private_key_jwt` clients. The disposable organization owns the two official
+wallet public keys; Marty rejects missing, invalid, expired, replayed,
+wrong-audience, and cross-client assertions. OIDF release-v5.2.1 drives that
+normal public issuer path. Four optional capabilities Marty does not advertise
+remain explicit, owned, expiring skips. The lane separately validates the
+production credential-issuer metadata before creating and selecting the public
+credential configuration.
 
 ### Driving the real issuer path
 
@@ -427,6 +427,17 @@ verification behavior. It is not an OIDF mdoc issuer certification and must
 not be presented as one. Marty mdoc issuance remains covered separately by
 the EUDI reference-library lane until upstream provides a suitable issuer plan.
 
+The exact OIDF `release-v5.2.1` source still embeds an mdoc
+`documentSignerCert` whose validity ended at `2026-07-30T07:47:22Z`
+(SHA-256 `c74e6bfecdd161452009ce10d9e5c1386d9022b10378a3de5e296605d325d48d`).
+The lane now checks that upstream certificate before provisioning trust and
+fails explicitly while it is expired. Do not replace the certificate in the
+imported checkout, disable Marty certificate-time validation, or record an
+expected failure to manufacture a pass. Retain the last pre-expiry official
+evidence and rerun the exact reviewed upstream release or commit once OIDF
+publishes renewed material. Track that upstream dependency in
+[marty-integration-tests#217](https://github.com/ElevenID/marty-integration-tests/issues/217).
+
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
 per-request encryption key, and encrypted `direct_post.jwt` handling. Its
@@ -580,7 +591,7 @@ complete suite from a new detached worktree.
 
 ## Certification later
 
-At the pinned OIDF `release-v5.2.0`, the official source labels both the
+At the pinned OIDF `release-v5.2.1`, the official source labels both the
 OID4VP Final verifier plan and the HAIP verifier plan as alpha tests that are
 not currently part of the certification program. Passing them is valuable
 official-runner interoperability evidence, but it is not an OIDF certificate.
