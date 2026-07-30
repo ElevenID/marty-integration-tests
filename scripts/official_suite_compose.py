@@ -92,6 +92,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--oidf", action="store_true", help="include the official OIDF runner project")
     result.add_argument("--eudi", action="store_true", help="include the EUDI reference project")
     result.add_argument(
+        "--marty-only",
+        action="store_true",
+        help="start only the released Marty project for ElevenID-owned product tests",
+    )
+    result.add_argument(
         "--eudi-material",
         type=Path,
         help="generated EUDI/TLS material; a complete external environment takes precedence",
@@ -570,14 +575,16 @@ def stop_started(
 def execute(args: argparse.Namespace) -> int:
     if not args.run_id:
         raise ValueError("--run-id, OFFICIAL_SUITE_RUN_ID, or GITHUB_RUN_ID is required")
+    if args.marty_only and any((args.oidf, args.eudi, args.haip)):
+        raise ValueError("--marty-only cannot be combined with --oidf, --eudi, or --haip")
     if args.haip and not (args.oidf or args.eudi):
         raise ValueError("--haip requires --oidf or --eudi")
     if args.haip_material is not None and not args.haip:
         raise ValueError("--haip-material requires --haip")
     if args.eudi_material is not None and not args.eudi:
         raise ValueError("--eudi-material requires --eudi")
-    if not any((args.oidf, args.eudi)):
-        raise ValueError("select at least one of --oidf or --eudi")
+    if not any((args.marty_only, args.oidf, args.eudi)):
+        raise ValueError("select --marty-only or at least one of --oidf or --eudi")
 
     projects = project_names(args.run_id)
     environment = child_environment(

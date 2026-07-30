@@ -73,6 +73,55 @@ def test_projects_are_unique_and_scoped() -> None:
         lifecycle.project_names("production/stack")
 
 
+def test_marty_only_runs_without_an_official_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(lifecycle, "child_environment", dict)
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+    monkeypatch.setattr(
+        lifecycle,
+        "run",
+        lambda command, _environment: calls.append(
+            (component(command), action(command))
+        )
+        or 0,
+    )
+
+    assert (
+        lifecycle.main(
+            [
+                "up",
+                "--run-id",
+                "product-boundary",
+                "--marty-ui",
+                str(marty_checkout(tmp_path)),
+                "--marty-only",
+            ]
+        )
+        == 0
+    )
+    assert calls == [("marty", "up")]
+
+
+def test_marty_only_is_mutually_exclusive_with_official_runners(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        lifecycle.main(
+            [
+                "up",
+                "--run-id",
+                "invalid-selection",
+                "--marty-ui",
+                str(marty_checkout(tmp_path)),
+                "--marty-only",
+                "--eudi",
+            ]
+        )
+
+
 def test_compose_project_environment_matches_derived_names() -> None:
     projects = lifecycle.project_names("123-1")
     environment = {
