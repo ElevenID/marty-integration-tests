@@ -21,6 +21,13 @@ from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.test_data import TestDataBuilder
 
 MARTY_DEFAULT_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001"
+FORBIDDEN_PUBLIC_SIGNING_SELECTORS = (
+    "issuer_profile_id",
+    "signing_service_id",
+    "signing_key_reference",
+    "key_reference",
+    "kms_provider",
+)
 
 
 def _assert_cross_tenant_denied(error: GatewayClientError) -> None:
@@ -53,6 +60,19 @@ def _assert_public_denial(response: Any, *, foreign_values: tuple[str, ...] = ()
             assert value.lower() not in normalized, (
                 f"Cross-tenant denial exposed protected foreign value #{index}"
             )
+
+
+def _assert_no_private_signing_selectors(value: Any, *, path: str = "$") -> None:
+    """Prove that successful public responses do not disclose custody routing."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            assert key not in FORBIDDEN_PUBLIC_SIGNING_SELECTORS, (
+                f"Public response exposed private signing selector {path}.{key}"
+            )
+            _assert_no_private_signing_selectors(child, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _assert_no_private_signing_selectors(child, path=f"{path}[{index}]")
 
 
 async def _reviewer_session() -> str:
@@ -155,23 +175,40 @@ async def _provision_issuer(
     organization: dict[str, Any],
 ) -> str:
     """Create an active issuer profile through the normal administration API."""
+    profile = await _provision_issuer_profile(client, organization)
+    return str(profile["issuer_did"])
+
+
+async def _provision_issuer_profile(
+    client: GatewayClient,
+    organization: dict[str, Any],
+    *,
+    key_purpose: str = "vc_jwt_issuer",
+    status: str = "active",
+) -> dict[str, Any]:
+    """Create a managed profile for setup while returning only test-owned metadata."""
     service = await _resolve_signing_service(
         client,
         str(organization["id"]),
-        key_purpose="vc_jwt_issuer",
+        key_purpose=key_purpose,
     )
     issuer_did = _issuer_did(organization)
     profile = await client.create_issuer_profile(
         organization_id=str(organization["id"]),
-        name=f"{organization.get('name', organization['id'])} tenant-isolation issuer",
+        name=(
+            f"{organization.get('name', organization['id'])} "
+            f"{key_purpose} tenant-isolation issuer"
+        ),
         issuer_did=issuer_did,
         signing_service_id=str(service["id"]),
         signing_key_reference=(str(service.get("key_reference")) if service.get("key_reference") else None),
-        key_purpose="vc_jwt_issuer",
-        status="active",
+        key_purpose=key_purpose,
+        status=status,
     )
     assert profile["issuer_did"] == issuer_did
-    return issuer_did
+    assert profile["key_purpose"] == key_purpose
+    assert profile["status"] == status
+    return profile
 
 
 async def _employee_badge_template_data(
@@ -324,6 +361,190 @@ async def test_issuer_did_resolution_is_scoped_to_the_selected_organization(
     issuances_a = await client.list_issuances(organization_a["id"])
     issued_ids_a = {str(item.get("id")) for item in issuances_a if isinstance(item, dict) and item.get("id")}
     assert str(issued_b.get("id")) not in issued_ids_a
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_public_signing_is_did_first_and_fails_closed(
+    authenticated_gateway_client: GatewayClient,
+) -> None:
+    """Exercise DID-first public signing without changing an imported suite.
+
+    Profile and service coordinates are used only to provision disposable
+    managed identities through the administration API. Browser-equivalent
+    issuance and verification requests receive only the organization and DID.
+    """
+    client = authenticated_gateway_client
+    organization = await client.create_organization(**TestDataBuilder.organization())
+    organization_id = str(organization["id"])
+    issuance_profile = await _provision_issuer_profile(client, organization)
+    issuer_did = str(issuance_profile["issuer_did"])
+    request_profile = await _provision_issuer_profile(
+        client,
+        organization,
+        key_purpose="oid4vp_request_signing",
+    )
+    assert request_profile["issuer_did"] == issuer_did
+
+    # Repeating setup for the same DID/service/purpose tuple must be
+    # idempotent. It may not create an ambiguous second active mapping.
+    duplicate = await _provision_issuer_profile(client, organization)
+    assert duplicate["id"] == issuance_profile["id"]
+
+    template_data = await _employee_badge_template_data(
+        client,
+        organization_id=organization_id,
+        name="DID-first public boundary template",
+        issuer_did=issuer_did,
+    )
+    public_template_payload = {
+        "organization_id": template_data["organization_id"],
+        "name": template_data["name"],
+        "credential_type": template_data["credential_type"],
+        "vct": template_data["vct"],
+        "supported_formats": template_data["supported_formats"],
+        "claims": template_data["claims"],
+        "credential_payload_format": template_data["credential_payload_format"],
+        "compliance_profile_id": template_data["compliance_profile_id"],
+        "revocation_profile_id": template_data["revocation_profile_id"],
+        "issuer_did": template_data["issuer_did"],
+        "schema_uri": template_data["schema"],
+    }
+
+    # Public authoring, issuance, and verification models must reject every
+    # private custody selector. Values are synthetic and never real KMS data.
+    for selector in FORBIDDEN_PUBLIC_SIGNING_SELECTORS:
+        synthetic_value = f"untrusted-{selector}"
+
+        rejected_template = await client.client.post(
+            "/v1/credential-templates",
+            json={**public_template_payload, selector: synthetic_value},
+        )
+        assert rejected_template.status_code == 422, rejected_template.text
+
+        rejected_issuance = await client.client.post(
+            "/v1/issuance",
+            json={
+                "organization_id": organization_id,
+                "issuer_did": issuer_did,
+                "claims": {"credential_format": "dc+sd-jwt"},
+                selector: synthetic_value,
+            },
+        )
+        assert rejected_issuance.status_code == 422, rejected_issuance.text
+
+    # Claims cannot smuggle custody routing through the otherwise extensible
+    # credential subject.
+    for selector in FORBIDDEN_PUBLIC_SIGNING_SELECTORS:
+        rejected_claim = await client.client.post(
+            "/v1/issuance",
+            json={
+                "organization_id": organization_id,
+                "issuer_did": issuer_did,
+                "claims": {
+                    "credential_format": "dc+sd-jwt",
+                    selector: f"untrusted-claim-{selector}",
+                },
+            },
+        )
+        assert rejected_claim.status_code == 422, rejected_claim.text
+
+    template = await client.create_credential_template(**template_data)
+    template = await client.activate_credential_template(template["id"])
+    _assert_no_private_signing_selectors(template)
+
+    issued = await client.issue_credential(
+        organization_id=organization_id,
+        credential_template_id=template["id"],
+        claims=TestDataBuilder.employee_badge_claims(),
+        subject_did=f"did:key:z6Mk{uuid.uuid4().hex}",
+    )
+    _assert_no_private_signing_selectors(issued)
+
+    policy_data = TestDataBuilder.presentation_policy_age_verification(
+        organization_id=organization_id,
+        credential_template_id=template["id"],
+        name="DID-first public boundary policy",
+    )
+    policy = await client.create_presentation_policy(**policy_data)
+    policy = await client.activate_presentation_policy(policy["id"])
+
+    for selector in FORBIDDEN_PUBLIC_SIGNING_SELECTORS:
+        rejected_verification = await client.client.post(
+            "/v1/flows/verify",
+            headers={"X-Organization-ID": organization_id},
+            json={
+                "organization_id": organization_id,
+                "issuer_did": issuer_did,
+                "presentation_policy_id": policy["id"],
+                selector: f"untrusted-{selector}",
+            },
+        )
+        assert rejected_verification.status_code == 422, rejected_verification.text
+
+    verification = await client.start_verification_flow(
+        presentation_policy_id=policy["id"],
+        organization_id=organization_id,
+        issuer_did=issuer_did,
+    )
+    _assert_no_private_signing_selectors(verification)
+
+    # Unknown DIDs and DIDs with no compatible issuance-purpose profile must
+    # fail before a signing service is invoked.
+    unknown_did = f"did:example:unknown-{uuid.uuid4().hex}"
+    unknown_response = await client.client.post(
+        "/v1/issuance",
+        json={
+            "organization_id": organization_id,
+            "issuer_did": unknown_did,
+            "claims": {"credential_format": "dc+sd-jwt"},
+        },
+    )
+    assert unknown_response.status_code in {403, 404, 409, 422}, unknown_response.text
+    _assert_no_private_signing_selectors(unknown_response.json())
+
+    request_only_organization = await client.create_organization(
+        **TestDataBuilder.organization()
+    )
+    request_only_profile = await _provision_issuer_profile(
+        client,
+        request_only_organization,
+        key_purpose="oid4vp_request_signing",
+    )
+    incompatible_response = await client.client.post(
+        "/v1/issuance",
+        json={
+            "organization_id": str(request_only_organization["id"]),
+            "issuer_did": str(request_only_profile["issuer_did"]),
+            "claims": {"credential_format": "dc+sd-jwt"},
+        },
+    )
+    assert incompatible_response.status_code in {
+        403,
+        404,
+        409,
+        422,
+    }, incompatible_response.text
+    _assert_no_private_signing_selectors(incompatible_response.json())
+
+    # Once the credential-issuance profile is inactive, the DID must not fall
+    # back to the still-active request-object profile with the same public DID.
+    inactive_update = await client.client.patch(
+        f"/v1/signing-keys/issuer-profiles/{issuance_profile['id']}",
+        params={"organization_id": organization_id},
+        json={"status": "inactive"},
+    )
+    assert inactive_update.status_code == 200, inactive_update.text
+    inactive_response = await client.client.post(
+        "/v1/issuance",
+        json={
+            "organization_id": organization_id,
+            "issuer_did": issuer_did,
+            "claims": {"credential_format": "dc+sd-jwt"},
+        },
+    )
+    assert inactive_response.status_code in {403, 404, 409, 422}, inactive_response.text
+    _assert_no_private_signing_selectors(inactive_response.json())
 
 
 @pytest.mark.asyncio
