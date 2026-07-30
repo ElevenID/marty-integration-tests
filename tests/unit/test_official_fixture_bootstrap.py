@@ -252,6 +252,82 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert presentation_requirement["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
 
+def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+    responses = iter(
+        [
+            {"service": {"id": "service-1", "key_reference": "issuer-es256"}},
+            {"profile": {"id": "credential-issuer-1"}},
+            {"service": {"id": "request-service-1", "key_reference": "request-es256"}},
+            {"profile": {"id": "request-issuer-1"}},
+            {"id": "compliance-1"},
+            {"id": "revocation-1"},
+            {"id": "revocation-1"},
+            {"id": "template-1"},
+            {"id": "policy-1"},
+            {"id": "policy-1"},
+            {"id": "trust-1"},
+            {"id": "trust-1"},
+            {"id": "browser-compliance-1"},
+            {"id": "browser-credential-1"},
+            {"id": "browser-credential-1"},
+            {"id": "browser-application-1"},
+            {"id": "browser-application-1"},
+            {"id": "browser-flow-1"},
+            {"id": "browser-flow-1"},
+        ]
+    )
+
+    def request(
+        _gateway: str,
+        _session: str,
+        path: str,
+        *,
+        method: str,
+        json_body: dict | None = None,
+    ) -> object:
+        calls.append((path, method, json_body))
+        return next(responses)
+
+    result = fixtures.bootstrap(
+        "https://marty.test",
+        "real-session",
+        organization_id=fixtures.DEFAULT_ORGANIZATION,
+        run_id="run-1",
+        mode="oid4vp",
+        oidf_signer_public_jwk=PUBLIC_SIGNING_JWK,
+        request=request,
+    )
+
+    assert result["browser_credential_template_id"] == "browser-credential-1"
+    assert result["browser_application_template_id"] == "browser-application-1"
+    assert result["browser_flow_id"] == "browser-flow-1"
+    browser_calls = calls[12:]
+    assert [path for path, _method, _body in browser_calls] == [
+        "/v1/compliance-profiles",
+        "/v1/credential-templates",
+        "/v1/credential-templates/browser-credential-1/activate",
+        "/v1/application-templates",
+        "/v1/application-templates/browser-application-1/activate",
+        "/v1/flows/definitions",
+        "/v1/flows/definitions/browser-flow-1/activate",
+    ]
+    credential_body = browser_calls[1][2]
+    assert credential_body is not None
+    assert credential_body["issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
+    assert "issuer_profile_id" not in credential_body
+    assert "signing_service_id" not in credential_body
+    assert "signing_key_reference" not in credential_body
+    application_body = browser_calls[3][2]
+    assert application_body is not None
+    assert application_body["credential_template_id"] == "browser-credential-1"
+    flow_body = browser_calls[5][2]
+    assert flow_body is not None
+    assert flow_body["credential_template_id"] == "browser-credential-1"
+    assert flow_body["trigger"]["config"]["event_type"] == "APPLICATION_APPROVED"
+    assert flow_body["extension"]["extends_flow_type"] == "oid4vci_pre_authorized"
+
+
 def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     template = fixtures.template_payload(
         fixtures.DEFAULT_ORGANIZATION,
@@ -354,9 +430,7 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
         "birth_date",
     ]
     template_claims = {claim["name"] for claim in template["claims"]}
-    assert {
-        claim["claim_name"] for claim in requirement["requested_claims"]
-    } <= template_claims
+    assert {claim["claim_name"] for claim in requirement["requested_claims"]} <= template_claims
 
 
 def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:

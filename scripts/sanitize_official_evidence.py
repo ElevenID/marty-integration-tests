@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 SCHEMA = "elevenid.sanitized-official-interop/v1"
+BROWSER_SCHEMA = "elevenid.released-browser-smoke/v1"
 LANES = {"oid4vci-issuer", "oid4vp-final", "oid4vp-mdoc", "haip", "w3c-v2", "eudi"}
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SENSITIVE_KEY = re.compile(
@@ -103,7 +104,25 @@ def build_summary(
 
     evidence: list[dict[str, object]] = []
     junit: list[dict[str, object]] = []
+    browser_evidence: object | None = None
     if input_dir.is_dir():
+        browser_paths = sorted(input_dir.rglob("browser-evidence.json"))
+        if len(browser_paths) > 1:
+            raise ValueError("official evidence contains multiple browser evidence files")
+        if browser_paths:
+            if lane != "oid4vp-final":
+                raise ValueError("browser evidence is permitted only for the oid4vp-final lane")
+            browser_raw = load_json(browser_paths[0])
+            if not isinstance(browser_raw, dict):
+                raise ValueError("browser evidence must be a JSON object")
+            if browser_raw.get("schema") != BROWSER_SCHEMA:
+                raise ValueError("browser evidence has an unsupported schema")
+            if browser_raw.get("status") != "passed":
+                raise ValueError("browser evidence does not record a passing run")
+            if browser_raw.get("private_selectors_observed") is not False:
+                raise ValueError("browser evidence does not prove private-selector absence")
+            browser_evidence, count = sanitize(browser_raw)
+            redactions += count
         for path in sorted(input_dir.rglob("evidence.json")):
             clean, count = sanitize(load_json(path))
             redactions += count
@@ -123,6 +142,7 @@ def build_summary(
         "stack": stack,
         "material": material,
         "eudi_harness_image": harness_image,
+        "browser_evidence": browser_evidence,
         "official_evidence": evidence,
         "junit": junit,
         "redactions": redactions,

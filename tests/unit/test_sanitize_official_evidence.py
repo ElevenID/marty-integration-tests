@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "sanitize_official_evidence", ROOT / "scripts" / "sanitize_official_evidence.py"
@@ -93,3 +95,71 @@ def test_summary_records_public_safe_eudi_harness_image_digest(tmp_path: Path) -
         harness_image_report=report,
     )
     assert summary["eudi_harness_image"]["image_digest"] == "sha256:" + "a" * 64
+
+
+def test_summary_records_public_safe_browser_issuance_and_verification(tmp_path: Path) -> None:
+    raw = tmp_path / "raw"
+    browser = raw / "browser"
+    browser.mkdir(parents=True)
+    (browser / "browser-evidence.json").write_text(
+        json.dumps(
+            {
+                "schema": "elevenid.released-browser-smoke/v1",
+                "issuance": {
+                    "organization_id": "org-1",
+                    "issuer_did": "did:web:issuer.example:orgs:org-1",
+                    "credential_offer_present": True,
+                },
+                "verification": {
+                    "organization_id": "org-1",
+                    "issuer_did": "did:web:issuer.example:orgs:org-1",
+                },
+                "public_post_paths": [
+                    "/v1/me/applications",
+                    "/v1/me/applications/application-1/submit",
+                    "/v1/me/applications/application-1/claim",
+                    "/v1/flows/verify",
+                ],
+                "private_selectors_observed": False,
+                "status": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = sanitizer.build_summary(
+        raw,
+        lane="oid4vp-final",
+        harness_commit="d" * 40,
+        exit_code=0,
+    )
+
+    assert summary["browser_evidence"]["issuance"]["issuer_did"].startswith("did:")
+    assert summary["browser_evidence"]["issuance"]["credential_offer_present"] is True
+    assert summary["browser_evidence"]["private_selectors_observed"] is False
+
+
+def test_summary_rejects_nonpassing_or_misplaced_browser_evidence(tmp_path: Path) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    browser = {
+        "schema": "elevenid.released-browser-smoke/v1",
+        "status": "failed",
+        "private_selectors_observed": False,
+    }
+    (raw / "browser-evidence.json").write_text(json.dumps(browser), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="permitted only"):
+        sanitizer.build_summary(
+            raw,
+            lane="haip",
+            harness_commit="e" * 40,
+            exit_code=1,
+        )
+    with pytest.raises(ValueError, match="passing"):
+        sanitizer.build_summary(
+            raw,
+            lane="oid4vp-final",
+            harness_commit="e" * 40,
+            exit_code=1,
+        )

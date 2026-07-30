@@ -700,9 +700,7 @@ def classify_mdoc_runtime_diagnostics(text: str) -> list[str]:
         for match in MDOC_DEVICE_AUTH_ERROR_KIND.finditer(text)
         if match.group(1) in MDOC_DEVICE_AUTH_ERROR_KINDS
     }
-    categories.extend(
-        f"device-auth-error-kind-{kind}" for kind in sorted(observed_error_kinds)
-    )
+    categories.extend(f"device-auth-error-kind-{kind}" for kind in sorted(observed_error_kinds))
     return categories or ["unclassified-runtime-failure"]
 
 
@@ -988,13 +986,7 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
 def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     haip = args.lane == "haip"
     mdoc = args.lane == "oid4vp-mdoc"
-    profile = (
-        "oid4vp-haip-verifier"
-        if haip
-        else "oid4vp-mdoc-verifier"
-        if mdoc
-        else "oid4vp-verifier"
-    )
+    profile = "oid4vp-haip-verifier" if haip else "oid4vp-mdoc-verifier" if mdoc else "oid4vp-verifier"
     # Both verifier plans exercise Marty's native signed request_uri. The
     # x509_hash client identifier therefore requires a short-lived certificate
     # over the issuer profile's public DID key even when response encryption is
@@ -1014,6 +1006,9 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures[f"{fixture_prefix}_policy_id"]
         environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures[f"{fixture_prefix}_trust_profile_id"]
         environment["OIDF_MARTY_ISSUER_DID"] = fixtures[f"{fixture_prefix}_issuer_did"]
+        if args.lane == "oid4vp-final":
+            environment["OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID"] = fixtures["browser_credential_template_id"]
+            environment["OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID"] = fixtures["browser_application_template_id"]
         environment.update(
             {
                 "CONFORMANCE_SERVER": "https://localhost.emobix.co.uk:8443/",
@@ -1037,6 +1032,8 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 [
                     sys.executable,
                     str(ROOT / "scripts" / "oidf_marty_browser_smoke.py"),
+                    "--output",
+                    str(args.output_dir / "raw" / "browser" / "browser-evidence.json"),
                 ],
                 environment,
             )
@@ -1076,24 +1073,15 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                     args.output_dir / "raw" / profile,
                     compose_log,
                 )
-                binding_audit_path = (
-                    args.output_dir / "private" / "oidf-mdoc-binding-audit.json"
-                )
+                binding_audit_path = args.output_dir / "private" / "oidf-mdoc-binding-audit.json"
                 binding_audit_path.write_text(
                     json.dumps(binding_audit, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
                 print("--- OIDF mdoc binding audit (redacted) ---")
                 for module in binding_audit["modules"]:
-                    mismatches = ",".join(
-                        field
-                        for field, matched in module["binding_matches"].items()
-                        if not matched
-                    )
-                    print(
-                        f"{module['test_name']}: status={module['status']} "
-                        f"mismatches={mismatches or 'none'}"
-                    )
+                    mismatches = ",".join(field for field, matched in module["binding_matches"].items() if not matched)
+                    print(f"{module['test_name']}: status={module['status']} mismatches={mismatches or 'none'}")
                 print("--- end OIDF mdoc binding audit ---")
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 print(

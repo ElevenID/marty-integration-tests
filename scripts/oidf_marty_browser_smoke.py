@@ -9,6 +9,7 @@ from the exact released UI artifact through the public HTTPS gateway.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from collections.abc import Mapping
@@ -36,7 +37,6 @@ FORBIDDEN_PUBLIC_SELECTORS = {
     "provider_selector",
     "providerSelector",
 }
-ISSUANCE_TEMPLATE_NAME = "Member Login Credential"
 VERIFICATION_PURPOSE = "Released-stack browser DID-first smoke"
 
 
@@ -68,6 +68,98 @@ def require_success(response: Response, *, operation: str) -> None:
         raise AssertionError(f"{operation} returned HTTP {response.status} at {public_path(response.url)}")
 
 
+def collection_items(value: object, *, location: str) -> list[dict[str, object]]:
+    """Return a public list response without accepting malformed collection shapes."""
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, Mapping):
+        candidate = value.get("items", value.get("templates"))
+        if not isinstance(candidate, list):
+            raise AssertionError(f"{location} has no items collection")
+        items = candidate
+    else:
+        raise AssertionError(f"{location} is not a collection")
+    if not all(isinstance(item, dict) for item in items):
+        raise AssertionError(f"{location} contains a non-object item")
+    return items
+
+
+def issuance_binding(
+    credential_templates: object,
+    application_templates: object,
+    *,
+    expected_credential_template_id: str,
+    expected_application_template_id: str,
+) -> dict[str, str]:
+    """Resolve the exact disposable public DID binding used by the browser."""
+    assert_no_private_selectors(credential_templates, location="credential templates")
+    assert_no_private_selectors(application_templates, location="application templates")
+    credentials = collection_items(credential_templates, location="credential templates")
+    matches = [
+        item
+        for item in credentials
+        if str(item.get("id") or "").strip() == expected_credential_template_id
+        and str(item.get("status") or "").strip().upper() == "ACTIVE"
+    ]
+    if len(matches) != 1:
+        raise AssertionError(
+            "browser catalog did not resolve exactly one active disposable "
+            f"credential template {expected_credential_template_id}"
+        )
+    credential = matches[0]
+    credential_template_id = str(credential.get("id") or "").strip()
+    credential_template_name = str(credential.get("name") or "").strip()
+    organization_id = str(credential.get("organization_id") or "").strip()
+    issuer_did = str(credential.get("issuer_did") or "").strip()
+    if not credential_template_id:
+        raise AssertionError("browser issuance template has no public id")
+    if not credential_template_name:
+        raise AssertionError("browser issuance template has no public name")
+    if not organization_id:
+        raise AssertionError("browser issuance template has no organization_id")
+    if not issuer_did.startswith("did:"):
+        raise AssertionError("browser issuance template has no public issuer_did")
+
+    applications = collection_items(application_templates, location="application templates")
+    application_matches = [
+        item
+        for item in applications
+        if str(item.get("id") or "").strip() == expected_application_template_id
+        and str(item.get("credential_template_id") or "").strip() == credential_template_id
+        and str(item.get("status") or "").strip().upper() == "ACTIVE"
+    ]
+    if len(application_matches) != 1:
+        raise AssertionError(
+            f"browser catalog resolved {len(application_matches)} active application templates "
+            f"for credential template {credential_template_id}"
+        )
+    application_template = application_matches[0]
+    application_template_id = str(application_template.get("id") or "").strip()
+    application_organization_id = str(application_template.get("organization_id") or "").strip()
+    if not application_template_id:
+        raise AssertionError("browser issuance application template has no public id")
+    if application_organization_id and application_organization_id != organization_id:
+        raise AssertionError("browser issuance application template belongs to another organization")
+    return {
+        "credential_template_id": credential_template_id,
+        "application_template_id": application_template_id,
+        "credential_template_name": credential_template_name,
+        "organization_id": organization_id,
+        "issuer_did": issuer_did,
+    }
+
+
+def assert_application_request(body: object, binding: Mapping[str, str]) -> None:
+    """Prove the UI submits the application bound to the public organization and DID."""
+    assert_no_private_selectors(body, location="issuance application")
+    if not isinstance(body, dict):
+        raise AssertionError("browser issuance application request is not a JSON object")
+    if str(body.get("organization_id") or "").strip() != binding["organization_id"]:
+        raise AssertionError("browser issuance application request changed organization_id")
+    if str(body.get("application_template_id") or "").strip() != binding["application_template_id"]:
+        raise AssertionError("browser issuance application request changed application_template_id")
+
+
 def open_org_console(page: Page, base_url: str) -> None:
     page.goto(
         f"{base_url}/console/org/operate/verify",
@@ -89,31 +181,103 @@ def open_org_console(page: Page, base_url: str) -> None:
     )
 
 
-def exercise_issuance(page: Page, base_url: str) -> dict[str, object]:
-    page.goto(
-        f"{base_url}/console/applicant/catalog",
-        wait_until="domcontentloaded",
-        timeout=30_000,
+def exercise_issuance(
+    page: Page,
+    base_url: str,
+    *,
+    credential_template_id: str,
+    application_template_id: str,
+) -> dict[str, object]:
+    with (
+        page.expect_response(
+            lambda response: (
+                response.request.method == "GET" and public_path(response.url) == "/v1/credential-templates"
+            ),
+            timeout=30_000,
+        ) as credential_templates_info,
+        page.expect_response(
+            lambda response: (
+                response.request.method == "GET" and public_path(response.url) == "/v1/application-templates"
+            ),
+            timeout=30_000,
+        ) as application_templates_info,
+    ):
+        page.goto(
+            f"{base_url}/console/applicant/catalog",
+            wait_until="domcontentloaded",
+            timeout=30_000,
+        )
+    credential_templates_response = credential_templates_info.value
+    application_templates_response = application_templates_info.value
+    require_success(
+        credential_templates_response,
+        operation="browser credential-template discovery",
     )
-    card = page.locator(".MuiCard-root").filter(has_text=ISSUANCE_TEMPLATE_NAME).first
+    require_success(
+        application_templates_response,
+        operation="browser application-template discovery",
+    )
+    binding = issuance_binding(
+        credential_templates_response.json(),
+        application_templates_response.json(),
+        expected_credential_template_id=credential_template_id,
+        expected_application_template_id=application_template_id,
+    )
+
+    card = page.locator(".MuiCard-root").filter(has_text=binding["credential_template_name"]).first
     card.wait_for(timeout=30_000)
     card.get_by_role("button", name="Apply").click()
     page.wait_for_url("**/console/applicant/apply/**", timeout=15_000)
 
     issue = page.get_by_role("button", name="Add to Wallet")
     issue.wait_for(timeout=30_000)
-    with page.expect_response(
-        lambda response: response.request.method == "POST" and public_path(response.url).endswith("/claim"),
-        timeout=30_000,
-    ) as claim_info:
+    with (
+        page.expect_response(
+            lambda response: response.request.method == "POST" and public_path(response.url) == "/v1/me/applications",
+            timeout=30_000,
+        ) as application_info,
+        page.expect_response(
+            lambda response: response.request.method == "POST" and public_path(response.url).endswith("/submit"),
+            timeout=30_000,
+        ) as submit_info,
+        page.expect_response(
+            lambda response: response.request.method == "POST" and public_path(response.url).endswith("/claim"),
+            timeout=30_000,
+        ) as claim_info,
+    ):
         issue.click()
+    application_response = application_info.value
+    submit_response = submit_info.value
     claim_response = claim_info.value
+    require_success(application_response, operation="browser issuance application")
+    require_success(submit_response, operation="browser issuance submission")
     require_success(claim_response, operation="browser issuance claim")
+    assert_application_request(request_json(application_response.request), binding)
+    submit_body = request_json(submit_response.request)
+    claim_body = request_json(claim_response.request)
+    assert_no_private_selectors(submit_body, location="issuance submission")
+    assert_no_private_selectors(claim_body, location="issuance claim")
+    claim_payload = claim_response.json()
+    assert_no_private_selectors(claim_payload, location="issuance claim response")
+    if not isinstance(claim_payload, dict):
+        raise AssertionError("browser issuance claim response is not a JSON object")
+    offer_present = any(
+        isinstance(claim_payload.get(field), str) and bool(str(claim_payload[field]).strip())
+        for field in ("credential_offer_uri", "offer_url")
+    ) or bool(claim_payload.get("credential_offer_uris"))
+    if not offer_present:
+        raise AssertionError("browser issuance claim response has no public credential offer")
     page.get_by_role("dialog").get_by_text("Receive Credential").wait_for(timeout=15_000)
 
     return {
+        **binding,
+        "application_path": public_path(application_response.url),
+        "application_status": application_response.status,
+        "submit_path": public_path(submit_response.url),
+        "submit_status": submit_response.status,
         "claim_path": public_path(claim_response.url),
         "claim_status": claim_response.status,
+        "credential_offer_present": True,
     }
 
 
@@ -169,12 +333,25 @@ def exercise_verification(page: Page, base_url: str) -> dict[str, object]:
     }
 
 
-def main() -> int:
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument(
+        "--output",
+        type=Path,
+        help="Optional public-safe JSON evidence destination",
+    )
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
     from playwright.sync_api import sync_playwright
 
+    args = parser().parse_args(argv)
     base_url = public_origin(required_env("OIDF_MARTY_GATEWAY_URL"))
     email = required_env("OIDF_MARTY_OPERATOR_EMAIL")
     password = required_env("OIDF_MARTY_OPERATOR_PASSWORD")
+    credential_template_id = required_env("OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID")
+    application_template_id = required_env("OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID")
     session_id = login(base_url, email, password)
 
     request_records: list[dict[str, object]] = []
@@ -220,7 +397,12 @@ def main() -> int:
         )
 
         try:
-            issuance = exercise_issuance(page, base_url)
+            issuance = exercise_issuance(
+                page,
+                base_url,
+                credential_template_id=credential_template_id,
+                application_template_id=application_template_id,
+            )
             verification = exercise_verification(page, base_url)
         finally:
             context.close()
@@ -253,19 +435,19 @@ def main() -> int:
     if csp_errors:
         raise AssertionError(f"released UI violates its script policy: {csp_errors}")
 
-    print(
-        json.dumps(
-            {
-                "schema": "elevenid.released-browser-smoke/v1",
-                "issuance": issuance,
-                "verification": verification,
-                "public_post_paths": sorted(set(post_paths)),
-                "private_selectors_observed": False,
-                "status": "passed",
-            },
-            sort_keys=True,
-        )
-    )
+    evidence = {
+        "schema": "elevenid.released-browser-smoke/v1",
+        "issuance": issuance,
+        "verification": verification,
+        "public_post_paths": sorted(set(post_paths)),
+        "private_selectors_observed": False,
+        "status": "passed",
+    }
+    rendered = json.dumps(evidence, sort_keys=True)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
     return 0
 
 
