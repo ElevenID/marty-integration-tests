@@ -63,15 +63,15 @@ for reproducible evidence, and passes the configuration relative to the runner
 checkout so Windows drive letters cannot be parsed as test-plan syntax. The official suite URL can be supplied with
 `CONFORMANCE_SERVER` when it is not using its normal local default.
 
-Marty's current authorization-server metadata and pre-authorized public-wallet
-flow support `client_auth_type=none`. OIDF release-v5.2.0, however, declares
-every issuer module inapplicable to that variant. The executable official plan
-therefore remains explicitly `planned` and uses `private_key_jwt` only as
-pre-activation interoperability evidence. It must not be described as a pass or
-activated until Marty registers the two official wallet public keys and rejects
-missing, invalid, expired, replayed, wrong-audience, and cross-client
-assertions. The lane separately validates the production credential-issuer
-metadata before creating and selecting the public credential configuration.
+Marty's public-wallet flow supports `client_auth_type=none`, while the active
+official interoperability profile deliberately exercises registered
+`private_key_jwt` clients. The disposable organization owns the two official
+wallet public keys; Marty rejects missing, invalid, expired, replayed,
+wrong-audience, and cross-client assertions. OIDF release-v5.2.1 drives that
+normal public issuer path. Four optional capabilities Marty does not advertise
+remain explicit, owned, expiring skips. The lane separately validates the
+production credential-issuer metadata before creating and selecting the public
+credential configuration.
 
 ### Driving the real issuer path
 
@@ -580,7 +580,7 @@ complete suite from a new detached worktree.
 
 ## Certification later
 
-At the pinned OIDF `release-v5.2.0`, the official source labels both the
+At the pinned OIDF `release-v5.2.1`, the official source labels both the
 OID4VP Final verifier plan and the HAIP verifier plan as alpha tests that are
 not currently part of the certification program. Passing them is valuable
 official-runner interoperability evidence, but it is not an OIDF certificate.

@@ -37,7 +37,7 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert url_query["status"] == "active"
     assert "[request_method=url_query]" in url_query["test_plan"]
     assert "[client_id_prefix=redirect_uri]" in url_query["test_plan"]
-    assert "Exact unmodified OIDF release-v5.2.0 evidence" in url_query["qualification"]
+    assert "Exact unmodified OIDF release-v5.2.1 evidence" in url_query["qualification"]
     assert "distinct from Marty's signed by-value Request Object" in url_query["qualification"]
     mdoc = manifest["profiles"]["oid4vp-mdoc-verifier"]
     assert mdoc["status"] == "active"
