@@ -188,6 +188,11 @@ def write_summary(
             "flow definition, instance, and result isolation",
             "webhook ownership and secret leakage prevention",
             "audit-event isolation",
+            "DID-first issuance and verification",
+            "public custody-selector rejection",
+            "unknown, inactive, and purpose-incompatible DID rejection",
+            "idempotent issuer-profile uniqueness",
+            "public response custody-metadata minimization",
         ],
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
