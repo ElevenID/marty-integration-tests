@@ -383,6 +383,7 @@ async def test_two_principals_cannot_cross_rbac_api_key_scim_flow_or_webhook_bou
         organization_b_name = str(
             organization_b.get("display_name") or organization_b.get("name") or ""
         )
+        issuer_did_b = await _provision_issuer(admin, organization_b)
 
         # A real foreign SCIM resource must not be addressable by substituting
         # its member ID into the reviewer's organization-A URL.
@@ -493,6 +494,7 @@ async def test_two_principals_cannot_cross_rbac_api_key_scim_flow_or_webhook_bou
             admin,
             organization_id=organization_b_id,
             name=f"Organization B flow template {uuid.uuid4().hex}",
+            issuer_did=issuer_did_b,
         )
         template_b = await admin.create_credential_template(**template_b_data)
         policy_b_data = TestDataBuilder.presentation_policy_age_verification(
