@@ -623,6 +623,66 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert all("--haip" in command for command in compose_commands)
 
 
+def test_oidf_url_query_lane_runs_the_exact_planned_direct_query_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    official_command: list[str] = []
+    suite_environment: dict[str, str] = {}
+
+    def fake_run(
+        command: list[str],
+        environment: dict[str, str],
+        **_kwargs: object,
+    ) -> int:
+        if "oidf_conformance.py" in " ".join(command):
+            official_command.extend(command)
+            suite_environment.update(environment)
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(
+        lane,
+        "bootstrap_fixtures",
+        lambda *_args, **_kwargs: {
+            "organization_id": "org-1",
+            "oid4vp_policy_id": "policy-1",
+            "oid4vp_trust_profile_id": "trust-1",
+            "oid4vp_issuer_did": "did:web:marty.test:orgs:org-1",
+        },
+    )
+    monkeypatch.setattr(
+        lane,
+        "standard_verifier_config",
+        lambda _material, _gateway: tmp_path / "marty-verifier.json",
+    )
+    args = SimpleNamespace(
+        lane="oid4vp-url-query",
+        marty_ui=tmp_path / "marty-ui",
+        run_id="run-1",
+        oidf_runner=tmp_path / "runner",
+        haip_material=tmp_path / "haip",
+        output_dir=tmp_path / "output",
+        stack_manifest=tmp_path / "stack-manifest.json",
+    )
+
+    assert lane.run_oidf(
+        args,
+        {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+    ) == 0
+    assert official_command[official_command.index("--profile") + 1] == (
+        "oid4vp-url-query-verifier"
+    )
+    assert "--allow-planned-profile" in official_command
+    assert suite_environment["OIDF_MARTY_VERIFIER_PROFILE"] == "standard"
+    assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "url_query"
+    assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
+    assert suite_environment["OIDF_MARTY_ISSUER_DID"] == (
+        "did:web:marty.test:orgs:org-1"
+    )
+
+
 def test_mdoc_fixture_bootstrap_receives_the_exact_runner_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

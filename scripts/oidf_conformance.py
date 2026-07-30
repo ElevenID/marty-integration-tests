@@ -110,7 +110,12 @@ def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
                 raise ValueError(f"vci.{field} is required by the official issuer plan")
         return
 
-    if profile_name not in {"oid4vp-verifier", "oid4vp-mdoc-verifier", "oid4vp-haip-verifier"}:
+    if profile_name not in {
+        "oid4vp-verifier",
+        "oid4vp-url-query-verifier",
+        "oid4vp-mdoc-verifier",
+        "oid4vp-haip-verifier",
+    }:
         raise ValueError(f"unknown OIDF configuration profile: {profile_name}")
     signing_jwk = data.get("credential", {}).get("signing_jwk")
     if not isinstance(signing_jwk, dict) or not all(
@@ -125,6 +130,7 @@ def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
     _validate_absolute_url(verifier.get("gateway_url"), "verifier.gateway_url")
     expected_profile = {
         "oid4vp-verifier": "oid4vp-1.0-final",
+        "oid4vp-url-query-verifier": "oid4vp-1.0-final",
         "oid4vp-mdoc-verifier": "oid4vp-1.0-final",
         "oid4vp-haip-verifier": "oid4vp-haip-1.0",
     }[profile_name]
@@ -133,9 +139,13 @@ def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
             f"verifier.profile must be {expected_profile!r} for {profile_name}; "
             "a mismatched profile cannot produce authoritative evidence"
         )
-    anchor = data.get("client", {}).get("request_object_trust_anchor_pem")
-    if not isinstance(anchor, str) or not anchor.strip() or "REPLACE_" in anchor:
-        raise ValueError("client.request_object_trust_anchor_pem is required by the signed request_uri verifier plan")
+    if profile_name != "oid4vp-url-query-verifier":
+        anchor = data.get("client", {}).get("request_object_trust_anchor_pem")
+        if not isinstance(anchor, str) or not anchor.strip() or "REPLACE_" in anchor:
+            raise ValueError(
+                "client.request_object_trust_anchor_pem is required by the "
+                "signed request_uri verifier plan"
+            )
 
 
 def runner_relative_path(path: Path, runner: Path) -> str:
@@ -272,6 +282,7 @@ def validate_verifier_interaction_environment(profile_name: str) -> None:
     """
     expected = {
         "oid4vp-verifier": ("standard", "request_uri_signed"),
+        "oid4vp-url-query-verifier": ("standard", "url_query"),
         "oid4vp-mdoc-verifier": ("standard", "request_uri_signed"),
         "oid4vp-haip-verifier": ("haip", "request_uri_signed"),
     }.get(profile_name)

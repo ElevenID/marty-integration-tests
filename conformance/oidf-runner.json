@@ -22,6 +22,14 @@
       "target": "Marty's public verifier URL through the gateway",
       "qualification": "Interoperability evidence only. The upstream profile is not currently a certifiable OIDF profile."
     },
+    "oid4vp-url-query-verifier": {
+      "status": "planned",
+      "reason": "Native direct URL-query transport is implemented but remains pre-activation until the exact unchanged official variant passes against released immutable artifacts.",
+      "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=sd_jwt_vc][response_mode=direct_post][request_method=url_query][client_id_prefix=redirect_uri]",
+      "configuration_example": "conformance/marty-verifier.example.json",
+      "target": "Marty's public verifier URL through the gateway using direct unsigned OID4VP authorization parameters",
+      "qualification": "Pre-activation interoperability evidence only. This is the upstream url_query variant, not Marty's separate signed by-value Request Object transport and not an OIDF certification claim."
+    },
     "oid4vp-mdoc-verifier": {
       "status": "active",
       "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=iso_mdl][response_mode=direct_post][request_method=request_uri_signed][client_id_prefix=x509_hash]",
