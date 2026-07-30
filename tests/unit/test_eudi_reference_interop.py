@@ -35,14 +35,18 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
         eudi.EUDI_REPLAY_EVIDENCE_ID,
         eudi.EUDI_INVALID_SIGNATURE_EVIDENCE_ID,
     }
-    assert manifest["planned_coverage"] == {}
-    assert manifest["limitations"] == {}
+    key_attestation_plan = manifest["planned_coverage"]["key_attestation_bound_jwt_proofs"]
+    assert key_attestation_plan["target_oid4vci_release"] == "v0.12.3"
+    assert key_attestation_plan["tracking_issue"].endswith("/issues/220")
+    key_attestation_limit = manifest["limitations"]["oid4vci_key_attestation"]
+    assert key_attestation_limit["current_release"] == "v0.9.1"
+    assert key_attestation_limit["tracking_issue"] == key_attestation_plan["tracking_issue"]
     libraries = manifest["components"]["wallet_kit"]["libraries"]
     assert {name: value["version"] for name, value in libraries.items()} == {
-        "oid4vp": "0.12.3",
+        "oid4vp": "0.15.1",
         "oid4vci": "0.9.1",
-        "sd_jwt": "0.18.0",
-        "mdoc": "0.99.0",
+        "sd_jwt": "0.20.1",
+        "mdoc": "0.100.0",
     }
     assert all(value["maven_coordinate"].endswith(value["version"]) for value in libraries.values())
     build = manifest["components"]["wallet_kit"]["build"]

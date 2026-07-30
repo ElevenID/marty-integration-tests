@@ -15,6 +15,7 @@ import org.multipaz.crypto.Algorithm
 import org.multipaz.crypto.EcPrivateKey
 import org.multipaz.crypto.SignatureVerificationException
 import org.multipaz.mdoc.issuersigned.buildIssuerNamespaces
+import org.multipaz.mdoc.mso.MobileSecurityObject
 import org.multipaz.mdoc.response.DeviceResponse
 import java.util.Base64
 import kotlin.test.Test
@@ -22,12 +23,28 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.time.Instant
 
 class WalletPresentationServiceTest {
     @Test
+    @OptIn(kotlin.time.ExperimentalTime::class)
     fun `mdoc presentation preserves issuer data and authenticates with the holder key`() {
         runBlocking {
             val holderKey = ECKeyGenerator(Curve.P_256).generate()
+            val holderPrivateKey = EcPrivateKey.fromJwk(
+                Json.parseToJsonElement(holderKey.toJSONString()).jsonObject,
+            )
+            val mobileSecurityObject = MobileSecurityObject(
+                version = "1.0",
+                docType = MDL_DOC_TYPE,
+                signedAt = Instant.parse("2026-01-01T00:00:00Z"),
+                validFrom = Instant.parse("2026-01-01T00:00:00Z"),
+                validUntil = Instant.parse("2027-01-01T00:00:00Z"),
+                expectedUpdate = null,
+                digestAlgorithm = Algorithm.SHA256,
+                valueDigests = emptyMap(),
+                deviceKey = holderPrivateKey.publicKey,
+            )
             val issuerSigned = buildCborMap {
                 put("nameSpaces", buildIssuerNamespaces {}.toDataItem())
                 put(
@@ -40,11 +57,7 @@ class WalletPresentationServiceTest {
                             Tagged(
                                 Tagged.ENCODED_CBOR,
                                 Bstr(
-                                    Cbor.encode(
-                                        buildCborMap {
-                                            put("docType", MDL_DOC_TYPE)
-                                        },
-                                    ),
+                                    Cbor.encode(mobileSecurityObject.toDataItem()),
                                 ),
                             ),
                         ),
@@ -71,15 +84,19 @@ class WalletPresentationServiceTest {
             assertEquals("1.0", presented["version"].asTstr)
             assertEquals(0L, presented["status"].asNumber)
             assertEquals(MDL_DOC_TYPE, document["docType"].asTstr)
-            assertContentEquals(Cbor.encode(issuerSigned), Cbor.encode(document["issuerSigned"]))
+            assertContentEquals(
+                Cbor.encode(issuerSigned["issuerAuth"]),
+                Cbor.encode(document["issuerSigned"]["issuerAuth"]),
+            )
+            assertContentEquals(
+                Cbor.encode(issuerSigned["nameSpaces"]),
+                Cbor.encode(document["issuerSigned"]["nameSpaces"]),
+            )
             assertContentEquals(
                 Cbor.encode(buildCborMap {}),
                 Cbor.encode(document["deviceSigned"]["nameSpaces"].asTaggedEncodedCbor),
             )
 
-            val holderPrivateKey = EcPrivateKey.fromJwk(
-                Json.parseToJsonElement(holderKey.toJSONString()).jsonObject,
-            )
             val sessionTranscript = WalletPresentationService.mdocSessionTranscript(
                 audience = AUDIENCE,
                 nonce = NONCE,

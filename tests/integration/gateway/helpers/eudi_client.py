@@ -139,8 +139,14 @@ class EUDIVerifierClient:
     API docs: http://<host>:8080/swagger-ui
     """
 
-    def __init__(self, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        intended_use_id: str | None = None,
+    ) -> None:
         self.base_url = (base_url or os.getenv("EUDI_VERIFIER_URL") or "http://localhost:8090").rstrip("/")
+        self.intended_use_id = intended_use_id or os.getenv("EUDI_VERIFIER_INTENDED_USE_ID") or "1"
         self._verifier_origin = self._absolute_origin(self.base_url, "base_url")
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -207,6 +213,10 @@ class EUDIVerifierClient:
             "dcql_query": dcql_query,
             "response_mode": response_mode,
             "jar_mode": jar_mode,
+            # EUDI Verifier Endpoint v0.11+ requires a configured intended use
+            # or a supplied registration certificate for every transaction.
+            # Its reference configuration and examples publish intended use 1.
+            "intended_use_id": self.intended_use_id,
         }
         if nonce:
             payload["nonce"] = nonce
