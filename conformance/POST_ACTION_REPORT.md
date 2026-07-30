@@ -933,28 +933,53 @@ Required follow-up:
 
 The official lanes authenticate a disposable operator and create resources in
 one configured organization. This proves organization-scoped happy paths but
-does not prove tenant isolation.
+not, by itself, prove tenant isolation. Tenant evidence therefore remains
+separate from every official result.
 
-Missing evidence:
+The ElevenID-owned public-boundary lane now creates two organizations with
+distinct active issuer DIDs and profiles, uses two authenticated principals
+plus an organization-bound API key, and exercises only browser-equivalent
+public HTTPS routes. It proves:
 
-- two authenticated organizations with distinct issuer DIDs and profiles;
-- resource-ID substitution across templates, policies, flows, and results;
-- cross-tenant issuer-DID resolution and ambiguous DID rejection;
-- membership, role, API-key, and SCIM authorization boundaries;
-- response, audit, webhook, and error-message leakage checks.
+- template list isolation plus template, policy, and issuer-DID substitution
+  denial;
+- organization membership and assigned-role enforcement for a second
+  principal;
+- API-key machine-principal binding and cross-organization denial;
+- SCIM direct-access and resource-ID substitution denial;
+- saved flow definition, instance, and result isolation;
+- webhook ownership, URL, and signing-secret leakage prevention; and
+- audit-event list and detail isolation without foreign identifiers or
+  metadata in denial responses.
 
-A dedicated two-organization adversarial matrix is required before the
-multitenancy objective is satisfied.
+The final run
+[30524717116](https://github.com/ElevenID/marty-integration-tests/actions/runs/30524717116)
+passed against exact `marty-ui` v1.1.78 artifacts and manifest
+`sha256:88488c84d46ca29538b71c71bf12ada6b213e5069bf931d74ef8ce97108dc378`.
+Its evidence schema identifies the lane as
+`elevenid-owned-product-security`, records `official_suite_invoked=false` and
+`official_suite_source_modified=false`, and pins the owned test source to
+commit `ea14814a7e25106d07cf7bb5e97122e5bc0b4490`.
 
-Initial executable coverage in
-[marty-integration-tests#154](https://github.com/ElevenID/marty-integration-tests/pull/154)
-creates two disposable organizations through the normal authenticated gateway,
-then proves that template lists do not leak and that template-issuance and
-policy-template resource-ID substitutions fail closed.  It deliberately uses
-one operator able to administer both organizations, so it tests resource
-isolation independently of role assignment.  Membership, RBAC, API-key,
-SCIM, result, audit, webhook, and error-message isolation remain separate
-required matrix rows.
+This lane exposed real production defects before it passed:
+
+- organization member persistence assumed every SCIM `externalId` fit a
+  36-character UUID column;
+- webhook, subscription, notification, and SSE routes were absent from the
+  shared Cedar route registry, and some notification resource routes did not
+  independently verify tenant ownership;
+- validated API keys were incorrectly sent through human-membership lookup
+  instead of remaining organization-bound machine principals; and
+- organization audit list/detail/export routes were absent from the shared
+  Cedar map, allowing an organization-A reviewer to retrieve organization-B
+  audit events.
+
+It also exposed owned harness drift rather than product defects: the Compose
+coordinator lacked a Marty-only lifecycle, the foreign flow fixture initially
+had no issuer, the flow helper still sent removed top-level `steps`/`type`
+fields, and a dependent credential template was left in draft state. Those
+were corrected only in ElevenID-owned orchestration and fixtures. The imported
+OIDF, W3C, and EUDI suites were not edited.
 
 The Canvas mirror provenance audit added a second concrete isolation slice.
 The previously anonymous gateway route could query a delivery record,
@@ -970,8 +995,14 @@ user authentication, selected-organization membership, and the
 `integration-connector:view` permission before the gateway calls issuance.
 Focused tests cover all three resource-ID substitution paths and a
 two-organization denial before the backend. This is useful production-boundary
-evidence, but it does not complete the wider RBAC, SCIM, result, audit, and
-webhook matrix.
+evidence and is now complemented by the released two-principal matrix above.
+
+Remaining multitenancy evidence is narrower: ambiguous same-tenant DID
+resolution, inactive or incompatible issuer mappings, notification/SSE
+cross-tenant delivery in the released external lane, adversarial browser
+substitution, issued-credential/revocation isolation, trust registries, wallet
+profiles, devices/deployments, and DIDComm where applicable. These are not
+implicitly satisfied by the green matrix.
 
 ## Does the suite use the UI's general API?
 
@@ -1004,9 +1035,9 @@ remains API-driven and unmodified.
 | OID4VP URL-query transport | Exact unmodified OIDF `url_query` + `redirect_uri` plan passes against immutable v1.1.73: ten modules, 273 successes, zero failures/warnings, and no exclusions; signed by-value Request Objects remain a separate `request_object` transport | Keep the active profile green as the pinned official runner advances; do not merge the two transport claims |
 | W3C VCDM v2 verification and issuance | Exact upstream commit `1db599924e6601555933550e0e65925a6abbd0a8` passes on GitHub from an unmodified disposable worktree against immutable v1.1.60; issuer, VC-verifier, and VP-verifier roles all execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
 | UI issuance/verification | Released v1.1.72 browser smoke completes disposable application, submit, claim, credential-offer, and signed-verification journeys using public DIDs; no private selector or issuer-profile collection request is observed | Add adversarial cross-tenant browser cases and continue generated-client response drift checks |
-| Multitenancy | Partial: two-organization template isolation plus Canvas delivery/external/canonical credential substitution and gateway authorization checks | Complete the two-organization RBAC, API-key, SCIM, result, audit, webhook, and error-leakage matrix |
+| Multitenancy | Released v1.1.78 two-principal matrix covers distinct issuer DIDs/profiles, membership/RBAC, template/policy/DID substitution, API-key binding, SCIM, flows/results, webhooks, audit, and non-leaking denials; Canvas provenance separately covers delivery/external/canonical credential selectors | Add ambiguous/inactive/incompatible DID cases, notification/SSE delivery, adversarial browser paths, issued-credential/revocation, trust, wallet, device/deployment, and DIDComm isolation |
 | Protocol contract | DID-first schemas and request fixtures | Generated runtime/client types and response drift checks |
-| Wider Marty feature model | Not covered by official suites | RBAC/SCIM, saved flows, vetting, devices, API keys, revocation, trust registries, notifications, audit, wallet profiles, DIDComm |
+| Wider Marty feature model | Official suites do not cover it; the ElevenID-owned released matrix now covers membership/RBAC, API keys, SCIM, saved verification flows/results, webhooks, and audit boundaries | Applicant/vetting, devices/deployments, issued-credential lifecycle/revocation, trust registries, notification/SSE delivery, wallet profiles, and DIDComm |
 
 ### Exposed-gap action ledger
 
@@ -1043,7 +1074,12 @@ remains API-driven and unmodified.
 | mdoc `x5chain` was encoded in the protected COSE header | Product ISO 18013-5 interoperability defect | Marty-local parsing accepted the credential, but Multipaz follows ISO 18013-5 section 9.1.2.4 and reads `x5chain` from the unprotected header; official issuance and presentation therefore failed despite a valid profile-owned chain | `marty-core#79` moves only `x5chain` to the unprotected header, retains `alg` in the protected header, and covers local plus remote/HSM prepare/assemble signing paths | Merged after the full cross-platform matrix plus local locked tests, Clippy, formatting, and black-box COSE regression passed; release propagation and immutable EUDI/mdoc evidence remain required |
 | OIDF mdoc verifier adapter omitted `organization_id` | Harness public-boundary defect | Every official module reached the production gateway, which correctly rejected `/v1/flows/verify` with HTTP 422 before request-object creation; the runner then timed out in `WAITING`, so the run provides no mdoc cryptographic evidence | Pass the disposable fixture organization through `OIDF_MARTY_ORGANIZATION_ID` and include it in the normal authenticated public flow request | Fixed locally with 57 focused tests; merge and immutable official rerun required |
 | Signed issuer metadata, batch issuance, holder-key attestation, and credential-response encryption are not advertised | Missing optional features | The active profile is narrower than the complete optional OID4VCI feature set | Keep explicit capability metadata and owned, expiring skip records; implement each only through a separately reviewed production path | Open by design; never represent these skipped modules as passed |
-| Official lanes use one organization | Missing evidence | Tenant isolation and cross-tenant DID resolution remain unproven | Two-organization adversarial matrix | Partial template isolation exists; full matrix remains open |
+| Official lanes use one organization | Missing official evidence, addressed by separate product-security evidence | Official results cannot prove tenant isolation | `marty-integration-tests#203` adds a separately labeled two-organization public-boundary lane; `#204`, `#207`, `#208`, and `#209` correct owned lifecycle/setup drift without touching imported suites | Released-stack run 30524717116 passes on v1.1.78 with two principals, distinct issuer DIDs/profiles, template/policy/DID substitution, RBAC, API key, SCIM, flows/results, webhook, audit, and leakage checks; ambiguous/inactive/incompatible DID and wider feature rows remain open |
+| SCIM `externalId` exceeded the organization member identity column | Product persistence/error-boundary defect | A valid opaque external identifier caused PostgreSQL rejection and a public HTTP 500 | `marty-ui#210` expands the field to 255 characters with migration and schema/route regressions | Released before v1.1.78; the unchanged external matrix creates and isolates the non-UUID SCIM identity successfully |
+| Notification and webhook routes were absent from the Cedar route map | Public BOLA/authorization defect | An organization-A session could enumerate organization-B webhook metadata; resource routes and SSE could select conflicting tenant inputs | `marty-ui#208` adds ownership checks; `marty-ui#212` maps webhook/subscription/notification/SSE permissions, rejects conflicting selectors, and rechecks ownership in the service | Released before v1.1.78; webhook collection/resource/secret isolation passes externally, while notification/SSE delivery retains focused gateway/service/UI regressions and still needs an external matrix row |
+| Organization-bound API keys were treated as human members | Authentication-principal defect | A valid B-scoped machine credential failed its own organization access, encouraging unsafe bypasses; selector substitution still had to remain denied | `Marty#14` and `#15` introduce fail-closed machine-principal authorization in `marty-common` 0.2.2; `marty-ui#214` consumes the attested artifact | Released in v1.1.77; the unchanged external matrix proves the B key reads B and cannot select A |
+| Organization audit routes were absent from the shared Cedar map | Public cross-tenant data leak | An organization-A reviewer received organization-B audit events including identifiers and metadata | `Marty#16` maps list/detail/export to `audit:view`/`audit:export` in `marty-common` 0.2.3; `marty-ui#216` adds organization-service defense in depth | Released in v1.1.78; unchanged run 30524717116 proves direct B list denial plus A-path foreign-event substitution denial without foreign-data leakage |
+| Owned tenant fixture sent stale flow fields and incomplete dependencies | Harness contract/setup drift | The product correctly rejected a missing issuer, removed top-level flow fields, and a draft template before the security assertion could execute | `marty-integration-tests#207`, `#208`, and `#209` provision the issuer, use the current server-resolved flow contract, and activate the dependency | Corrected only in ElevenID-owned code; 446 unit tests and the final released-stack lane pass, with imported official suites unchanged |
 | Canvas provenance accepted an unscoped organization and exposed issuer-profile internals | Public authorization/data-boundary defect | A guessed delivery, external credential, or canonical credential identifier could cross the intended tenant boundary; public responses leaked internal profile/mode metadata | `marty-credentials#86` requires trusted tenant context and scopes all selectors; `marty-ui#177` adds authentication, membership, permission, and internal service authentication | Released in v1.1.61 after all three selector substitutions, trusted-context mismatch, two-organization pre-backend denial, public response-shape regressions, full PR checks, and the artifact-only stack smoke passed |
 | Ordinary dashboard and template-authoring journeys fetched internal issuer profiles | Public abstraction leak | A transient dashboard route and credential-template wizard received custody coordinates even though verification itself used the public DID projection | `marty-ui#204` moves ordinary readiness and authoring to `/issuer-identities`; profile administration remains isolated to authorized setup pages | Released in v1.1.72; run 30506329100 completes browser issuance and verification with no private selectors or issuer-profile collection request |
 | Official lanes do not drive the browser | Missing evidence | API-only official lanes could not prove UI request shapes or private-selector absence | Released-stack Playwright smoke in run 30506329100 selected public DIDs and completed ordinary application, submit, claim, offer, and verification routes | One-organization issuance/verification slice complete; adversarial cross-tenant browser coverage remains open |
@@ -1110,6 +1146,8 @@ remains API-driven and unmodified.
 | Direct OID4VP URL-query run [30509192015](https://github.com/ElevenID/marty-integration-tests/actions/runs/30509192015), sanitized artifact ID `8746500090`, artifact digest `sha256:0e7db020196aa8deb07a2c49aba37e03540b555795c9a4d7a4aded21f4948dc8`, summary `sha256:881edd005432620339bdbf25548436fb266ca4d10938b5d4ae7f148d2d485704` | Exact v1.1.73 artifacts and harness `b4be1df46aa7d3ba1c6fc12a3f75b3ea8e86bed1` passed in pre-activation mode. Exact unmodified OIDF commit `dee9a25160e789f0f80517674693ef7989ab9fa1` ran the `url_query` + `redirect_uri` plan: all ten official modules passed with 273 successes, zero failures, zero warnings, and no expected failures/skips. This row activates the profile; future runs use active mode. |
 | Active direct OID4VP URL-query run [30509798974](https://github.com/ElevenID/marty-integration-tests/actions/runs/30509798974), sanitized artifact ID `8746701288`, artifact digest `sha256:9f37ca39bee3c71a3dbc6760544518dc75e210b06ed66ec94af0737733e6935f`, summary `sha256:cfe3fabba9d937c2df21e6a5000391c2ffa4e496ed91e0c4a49b415b79e86ec0` | Harness `33410c70fdb7d2f14efcc1af7946780ff9619748` resolved the checked-in default v1.1.73 pin without an override and records `execution_mode=active`. The exact unmodified OIDF runner passed again with no expected failures/skips, proving scheduled runs no longer rely on the planned-profile switch. |
 | OID4VCI issuer run [30499049492](https://github.com/ElevenID/marty-integration-tests/actions/runs/30499049492), sanitized artifact ID `8742812832`, artifact digest `sha256:2791885fd090a180bb0f96cf34859a226f7f8bb15065c97ba2c7926a25b91e09` | Exact unmodified OIDF commit `dee9a25160e789f0f80517674693ef7989ab9fa1` passed every active module against exact v1.1.68 artifacts in active execution mode: 16 modules, 1,015 successful conditions, zero failures, and zero warnings. Four optional capabilities Marty does not advertise remain explicit, owned, expiring skips; there are no expected failures. The source checkout was exact and clean before and after execution. |
+| `marty-ui` v1.1.78, release commit `4944112a8afe14b1874d3ecc57bc6bd424457833`, manifest `sha256:88488c84d46ca29538b71c71bf12ada6b213e5069bf931d74ef8ce97108dc378`, run [30520912018](https://github.com/ElevenID/marty-ui/actions/runs/30520912018) | Every immutable-input, build, provenance, SBOM, public-stack smoke, and manifest-publication job passed. The release consumes attested `marty-common` 0.2.3 and contains the gateway plus organization-service audit authorization fix. |
+| Two-organization public-boundary run [30524717116](https://github.com/ElevenID/marty-integration-tests/actions/runs/30524717116), artifact `tenant-boundary-30524717116-1`, artifact digest `sha256:7a9383e56dc276ea94ddfd7efb95e6fff96ceeeb90419492fff5099159d0e6c1`, summary `sha256:ab2cab089deb9c45329b4604fc5a16006632cf7e39e466c66e7a5a2b57a83d57` | Exact v1.1.78 artifacts and owned harness commit `ea14814a7e25106d07cf7bb5e97122e5bc0b4490` passed. Evidence is explicitly `elevenid-owned-product-security`, invokes no official suite, modifies no official-suite source, and covers two principals, membership/RBAC, template/policy/DID substitution, API-key binding, SCIM, flows/results, webhooks, audit events, and leakage prevention. |
 
 The v1.1.66 image digests are signed, attested, and pinned, but the services and
 migrations images produced different digests when the failed release job was
@@ -1127,10 +1165,13 @@ the exact v1.1.68 stack manifest above.
 
 This report becomes final only when:
 
-- the immutable EUDI lane passes with all required evidence;
-- the default stack pin names that reviewed release;
-- OID4VP Final, HAIP, W3C v2, and applicable mdoc official lanes have explicit
-  native/adapted/unsupported outcomes;
-- the two-organization matrix and browser UI path have executable evidence;
-- public protocol schema drift is enforced in CI; and
-- every remaining limitation links to an owned remediation item.
+- [ ] the immutable EUDI lane passes with all required evidence;
+- [x] the default stack pin names a reviewed immutable release;
+- [x] OID4VP Final, HAIP, W3C v2, and applicable mdoc official lanes have
+  explicit native/adapted/unsupported outcomes;
+- [x] the two-organization matrix and browser UI path have executable evidence;
+- [ ] public protocol request and response schema drift is enforced in CI; and
+- [ ] every remaining limitation links to an owned remediation item.
+
+The checked tenant and browser criteria are evidence milestones, not a claim
+that the full DID-first or wider Marty feature objective is complete.
