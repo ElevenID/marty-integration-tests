@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -21,10 +26,41 @@ PUBLIC_SIGNING_JWK = {
     "x": "public-x",
     "y": "public-y",
 }
-MDOC_TRUST_ANCHOR_PEM = """-----BEGIN CERTIFICATE-----
-Y2VydGlmaWNhdGU=
------END CERTIFICATE-----
-"""
+
+
+def mdoc_trust_anchor_pem(*, not_before: datetime, not_after: datetime) -> str:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "OIDF mdoc fixture")])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_before)
+        .not_valid_after(not_after)
+        .sign(private_key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+MDOC_TRUST_ANCHOR_PEM = mdoc_trust_anchor_pem(
+    not_before=datetime(2025, 1, 1, tzinfo=UTC),
+    not_after=datetime(2035, 1, 1, tzinfo=UTC),
+)
+
+
+def write_mdoc_runner_certificate(root: Path, certificate_pem: str) -> None:
+    source = root / "src" / "main" / "kotlin" / "org" / "multipaz" / "testapp" / "TestAppUtils.kt"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        f"""
+        val documentSignerCert = X509Cert.fromPem(
+            \"\"\"{certificate_pem.rstrip()}\"\"\"
+        )
+        """,
+        encoding="utf-8",
+    )
 
 
 def test_mdoc_mode_is_a_supported_public_fixture_mode() -> None:
@@ -751,20 +787,36 @@ def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_
 
 
 def test_mdoc_trust_anchor_is_read_from_exact_runner_source(tmp_path: Path) -> None:
-    source = tmp_path / "src" / "main" / "kotlin" / "org" / "multipaz" / "testapp" / "TestAppUtils.kt"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        """
-        val documentSignerCert = X509Cert.fromPem(
-            \"\"\"-----BEGIN CERTIFICATE-----
-            Y2VydGlmaWNhdGU=
-            -----END CERTIFICATE-----\"\"\"
+    certificate_pem = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC),
+        not_after=datetime(2030, 1, 1, tzinfo=UTC),
+    )
+    write_mdoc_runner_certificate(tmp_path, certificate_pem)
+
+    assert (
+        fixtures.official_mdoc_trust_anchor(
+            tmp_path,
+            now=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        """,
-        encoding="utf-8",
+        == certificate_pem
     )
 
-    assert fixtures.official_mdoc_trust_anchor(tmp_path) == MDOC_TRUST_ANCHOR_PEM
+
+def test_mdoc_trust_anchor_rejects_expired_official_fixture(tmp_path: Path) -> None:
+    certificate_pem = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC),
+        not_after=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    write_mdoc_runner_certificate(tmp_path, certificate_pem)
+
+    with pytest.raises(
+        ValueError,
+        match=r"official OIDF mdoc documentSignerCert has expired: .*do not bypass",
+    ):
+        fixtures.official_mdoc_trust_anchor(
+            tmp_path,
+            now=datetime(2026, 1, 2, tzinfo=UTC),
+        )
 
 
 def test_mdoc_bootstrap_requires_the_runner_document_certificate() -> None:

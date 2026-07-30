@@ -427,6 +427,16 @@ verification behavior. It is not an OIDF mdoc issuer certification and must
 not be presented as one. Marty mdoc issuance remains covered separately by
 the EUDI reference-library lane until upstream provides a suitable issuer plan.
 
+The exact OIDF `release-v5.2.1` source still embeds an mdoc
+`documentSignerCert` whose validity ended at `2026-07-30T07:47:22Z`
+(SHA-256 `c74e6bfecdd161452009ce10d9e5c1386d9022b10378a3de5e296605d325d48d`).
+The lane now checks that upstream certificate before provisioning trust and
+fails explicitly while it is expired. Do not replace the certificate in the
+imported checkout, disable Marty certificate-time validation, or record an
+expected failure to manufacture a pass. Retain the last pre-expiry official
+evidence and rerun the exact reviewed upstream release or commit once OIDF
+publishes renewed material.
+
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
 per-request encryption key, and encrypted `direct_post.jwt` handling. Its
