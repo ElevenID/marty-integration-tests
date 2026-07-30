@@ -706,14 +706,22 @@ used by the EUDI reference wallet, not a mock wallet. The three HTTPS
 endpoints above are the TLS boundaries; do not use private container ports
 from a host-side conformance run.
 
-The manifest records each library independently: OID4VP 0.12.3, OID4VCI
-0.9.1, SD-JWT 0.18.0, and Multipaz 0.99.0, including its Maven coordinate,
+The manifest records each library independently: OID4VP 0.15.1, OID4VCI
+0.9.1, SD-JWT 0.20.1, and Multipaz 0.100.0, including its Maven coordinate,
 official source repository, release tag, and dereferenced commit. The harness build uses
 digest-pinned Gradle and Temurin bases, Gradle dependency locking, and strict
 SHA-256 dependency verification metadata. The monthly upstream review checks
 all four source repositories rather than treating OID4VP as the whole wallet
 kit. Updating a coordinate requires regenerating and reviewing both
 `gradle.lockfile` and `gradle/verification-metadata.xml`.
+
+OID4VCI remains pinned at 0.9.1 while
+[key-attestation-bound proof support](https://github.com/ElevenID/marty-integration-tests/issues/220)
+is implemented through a real issuer-profile trust policy. Current EUDI
+OID4VCI releases no longer expose the plain-JWK proof-construction path used
+by the released Marty stack. The facade does not mint a self-trusted
+attestation merely to make the lane green; the manifest records this
+limitation and the current target release explicitly.
 
 It writes JUnit output, the unredacted local runner log, and `evidence.json`
 with the exact EUDI component digests, coverage matrix, endpoints, Marty
