@@ -527,12 +527,13 @@ async def test_public_signing_is_did_first_and_fails_closed(
     }, incompatible_response.text
     _assert_no_private_signing_selectors(incompatible_response.json())
 
-    # Once the credential-issuance profile is inactive, the DID must not fall
-    # back to the still-active request-object profile with the same public DID.
+    # A draft profile is non-active in the profile lifecycle. Once issuance is
+    # returned to draft, the DID must not fall back to the still-active
+    # request-object profile with the same public DID.
     inactive_update = await client.client.patch(
         f"/v1/signing-keys/issuer-profiles/{issuance_profile['id']}",
         params={"organization_id": organization_id},
-        json={"status": "inactive"},
+        json={"status": "draft"},
     )
     assert inactive_update.status_code == 200, inactive_update.text
     inactive_response = await client.client.post(
