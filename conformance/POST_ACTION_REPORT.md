@@ -1,7 +1,7 @@
 # Protocol Compliance Post-Action Report
 
 Status: in progress  
-Last updated: 2026-07-29
+Last updated: 2026-07-30
 
 ## Purpose
 
@@ -229,12 +229,27 @@ The exact unmodified OIDF suite in the same run remained green: 11 modules,
 fixture, expected result, test selection, exclusion, or source file was changed
 to obtain either result.
 
-Remediation in progress:
+The first remediation release exposed a second, independent legacy selector
+in [run 30501528652](https://github.com/ElevenID/marty-integration-tests/actions/runs/30501528652).
+The disposable credential template correctly supplied only its organization,
+public issuer DID, format, and algorithm, but flow-definition validation still
+read the removed protobuf fields `issuer_profile_id` and `key_access_mode`.
+Those fields are intentionally reserved and absent from
+`TemplateResponse`, so a valid DID-only template could never satisfy that
+check. The harness did not add either private field to make the test pass.
+
+Remediation completed:
 
 - [marty-ui#194](https://github.com/ElevenID/marty-ui/pull/194) adds a one-way
   migration that binds active Marty templates already using a KMS-backed remote
   issuer profile to that profile's public `did:web` identity. Existing non-empty
   DID bindings are preserved.
+- [marty-ui#196](https://github.com/ElevenID/marty-ui/pull/196) removes the
+  stale flow-service selector check. The flow now resolves
+  `organization_id + issuer_did + credential format + key purpose + algorithm`
+  through the internal organization-scoped resolver and requires exactly one
+  active KMS-backed issuer profile. Public callers still cannot select the
+  profile, service, KMS provider, or key reference.
 - The ElevenID harness now creates a disposable DID-bound MemberCredential,
   linked active Application Template, and normal application-approved OID4VCI
   flow through the public gateway. The released browser selects those exact
@@ -242,8 +257,24 @@ Remediation in progress:
 - Public browser requests and responses continue to reject issuer-profile,
   signing-service, key-reference, KMS-provider, and custody selectors.
 
-A fresh immutable marty-ui release and exact-stack rerun are required before
-this item can be marked corrected.
+Immutable `marty-ui` v1.1.70 passed the exact released-stack rerun in
+[run 30503123595](https://github.com/ElevenID/marty-integration-tests/actions/runs/30503123595).
+The stack manifest digest was
+`sha256:cb157c988fd0be7a623b1c28b46ddb4524caa1343667357976556c725d5fe58d`
+and resolved Marty commit
+`d9a1cf91f941ca6e787f6c474e6352b28678e448`. The browser completed the
+normal public verification, application, claim, and submit routes for one
+disposable organization; received a credential offer; observed no private
+selector; and used the exact DID-bound fixture IDs.
+
+The unmodified OIDF verifier suite in that same run also passed all 11
+executed modules with 417 successes, zero failures, and zero warnings. The
+runner was exact commit
+`dee9a25160e789f0f80517674693ef7989ab9fa1`, with no expected failures or
+skips. Its checkout-clean guards passed before and after execution. No
+upstream test, assertion, fixture, expected result, selection, exclusion, or
+source file was modified. This closes the released-browser DID-binding gap
+without weakening the compliance suite.
 
 ### 7. W3C Data Integrity issuance was configuration-only and reconstructed the document
 
