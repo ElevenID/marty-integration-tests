@@ -200,7 +200,10 @@ def write_summary(
 def execute(args: argparse.Namespace) -> int:
     lane_environment, metadata = environment(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    started = run(compose_command(args, "up"), lane_environment) == 0
+    started = run(
+        compose_command(args, "up", marty_only=True),
+        lane_environment,
+    ) == 0
     exit_code = 1
     try:
         if started:
@@ -230,11 +233,14 @@ def execute(args: argparse.Namespace) -> int:
         private = args.output_dir / "private"
         private.mkdir(parents=True, exist_ok=True)
         run(
-            compose_command(args, "logs"),
+            compose_command(args, "logs", marty_only=True),
             lane_environment,
             capture=private / "compose.log",
         )
-        run(compose_command(args, "down"), lane_environment)
+        run(
+            compose_command(args, "down", marty_only=True),
+            lane_environment,
+        )
     return exit_code
 
 

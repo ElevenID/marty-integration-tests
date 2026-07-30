@@ -858,6 +858,7 @@ def compose_command(
     args: argparse.Namespace,
     action: str,
     *,
+    marty_only: bool = False,
     oidf: bool = False,
     eudi: bool = False,
     haip: bool = False,
@@ -871,6 +872,8 @@ def compose_command(
         "--marty-ui",
         str(args.marty_ui),
     ]
+    if marty_only:
+        command.append("--marty-only")
     if oidf:
         command.extend(["--oidf-runner", str(args.oidf_runner), "--oidf"])
     if eudi:

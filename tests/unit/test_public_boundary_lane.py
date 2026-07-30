@@ -6,6 +6,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,23 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load public tenant-boundary lane")
 lane = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lane)
+
+
+def test_product_lane_selects_explicit_marty_only_compose_mode(
+    tmp_path: Path,
+) -> None:
+    command = lane.compose_command(
+        SimpleNamespace(
+            run_id="product-boundary",
+            marty_ui=tmp_path / "marty-ui",
+        ),
+        "up",
+        marty_only=True,
+    )
+
+    assert "--marty-only" in command
+    assert "--oidf" not in command
+    assert "--eudi" not in command
 
 
 def test_public_session_uses_public_login_adapter_without_logging_credentials(
