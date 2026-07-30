@@ -74,11 +74,21 @@ def validate_runner(path: Path, manifest: dict) -> None:
     if actual != expected:
         raise ValueError(f"OIDF runner is {actual}; expected pinned {expected}")
     changed = subprocess.check_output(
-        ["git", "-C", str(path), "status", "--porcelain=v1", "--untracked-files=no"],
+        [
+            "git",
+            "-C",
+            str(path),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ],
         text=True,
-    ).strip()
+    ).splitlines()
     if changed:
-        raise ValueError("OIDF runner tracked source is not byte-for-byte clean")
+        paths = ", ".join(line[3:] for line in changed)
+        raise ValueError(
+            f"OIDF runner source is not byte-for-byte clean: {paths}"
+        )
 
 
 def _validate_absolute_url(value: object, field: str) -> None:

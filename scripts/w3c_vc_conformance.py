@@ -102,13 +102,13 @@ def validate_checkout(path: Path, manifest: dict) -> None:
             str(path),
             "status",
             "--porcelain=v1",
-            "--untracked-files=no",
+            "--untracked-files=all",
         ],
         text=True,
     ).splitlines()
     if changed:
         paths = ", ".join(line[3:] for line in changed)
-        raise ValueError(f"W3C VC suite tracked source is not byte-for-byte clean: {paths}")
+        raise ValueError(f"W3C VC suite source is not byte-for-byte clean: {paths}")
 
 
 def tracked_changes(path: Path) -> list[tuple[str, str]]:

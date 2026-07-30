@@ -78,6 +78,19 @@ def test_w3c_checkout_rejects_any_tracked_source_change(tmp_path: Path) -> None:
         w3c.validate_checkout(suite, manifest)
 
 
+def test_w3c_checkout_rejects_untracked_local_test_shims(tmp_path: Path) -> None:
+    suite, manifest = initialize_official_suite(tmp_path / "suite")
+
+    w3c.validate_checkout(suite, manifest)
+    (suite / "tests" / "local-pass-shim.js").write_text(
+        "export const pass = true;\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="byte-for-byte clean"):
+        w3c.validate_checkout(suite, manifest)
+
+
 def test_runtime_report_cleanup_preserves_tracked_upstream_sentinel(
     tmp_path: Path,
 ) -> None:
