@@ -497,6 +497,7 @@ async def test_two_principals_cannot_cross_rbac_api_key_scim_flow_or_webhook_bou
             issuer_did=issuer_did_b,
         )
         template_b = await admin.create_credential_template(**template_b_data)
+        template_b = await admin.activate_credential_template(template_b["id"])
         policy_b_data = TestDataBuilder.presentation_policy_age_verification(
             organization_id=organization_b_id,
             credential_template_id=template_b["id"],
