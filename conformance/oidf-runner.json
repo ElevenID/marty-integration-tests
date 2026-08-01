@@ -31,10 +31,18 @@
     },
     "oid4vp-mdoc-verifier": {
       "status": "active",
+      "execution_status": "blocked_upstream",
       "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=iso_mdl][response_mode=direct_post][request_method=request_uri_signed][client_id_prefix=x509_hash]",
       "configuration_example": "conformance/marty-verifier-mdoc.example.json",
       "target": "Marty's public verifier URL through the gateway",
-      "qualification": "Interoperability evidence only. This native OIDF verifier plan creates ISO 18013-5 mdoc presentations; it does not certify Marty as an mdoc issuer."
+      "qualification": "Interoperability evidence only. This native OIDF verifier plan creates ISO 18013-5 mdoc presentations; it does not certify Marty as an mdoc issuer.",
+      "upstream_constraint": {
+        "tracking_issue": "https://github.com/ElevenID/marty-integration-tests/issues/243",
+        "runner_release": "release-v5.2.1",
+        "certificate_not_after": "2026-07-30T07:47:22+00:00",
+        "certificate_sha256": "c74e6bfecdd161452009ce10d9e5c1386d9022b10378a3de5e296605d325d48d",
+        "policy": "Do not replace the runner certificate, alter validation time, bypass certificate validation, modify the imported suite, or exclude the lane. Adopt and rerun the next reviewed official release that rotates the fixture."
+      }
     },
     "oid4vp-haip-verifier": {
       "status": "active",
