@@ -282,7 +282,16 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert requirement["credential_template_id"] == "template-2"
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[21][2]["holder_binding"] == {"required": True}
+    assert calls[21][2]["holder_binding"] == {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
     presentation_requirement = calls[21][2]["credential_requirements"][0]
     assert presentation_requirement["credential_template_id"] == "template-3"
     assert presentation_requirement["credential_payload_format"] == ("w3c_vcdm_v2_di")
@@ -399,7 +408,16 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
         "family_name",
         "birthdate",
     ]
-    assert policy["holder_binding"] == {"required": True}
+    assert policy["holder_binding"] == {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
 
 
 def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
@@ -459,6 +477,16 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
         mdoc=True,
     )
     requirement = policy["credential_requirements"][0]
+    assert policy["holder_binding"] == {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["MDOC_DEVICE_AUTHENTICATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
     assert requirement["credential_payload_format"] == "MDOC"
     assert [claim["claim_name"] for claim in requirement["requested_claims"]] == [
         "family_name",
@@ -740,7 +768,16 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     credential_requirement = credential_policy["credential_requirements"][0]
     assert credential_requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert credential_requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert presentation_policy["holder_binding"] == {"required": True}
+    assert presentation_policy["holder_binding"] == {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
     assert presentation_policy["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
 

@@ -192,6 +192,7 @@ class TestFlowInstanceLifecycle:
         
         # Start instance
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="test-subject-123",
         )
@@ -216,6 +217,7 @@ class TestFlowInstanceLifecycle:
         )
         
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
         )
         
@@ -241,6 +243,7 @@ class TestFlowInstanceLifecycle:
         
         # Start with context
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="user-456",
             initial_context={
@@ -364,6 +367,7 @@ class TestIssuanceFlow:
         
         # Start flow instance
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="test-subject-789",
         )
@@ -402,6 +406,7 @@ class TestIssuanceFlow:
         
         # Start flow for this application
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="applicant-user-id",
             initial_context={"application_id": application["id"]},
@@ -532,10 +537,12 @@ class TestFlowErrors:
     async def test_start_instance_invalid_flow(
         self,
         gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
     ):
         """Test starting instance with invalid flow definition ID"""
         with pytest.raises(Exception) as exc_info:
             await gateway_client.start_flow_instance(
+                organization_id=test_organization["id"],
                 flow_definition_id="invalid-flow-999",
             )
         

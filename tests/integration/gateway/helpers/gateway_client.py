@@ -1232,6 +1232,7 @@ class GatewayClient:
 
     async def start_flow_instance(
         self,
+        organization_id: str,
         flow_definition_id: str,
         subject_id: Optional[str] = None,
         initial_context: Optional[Dict] = None,
@@ -1241,6 +1242,7 @@ class GatewayClient:
             "POST",
             "/v1/flows/instances",
             json={
+                "organization_id": organization_id,
                 "flow_definition_id": flow_definition_id,
                 "subject_id": subject_id,
                 "initial_context": initial_context or {},
