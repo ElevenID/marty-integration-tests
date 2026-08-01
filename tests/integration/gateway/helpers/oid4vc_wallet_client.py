@@ -70,6 +70,22 @@ _SAFE_MARTY_503_CATEGORIES = (
 )
 
 _SAFE_MARTY_FAILURE_SUBSTRINGS = (
+    (
+        "Signing algorithm must match the DID-resolved issuer profile binding",
+        "issuer-signing-algorithm-mismatch",
+    ),
+    (
+        "Issuer DID profile has an incomplete signing identity binding",
+        "issuer-signing-binding-incomplete",
+    ),
+    (
+        "Issuer DID resolves to multiple active issuer profiles",
+        "issuer-signing-profile-ambiguous",
+    ),
+    (
+        "Issuer DID resolved without an active profile",
+        "issuer-signing-profile-inactive",
+    ),
     ("DID-mediated signing failed (HTTP 404)", "issuer-signing-profile-not-found"),
     ("DID-mediated signing failed (HTTP 409)", "issuer-signing-conflict"),
     ("DID-mediated signing failed (HTTP 503)", "issuer-signing-service-unavailable"),
