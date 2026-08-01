@@ -46,6 +46,13 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert "[credential_format=iso_mdl]" in mdoc["test_plan"]
     assert "[response_mode=direct_post]" in mdoc["test_plan"]
     assert "does not certify Marty as an mdoc issuer" in mdoc["qualification"]
+    assert mdoc["execution_status"] == "blocked_upstream"
+    constraint = mdoc["upstream_constraint"]
+    assert constraint["tracking_issue"].endswith("/issues/243")
+    assert constraint["runner_release"] == manifest["official_runner"]["release"]
+    assert constraint["certificate_not_after"] == "2026-07-30T07:47:22+00:00"
+    assert len(constraint["certificate_sha256"]) == 64
+    assert "Do not replace" in constraint["policy"]
     haip = manifest["profiles"]["oid4vp-haip-verifier"]
     assert haip["status"] == "active"
     assert "oid4vp-1final-verifier-haip-test-plan" in haip["test_plan"]

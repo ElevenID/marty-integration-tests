@@ -3,6 +3,46 @@
 Status: in progress  
 Last updated: 2026-08-01
 
+## Current evidence snapshot
+
+The immutable `marty-ui` v1.1.90 stack is the current reviewed target. Its
+manifest digest is
+`sha256:1529c3f8e28cec088ae14f4173fc2223a8a7bffeffe87ec9d21c157fbe4811f9`.
+
+- The unchanged OIDF issuer lane passed 16 modules with 1,076 successes,
+  zero failures, and zero warnings in
+  [run 30723084309](https://github.com/ElevenID/marty-integration-tests/actions/runs/30723084309).
+- The unchanged W3C VC Data Model v2 suite at commit
+  `e92936564867da9150b99b167fe1c73b9370ad6c` passed its issuer, credential
+  verifier, and presentation verifier capabilities in
+  [run 30723956983](https://github.com/ElevenID/marty-integration-tests/actions/runs/30723956983).
+- OID4VP Final, native URL-query, HAIP, and EUDI reference interoperability
+  passed in the full-matrix
+  [run 30723329127](https://github.com/ElevenID/marty-integration-tests/actions/runs/30723329127).
+- The same full-matrix run stopped the OIDF mdoc lane before official
+  execution because the runner-owned `documentSignerCert` expired on
+  2026-07-30. This is tracked in
+  [issue 243](https://github.com/ElevenID/marty-integration-tests/issues/243).
+  ElevenID does not substitute the certificate, change validation time,
+  disable certificate validation, modify the imported suite, or exclude the
+  lane. The monthly upstream-review workflow will surface the next official
+  release for reviewed adoption and an unchanged-suite rerun.
+
+One earlier W3C invocation in the full matrix reported a single transient
+issuer request failure. The exact same immutable images and upstream commit
+then passed. The released native binding, released issuance wrapper, and
+concurrent canonicalization path also completed repeated copies of the exact
+temporality/status shape without failure. No standard assertion or product
+validation was weakened in response; the successful unchanged-suite rerun is
+the current evidence, and future recurrence must be investigated from
+product-owned service diagnostics.
+
+Because the stack remains pre-1.0, obsolete selectors, aliases, deprecated
+formats, and compatibility-only code are removed rather than preserved.
+This does not authorize removal of current standards capabilities: mdoc,
+SD-JWT VC, JWT VC, VCDM v2 Data Integrity, OID4VCI, OID4VP, HAIP, and EUDI
+paths remain acceptance requirements.
+
 ## Purpose
 
 This report records what the official OIDF, W3C, and EUDI interoperability
@@ -124,9 +164,9 @@ Manual investigation initially used reviewed tag and manifest overrides while
 cause a default or scheduled lane to test an obsolete pre-DID-first stack even
 while manually dispatched evidence used newer artifacts.
 
-Action completed: the checked-in pin now names `marty-ui` v1.1.83 and its
+Action completed: the checked-in pin now names `marty-ui` v1.1.90 and its
 independently verified manifest digest
-`sha256:34f460a69c2ee89bee26a4e98c426036940ba343d58902a9d71b1e9f115d4c74`.
+`sha256:1529c3f8e28cec088ae14f4173fc2223a8a7bffeffe87ec9d21c157fbe4811f9`.
 Overrides remain available for controlled candidate testing, but the default
 is the latest stack that passed its artifact-only release gate, released-browser
 issuance and verification journey, unmodified OIDF OID4VP Final verifier lane,
