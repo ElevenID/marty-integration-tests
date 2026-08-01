@@ -46,3 +46,158 @@ def test_oid4vci_diagnostic_rejects_unrecognized_response_text() -> None:
 
 def test_oid4vci_diagnostic_accepts_success() -> None:
     _raise_for_oid4vci_error(httpx.Response(200, json={"ok": True}), "metadata")
+
+
+@pytest.mark.parametrize(
+    ("detail", "category"),
+    [
+        (
+            "DID resolution failed for issuer did:web:tenant.example: "
+            "remote signing key could not be resolved (private detail)",
+            "issuer-did-resolution-failed",
+        ),
+        (
+            "Revocation service unavailable: private transport detail",
+            "revocation-service-unavailable",
+        ),
+        (
+            "Credential has no allocated status-list entry",
+            "status-list-allocation-missing",
+        ),
+    ],
+)
+def test_marty_503_detail_is_reduced_to_fixed_category(
+    detail: str,
+    category: str,
+) -> None:
+    response = httpx.Response(503, json={"detail": detail})
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"^OID4VCI credential failed: status=503 error={category}$",
+    ) as exc_info:
+        _raise_for_oid4vci_error(response, "credential")
+
+    assert "private" not in str(exc_info.value)
+    assert "did:web" not in str(exc_info.value)
+
+
+def test_mip_envelope_description_is_reduced_to_fixed_category() -> None:
+    response = httpx.Response(
+        503,
+        json={
+            "error": "service_error",
+            "error_description": (
+                "DID resolution failed for issuer did:web:tenant.example: "
+                "remote signing key could not be resolved (private detail)"
+            ),
+        },
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"^OID4VCI credential failed: status=503 "
+            r"error=issuer-did-resolution-failed$"
+        ),
+    ) as exc_info:
+        _raise_for_oid4vci_error(response, "credential")
+
+    assert "private" not in str(exc_info.value)
+    assert "did:web" not in str(exc_info.value)
+
+
+def test_mip_envelope_inner_signing_failure_is_reduced_to_fixed_category() -> None:
+    response = httpx.Response(
+        503,
+        json={
+            "error": "service_error",
+            "error_description": (
+                "DID resolution failed for issuer did:web:tenant.example: "
+                "remote signing key could not be resolved "
+                "(DID-mediated signing failed (HTTP 409): private detail)"
+            ),
+        },
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"^OID4VCI credential failed: status=503 "
+            r"error=issuer-signing-conflict$"
+        ),
+    ) as exc_info:
+        _raise_for_oid4vci_error(response, "credential")
+
+    assert "private" not in str(exc_info.value)
+    assert "did:web" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("inner_detail", "category"),
+    [
+        (
+            "Signing algorithm must match the DID-resolved issuer profile binding.",
+            "issuer-signing-algorithm-mismatch",
+        ),
+        (
+            "Issuer DID profile has an incomplete signing identity binding.",
+            "issuer-signing-binding-incomplete",
+        ),
+        (
+            "Issuer DID resolves to multiple active issuer profiles: private detail",
+            "issuer-signing-profile-ambiguous",
+        ),
+        (
+            "Issuer DID resolved without an active profile.",
+            "issuer-signing-profile-inactive",
+        ),
+    ],
+)
+def test_signing_conflict_details_are_reduced_to_fixed_categories(
+    inner_detail: str,
+    category: str,
+) -> None:
+    response = httpx.Response(
+        503,
+        json={
+            "error": "service_error",
+            "error_description": (
+                "DID resolution failed for issuer did:web:tenant.example: "
+                "remote signing key could not be resolved "
+                f"(DID-mediated signing failed (HTTP 409): {inner_detail})"
+            ),
+        },
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"^OID4VCI credential failed: status=503 error={category}$",
+    ) as exc_info:
+        _raise_for_oid4vci_error(response, "credential")
+
+    assert "private" not in str(exc_info.value)
+    assert "did:web" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("response", "category"),
+    [
+        (
+            httpx.Response(503, json={"detail": "unrecognized private detail"}),
+            "service-json-unclassified",
+        ),
+        (httpx.Response(503, text="upstream private detail"), "upstream-non-json"),
+    ],
+)
+def test_unrecognized_503_shape_is_classified_without_echoing_response(
+    response: httpx.Response,
+    category: str,
+) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=rf"^OID4VCI credential failed: status=503 error={category}$",
+    ) as exc_info:
+        _raise_for_oid4vci_error(response, "credential")
+
+    assert "private" not in str(exc_info.value)

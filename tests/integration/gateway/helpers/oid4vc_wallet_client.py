@@ -58,6 +58,44 @@ _SAFE_OID4VCI_ERROR_CODES = frozenset(
     }
 )
 
+_SAFE_MARTY_503_CATEGORIES = (
+    ("DID resolution failed for issuer ", "issuer-did-resolution-failed"),
+    ("Issuer identity is not configured", "issuer-identity-unavailable"),
+    ("Issuer profile configuration is required", "issuer-profile-unavailable"),
+    ("Unable to resolve the remote DID issuer profile", "issuer-profile-unavailable"),
+    ("Revocation Profile validation is unavailable", "revocation-profile-unavailable"),
+    ("RevocationProfile service URL is not configured", "revocation-service-unavailable"),
+    ("Revocation service unavailable", "revocation-service-unavailable"),
+    ("Credential has no allocated status-list entry", "status-list-allocation-missing"),
+)
+
+_SAFE_MARTY_FAILURE_SUBSTRINGS = (
+    (
+        "Signing algorithm must match the DID-resolved issuer profile binding",
+        "issuer-signing-algorithm-mismatch",
+    ),
+    (
+        "Issuer DID profile has an incomplete signing identity binding",
+        "issuer-signing-binding-incomplete",
+    ),
+    (
+        "Issuer DID resolves to multiple active issuer profiles",
+        "issuer-signing-profile-ambiguous",
+    ),
+    (
+        "Issuer DID resolved without an active profile",
+        "issuer-signing-profile-inactive",
+    ),
+    ("DID-mediated signing failed (HTTP 404)", "issuer-signing-profile-not-found"),
+    ("DID-mediated signing failed (HTTP 409)", "issuer-signing-conflict"),
+    ("DID-mediated signing failed (HTTP 503)", "issuer-signing-service-unavailable"),
+    ("Internal signing API rejected", "internal-signing-authentication-failed"),
+    ("different DID verification method", "issuer-verification-method-mismatch"),
+    ("different issuer DID", "issuer-did-mismatch"),
+    ("exposed private signing routing", "issuer-signing-response-leak"),
+    ("did not return a signature", "issuer-signature-missing"),
+)
+
 
 def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
     """Raise a public-safe failure containing only status and a fixed error code."""
@@ -70,6 +108,32 @@ def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
         body = None
     if isinstance(body, dict) and body.get("error") in _SAFE_OID4VCI_ERROR_CODES:
         error_code = str(body["error"])
+    elif response.status_code == 503 and isinstance(body, dict):
+        detail = body.get("detail")
+        public_message = body.get("error_description")
+        candidate = detail if isinstance(detail, str) else public_message
+        if isinstance(candidate, str):
+            error_code = next(
+                (
+                    category
+                    for prefix, category in _SAFE_MARTY_503_CATEGORIES
+                    if candidate.startswith(prefix)
+                ),
+                error_code,
+            )
+            if error_code == "issuer-did-resolution-failed":
+                error_code = next(
+                    (
+                        category
+                        for marker, category in _SAFE_MARTY_FAILURE_SUBSTRINGS
+                        if marker in candidate
+                    ),
+                    error_code,
+                )
+        if error_code == "unclassified":
+            error_code = "service-json-unclassified"
+    elif response.status_code == 503:
+        error_code = "upstream-non-json"
     raise RuntimeError(
         f"OID4VCI {operation} failed: status={response.status_code} error={error_code}"
     )

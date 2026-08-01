@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -95,3 +96,33 @@ def test_public_session_rejects_failed_or_malformed_login(
     )
     with pytest.raises(RuntimeError, match="malformed"):
         lane.public_session({}, email="reviewer@example.test", password="secret")
+
+
+def test_summary_labels_new_tenant_evidence_as_owned_not_official(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "stack-manifest.json"
+    manifest.write_text(
+        json.dumps({"release": "marty-ui@test"}) + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "evidence"
+
+    lane.write_summary(
+        SimpleNamespace(stack_manifest=manifest, output_dir=output),
+        {"marty_commit": "a" * 40},
+        0,
+    )
+
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert summary["evidence_class"] == "elevenid-owned-product-security"
+    assert summary["official_suite_boundary"] == {
+        "official_suite_invoked": False,
+        "official_suite_source_modified": False,
+        "claim": "This lane is not an official standards-compliance result.",
+    }
+    assert {
+        "issuance transaction and revocation-status isolation",
+        "issued-credential lifecycle and revocation isolation",
+        "trust-profile ownership and mutation isolation",
+    } <= set(summary["coverage"])

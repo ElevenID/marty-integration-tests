@@ -18,6 +18,7 @@ import pytest
 
 from .helpers.auth_helper import AuthHelper
 from .helpers.gateway_client import GatewayClient, GatewayClientError
+from .helpers.marty_wallet_client import MartyHeadlessWalletClient
 from .helpers.test_data import TestDataBuilder
 
 MARTY_DEFAULT_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001"
@@ -550,7 +551,7 @@ async def test_public_signing_is_did_first_and_fails_closed(
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_two_principals_cannot_cross_rbac_api_key_scim_flow_or_webhook_boundaries(
+async def test_two_principals_cannot_cross_tenant_product_boundaries(
     authenticated_gateway_client: GatewayClient,
 ) -> None:
     """Exercise actual foreign resources with distinct public identities.
@@ -582,6 +583,7 @@ async def test_two_principals_cannot_cross_rbac_api_key_scim_flow_or_webhook_bou
     reviewer.set_session(reviewer_session)
 
     api_key_client = GatewayClient()
+    wallet = MartyHeadlessWalletClient(gateway_url=admin.base_url)
     try:
         organization_a_response = await reviewer.client.get(
             f"/v1/organizations/{organization_a_id}"
@@ -720,6 +722,191 @@ async def test_two_principals_cannot_cross_rbac_api_key_scim_flow_or_webhook_bou
         )
         template_b = await admin.create_credential_template(**template_b_data)
         template_b = await admin.activate_credential_template(template_b["id"])
+
+        # Produce a real organization-B issuance transaction and its separate
+        # issued-credential lifecycle record.  The owner control proves both
+        # records exist before the organization-A reviewer attempts ID
+        # substitution through the same public routes used by the UI.
+        await wallet.create_wallet("Organization B boundary wallet")
+        holder = await wallet.create_did()
+        issuance_b = await admin.issue_credential(
+            organization_id=organization_b_id,
+            credential_template_id=template_b["id"],
+            claims=TestDataBuilder.employee_badge_claims(),
+            subject_did=str(holder["did"]),
+        )
+        issuance_b_id = str(issuance_b["id"])
+        offer_uri = str(issuance_b.get("credential_offer_uri") or "")
+        assert offer_uri, "Organization-B issuance produced no credential offer"
+        try:
+            accepted = await wallet.accept_credential_offer(
+                offer_url=offer_uri,
+                did=str(holder["did"]),
+            )
+        except RuntimeError as exc:
+            transaction_diagnostic = await admin.client.get(
+                f"/v1/issuance/{issuance_b_id}",
+            )
+            transaction_status = "unavailable"
+            if transaction_diagnostic.status_code == 200:
+                candidate_status = transaction_diagnostic.json().get("status")
+                if candidate_status in {
+                    "pending",
+                    "approved",
+                    "offered",
+                    "signing",
+                    "issued",
+                    "failed",
+                    "revoked",
+                    "expired",
+                }:
+                    transaction_status = candidate_status
+            raise AssertionError(
+                "Real OID4VCI redemption failed before lifecycle isolation: "
+                f"transaction_status={transaction_status}; {exc}"
+            ) from None
+        assert accepted["status"] == "accepted"
+        owner_transaction = await admin.client.get(
+            f"/v1/issuance/{issuance_b_id}",
+        )
+        assert owner_transaction.status_code == 200, owner_transaction.text
+
+        owner_credentials = await admin.client.get(
+            "/v1/issued-credentials",
+            params={"organization_id": organization_b_id},
+        )
+        assert owner_credentials.status_code == 200, owner_credentials.text
+        issued_credential_b = next(
+            (
+                credential
+                for credential in owner_credentials.json()
+                if isinstance(credential, dict)
+                and str(credential.get("flow_execution_id") or "")
+                == issuance_b_id
+            ),
+            None,
+        )
+        assert issued_credential_b is not None, (
+            "Organization-B issuance produced no public lifecycle record"
+        )
+        issued_credential_b_id = str(issued_credential_b["id"])
+
+        transaction_list_a = await reviewer.client.get(
+            "/v1/issuance",
+            params={"organization_id": organization_a_id},
+        )
+        assert transaction_list_a.status_code == 200, transaction_list_a.text
+        assert issuance_b_id not in {
+            str(transaction.get("id"))
+            for transaction in transaction_list_a.json()
+            if isinstance(transaction, dict)
+        }
+        credential_list_a = await reviewer.client.get(
+            "/v1/issued-credentials",
+            params={"organization_id": organization_a_id},
+        )
+        assert credential_list_a.status_code == 200, credential_list_a.text
+        assert issued_credential_b_id not in {
+            str(credential.get("id"))
+            for credential in credential_list_a.json()
+            if isinstance(credential, dict)
+        }
+
+        for method, path, body in (
+            ("GET", f"/v1/issuance/{issuance_b_id}", None),
+            ("GET", f"/v1/issuance/{issuance_b_id}/revocation-status", None),
+            (
+                "POST",
+                f"/v1/issuance/{issuance_b_id}/revoke",
+                {"reason": "foreign transaction substitution"},
+            ),
+            ("GET", f"/v1/issued-credentials/{issued_credential_b_id}", None),
+            (
+                "POST",
+                f"/v1/issued-credentials/{issued_credential_b_id}/suspend",
+                {"reason": "foreign lifecycle substitution"},
+            ),
+            (
+                "POST",
+                f"/v1/issued-credentials/{issued_credential_b_id}/revoke",
+                {"reason": "foreign lifecycle substitution"},
+            ),
+            (
+                "POST",
+                f"/v1/issued-credentials/{issued_credential_b_id}/renew",
+                None,
+            ),
+        ):
+            response = await reviewer.client.request(
+                method,
+                path,
+                json=body,
+            )
+            _assert_public_denial(
+                response,
+                foreign_values=(
+                    organization_b_name,
+                    issuance_b_id,
+                    issued_credential_b_id,
+                ),
+            )
+
+        # A trust profile is also tenant-owned security policy.  Prove the
+        # normal B owner path first, then ensure an A-only principal cannot
+        # enumerate, read, activate, or mutate the foreign profile by ID.
+        trust_profile_b = await admin.create_trust_profile(
+            organization_id=organization_b_id,
+            name=f"Organization B trust policy {uuid.uuid4().hex}",
+            trust_sources=[
+                {
+                    "source_type": "PINNED_ISSUER",
+                    "issuer_did": issuer_did_b,
+                    "organization_id": organization_b_id,
+                }
+            ],
+        )
+        trust_profile_b_id = str(trust_profile_b["id"])
+        trust_profile_b_name = str(trust_profile_b["name"])
+        owner_trust_profile = await admin.client.get(
+            f"/v1/trust-profiles/{trust_profile_b_id}",
+        )
+        assert owner_trust_profile.status_code == 200, owner_trust_profile.text
+
+        trust_profiles_a = await reviewer.client.get(
+            "/v1/trust-profiles",
+            params={"organization_id": organization_a_id},
+        )
+        assert trust_profiles_a.status_code == 200, trust_profiles_a.text
+        assert trust_profile_b_id not in {
+            str(profile.get("id"))
+            for profile in trust_profiles_a.json()
+            if isinstance(profile, dict)
+        }
+
+        for method, path, body in (
+            ("GET", f"/v1/trust-profiles/{trust_profile_b_id}", None),
+            (
+                "PATCH",
+                f"/v1/trust-profiles/{trust_profile_b_id}",
+                {"name": "foreign trust-profile substitution"},
+            ),
+            ("POST", f"/v1/trust-profiles/{trust_profile_b_id}/activate", None),
+        ):
+            response = await reviewer.client.request(
+                method,
+                path,
+                json=body,
+            )
+            _assert_public_denial(
+                response,
+                foreign_values=(
+                    organization_b_name,
+                    trust_profile_b_name,
+                    trust_profile_b_id,
+                    issuer_did_b,
+                ),
+            )
+
         policy_b_data = TestDataBuilder.presentation_policy_age_verification(
             organization_id=organization_b_id,
             credential_template_id=template_b["id"],
@@ -796,5 +983,6 @@ async def test_two_principals_cannot_cross_rbac_api_key_scim_flow_or_webhook_bou
             foreign_values=(organization_b_name, scim_email, webhook_name),
         )
     finally:
+        await wallet.close()
         await reviewer.close()
         await api_key_client.close()
