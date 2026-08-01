@@ -909,26 +909,30 @@ Partially.
 
 The current `marty-protocol` contract defines DID-first Credential Templates,
 public issuance requests, public verification-flow start requests and
-responses, and complete Presentation Policy resource, create, and update
-contracts. It includes conformance fixtures rejecting public profile, signing
-service, key-reference, verification-method, KMS, and provider selectors.
+responses, and complete Presentation Policy and Organization resource, create,
+and update contracts. It includes conformance fixtures rejecting public
+profile, signing-service, key-reference, verification-method, KMS, provider,
+commerce, and private organization-state selectors.
 Marty-Protocol PRs
 [#15](https://github.com/Marty-Protocol/Marty-Protocol/pull/15),
 [#16](https://github.com/Marty-Protocol/Marty-Protocol/pull/16),
 [#17](https://github.com/Marty-Protocol/Marty-Protocol/pull/17), and
-[#18](https://github.com/Marty-Protocol/Marty-Protocol/pull/18) publish those
+[#18](https://github.com/Marty-Protocol/Marty-Protocol/pull/18), and
+[#19](https://github.com/Marty-Protocol/Marty-Protocol/pull/19) publish those
 operation schemas and generated Python, Rust, and TypeScript bindings at exact
-commit `3486f64b5a6645a0505c1c9bca563ddb9a9584f6`.
+commit `1816b7c5f7c03e145eab148a98127cbab00a8e1f`.
 
 [marty-ui#224](https://github.com/ElevenID/marty-ui/pull/224),
 [#226](https://github.com/ElevenID/marty-ui/pull/226), and
-[#227](https://github.com/ElevenID/marty-ui/pull/227) pin and enforce that
+[#227](https://github.com/ElevenID/marty-ui/pull/227), and
+[#228](https://github.com/ElevenID/marty-ui/pull/228) pin and enforce that
 contract. CI compares fields and requiredness, the reserved issuance-claim
 boundary, representative schema-valid runtime messages, tenant-scoped
-Presentation Policy operations, and the prohibition on custody selectors. The
-gateway strips internal routing fields, forwards only validated policy fields,
-uses canonical wire serialization, and removes the deprecated public
-holder-key-reference derivation endpoint.
+Presentation Policy and Organization operations, and the prohibition on
+custody or private organization selectors. The gateway strips internal routing
+fields, forwards only validated fields, validates successful service responses
+before returning them, uses canonical wire serialization, and removes the
+deprecated public holder-key-reference derivation endpoint.
 
 The runtime still owns duplicated Python and JavaScript request models rather
 than consuming generated `marty-protocol` types at every public boundary.
@@ -940,9 +944,9 @@ operations but not yet eliminated across every public resource family.
 Required follow-up:
 
 - generate or consume shared types for all supported public clients;
-- cover Organization, issuer identity/entity, flow
-  definition/execution/result, issuance response/lifecycle, and generated
-  client contracts in the same drift gate; and
+- cover issuer identity/entity, flow definition/execution/result, issuance
+  response/lifecycle, and generated client contracts in the same drift gate;
+  and
 - retain the fail-closed public-to-internal translation tests as generated
   types replace duplicated runtime models.
 
@@ -955,6 +959,28 @@ The official lanes authenticate a disposable operator and create resources in
 one configured organization. This proves organization-scoped happy paths but
 not, by itself, prove tenant isolation. Tenant evidence therefore remains
 separate from every official result.
+
+The Organization contract audit exposed product drift outside the official
+suites. The UI offered `jurisdiction` even though no production path persisted
+it, mapped admission choices into fields the service ignored, and offered
+organization types that the service rejected. The gateway validated a reduced
+Pydantic object but proxied the caller's raw body, returned successful raw
+service responses without response-model enforcement, exposed `PUT` while the
+UI and service used `PATCH`, and advertised a delete operation the service did
+not implement. `/organizations/mine` used a separate legacy response shape and
+included internal membership identifiers and email fields outside the public
+Organization resource.
+
+Marty-Protocol [#19](https://github.com/Marty-Protocol/Marty-Protocol/pull/19)
+and marty-ui [#228](https://github.com/ElevenID/marty-ui/pull/228) correct those
+owned production paths. Create and partial update requests are strict;
+discoverability, admission mode, approval, and all supported organization types
+are persisted; successful responses fail closed unless they match the public
+resource; `/mine` reuses that resource; internal membership identity fields are
+not returned; `PATCH` is canonical; and the unimplemented public delete and
+false jurisdiction control are removed. No upstream compliance test, runner,
+fixture, vector, assertion, expected result, exclusion, or test selection was
+changed to obtain this result.
 
 The ElevenID-owned public-boundary lane now creates two organizations with
 distinct active issuer DIDs and profiles, uses two authenticated principals
@@ -1084,14 +1110,15 @@ the official suite itself remains API-driven and unmodified.
 | W3C VCDM v2 verification and issuance | Exact upstream commit `e92936564867da9150b99b167fe1c73b9370ad6c` passes on GitHub from an unmodified disposable worktree against immutable v1.1.78; issuer, VC-verifier, and VP-verifier roles all execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
 | UI issuance/verification | Released v1.1.72 browser smoke completes disposable application, submit, claim, credential-offer, and signed-verification journeys using public DIDs; no private selector or issuer-profile collection request is observed | Add adversarial cross-tenant browser cases under [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) and continue generated-client response drift checks under [marty-ui#222](https://github.com/ElevenID/marty-ui/issues/222) |
 | Multitenancy | Released v1.1.78 two-principal matrix covers distinct issuer DIDs/profiles, membership/RBAC, template/policy/DID substitution, API-key binding, SCIM, flows/results, webhooks, audit, and non-leaking denials; the follow-up DID matrix rejects all public custody selectors plus unknown, draft/non-active, and purpose-incompatible mappings and proves idempotent profile uniqueness; Canvas provenance separately covers delivery/external/canonical credential selectors | Add forced ambiguous-state evidence beyond the public uniqueness guard, notification/SSE delivery, adversarial browser paths, issued-credential/revocation, trust, wallet, device/deployment, and DIDComm isolation under [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) |
-| Protocol contract | Public DID-only Credential Template, Organization Trust Profile, issuance request, verification-flow start request/response, and complete Presentation Policy resource/create/update contracts are merged. `marty-ui#227` pins exact protocol commit `3486f64b5a6645a0505c1c9bca563ddb9a9584f6`, validates runtime parity and representative tenant-scoped operations, preserves template-bound verification semantics, rejects raw-model bypasses and cross-tenant policy substitution, and exposes the UI's actual `PATCH` update operation | Extend the executable cross-repository gate to organization, issuer entity/identity, flow definition/execution/result, issuance response/lifecycle, and all generated clients under [marty-ui#222](https://github.com/ElevenID/marty-ui/issues/222) |
+| Protocol contract | Public DID-only Credential Template, Organization Trust Profile, issuance request, verification-flow start request/response, and complete Presentation Policy and Organization resource/create/update contracts are merged. `marty-ui#228` pins exact protocol commit `1816b7c5f7c03e145eab148a98127cbab00a8e1f`, validates runtime parity and representative tenant-scoped operations, preserves template-bound verification semantics, rejects raw-model and private-field bypasses, fails closed on cross-tenant substitution, and exposes canonical `PATCH` update operations | Extend the executable cross-repository gate to issuer entity/identity, flow definition/execution/result, issuance response/lifecycle, and all generated clients under [marty-ui#222](https://github.com/ElevenID/marty-ui/issues/222) |
 | Wider Marty feature model | Official suites do not cover it; the ElevenID-owned released matrix now covers membership/RBAC, API keys, SCIM, saved verification flows/results, webhooks, and audit boundaries | Applicant/vetting, devices/deployments, issued-credential lifecycle/revocation, trust registries, notification/SSE delivery, wallet profiles, and DIDComm are owned by [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) |
 
 ### Exposed-gap action ledger
 
 | Finding | Classification | Impact | Owner/remediation | Status and required evidence |
 | --- | --- | --- | --- | --- |
-| Published public operation contracts and production models were not mechanically coupled | Protocol drift | A repository could add a public custody selector, leak internal routing, or change required request/response fields while both repositories remained independently green | [Marty-Protocol#13](https://github.com/Marty-Protocol/Marty-Protocol/pull/13), [#14](https://github.com/Marty-Protocol/Marty-Protocol/pull/14), [#15](https://github.com/Marty-Protocol/Marty-Protocol/pull/15), [#16](https://github.com/Marty-Protocol/Marty-Protocol/pull/16), [#17](https://github.com/Marty-Protocol/Marty-Protocol/pull/17), and [#18](https://github.com/Marty-Protocol/Marty-Protocol/pull/18) define the current DID-only core and Presentation Policy contracts; [marty-ui#220](https://github.com/ElevenID/marty-ui/pull/220), [#221](https://github.com/ElevenID/marty-ui/pull/221), [#223](https://github.com/ElevenID/marty-ui/pull/223), [#224](https://github.com/ElevenID/marty-ui/pull/224), [#226](https://github.com/ElevenID/marty-ui/pull/226), and [#227](https://github.com/ElevenID/marty-ui/pull/227) align and enforce the runtime boundary | Exact protocol commit `3486f64b5a6645a0505c1c9bca563ddb9a9584f6` is pinned in code and the repository variable. The gate now covers the core contract plus complete Presentation Policy resource/create/update operations, including canonical disabled-holder-binding serialization. Remaining resource-family expansion is owned by [marty-ui#222](https://github.com/ElevenID/marty-ui/issues/222). No imported official suite, runner, fixture, vector, assertion, expected result, or test selection changed |
+| Published public operation contracts and production models were not mechanically coupled | Protocol drift | A repository could add a public custody selector, leak internal routing, or change required request/response fields while both repositories remained independently green | [Marty-Protocol#13](https://github.com/Marty-Protocol/Marty-Protocol/pull/13), [#14](https://github.com/Marty-Protocol/Marty-Protocol/pull/14), [#15](https://github.com/Marty-Protocol/Marty-Protocol/pull/15), [#16](https://github.com/Marty-Protocol/Marty-Protocol/pull/16), [#17](https://github.com/Marty-Protocol/Marty-Protocol/pull/17), [#18](https://github.com/Marty-Protocol/Marty-Protocol/pull/18), and [#19](https://github.com/Marty-Protocol/Marty-Protocol/pull/19) define the current DID-only core, Presentation Policy, and Organization contracts; [marty-ui#220](https://github.com/ElevenID/marty-ui/pull/220), [#221](https://github.com/ElevenID/marty-ui/pull/221), [#223](https://github.com/ElevenID/marty-ui/pull/223), [#224](https://github.com/ElevenID/marty-ui/pull/224), [#226](https://github.com/ElevenID/marty-ui/pull/226), [#227](https://github.com/ElevenID/marty-ui/pull/227), and [#228](https://github.com/ElevenID/marty-ui/pull/228) align and enforce the runtime boundary | Exact protocol commit `1816b7c5f7c03e145eab148a98127cbab00a8e1f` is pinned in code and the repository variable. The gate now covers the core contract plus complete Presentation Policy and Organization resource/create/update operations, including canonical partial updates, strict successful-response validation, and private-state rejection. Remaining resource-family expansion is owned by [marty-ui#222](https://github.com/ElevenID/marty-ui/issues/222). No imported official suite, runner, fixture, vector, assertion, expected result, or test selection changed |
+| Organization create/update and response behavior drifted from the public product contract | Public API bypass / protocol drift / data-minimization defect | The UI submitted ignored fields and offered unsupported types; the gateway forwarded unvalidated raw JSON and returned unsanitized successful service bodies; update methods disagreed; an unimplemented delete was advertised; and the legacy `/mine` shape could expose internal membership identifiers and email | [Marty-Protocol#19](https://github.com/Marty-Protocol/Marty-Protocol/pull/19) publishes strict Organization resource/create/update schemas and regenerated bindings. [marty-ui#228](https://github.com/ElevenID/marty-ui/pull/228) serializes only validated input, persists canonical discovery/admission settings, validates every public success response, unifies `/mine`, rejects private membership fields, uses `PATCH`, removes dead delete behavior, and removes the false jurisdiction UI | Merged as protocol `1816b7c5f7c03e145eab148a98127cbab00a8e1f` and marty-ui `ad0b9636109ed262e2164ad981c6fd93b157ead4`. Protocol CI/CodeQL/policy and every marty-ui PR gate passed: 653 local gateway/organization tests, 1,065 local UI tests, Vite 8 production build, Ruff, ESLint with zero errors, npm audit with zero vulnerabilities, pinned protocol contract, service/UI/browser/release/security/dependency/workflow-policy/CodeQL checks. No imported official evidence source changed |
 | Presentation Policy validation was bypassable and legitimate policy semantics were mislabeled as legacy | Public API bypass / protocol drift / multitenancy defect | The gateway validated a reduced Pydantic model but forwarded caller-controlled raw JSON, so unknown fields bypassed validation. Template-bound requirements, alternatives, consent metadata, compliance linkage, and version were hidden from the public resource. The UI sent `PATCH` while the gateway exposed `PUT`, and update-by-ID lacked an explicit organization match at the gateway boundary | [Marty-Protocol#17](https://github.com/Marty-Protocol/Marty-Protocol/pull/17) publishes the complete resource contract and typed bindings. [marty-ui#226](https://github.com/ElevenID/marty-ui/pull/226) serializes only validated models, resolves every direct and alternative requirement through its authoritative same-organization Credential Template, validates/sanitizes successful responses, exposes `PATCH`, and rejects cross-tenant resource substitution without proxying | Merged as protocol `6f4e5cfe12dc847fb4fd3072fea324e8e555de22` and marty-ui `10706cc72d6828b797cfc945984d9f78aa143832`. Protocol CI/CodeQL/policy is green; marty-ui [post-merge main CI 30560427372](https://github.com/ElevenID/marty-ui/actions/runs/30560427372) passed the contract, 1,146 service tests, browser lifecycle, UI, release, and security gates; organization quality, open-source policy, and [CodeQL 30560423528](https://github.com/ElevenID/marty-ui/actions/runs/30560423528) also passed. No imported compliance source changed |
 | Credential Template read-by-ID lacked a tenant authorization boundary | Product multitenancy defect | An authenticated or unauthenticated caller with a guessed template ID could read another organization's public template metadata; incomplete API-key context could also reach resource routes without the full organization binding | [marty-ui#220](https://github.com/ElevenID/marty-ui/pull/220) requires membership or complete API-key identity, organization, permission, and scopes for every template-ID read or mutation; the gateway forwards the required permission and issuance uses the same complete internal context | Merged as `c526063ba6ac4a0d30ad899445061e30772e31fe`; 124 service tests, 97 focused gateway tests, 1,061 UI tests, the PR matrix, and main browser gate pass. Immutable release and released two-organization rerun remain required |
 | Public response models marked schema-required `compliance_profile_id` optional | Protocol drift | A response could validate in local runtime models but violate the published Credential Template representation | [marty-ui#221](https://github.com/ElevenID/marty-ui/pull/221) makes the field required in both service and gateway response models and validates representative public responses against the pinned external schema | Merged as `6ad1e0b421cea115d02029af7127874425691881`; the PR matrix, 124 local credential-template tests, and the main-branch external contract job pass |
