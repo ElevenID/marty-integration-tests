@@ -83,12 +83,14 @@ def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
         error_code = str(body["error"])
     elif response.status_code == 503 and isinstance(body, dict):
         detail = body.get("detail")
-        if isinstance(detail, str):
+        public_message = body.get("error_description")
+        candidate = detail if isinstance(detail, str) else public_message
+        if isinstance(candidate, str):
             error_code = next(
                 (
                     category
                     for prefix, category in _SAFE_MARTY_503_CATEGORIES
-                    if detail.startswith(prefix)
+                    if candidate.startswith(prefix)
                 ),
                 error_code,
             )

@@ -82,6 +82,31 @@ def test_marty_503_detail_is_reduced_to_fixed_category(
     assert "did:web" not in str(exc_info.value)
 
 
+def test_mip_envelope_description_is_reduced_to_fixed_category() -> None:
+    response = httpx.Response(
+        503,
+        json={
+            "error": "service_error",
+            "error_description": (
+                "DID resolution failed for issuer did:web:tenant.example: "
+                "remote signing key could not be resolved (private detail)"
+            ),
+        },
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"^OID4VCI credential failed: status=503 "
+            r"error=issuer-did-resolution-failed$"
+        ),
+    ) as exc_info:
+        _raise_for_oid4vci_error(response, "credential")
+
+    assert "private" not in str(exc_info.value)
+    assert "did:web" not in str(exc_info.value)
+
+
 @pytest.mark.parametrize(
     ("response", "category"),
     [
