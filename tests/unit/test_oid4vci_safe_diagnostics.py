@@ -80,3 +80,26 @@ def test_marty_503_detail_is_reduced_to_fixed_category(
 
     assert "private" not in str(exc_info.value)
     assert "did:web" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("response", "category"),
+    [
+        (
+            httpx.Response(503, json={"detail": "unrecognized private detail"}),
+            "service-json-unclassified",
+        ),
+        (httpx.Response(503, text="upstream private detail"), "upstream-non-json"),
+    ],
+)
+def test_unrecognized_503_shape_is_classified_without_echoing_response(
+    response: httpx.Response,
+    category: str,
+) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=rf"^OID4VCI credential failed: status=503 error={category}$",
+    ) as exc_info:
+        _raise_for_oid4vci_error(response, "credential")
+
+    assert "private" not in str(exc_info.value)

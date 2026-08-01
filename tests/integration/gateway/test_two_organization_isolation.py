@@ -738,10 +738,33 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         issuance_b_id = str(issuance_b["id"])
         offer_uri = str(issuance_b.get("credential_offer_uri") or "")
         assert offer_uri, "Organization-B issuance produced no credential offer"
-        accepted = await wallet.accept_credential_offer(
-            offer_url=offer_uri,
-            did=str(holder["did"]),
-        )
+        try:
+            accepted = await wallet.accept_credential_offer(
+                offer_url=offer_uri,
+                did=str(holder["did"]),
+            )
+        except RuntimeError as exc:
+            transaction_diagnostic = await admin.client.get(
+                f"/v1/issuance/{issuance_b_id}",
+            )
+            transaction_status = "unavailable"
+            if transaction_diagnostic.status_code == 200:
+                candidate_status = transaction_diagnostic.json().get("status")
+                if candidate_status in {
+                    "pending",
+                    "approved",
+                    "offered",
+                    "signing",
+                    "issued",
+                    "failed",
+                    "revoked",
+                    "expired",
+                }:
+                    transaction_status = candidate_status
+            raise AssertionError(
+                "Real OID4VCI redemption failed before lifecycle isolation: "
+                f"transaction_status={transaction_status}; {exc}"
+            ) from None
         assert accepted["status"] == "accepted"
         owner_transaction = await admin.client.get(
             f"/v1/issuance/{issuance_b_id}",

@@ -92,6 +92,10 @@ def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
                 ),
                 error_code,
             )
+        if error_code == "unclassified":
+            error_code = "service-json-unclassified"
+    elif response.status_code == 503:
+        error_code = "upstream-non-json"
     raise RuntimeError(
         f"OID4VCI {operation} failed: status={response.status_code} error={error_code}"
     )
