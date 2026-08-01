@@ -18,6 +18,7 @@ import pytest
 
 from .helpers.auth_helper import AuthHelper
 from .helpers.gateway_client import GatewayClient, GatewayClientError
+from .helpers.marty_wallet_client import MartyHeadlessWalletClient
 from .helpers.test_data import TestDataBuilder
 
 MARTY_DEFAULT_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001"
@@ -582,6 +583,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
     reviewer.set_session(reviewer_session)
 
     api_key_client = GatewayClient()
+    wallet = MartyHeadlessWalletClient(gateway_url=admin.base_url)
     try:
         organization_a_response = await reviewer.client.get(
             f"/v1/organizations/{organization_a_id}"
@@ -725,23 +727,30 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         # issued-credential lifecycle record.  The owner control proves both
         # records exist before the organization-A reviewer attempts ID
         # substitution through the same public routes used by the UI.
+        await wallet.create_wallet("Organization B boundary wallet")
+        holder = await wallet.create_did()
         issuance_b = await admin.issue_credential(
             organization_id=organization_b_id,
             credential_template_id=template_b["id"],
             claims=TestDataBuilder.employee_badge_claims(),
-            subject_did=f"did:key:z6Mk{uuid.uuid4().hex}",
+            subject_did=str(holder["did"]),
         )
         issuance_b_id = str(issuance_b["id"])
+        offer_uri = str(issuance_b.get("credential_offer_uri") or "")
+        assert offer_uri, "Organization-B issuance produced no credential offer"
+        accepted = await wallet.accept_credential_offer(
+            offer_url=offer_uri,
+            did=str(holder["did"]),
+        )
+        assert accepted["status"] == "accepted"
         owner_transaction = await admin.client.get(
             f"/v1/issuance/{issuance_b_id}",
-            headers={"X-Organization-ID": organization_b_id},
         )
         assert owner_transaction.status_code == 200, owner_transaction.text
 
         owner_credentials = await admin.client.get(
             "/v1/issued-credentials",
             params={"organization_id": organization_b_id},
-            headers={"X-Organization-ID": organization_b_id},
         )
         assert owner_credentials.status_code == 200, owner_credentials.text
         issued_credential_b = next(
@@ -762,7 +771,6 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         transaction_list_a = await reviewer.client.get(
             "/v1/issuance",
             params={"organization_id": organization_a_id},
-            headers={"X-Organization-ID": organization_a_id},
         )
         assert transaction_list_a.status_code == 200, transaction_list_a.text
         assert issuance_b_id not in {
@@ -773,7 +781,6 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         credential_list_a = await reviewer.client.get(
             "/v1/issued-credentials",
             params={"organization_id": organization_a_id},
-            headers={"X-Organization-ID": organization_a_id},
         )
         assert credential_list_a.status_code == 200, credential_list_a.text
         assert issued_credential_b_id not in {
@@ -811,7 +818,6 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 method,
                 path,
                 json=body,
-                headers={"X-Organization-ID": organization_a_id},
             )
             _assert_public_denial(
                 response,
@@ -840,14 +846,12 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         trust_profile_b_name = str(trust_profile_b["name"])
         owner_trust_profile = await admin.client.get(
             f"/v1/trust-profiles/{trust_profile_b_id}",
-            headers={"X-Organization-ID": organization_b_id},
         )
         assert owner_trust_profile.status_code == 200, owner_trust_profile.text
 
         trust_profiles_a = await reviewer.client.get(
             "/v1/trust-profiles",
             params={"organization_id": organization_a_id},
-            headers={"X-Organization-ID": organization_a_id},
         )
         assert trust_profiles_a.status_code == 200, trust_profiles_a.text
         assert trust_profile_b_id not in {
@@ -869,7 +873,6 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 method,
                 path,
                 json=body,
-                headers={"X-Organization-ID": organization_a_id},
             )
             _assert_public_denial(
                 response,
@@ -957,5 +960,6 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             foreign_values=(organization_b_name, scim_email, webhook_name),
         )
     finally:
+        await wallet.close()
         await reviewer.close()
         await api_key_client.close()
