@@ -69,6 +69,17 @@ _SAFE_MARTY_503_CATEGORIES = (
     ("Credential has no allocated status-list entry", "status-list-allocation-missing"),
 )
 
+_SAFE_MARTY_FAILURE_SUBSTRINGS = (
+    ("DID-mediated signing failed (HTTP 404)", "issuer-signing-profile-not-found"),
+    ("DID-mediated signing failed (HTTP 409)", "issuer-signing-conflict"),
+    ("DID-mediated signing failed (HTTP 503)", "issuer-signing-service-unavailable"),
+    ("Internal signing API rejected", "internal-signing-authentication-failed"),
+    ("different DID verification method", "issuer-verification-method-mismatch"),
+    ("different issuer DID", "issuer-did-mismatch"),
+    ("exposed private signing routing", "issuer-signing-response-leak"),
+    ("did not return a signature", "issuer-signature-missing"),
+)
+
 
 def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
     """Raise a public-safe failure containing only status and a fixed error code."""
@@ -94,6 +105,15 @@ def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
                 ),
                 error_code,
             )
+            if error_code == "issuer-did-resolution-failed":
+                error_code = next(
+                    (
+                        category
+                        for marker, category in _SAFE_MARTY_FAILURE_SUBSTRINGS
+                        if marker in candidate
+                    ),
+                    error_code,
+                )
         if error_code == "unclassified":
             error_code = "service-json-unclassified"
     elif response.status_code == 503:
