@@ -1,0 +1,40 @@
+{
+  "observed_at": "2026-08-01T07:41:54.222005+00:00",
+  "schema": "elevenid.official-suite-upstream-review/v1",
+  "upstreams": {
+    "eudi_verifier_endpoint": {
+      "latest_commit": "ea2115daf10d6921d68ac1d720eb95f6790c7faa",
+      "pinned_commit": "2bc0bd98a81742db321e96d31d88142128006422"
+    },
+    "eudi_wallet_kit_mdoc": {
+      "latest_commit": "fe4b23869b8c4398021ff552804514f5da73a7d4",
+      "pinned_commit": "7c0988bee3384d13a0732e0c33336ae0faf3b863"
+    },
+    "eudi_wallet_kit_oid4vci": {
+      "latest_commit": "571358819d82b8bee79998b7d14b820aab2e0772",
+      "pinned_commit": "ee36d07cd3f78afdd3e7016b3be1f6022f85ef92"
+    },
+    "eudi_wallet_kit_oid4vp": {
+      "latest_commit": "c6a39141aa81c6b22975f3294e3989aaee488865",
+      "pinned_commit": "4a695477b66040229c347d3255099b9f702ec929"
+    },
+    "eudi_wallet_kit_sd_jwt": {
+      "latest_commit": "33e5fb45b8c7ded948e7fc191fcb28dae5a84da3",
+      "pinned_commit": "e8a94cb6114efc73812843fb1338913eac427675"
+    },
+    "eudi_wallet_tester": {
+      "latest_commit": "7605672f5a4b22c5f867490cd9b4889e1ec5f748",
+      "pinned_commit": "7605672f5a4b22c5f867490cd9b4889e1ec5f748"
+    },
+    "oidf": {
+      "latest_commit": "932b46f1e507871eb0b34621aaef65ff04442e6f",
+      "latest_release": "release-v5.2.1",
+      "pinned_commit": "932b46f1e507871eb0b34621aaef65ff04442e6f",
+      "pinned_release": "release-v5.2.1"
+    },
+    "w3c_vc_data_model_v2": {
+      "latest_commit": "e92936564867da9150b99b167fe1c73b9370ad6c",
+      "pinned_commit": "e92936564867da9150b99b167fe1c73b9370ad6c"
+    }
+  }
+}
