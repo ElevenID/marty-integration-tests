@@ -58,6 +58,17 @@ _SAFE_OID4VCI_ERROR_CODES = frozenset(
     }
 )
 
+_SAFE_MARTY_503_CATEGORIES = (
+    ("DID resolution failed for issuer ", "issuer-did-resolution-failed"),
+    ("Issuer identity is not configured", "issuer-identity-unavailable"),
+    ("Issuer profile configuration is required", "issuer-profile-unavailable"),
+    ("Unable to resolve the remote DID issuer profile", "issuer-profile-unavailable"),
+    ("Revocation Profile validation is unavailable", "revocation-profile-unavailable"),
+    ("RevocationProfile service URL is not configured", "revocation-service-unavailable"),
+    ("Revocation service unavailable", "revocation-service-unavailable"),
+    ("Credential has no allocated status-list entry", "status-list-allocation-missing"),
+)
+
 
 def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
     """Raise a public-safe failure containing only status and a fixed error code."""
@@ -70,6 +81,17 @@ def _raise_for_oid4vci_error(response: httpx.Response, operation: str) -> None:
         body = None
     if isinstance(body, dict) and body.get("error") in _SAFE_OID4VCI_ERROR_CODES:
         error_code = str(body["error"])
+    elif response.status_code == 503 and isinstance(body, dict):
+        detail = body.get("detail")
+        if isinstance(detail, str):
+            error_code = next(
+                (
+                    category
+                    for prefix, category in _SAFE_MARTY_503_CATEGORIES
+                    if detail.startswith(prefix)
+                ),
+                error_code,
+            )
     raise RuntimeError(
         f"OID4VCI {operation} failed: status={response.status_code} error={error_code}"
     )

@@ -46,3 +46,37 @@ def test_oid4vci_diagnostic_rejects_unrecognized_response_text() -> None:
 
 def test_oid4vci_diagnostic_accepts_success() -> None:
     _raise_for_oid4vci_error(httpx.Response(200, json={"ok": True}), "metadata")
+
+
+@pytest.mark.parametrize(
+    ("detail", "category"),
+    [
+        (
+            "DID resolution failed for issuer did:web:tenant.example: "
+            "remote signing key could not be resolved (private detail)",
+            "issuer-did-resolution-failed",
+        ),
+        (
+            "Revocation service unavailable: private transport detail",
+            "revocation-service-unavailable",
+        ),
+        (
+            "Credential has no allocated status-list entry",
+            "status-list-allocation-missing",
+        ),
+    ],
+)
+def test_marty_503_detail_is_reduced_to_fixed_category(
+    detail: str,
+    category: str,
+) -> None:
+    response = httpx.Response(503, json={"detail": detail})
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"^OID4VCI credential failed: status=503 error={category}$",
+    ) as exc_info:
+        _raise_for_oid4vci_error(response, "credential")
+
+    assert "private" not in str(exc_info.value)
+    assert "did:web" not in str(exc_info.value)
