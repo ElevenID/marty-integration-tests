@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import zipfile
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
@@ -209,6 +210,87 @@ def requires_interaction_hook(test_name: str, expected_skips: list[dict]) -> boo
     return not any(entry.get("test-name") == test_name for entry in expected_skips)
 
 
+def write_failure_diagnostics(output: Path) -> list[dict[str, object]]:
+    """Extract a deliberately small, public-safe view of official failures.
+
+    The official export ZIPs remain byte-for-byte unchanged and authoritative.
+    This owned diagnostic records only module/condition/block identifiers plus
+    allow-listed HTTP status and protocol error-code facts. It never copies
+    request bodies, response bodies, headers, URLs, tokens, keys, or free-form
+    messages from the upstream result.
+    """
+    diagnostics: list[dict[str, object]] = []
+    allowed_detail_keys = {
+        "http_status",
+        "expected_status_codes",
+        "error",
+        "expected_error",
+    }
+
+    def safe_details(value: object) -> dict[str, object]:
+        found: dict[str, object] = {}
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in allowed_detail_keys:
+                    if key in {"http_status", "expected_status_codes"}:
+                        if (
+                            isinstance(child, int)
+                            or isinstance(child, list)
+                            and all(isinstance(item, int) for item in child)
+                        ):
+                            found[key] = child
+                    elif isinstance(child, str) and re.fullmatch(r"[a-z0-9_]{1,80}", child):
+                        found[key] = child
+                found.update({name: detail for name, detail in safe_details(child).items() if name not in found})
+        elif isinstance(value, list):
+            for child in value:
+                found.update({name: detail for name, detail in safe_details(child).items() if name not in found})
+        return found
+
+    for archive in sorted(output.glob("*.zip")):
+        with zipfile.ZipFile(archive) as result_zip:
+            for name in sorted(result_zip.namelist()):
+                if not name.endswith(".json"):
+                    continue
+                raw: object = json.loads(result_zip.read(name))
+                if not isinstance(raw, dict):
+                    continue
+                test_info = raw.get("testInfo")
+                results = raw.get("results")
+                if not isinstance(test_info, dict) or not isinstance(results, list):
+                    continue
+                module = test_info.get("testName")
+                if not isinstance(module, str) or not module:
+                    continue
+                blocks: dict[str, str] = {}
+                for entry in results:
+                    if not isinstance(entry, dict):
+                        continue
+                    block_id = entry.get("blockId")
+                    if entry.get("startBlock") is True and entry.get("src") == "-START-BLOCK-":
+                        if isinstance(block_id, str) and isinstance(entry.get("msg"), str):
+                            blocks[block_id] = entry["msg"]
+                        continue
+                    if entry.get("result") != "FAILURE":
+                        continue
+                    condition = entry.get("src")
+                    if not isinstance(condition, str) or not condition:
+                        continue
+                    diagnostic: dict[str, object] = {
+                        "module": module,
+                        "condition": condition,
+                    }
+                    if isinstance(block_id, str) and block_id in blocks:
+                        diagnostic["block"] = blocks[block_id]
+                    diagnostic.update(safe_details(entry))
+                    diagnostics.append(diagnostic)
+
+    destination = output / "failure-diagnostics.json"
+    destination.write_text(json.dumps(diagnostics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print("OIDF public-safe failure diagnostics:", json.dumps(diagnostics, sort_keys=True), flush=True)
+    return diagnostics
+
+
 def write_evidence(
     output: Path,
     manifest: dict,
@@ -363,6 +445,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.interaction_script is None:
         result = subprocess.run(command, cwd=runner, check=False).returncode
         validate_runner(runner, manifest)
+        write_failure_diagnostics(output)
         write_evidence(
             output,
             manifest,
@@ -447,6 +530,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         hook_result = hook.wait() or hook_result
     result = runner_result or hook_result
     validate_runner(runner, manifest)
+    write_failure_diagnostics(output)
     write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
     return result
 

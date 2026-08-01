@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -161,6 +162,68 @@ def test_expected_skips_do_not_start_racy_product_interactions() -> None:
 def test_official_runner_always_emits_actionable_failure_detail() -> None:
     source = (ROOT / "scripts" / "oidf_conformance.py").read_text(encoding="utf-8")
     assert '"--no-parallel",\n        "--verbose",' in source
+
+
+def test_failure_diagnostics_extract_only_allowlisted_public_facts(tmp_path: Path) -> None:
+    output = tmp_path / "results"
+    output.mkdir()
+    exported = {
+        "testInfo": {"testName": "oid4vci-1_0-issuer-happy-flow", "testId": "secret-id"},
+        "results": [
+            {
+                "src": "-START-BLOCK-",
+                "startBlock": True,
+                "blockId": "block-1",
+                "msg": "Verify Credential Endpoint Response",
+            },
+            {
+                "src": "EnsureHttpStatusCodeIsAnyOf",
+                "result": "FAILURE",
+                "blockId": "block-1",
+                "msg": "must not be copied",
+                "args": {
+                    "http_status": 400,
+                    "expected_status_codes": [200, 202],
+                    "body": {"access_token": "must-not-leak"},
+                    "error_description": "must not be copied",
+                },
+            },
+            {
+                "src": "VCIValidateCredentialErrorResponse",
+                "result": "FAILURE",
+                "blockId": "block-1",
+                "args": {
+                    "error": "invalid_proof",
+                    "expected_error": "invalid_nonce",
+                    "credential": "must-not-leak",
+                },
+            },
+        ],
+    }
+    with zipfile.ZipFile(output / "official.zip", "w") as archive:
+        archive.writestr("module.json", json.dumps(exported))
+
+    diagnostics = oidf.write_failure_diagnostics(output)
+
+    assert diagnostics == [
+        {
+            "module": "oid4vci-1_0-issuer-happy-flow",
+            "condition": "EnsureHttpStatusCodeIsAnyOf",
+            "block": "Verify Credential Endpoint Response",
+            "http_status": 400,
+            "expected_status_codes": [200, 202],
+        },
+        {
+            "module": "oid4vci-1_0-issuer-happy-flow",
+            "condition": "VCIValidateCredentialErrorResponse",
+            "block": "Verify Credential Endpoint Response",
+            "error": "invalid_proof",
+            "expected_error": "invalid_nonce",
+        },
+    ]
+    serialized = (output / "failure-diagnostics.json").read_text(encoding="utf-8")
+    assert "must-not-leak" not in serialized
+    assert "secret-id" not in serialized
 
 
 def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:
