@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode, urlparse
 
 from cryptography import x509
@@ -114,7 +115,8 @@ def issuer_profile_payload(
     algorithm: str,
     label: str | None = None,
     key_purpose: str = "vc_jwt_issuer",
-) -> dict[str, str]:
+    key_attestation_trust_anchor_pem: str | None = None,
+) -> dict[str, Any]:
     """Provision an issuer profile whose private key remains in managed custody.
 
     The service and key references are profile-administration inputs only. The
@@ -131,7 +133,7 @@ def issuer_profile_payload(
     if not domain:
         raise ValueError("gateway URL has no hostname for the disposable issuer DID")
     profile_label = label or ("W3C VC Data Model v2" if w3c else "OID4VP SD-JWT")
-    return {
+    result: dict[str, Any] = {
         "name": f"Official {profile_label} issuer {run_id}",
         "issuer_did": f"did:web:{domain}:orgs:{organization_id}",
         "signing_service_id": service_id,
@@ -140,6 +142,34 @@ def issuer_profile_payload(
         "algorithm": algorithm,
         "status": "active",
     }
+    if key_attestation_trust_anchor_pem is not None:
+        result["key_attestation_policy"] = {
+            "mode": "required",
+            "trusted_root_certificates_pem": [key_attestation_trust_anchor_pem],
+            "allowed_algorithms": ["ES256"],
+            "required_key_storage": [],
+            "required_user_authentication": [],
+            "max_age_seconds": 300,
+            "require_nonce": True,
+            # The official OIDF issuer test emits no optional status claim.
+            # This lane tests trusted attester signatures and proof binding;
+            # EUDI status-list validation remains a separate production lane.
+            "status_validation": "disabled",
+        }
+    return result
+
+
+def key_attestation_trust_anchor(path: Path) -> str:
+    """Load one CA certificate used only to trust the official test wallet."""
+    pem = path.resolve().read_text(encoding="ascii")
+    certificate = x509.load_pem_x509_certificate(pem.encode("ascii"))
+    try:
+        constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value
+    except x509.ExtensionNotFound as exc:
+        raise ValueError("OIDF key-attestation trust anchor has no CA constraint") from exc
+    if not constraints.ca:
+        raise ValueError("OIDF key-attestation trust anchor is not a CA certificate")
+    return pem
 
 
 def eudi_compliance_profile_payload(organization_id: str, *, run_id: str) -> dict[str, object]:
@@ -1092,6 +1122,7 @@ def bootstrap(
     mode: str,
     oidf_signer_public_jwk: dict[str, str] | None = None,
     oidf_mdoc_trust_anchor_pem: str | None = None,
+    oidf_key_attestation_trust_anchor_pem: str | None = None,
     request: Callable[..., object] = authenticated_json_request,
 ) -> dict[str, str]:
     if not RUN_ID.fullmatch(run_id):
@@ -1102,6 +1133,8 @@ def bootstrap(
         raise ValueError("OID4VP fixture bootstrap requires the official runner public signing JWK")
     if mode == "oid4vp-mdoc" and oidf_mdoc_trust_anchor_pem is None:
         raise ValueError("OID4VP mdoc fixture bootstrap requires the official runner document certificate")
+    if mode == "oid4vci" and oidf_key_attestation_trust_anchor_pem is None:
+        raise ValueError("OID4VCI fixture bootstrap requires a key-attestation trust anchor")
     if mode == "eudi":
         return bootstrap_eudi(
             gateway_url,
@@ -1134,6 +1167,9 @@ def bootstrap(
             algorithm="EdDSA" if w3c else "ES256",
             label="W3C VC Data Integrity" if w3c else "OID4VCI SD-JWT" if oid4vci else None,
             key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
+            key_attestation_trust_anchor_pem=(
+                oidf_key_attestation_trust_anchor_pem if oid4vci else None
+            ),
         )
         created_issuer_profile = request(
             gateway_url,
@@ -1409,6 +1445,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--run-id", default=os.environ.get("OFFICIAL_SUITE_RUN_ID"), required=False)
     result.add_argument("--oidf-runner-config", type=Path)
     result.add_argument("--oidf-runner-source", type=Path)
+    result.add_argument("--oidf-key-attestation-trust-anchor", type=Path)
     result.add_argument("--output", type=Path, required=True)
     return result
 
@@ -1424,6 +1461,10 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--oidf-runner-config is required for OID4VP fixture bootstrap")
     if args.mode == "oid4vp-mdoc" and args.oidf_runner_source is None:
         raise ValueError("--oidf-runner-source is required for OID4VP mdoc fixture bootstrap")
+    if args.mode == "oid4vci" and args.oidf_key_attestation_trust_anchor is None:
+        raise ValueError(
+            "--oidf-key-attestation-trust-anchor is required for OID4VCI fixture bootstrap"
+        )
     gateway = https_url(args.gateway_url, "gateway URL")
     signer_public_jwk = (
         official_signer_public_jwk(args.oidf_runner_config)
@@ -1435,6 +1476,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.oidf_runner_source is not None and args.mode == "oid4vp-mdoc"
         else None
     )
+    key_attestation_trust_anchor_pem = (
+        key_attestation_trust_anchor(args.oidf_key_attestation_trust_anchor)
+        if args.oidf_key_attestation_trust_anchor is not None and args.mode == "oid4vci"
+        else None
+    )
     fixtures = bootstrap(
         gateway,
         gateway_session_id(),
@@ -1443,6 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         oidf_signer_public_jwk=signer_public_jwk,
         oidf_mdoc_trust_anchor_pem=mdoc_trust_anchor_pem,
+        oidf_key_attestation_trust_anchor_pem=key_attestation_trust_anchor_pem,
     )
     write_private_json(args.output.resolve(), fixtures)
     # The file contains identifiers only, but keep stdout free of values so it

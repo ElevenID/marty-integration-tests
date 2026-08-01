@@ -118,6 +118,16 @@ def test_optional_encryption_skip_is_documented_narrowly() -> None:
     assert encryption["expires"] == "2027-01-01"
 
 
+def test_invalid_key_attestation_signature_is_not_expected_to_skip() -> None:
+    skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
+    key_attestation = [
+        item
+        for item in skips
+        if item["test-name"] == "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature"
+    ]
+    assert key_attestation == []
+
+
 def test_haip_post_retrieval_module_is_not_expected_to_skip() -> None:
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
     request_uri_post = [
