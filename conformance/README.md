@@ -68,10 +68,20 @@ official interoperability profile deliberately exercises registered
 `private_key_jwt` clients. The disposable organization owns the two official
 wallet public keys; Marty rejects missing, invalid, expired, replayed,
 wrong-audience, and cross-client assertions. OIDF release-v5.2.1 drives that
-normal public issuer path. Four optional capabilities Marty does not advertise
-remain explicit, owned, expiring skips. The lane separately validates the
-production credential-issuer metadata before creating and selecting the public
-credential configuration.
+normal public issuer path. Three optional capabilities Marty does not advertise
+remain explicit, owned, expiring skips. The disposable issuer profile requires
+key attestation, trusts only the lane's short-lived attester CA, and advertises
+that policy in the production credential-issuer metadata. The unchanged OIDF
+runner then creates the valid attestation and corrupts its signature for the
+official negative module; ElevenID does not patch the runner or its expected
+result.
+
+The attester key belongs to the external test-wallet role because the official
+runner has no remote-signing interface. It exists only in the mode-0600 runner
+configuration and is destroyed with the disposable lane. It is not a Marty
+issuer key: every Marty credential and request-object key remains in managed
+custody, and every Marty signature is selected through the tenant issuer
+profile and its DID.
 
 ### Driving the real issuer path
 

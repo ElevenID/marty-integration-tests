@@ -13,7 +13,7 @@
       "test_plan": "oid4vci-1_0-issuer-test-plan[sender_constrain=dpop][client_auth_type=private_key_jwt][vci_authorization_code_flow_variant=issuer_initiated][credential_format=sd_jwt_vc][authorization_request_type=simple][openid=plain_oauth][fapi_request_method=unsigned][vci_grant_type=pre_authorization_code][vci_credential_encryption=plain][fapi_profile=vci][fapi_response_mode=plain_response]",
       "configuration_example": "conformance/marty-issuer.example.json",
       "target": "Marty's public credential-issuer URL through the gateway",
-      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact OIDF release-v5.2.1 runs validate registered private_key_jwt clients end to end through Marty's public issuer path. Four optional, unadvertised capabilities remain explicit expiring skips."
+      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact OIDF release-v5.2.1 runs validate registered private_key_jwt clients end to end and exercise the issuer's tenant-bound key-attestation policy through Marty's public issuer path. Three optional, unadvertised capabilities remain explicit expiring skips."
     },
     "oid4vp-verifier": {
       "status": "active",

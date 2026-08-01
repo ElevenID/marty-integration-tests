@@ -124,6 +124,7 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
         organization_id=fixtures.DEFAULT_ORGANIZATION,
         run_id="run-1",
         mode="oid4vci",
+        oidf_key_attestation_trust_anchor_pem="-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n",
         request=request,
     )
 
@@ -139,6 +140,20 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
     paths = [path for path, _method, _body in calls]
     assert paths[0].startswith("/v1/signing-keys/config/resolve?")
     assert paths[1].startswith("/v1/signing-keys/issuer-profiles?")
+    issuer_profile = calls[1][2]
+    assert issuer_profile is not None
+    assert issuer_profile["key_attestation_policy"] == {
+        "mode": "required",
+        "trusted_root_certificates_pem": [
+            "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n"
+        ],
+        "allowed_algorithms": ["ES256"],
+        "required_key_storage": [],
+        "required_user_authentication": [],
+        "max_age_seconds": 300,
+        "require_nonce": True,
+        "status_validation": "disabled",
+    }
     assert paths[2:] == [
         "/v1/compliance-profiles",
         "/v1/revocation-profiles",

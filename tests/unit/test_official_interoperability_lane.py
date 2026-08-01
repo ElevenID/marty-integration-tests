@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -427,6 +428,7 @@ def test_oid4vci_fixture_bootstrap_accepts_public_configuration_fragment(
         args,
         {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
         mode="oid4vci",
+        oidf_key_attestation_trust_anchor=tmp_path / "attester-root.pem",
     )
 
     assert result["oid4vci_credential_configuration_id"] == "PID#sd-jwt"
@@ -464,10 +466,12 @@ def test_fixture_bootstrap_rejects_control_characters(
             args,
             {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
             mode="oid4vci",
+            oidf_key_attestation_trust_anchor=tmp_path / "attester-root.pem",
         )
 
 
 def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> None:
+    key_attestation_jwks, root_path = lane.oidf_key_attestation_material(tmp_path)
     config, request = lane.oid4vci_issuer_config(
         tmp_path,
         "https://marty.test",
@@ -477,6 +481,7 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
             "oid4vci_credential_configuration_id": "PID#sd-jwt",
             "oid4vci_issuer_did": "did:web:marty.test:orgs:org-1",
         },
+        key_attestation_jwks,
     )
 
     data = json.loads(config.read_text(encoding="utf-8"))
@@ -488,6 +493,12 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
     }
     assert data["client"]["client_id"] == "marty-official-wallet-org-1"
     assert data["client2"]["client_id"] == "marty-official-wallet-2-org-1"
+    attester = data["client_attestation"]["key_attestation_jwks"]["keys"][0]
+    assert attester["alg"] == "ES256"
+    assert attester["d"]
+    assert len(attester["x5c"]) == 2
+    if os.name != "nt":
+        assert root_path.stat().st_mode & 0o777 == 0o600
     request_data = json.loads(request.read_text(encoding="utf-8"))
     assert request_data["claims"]["employee_id"] == "oidf-conformance"
     for runner_client, registered_client in zip(
@@ -501,6 +512,18 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
         assert "d" not in public_key
         assert public_key == {name: value for name, value in private_key.items() if name != "d"}
         assert registered_client["client_id"] == runner_client["client_id"]
+
+
+def test_oidf_key_attestation_material_is_disposable_ca_bound(tmp_path: Path) -> None:
+    jwks, root_path = lane.oidf_key_attestation_material(tmp_path)
+
+    root = lane.x509.load_pem_x509_certificate(root_path.read_bytes())
+    assert root.extensions.get_extension_for_class(lane.x509.BasicConstraints).value.ca is True
+    key = jwks["keys"][0]
+    leaf = lane.x509.load_der_x509_certificate(lane.base64.b64decode(key["x5c"][0]))
+    assert leaf.issuer == root.subject
+    assert leaf.extensions.get_extension_for_class(lane.x509.BasicConstraints).value.ca is False
+    assert key["d"]
 
 
 def test_oid4vci_lane_runs_official_plan_through_public_issuance(

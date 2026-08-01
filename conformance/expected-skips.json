@@ -16,14 +16,6 @@
     "expires": "2027-01-01"
   },
   {
-    "test-name": "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature",
-    "configuration-filename": "*marty-issuer*.json",
-    "variant": {"credential_format": "sd_jwt_vc"},
-    "reason": "Marty's active SD-JWT VC configuration requires a JWT proof but does not advertise key_attestations_required. Key attestation is optional until that capability is introduced and tested.",
-    "owner": "ElevenID",
-    "expires": "2027-01-01"
-  },
-  {
     "test-name": "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm",
     "configuration-filename": "*marty-issuer*.json",
     "variant": {"vci_credential_encryption": "plain"},
