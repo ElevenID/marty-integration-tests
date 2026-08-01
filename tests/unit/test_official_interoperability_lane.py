@@ -114,6 +114,24 @@ def test_keycloak_initializer_diagnostic_redacts_secret_values() -> None:
     assert redacted.count("<redacted>") == 4
 
 
+def test_oid4vci_runtime_diagnostic_emits_only_fixed_categories(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log = tmp_path / "compose.log"
+    log.write_text(
+        "proof verification failed: Key-attestation-bound proof has no resolved tenant issuer policy "
+        "token=must-not-leak\n",
+        encoding="utf-8",
+    )
+
+    lane.emit_oid4vci_runtime_diagnostic(log)
+
+    output = capsys.readouterr().err
+    assert "key-attestation-policy-unresolved" in output
+    assert "must-not-leak" not in output
+    assert "proof verification failed" not in output
+
+
 def test_keycloak_startup_diagnostic_includes_service_logs_and_redacts(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

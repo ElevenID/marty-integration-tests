@@ -69,6 +69,26 @@ PROXY_DIAGNOSTIC_CLASSES = {
     "upstream-timeout": re.compile(r"(?i)(?:upstream timed out|connection timed out)"),
     "no-live-upstream": re.compile(r"(?i)no live upstreams"),
 }
+OID4VCI_RUNTIME_DIAGNOSTIC_CLASSES = {
+    "key-attestation-policy-unresolved": re.compile(
+        r"(?i)key-attestation-bound proof has no resolved tenant issuer policy"
+    ),
+    "key-attestation-missing": re.compile(
+        r"(?i)issuer profile requires a key-attestation-bound proof"
+    ),
+    "key-attestation-nonce": re.compile(r"(?i)key attestation nonce does not match"),
+    "key-attestation-untrusted-certificate": re.compile(
+        r"(?i)key attestation certificate chain is not trusted"
+    ),
+    "key-attestation-signature": re.compile(
+        r"(?i)key attestation signature verification failed"
+    ),
+    "key-attestation-holder-binding": re.compile(
+        r"(?i)(?:attested public key|attested key).{0,100}(?:proof|match|binding)"
+    ),
+    "proof-signature": re.compile(r"(?i)proof (?:jwt )?signature.{0,80}(?:invalid|failed)"),
+    "invalid-nonce": re.compile(r"(?i)(?:invalid_nonce|proof nonce is missing, expired, or already used)"),
+}
 
 
 def w3c_related_resource_allowlist() -> str:
@@ -848,6 +868,27 @@ def emit_mdoc_runtime_diagnostic(path: Path) -> None:
     print("--- end mdoc verifier runtime diagnostic ---", file=sys.stderr)
 
 
+def classify_oid4vci_runtime_diagnostics(text: str) -> list[str]:
+    """Return fixed issuer categories without exposing private Compose logs."""
+    categories = [
+        name for name, pattern in OID4VCI_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)
+    ]
+    return categories or ["unclassified-runtime-failure"]
+
+
+def emit_oid4vci_runtime_diagnostic(path: Path) -> None:
+    """Print only allowlisted OID4VCI categories from the private log."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        categories = ["runtime-log-unavailable"]
+    else:
+        categories = classify_oid4vci_runtime_diagnostics(text)
+    print("--- OID4VCI issuer runtime diagnostic (redacted) ---", file=sys.stderr)
+    print(f"categories={','.join(categories)}", file=sys.stderr)
+    print("--- end OID4VCI issuer runtime diagnostic ---", file=sys.stderr)
+
+
 def emit_public_proxy_diagnostic(project: str, environment: dict[str, str]) -> None:
     """Classify proxy failures before Compose teardown without publishing logs."""
     containers = subprocess.run(
@@ -1271,6 +1312,7 @@ def run_oid4vci_issuer(
     if not started:
         emit_keycloak_initializer_diagnostic(args.run_id)
         return 1
+    result = 1
     try:
         wait_for_public_stack(environment)
         key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(
@@ -1303,7 +1345,7 @@ def run_oid4vci_issuer(
                 "OIDF_MARTY_ISSUER_DID": fixtures["oid4vci_issuer_did"],
             }
         )
-        return run(
+        result = run(
             [
                 sys.executable,
                 str(ROOT / "scripts" / "oidf_conformance.py"),
@@ -1324,12 +1366,16 @@ def run_oid4vci_issuer(
             suite_environment,
         )
     finally:
+        compose_log = args.output_dir / "private" / "compose.log"
         run(
             compose_command(args, "logs", oidf=True),
             environment,
-            capture=args.output_dir / "private" / "compose.log",
+            capture=compose_log,
         )
+        if result:
+            emit_oid4vci_runtime_diagnostic(compose_log)
         run(compose_command(args, "down", oidf=True), environment)
+    return result
 
 
 def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
