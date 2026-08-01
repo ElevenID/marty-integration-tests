@@ -142,14 +142,12 @@ def test_presentation_acceptance_reduces_verifier_reason_to_fixed_codes() -> Non
             stage="mdoc-presentation",
             expected_mode="direct_post",
             verification_result={
-                "status": "completed",
-                "result": {
-                    "decision_reason": (
-                        "Credential verification failed: Signature verification failed "
-                        "for secret-doctype: private-value; Holder device authentication "
-                        "failed: private-key-material"
-                    )
-                },
+                "status": "COMPLETED",
+                "decision_reason": (
+                    "Credential verification failed: Signature verification failed "
+                    "for secret-doctype: private-value; Holder device authentication "
+                    "failed: private-key-material"
+                ),
             },
         )
 
@@ -201,8 +199,8 @@ def test_presentation_acceptance_classifies_preverification_failures(
             stage="mdoc-presentation",
             expected_mode="direct_post",
             verification_result={
-                "status": "completed",
-                "result": {"decision_reason": reason},
+                "status": "COMPLETED",
+                "decision_reason": reason,
             },
         )
 

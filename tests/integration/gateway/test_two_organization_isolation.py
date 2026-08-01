@@ -734,7 +734,10 @@ async def test_two_principals_cannot_cross_rbac_api_key_scim_flow_or_webhook_bou
             presentation_policy_id=policy_b["id"],
         )
         flow_b = await admin.activate_flow_definition(flow_b["id"])
-        instance_b = await admin.start_flow_instance(flow_b["id"])
+        instance_b = await admin.start_flow_instance(
+            organization_id=organization_b_id,
+            flow_definition_id=flow_b["id"],
+        )
 
         for path in (
             f"/v1/flows/definitions/{flow_b['id']}",

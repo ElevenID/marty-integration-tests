@@ -110,14 +110,9 @@ def require_presentation_accepted(
     error = result.get("error")
     if error == _VERIFIER_REJECTED:
         dispatch_stage = f"{stage}-verifier-rejected"
-        decision = (
-            verification_result.get("result")
-            if isinstance(verification_result, Mapping)
-            else None
-        )
         reason = (
-            decision.get("decision_reason")
-            if isinstance(decision, Mapping)
+            verification_result.get("decision_reason")
+            if isinstance(verification_result, Mapping)
             else None
         )
         if isinstance(reason, str):

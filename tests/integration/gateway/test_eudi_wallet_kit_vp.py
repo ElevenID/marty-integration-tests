@@ -26,6 +26,7 @@ RUN_EUDI_TESTS           Gate for EUDI tests             (default: false)
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -858,9 +859,9 @@ class TestOID4VPSdJwtPresentation:
         accepted = await authenticated_gateway_client.get_verification_decision(
             flow["instance_id"]
         )
-        assert accepted["status"] == "completed"
-        assert accepted["result"]["evaluation_result"] == "passed"
-        assert accepted["result"]["decision"] == "allow"
+        assert accepted["status"] == "COMPLETED"
+        assert accepted["result"] == "passed"
+        assert accepted["decision"] == "allow"
 
         replay = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
@@ -966,10 +967,10 @@ class TestOID4VPSdJwtPresentation:
             # Implementations that finalize a cryptographic rejection must
             # expose a deny—not an allow—through the authenticated RP API.
             assert (
-                decision["status"] == "completed"
+                decision["status"] == "COMPLETED"
             ), "eudi-invariant-tamper-final-status"
             final_decision = str(
-                decision["result"].get("decision", "")
+                decision.get("decision", "")
             ).strip().lower()
             decision_category = (
                 final_decision.replace("_", "-")
@@ -981,7 +982,7 @@ class TestOID4VPSdJwtPresentation:
                 f"eudi-invariant-tamper-final-decision-{decision_category}"
             )
             assert (
-                decision["result"]["verified_claims"] == {}
+                decision["verified_claims"] == {}
             ), "eudi-invariant-tamper-final-claims"
 
     @pytest.mark.asyncio
@@ -999,8 +1000,14 @@ class TestOID4VPSdJwtPresentation:
             presentation_policy_id=vp_age_policy["id"],
             organization_id=vp_age_policy["organization_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
-            expiry_minutes=0,
+            expiry_minutes=1,
         )
+
+        # Exercise the real production clock and persisted expiry boundary.
+        # The public API deliberately rejects zero- or negative-duration
+        # requests, so manufacturing an already-expired request would bypass
+        # the contract this interoperability lane is meant to validate.
+        await asyncio.sleep(61)
 
         result = await wallet_kit.submit_presentation(
             authorization_request_uri=flow["request_uri"],
@@ -1296,11 +1303,11 @@ class TestMDocPresentation:
                 flow["instance_id"]
             )
         )
-        assert verification["status"] == "completed", verification
-        assert verification["result"]["evaluation_result"] == "passed", verification
-        assert verification["result"]["decision"] == "allow", verification
-        assert verification["result"]["verified_claims"]["given_name"] == "Erika"
-        assert verification["result"]["verified_claims"]["family_name"] == "Mustermann"
+        assert verification["status"] == "COMPLETED", verification
+        assert verification["result"] == "passed", verification
+        assert verification["decision"] == "allow", verification
+        assert verification["verified_claims"]["given_name"] == "Erika"
+        assert verification["verified_claims"]["family_name"] == "Mustermann"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

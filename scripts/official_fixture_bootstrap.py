@@ -610,6 +610,23 @@ def policy_payload(
         if mdoc
         else "OID4VP SD-JWT"
     )
+    holder_binding: dict[str, object] = {"required": presentation}
+    if presentation:
+        holder_binding.update(
+            {
+                "binding_methods": ["DEVICE_KEY"],
+                "proof_profiles": [
+                    "MDOC_DEVICE_AUTHENTICATION"
+                    if mdoc
+                    else "OID4VP_VERIFIABLE_PRESENTATION"
+                ],
+                "proof_freshness": {
+                    "challenge_required": True,
+                    "audience_binding_required": True,
+                    "replay_detection_required": True,
+                },
+            }
+        )
     return {
         "organization_id": organization_id,
         "name": f"Official {label} {run_id}",
@@ -617,7 +634,12 @@ def policy_payload(
         # OIDF and W3C Data Integrity presentations are holder bound. A JWT VC
         # verified outside a presentation is not: requiring a VP challenge on
         # that path would reject a valid credential before signature checks.
-        "holder_binding": {"required": presentation},
+        # Send the complete public holder-binding contract. The service used
+        # these same fail-closed defaults for older stored policies, but public
+        # callers must now state the proof and freshness requirements
+        # explicitly so policy intent cannot be inferred differently by a
+        # generated client or another service.
+        "holder_binding": holder_binding,
         "credential_requirements": [
             {
                 "credential_template_id": template_id,
