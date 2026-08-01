@@ -185,7 +185,7 @@ def test_failure_diagnostics_extract_only_allowlisted_public_facts(tmp_path: Pat
                     "http_status": 400,
                     "expected_status_codes": [200, 202],
                     "body": {"access_token": "must-not-leak"},
-                    "error_description": "must not be copied",
+                    "error_description": "Key attestation nonce does not match issuance nonce: must-not-leak",
                 },
             },
             {
@@ -212,6 +212,7 @@ def test_failure_diagnostics_extract_only_allowlisted_public_facts(tmp_path: Pat
             "block": "Verify Credential Endpoint Response",
             "http_status": 400,
             "expected_status_codes": [200, 202],
+            "error_category": "key-attestation-nonce",
         },
         {
             "module": "oid4vci-1_0-issuer-happy-flow",
@@ -219,11 +220,45 @@ def test_failure_diagnostics_extract_only_allowlisted_public_facts(tmp_path: Pat
             "block": "Verify Credential Endpoint Response",
             "error": "invalid_proof",
             "expected_error": "invalid_nonce",
+            "error_category": "key-attestation-nonce",
         },
     ]
     serialized = (output / "failure-diagnostics.json").read_text(encoding="utf-8")
     assert "must-not-leak" not in serialized
     assert "secret-id" not in serialized
+
+
+def test_failure_diagnostics_classify_module_response_without_copying_description(tmp_path: Path) -> None:
+    output = tmp_path / "results"
+    output.mkdir()
+    exported = {
+        "testInfo": {"testName": "oid4vci-1_0-issuer-happy-flow"},
+        "results": [
+            {
+                "src": "CallProtectedResource",
+                "result": "INFO",
+                "args": {
+                    "response": {
+                        "error_description": (
+                            "Key-attestation-bound proof has no resolved tenant issuer policy: must-not-leak"
+                        )
+                    }
+                },
+            },
+            {
+                "src": "EnsureHttpStatusCodeIsAnyOf",
+                "result": "FAILURE",
+                "args": {"http_status": 400, "expected_status_codes": [200, 202]},
+            },
+        ],
+    }
+    with zipfile.ZipFile(output / "official.zip", "w") as archive:
+        archive.writestr("module.json", json.dumps(exported))
+
+    diagnostics = oidf.write_failure_diagnostics(output)
+
+    assert diagnostics[0]["error_category"] == "key-attestation-policy-unresolved"
+    assert "must-not-leak" not in (output / "failure-diagnostics.json").read_text(encoding="utf-8")
 
 
 def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:

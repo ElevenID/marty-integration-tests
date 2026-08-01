@@ -227,6 +227,44 @@ def write_failure_diagnostics(output: Path) -> list[dict[str, object]]:
         "expected_error",
     }
 
+    def error_category(description: str) -> str | None:
+        """Map owned product descriptions to non-sensitive stable categories."""
+        normalized = description.casefold()
+        categories = (
+            ("key attestation nonce", "key-attestation-nonce"),
+            ("has no resolved tenant issuer policy", "key-attestation-policy-unresolved"),
+            ("issuer profile requires a key-attestation-bound proof", "key-attestation-missing"),
+            ("proof key_attestation header", "key-attestation-header"),
+            ("certificate chain is not trusted", "key-attestation-untrusted-certificate"),
+            ("key attestation certificate", "key-attestation-certificate"),
+            ("key attestation algorithm", "key-attestation-algorithm"),
+            ("key attestation typ", "key-attestation-type"),
+            ("key attestation signature", "key-attestation-signature"),
+            ("key-storage requirements", "key-attestation-storage"),
+            ("user-authentication requirements", "key-attestation-user-authentication"),
+            ("attested public key", "key-attestation-holder-binding"),
+            ("proof signature", "proof-signature"),
+            ("proof nonce", "proof-nonce"),
+            ("proof of possession", "proof-of-possession"),
+        )
+        return next((category for phrase, category in categories if phrase in normalized), None)
+
+    def error_categories(value: object) -> set[str]:
+        categories: set[str] = set()
+        stack = [value]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                for key, child in current.items():
+                    if key == "error_description" and isinstance(child, str):
+                        category = error_category(child)
+                        if category is not None:
+                            categories.add(category)
+                    stack.append(child)
+            elif isinstance(current, list):
+                stack.extend(current)
+        return categories
+
     def safe_details(value: object) -> dict[str, object]:
         found: dict[str, object] = {}
         if isinstance(value, dict):
@@ -262,6 +300,7 @@ def write_failure_diagnostics(output: Path) -> list[dict[str, object]]:
                 module = test_info.get("testName")
                 if not isinstance(module, str) or not module:
                     continue
+                module_categories = error_categories(results)
                 blocks: dict[str, str] = {}
                 for entry in results:
                     if not isinstance(entry, dict):
@@ -283,6 +322,12 @@ def write_failure_diagnostics(output: Path) -> list[dict[str, object]]:
                     if isinstance(block_id, str) and block_id in blocks:
                         diagnostic["block"] = blocks[block_id]
                     diagnostic.update(safe_details(entry))
+                    entry_categories = error_categories(entry)
+                    category = next(iter(entry_categories), None)
+                    if category is None and len(module_categories) == 1:
+                        category = next(iter(module_categories))
+                    if category is not None:
+                        diagnostic["error_category"] = category
                     diagnostics.append(diagnostic)
 
     destination = output / "failure-diagnostics.json"
