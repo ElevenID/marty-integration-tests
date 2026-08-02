@@ -1565,6 +1565,7 @@ class GatewayClient:
         signing_key_reference: Optional[str] = None,
         key_purpose: str = "vc_jwt_issuer",
         status: str = "active",
+        key_attestation_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create or return an issuer profile bound to a signing service."""
         payload: Dict[str, Any] = {
@@ -1576,6 +1577,8 @@ class GatewayClient:
         }
         if signing_key_reference:
             payload["signing_key_reference"] = signing_key_reference
+        if key_attestation_policy is not None:
+            payload["key_attestation_policy"] = key_attestation_policy
         response = await self._request(
             "POST",
             "/v1/signing-keys/issuer-profiles",

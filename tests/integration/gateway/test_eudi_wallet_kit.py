@@ -40,7 +40,7 @@ import uuid
 import pytest
 
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
-from .helpers.gateway_client import GatewayClient, GatewayClientError
+from .helpers.gateway_client import GatewayClient
 
 logger = logging.getLogger(__name__)
 
@@ -111,42 +111,14 @@ async def eudi_sd_jwt_compliance_profile(
 
 @pytest.fixture
 async def eudi_sd_jwt_issuer_profile(
-    authenticated_gateway_client: GatewayClient,
     eudi_test_org,
 ):
-    """Provision the normal KMS-backed issuer identity required for issuance."""
-    service = None
-    resolve_error: Exception | None = None
-    for organization_id in (eudi_test_org["id"], None):
-        try:
-            resolved = await authenticated_gateway_client.resolve_signing_service(
-                organization_id=organization_id,
-                credential_format="dc+sd-jwt",
-                key_purpose="vc_jwt_issuer",
-                algorithm="ES256",
-            )
-            candidate = resolved.get("service")
-            if isinstance(candidate, dict) and candidate.get("id"):
-                service = candidate
-                break
-        except GatewayClientError as exc:
-            resolve_error = exc
-    if not isinstance(service, dict) or not service.get("id"):
-        raise GatewayClientError(
-            "No signing service is available for EUDI SD-JWT issuance: "
-            f"{resolve_error}"
-        )
-    domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local").replace("https://", "").replace("http://", "").strip("/")
-    issuer_did = f"did:web:{domain.replace('/', ':')}:orgs:{eudi_test_org['id']}"
-    return await authenticated_gateway_client.create_issuer_profile(
-        organization_id=eudi_test_org["id"],
-        name="EUDI Wallet Kit Issuer",
-        issuer_did=issuer_did,
-        signing_service_id=str(service["id"]),
-        signing_key_reference=str(service.get("key_reference") or "") or None,
-        key_purpose="vc_jwt_issuer",
-        status="active",
-    )
+    """Use the one tenant-bound profile provisioned by the public lane API."""
+    issuer_did = os.environ.get("EUDI_TEST_ISSUER_DID", "").strip()
+    if not issuer_did:
+        raise RuntimeError("EUDI credential issuer DID is required")
+    assert issuer_did.endswith(f":orgs:{eudi_test_org['id']}")
+    return {"issuer_did": issuer_did}
 
 
 @pytest.fixture

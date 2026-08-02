@@ -5,9 +5,11 @@ Last updated: 2026-08-01
 
 ## Current evidence snapshot
 
-The immutable `marty-ui` v1.1.90 stack is the current reviewed target. Its
+The immutable `marty-ui` v1.1.93 stack is the current checked-in target. Its
 manifest digest is
-`sha256:1529c3f8e28cec088ae14f4173fc2223a8a7bffeffe87ec9d21c157fbe4811f9`.
+`sha256:126224b36df4256c3c3ebc2faa1960aea9f63846cf1adc747f3c54219025f2e9`.
+The evidence bullets immediately below retain the prior v1.1.90 results where
+named; they are not reinterpreted as v1.1.93 evidence.
 
 - The unchanged OIDF issuer lane passed 16 modules with 1,076 successes,
   zero failures, and zero warnings in
@@ -42,6 +44,49 @@ formats, and compatibility-only code are removed rather than preserved.
 This does not authorize removal of current standards capabilities: mdoc,
 SD-JWT VC, JWT VC, VCDM v2 Data Integrity, OID4VCI, OID4VP, HAIP, and EUDI
 paths remain acceptance requirements.
+
+## Current EUDI wallet-library upgrade audit (2026-08-02)
+
+The EUDI lane now pins the current official OID4VCI wallet library v0.13.0
+source at commit `07dc0b96dcd5c56197414c80c0fb70ce0d4f377d`. The retired web-wallet
+tester and its draft-era behavior were removed. Imported upstream source,
+assertions, expected results, selections, and exclusions remain unchanged.
+
+The upgrade exposed four product or ElevenID-harness defects before a
+credential could be accepted:
+
+1. Marty's JWT proof metadata omitted `key_attestations_required` when a
+   profile imposed no additional wallet-key constraints. The current official
+   EUDI parser rejects that metadata instead of treating the member as absent.
+2. The ElevenID HTTP facade returned a JOSE raw `r || s` ECDSA signature from
+   its callback. The official library's callback contract expects JCA/ASN.1
+   DER and performs the DER-to-JOSE conversion itself. This produced an
+   `Invalid ECDSA signature format` error inside the official library.
+3. Marty rejected the current ETSI key-attestation proof selector `kid: "0"`.
+   In this profile it means the first public key in the already validated
+   `attested_keys` array; it is not an unrestricted numeric index or a public
+   KMS selector.
+4. One owned SD-JWT fixture created a second profile for an already provisioned
+   issuer DID, while owned mdoc and DTC fixtures created purpose-specific
+   profiles without the external wallet-attester trust policy. The duplicate
+   path is removed, and each legitimate format/purpose profile is configured
+   explicitly through the public profile-administration API.
+
+No compliance assertion was relaxed to address these findings. The obsolete
+Python pseudo-wallet tests and a dummy-presentation event-count test were
+deleted because they bypassed current key attestation or submitted an invalid
+placeholder presentation and therefore provided misleading evidence. Current
+positive evidence must traverse the official wallet library, the public
+organization-scoped gateway, DID-first profile resolution, issuer-profile
+mediated custody, and the production issuance or verification callback.
+Crafted-response helpers remain evidence only for negative signature, replay,
+expiry, and malformed-input cases; they cannot establish a positive
+interoperability claim.
+
+The remediation is release-gated. The report must not mark the upgraded lane
+passed until it succeeds against a released immutable stack and records the
+exact manifest, component digests, official source commit, and unchanged-source
+checks.
 
 ## Purpose
 

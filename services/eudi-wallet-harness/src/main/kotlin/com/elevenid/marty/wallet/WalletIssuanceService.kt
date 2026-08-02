@@ -32,6 +32,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyStore
 import java.security.SecureRandom
+import java.security.Signature
 import java.time.Duration
 import java.time.Instant
 import java.util.Date
@@ -366,14 +367,16 @@ object WalletIssuanceService {
         val proofs = ProofSpecification.JwtProof { nonce, preferredPeriod ->
             val attestation = keyAttestation(ecKey, nonce, preferredPeriod)
             object : Signer<KeyAttestationJWT> {
-            override val javaAlgorithm: String = jcaAlgorithm
+                override val javaAlgorithm: String = jcaAlgorithm
                 override suspend fun acquire(): SignOperation<KeyAttestationJWT> =
                     SignOperation(
-                    function = SignFunction { input ->
-                            ECDSASigner(ecKey)
-                                .sign(JWSHeader(JWSAlgorithm.ES256), input)
-                                .decode()
-                    },
+                        // The EUDI signing callback follows the JCA contract:
+                        // ECDSA signatures are ASN.1 DER here. The official
+                        // library converts DER to the JOSE r||s representation
+                        // when it serializes the proof JWT.
+                        function = SignFunction { input ->
+                            derEncodedEcdsaSignature(ecKey, input)
+                        },
                         publicMaterial = attestation,
                     )
 
@@ -385,6 +388,15 @@ object WalletIssuanceService {
             proofs = proofs,
             privateKey = ecKey,
         )
+    }
+
+    internal fun derEncodedEcdsaSignature(
+        privateKey: ECKey,
+        input: ByteArray,
+    ): ByteArray = Signature.getInstance("SHA256withECDSA").run {
+        initSign(privateKey.toECPrivateKey())
+        update(input)
+        sign()
     }
 
     /**
