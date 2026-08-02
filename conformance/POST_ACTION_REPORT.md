@@ -1,13 +1,13 @@
 # Protocol Compliance Post-Action Report
 
 Status: in progress  
-Last updated: 2026-08-01
+Last updated: 2026-08-02
 
 ## Current evidence snapshot
 
-The immutable `marty-ui` v1.1.93 stack is the current checked-in target. Its
+The immutable `marty-ui` v1.1.94 stack is the current checked-in target. Its
 manifest digest is
-`sha256:126224b36df4256c3c3ebc2faa1960aea9f63846cf1adc747f3c54219025f2e9`.
+`sha256:76305f22fd21e5939aae26d903028d2d5fa30c409842a752424fe6511c8f5e7c`.
 The evidence bullets immediately below retain the prior v1.1.90 results where
 named; they are not reinterpreted as v1.1.93 evidence.
 
@@ -83,10 +83,22 @@ Crafted-response helpers remain evidence only for negative signature, replay,
 expiry, and malformed-input cases; they cannot establish a positive
 interoperability claim.
 
-The remediation is release-gated. The report must not mark the upgraded lane
-passed until it succeeds against a released immutable stack and records the
-exact manifest, component digests, official source commit, and unchanged-source
-checks.
+The remediation passed its release gate in
+[run 30739444518](https://github.com/ElevenID/marty-integration-tests/actions/runs/30739444518).
+The run executed harness commit
+`abd99e71234309091d9e21128fa686780ffe226f` against immutable `marty-ui`
+v1.1.94 commit `0c1740491619f04aae11f69ca50e3346917d61c9` and the manifest digest above.
+All 45 tests passed with zero failures, errors, or skips. The evidence pins
+official OID4VCI library v0.13.0 at
+`07dc0b96dcd5c56197414c80c0fb70ce0d4f377d`, OID4VP v0.15.1, SD-JWT
+v0.20.1, Multipaz v0.100.0, and verifier endpoint v0.11.0. The sanitized
+artifact is ID `8830838450`, digest
+`sha256:7725c9a8f6b93170967fe8803ae72c5cf198178cb8e2bc83931ee9ed75fb3b17`.
+It records the released issuance image
+`sha256:a0a0962dd5c6fa113fb0dbb265ba1a2ceaa76a98af4df0ecbf19c0548593df92`
+and UI, services, and migrations image digests. Imported official source and
+assertions were not changed; only ElevenID-owned adapters, fixtures, and
+negative-response mutation helpers changed.
 
 ## Purpose
 
