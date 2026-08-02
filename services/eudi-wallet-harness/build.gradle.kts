@@ -19,7 +19,7 @@ dependencyLocking {
 
 dependencies {
     // EUDI Wallet Kit — OID4VCI (wallet role)
-    implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.9.1")
+    implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.13.0")
     // EUDI Wallet Kit — OID4VP (wallet role)
     implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vp-kt:0.15.1")
     // EUDI SD-JWT (for decoding issued credentials)

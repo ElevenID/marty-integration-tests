@@ -6,9 +6,16 @@
  */
 package com.elevenid.marty.wallet
 
+import com.nimbusds.jose.JOSEObjectType
+import com.nimbusds.jose.JWSAlgorithm
+import com.nimbusds.jose.JWSHeader
+import com.nimbusds.jose.crypto.ECDSASigner
 import com.nimbusds.jose.jwk.Curve
 import com.nimbusds.jose.jwk.ECKey
+import com.nimbusds.jose.jwk.JWKSet
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator
+import com.nimbusds.jwt.JWTClaimsSet
+import com.nimbusds.jwt.SignedJWT
 import eu.europa.ec.eudi.openid4vci.*
 import io.ktor.client.*
 import io.ktor.client.engine.java.*
@@ -25,8 +32,9 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyStore
 import java.security.SecureRandom
-import java.security.Signature
-import java.security.interfaces.ECPrivateKey
+import java.time.Duration
+import java.time.Instant
+import java.util.Date
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 
@@ -194,7 +202,7 @@ object WalletIssuanceService {
     }
 
     private data class HolderProofMaterial(
-        val proofs: ProofsSpecification,
+        val proofs: ProofSpecification,
         val privateKey: ECKey,
     )
 
@@ -210,7 +218,7 @@ object WalletIssuanceService {
             2048,
             CredentialResponseEncryptionPolicy.SUPPORTED,
         ),
-        parUsage = ParUsage.IfSupported,
+        parUsage = ParUsage.IfSupported(),
         issuerMetadataPolicy = IssuerMetadataPolicy.IgnoreSigned,
     )
 
@@ -218,20 +226,11 @@ object WalletIssuanceService {
         credentialOfferUri: String,
         httpClient: HttpClient,
     ): Issuer {
-        val offer = try {
-            CredentialOfferRequestResolver(httpClient, vciConfig.issuerMetadataPolicy)
-                .resolve(credentialOfferUri)
-                .getOrThrow()
-        } catch (exception: Exception) {
-            if (exception is CancellationException) throw exception
-            throw OfferResolutionStageException("resolver", exception)
-        }
-
         return try {
-            Issuer.make(vciConfig, offer, httpClient).getOrThrow()
+            Issuer.make(vciConfig, credentialOfferUri, httpClient).getOrThrow().first
         } catch (exception: Exception) {
             if (exception is CancellationException) throw exception
-            throw OfferResolutionStageException("issuer-construction", exception)
+            throw OfferResolutionStageException("offer-and-issuer-resolution", exception)
         }
     }
 
@@ -308,42 +307,82 @@ object WalletIssuanceService {
         }
     }
 
-    /**
-     * Create a P-256 BatchSigner for proof-of-possession.
-     * This mirrors what the EUDI Reference Wallet does internally.
-     * javaAlgorithm must be the JCA name ("SHA256withECDSA"), which
-     * the EUDI library maps to JWS alg "ES256".
-     */
+    private fun walletAttester(): ECKey {
+        val path = requireNotNull(System.getenv("EUDI_WALLET_ATTESTER_JWKS_FILE")) {
+            "EUDI_WALLET_ATTESTER_JWKS_FILE is required"
+        }
+        val key = JWKSet.load(Path.of(path).toFile()).keys.singleOrNull() as? ECKey
+            ?: error("wallet attester JWKS must contain exactly one EC key")
+        require(key.isPrivate) { "wallet attester JWKS must contain its disposable private key" }
+        require(key.x509CertChain?.isNotEmpty() == true) {
+            "wallet attester key must carry its X.509 certificate chain"
+        }
+        return key
+    }
+
+    private fun keyAttestation(
+        attestedKey: ECKey,
+        nonce: Nonce?,
+        preferredPeriod: PositiveDuration?,
+    ): KeyAttestationJWT {
+        val attester = walletAttester()
+        val now = Instant.now()
+        val lifetime = preferredPeriod?.value ?: Duration.ofHours(1)
+        val expires = now.plus(lifetime.coerceAtMost(Duration.ofHours(4)))
+        val statusExpires = now.plus(Duration.ofHours(4))
+        val claims = JWTClaimsSet.Builder()
+            .issueTime(Date.from(now))
+            .expirationTime(Date.from(expires))
+            .claim("attested_keys", listOf(attestedKey.toPublicJWK().toJSONObject()))
+            .claim("key_storage", listOf("iso_18045_high"))
+            .claim("user_authentication", listOf("iso_18045_high"))
+            .claim("certification", "https://wallet-attester.test/certification")
+            .claim("nonce", nonce?.value)
+            .claim(
+                "key_storage_status",
+                mapOf(
+                    "status" to mapOf(
+                        "status_list" to mapOf(
+                            "idx" to 0,
+                            "uri" to "https://wallet-attester.test/status",
+                        ),
+                    ),
+                    "exp" to statusExpires.epochSecond,
+                ),
+            )
+            .build()
+        val header = JWSHeader.Builder(JWSAlgorithm.ES256)
+            .type(JOSEObjectType("key-attestation+jwt"))
+            .x509CertChain(attester.x509CertChain)
+            .build()
+        val jwt = SignedJWT(header, claims).apply { sign(ECDSASigner(attester)) }
+        return KeyAttestationJWT(jwt.serialize())
+    }
+
+    /** Create a P-256 holder key and a wallet-provider key attestation. */
     private fun createP256ProofSigner(): HolderProofMaterial {
         val ecKey: ECKey = ECKeyGenerator(Curve.P_256).generate()
-        val publicJwk = ecKey.toPublicJWK()
-        val privateKey: ECPrivateKey = ecKey.toECPrivateKey()
-        val bindingKey = JwtBindingKey.Jwk(publicJwk)
         val jcaAlgorithm = "SHA256withECDSA"
-
-        val batchSigner = object : BatchSigner<JwtBindingKey> {
+        val proofs = ProofSpecification.JwtProof { nonce, preferredPeriod ->
+            val attestation = keyAttestation(ecKey, nonce, preferredPeriod)
+            object : Signer<KeyAttestationJWT> {
             override val javaAlgorithm: String = jcaAlgorithm
-
-            override suspend fun authenticate(): BatchSignOperation<JwtBindingKey> {
-                val signOp = SignOperation<JwtBindingKey>(
+                override suspend fun acquire(): SignOperation<KeyAttestationJWT> =
+                    SignOperation(
                     function = SignFunction { input ->
-                        val sig = Signature.getInstance(jcaAlgorithm)
-                        sig.initSign(privateKey)
-                        sig.update(input)
-                        sig.sign()
+                            ECDSASigner(ecKey)
+                                .sign(JWSHeader(JWSAlgorithm.ES256), input)
+                                .decode()
                     },
-                    publicMaterial = bindingKey,
-                )
-                return BatchSignOperation(listOf(signOp))
-            }
+                        publicMaterial = attestation,
+                    )
 
-            override suspend fun release(signOps: BatchSignOperation<JwtBindingKey>?) {
-                // no-op
+                override suspend fun release(signOperation: SignOperation<KeyAttestationJWT>?) = Unit
             }
         }
 
         return HolderProofMaterial(
-            proofs = ProofsSpecification.JwtProofs.NoKeyAttestation(batchSigner),
+            proofs = proofs,
             privateKey = ecKey,
         )
     }

@@ -960,6 +960,7 @@ def bootstrap_eudi(
     *,
     organization_id: str,
     run_id: str,
+    key_attestation_trust_anchor_pem: str,
     request: Callable[..., object],
 ) -> dict[str, str]:
     """Create EUDI fixtures while keeping custody details behind the profile.
@@ -975,6 +976,7 @@ def bootstrap_eudi(
         key_purpose: str,
         *,
         attach_certificate: bool = False,
+        trust_wallet_attester: bool = False,
     ) -> tuple[str, str]:
         custody_service = resolve_signing_service(
             gateway_url,
@@ -993,6 +995,9 @@ def bootstrap_eudi(
             algorithm="ES256",
             label=label,
             key_purpose=key_purpose,
+            key_attestation_trust_anchor_pem=(
+                key_attestation_trust_anchor_pem if trust_wallet_attester else None
+            ),
         )
         created = request(
             gateway_url,
@@ -1043,6 +1048,7 @@ def bootstrap_eudi(
         "EUDI SD-JWT",
         "vc_jwt_issuer",
         attach_certificate=True,
+        trust_wallet_attester=True,
     )
     request_profile_id, request_issuer_did = provision_profile(
         "EUDI OID4VP request",
@@ -1133,14 +1139,15 @@ def bootstrap(
         raise ValueError("OID4VP fixture bootstrap requires the official runner public signing JWK")
     if mode == "oid4vp-mdoc" and oidf_mdoc_trust_anchor_pem is None:
         raise ValueError("OID4VP mdoc fixture bootstrap requires the official runner document certificate")
-    if mode == "oid4vci" and oidf_key_attestation_trust_anchor_pem is None:
-        raise ValueError("OID4VCI fixture bootstrap requires a key-attestation trust anchor")
+    if mode in {"oid4vci", "eudi"} and oidf_key_attestation_trust_anchor_pem is None:
+        raise ValueError(f"{mode} fixture bootstrap requires a key-attestation trust anchor")
     if mode == "eudi":
         return bootstrap_eudi(
             gateway_url,
             session_id,
             organization_id=organization_id,
             run_id=run_id,
+            key_attestation_trust_anchor_pem=oidf_key_attestation_trust_anchor_pem,
             request=request,
         )
     result = {"organization_id": organization_id}
@@ -1461,9 +1468,9 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--oidf-runner-config is required for OID4VP fixture bootstrap")
     if args.mode == "oid4vp-mdoc" and args.oidf_runner_source is None:
         raise ValueError("--oidf-runner-source is required for OID4VP mdoc fixture bootstrap")
-    if args.mode == "oid4vci" and args.oidf_key_attestation_trust_anchor is None:
+    if args.mode in {"oid4vci", "eudi"} and args.oidf_key_attestation_trust_anchor is None:
         raise ValueError(
-            "--oidf-key-attestation-trust-anchor is required for OID4VCI fixture bootstrap"
+            "--oidf-key-attestation-trust-anchor is required for OID4VCI and EUDI fixture bootstrap"
         )
     gateway = https_url(args.gateway_url, "gateway URL")
     signer_public_jwk = (
@@ -1478,7 +1485,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     key_attestation_trust_anchor_pem = (
         key_attestation_trust_anchor(args.oidf_key_attestation_trust_anchor)
-        if args.oidf_key_attestation_trust_anchor is not None and args.mode == "oid4vci"
+        if args.oidf_key_attestation_trust_anchor is not None and args.mode in {"oid4vci", "eudi"}
         else None
     )
     fixtures = bootstrap(

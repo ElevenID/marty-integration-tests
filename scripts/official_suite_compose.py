@@ -174,11 +174,10 @@ def cleanup_eudi_environment(environment: dict[str, str], material_dir: Path) ->
             "OIDF_CONFORMANCE_BRIDGE_ALIAS": "cleanup.invalid",
             "OIDF_TLS_CERT_DIR": str(directory),
             OID4VP_TRUST_ANCHOR_FILE_ENV: str(directory / ROOT_CA_FILE),
-            "EUDI_WALLET_TESTER_PUBLIC_URL": "https://cleanup.invalid:25051",
-            "EUDI_WALLET_TESTER_TLS_HOST_PORT": "25051",
             "EUDI_VERIFIER_PUBLIC_URL": "https://cleanup.invalid:28091",
             "EUDI_VERIFIER_TLS_HOST_PORT": "28091",
             "EUDI_WALLET_KIT_HOST_PORT": "29090",
+            "EUDI_WALLET_ATTESTER_JWKS_FILE": str(directory / "wallet-attester.jwks.json"),
             "EUDI_VERIFIER_KEYSTORE_FILE": str(directory / EUDI_KEYSTORE_FILE),
             "EUDI_VERIFIER_KEYSTORE_TYPE": "JKS",
             "EUDI_VERIFIER_KEYSTORE_PASSWORD": "unused-cleanup-value",
@@ -207,7 +206,6 @@ def wait_for_eudi_readiness(environment: dict[str, str]) -> None:
     )
     probes = {
         "Marty public gateway": environment["OIDF_PUBLIC_BASE_URL"] + "/.well-known/openid-configuration",
-        "EUDI wallet tester": environment["EUDI_WALLET_TESTER_PUBLIC_URL"] + "/",
         "EUDI verifier": environment["EUDI_VERIFIER_PUBLIC_URL"] + "/swagger-ui",
         "EUDI wallet kit": wallet_kit.rstrip("/") + "/health",
     }
@@ -275,6 +273,10 @@ def validate_remote_bind_contract(
         _absolute_remote_path(
             environment.get(OID4VP_TRUST_ANCHOR_FILE_ENV, ""),
             OID4VP_TRUST_ANCHOR_FILE_ENV,
+        )
+        _absolute_remote_path(
+            environment.get("EUDI_WALLET_ATTESTER_JWKS_FILE", ""),
+            "EUDI_WALLET_ATTESTER_JWKS_FILE",
         )
 
 

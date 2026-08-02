@@ -13,14 +13,10 @@ def service_block(compose: str, service: str, next_service: str) -> str:
 def test_eudi_reference_wallets_only_reach_marty_through_the_tls_bridge() -> None:
     compose = (ROOT / "conformance" / "eudi-reference.compose.yml").read_text(encoding="utf-8")
 
-    port_bridge = service_block(compose, "eudi-marty-public-port-bridge", "eudi-wallet-tester")
-    wallet_tester = service_block(compose, "eudi-wallet-tester", "eudi-wallet-tester-tls")
+    port_bridge = service_block(compose, "eudi-marty-public-port-bridge", "eudi-verifier-material-init")
     wallet_kit = service_block(compose, "eudi-wallet-kit", "networks")
-    assert "networks: [default, marty_public_url]" in wallet_tester
     assert "networks: [default, marty_public_url]" in wallet_kit
-    assert "marty_oidf_bridge" not in wallet_tester
     assert "marty_oidf_bridge" not in wallet_kit
-    assert "marty-network" not in wallet_tester
     assert "marty-network" not in wallet_kit
 
     assert "docker.io/alpine/socat:1.8.0.3@sha256:" in port_bridge
@@ -43,9 +39,6 @@ def test_eudi_reference_services_use_real_ca_and_access_certificate_contracts() 
     verifier = service_block(compose, "eudi-verifier", "eudi-verifier-tls")
     wallet_kit = service_block(compose, "eudi-wallet-kit", "networks")
 
-    assert "REQUESTS_CA_BUNDLE: /certs/root-ca.pem" in compose
-    assert "service_url: ${EUDI_WALLET_TESTER_PUBLIC_URL" in compose
-    assert "HTTPS origin without a trailing slash}/" in compose
     assert "VERIFIER_DEFAULTHTTPRESPONSEMODE" in compose
     assert "VERIFIER_DEFEAULTHTTPRESPONSEMODE" not in compose
     assert "VERIFIER_ACCESS_CERTIFICATE_SIGNING_ALGORITHM" in compose
@@ -59,10 +52,11 @@ def test_eudi_reference_services_use_real_ca_and_access_certificate_contracts() 
     assert "-Djavax.net.ssl.trustStoreType=JKS" in compose
     assert "${EUDI_OID4VP_TRUST_ANCHOR_FILE:?" in compose
     assert ":/oid4vp-trust/anchors.pem:ro" in compose
-    assert compose.count("healthcheck:") >= 3
-    assert "urllib.request.urlopen('http://127.0.0.1:5000/'" in compose
-    assert compose.count('["CMD", "nginx", "-t"]') == 2
-    assert compose.count("${EUDI_CONFORMANCE_CONFIG_ROOT:-./eudi-reference}") == 2
+    assert "${EUDI_WALLET_ATTESTER_JWKS_FILE:?" in compose
+    assert ":/wallet-attester/attester.jwks.json:ro" in compose
+    assert compose.count("healthcheck:") >= 1
+    assert compose.count('["CMD", "nginx", "-t"]') == 1
+    assert compose.count("${EUDI_CONFORMANCE_CONFIG_ROOT:-./eudi-reference}") == 1
     assert "mem_limit: 2g" in verifier
     assert 'JAVA_TOOL_OPTIONS: "-XX:ActiveProcessorCount=2 -Xss512k"' in verifier
     assert "mem_limit: 768m" in wallet_kit

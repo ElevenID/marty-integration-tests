@@ -7,11 +7,7 @@ implementation services:
 
   - EUDI Verifier Endpoint: validates that credentials issued by Marty can
     be parsed and verified by the EU reference verifier.
-  - EUDI Wallet Tester: validates that Marty's issuer endpoints are
-    compatible with the EUDI wallet tester's OID4VCI client.
-
-These tests require the EUDI services to be running (added by the
-eudi-wallet-tester and eudi-verifier containers in docker-compose.yml).
+These tests require the EUDI verifier service to be running.
 
 Run with:
     make test-eudi
@@ -22,14 +18,12 @@ Environment variables
 ---------------------
 GATEWAY_URL              Gateway base URL               (default: http://localhost:8000)
 EUDI_VERIFIER_URL        EUDI verifier base URL         (default: http://localhost:8090)
-EUDI_WALLET_TESTER_URL   EUDI wallet tester base URL    (default: https://localhost:5000)
 TEST_ORG_ID              Organization ID                (default: 22222222-...)
 RUN_EUDI_TESTS           Gate for EUDI tests            (default: false)
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import uuid
@@ -42,7 +36,6 @@ from .helpers.eudi_client import (
     PID_DCQL_QUERY,
     SD_JWT_DCQL_QUERY,
     EUDIVerifierClient,
-    EUDIWalletTesterClient,
     build_kb_jwt,
     dcql_query_for_sd_jwt,
     select_disclosures,
@@ -64,7 +57,6 @@ DEFAULT_ORG_ID = "22222222-2222-2222-2222-222222222222"
 ORG_ID = os.getenv("TEST_ORG_ID", DEFAULT_ORG_ID)
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 EUDI_VERIFIER_URL = os.getenv("EUDI_VERIFIER_URL", "http://localhost:8090")
-EUDI_WALLET_TESTER_URL = os.getenv("EUDI_WALLET_TESTER_URL", "http://localhost:5050")
 
 # The official lane injects disposable template IDs created through the public
 # API. Defaults remain only for the older opt-in local developer environment.
@@ -123,13 +115,6 @@ async def eudi_vp_wallet() -> OID4VPWalletClient:
     client = OID4VPWalletClient(
         profile=EUDI_WALLET_PROFILE, verifier_base_url=GATEWAY_URL,
     )
-    yield client
-    await client.close()
-
-
-@pytest.fixture
-async def eudi_wallet_tester() -> EUDIWalletTesterClient:
-    client = EUDIWalletTesterClient(base_url=EUDI_WALLET_TESTER_URL)
     yield client
     await client.close()
 
@@ -470,8 +455,8 @@ class TestEUDIMetadataCompatibility:
     async def test_openid_config_has_par_endpoint(self):
         """OIDC discovery must advertise pushed_authorization_request_endpoint.
 
-        The EUDI wallet tester requires this field (RFC 9126) and crashes
-        with a KeyError if it's missing.
+        The current EUDI wallet library uses this RFC 9126 endpoint when the
+        authorization server advertises PAR support.
         """
         import httpx
 
@@ -694,160 +679,9 @@ class TestEUDIVerifierCryptoValidation:
 # EUDI Wallet Tester — Container Integration
 # ═══════════════════════════════════════════════════════════════════════════
 
-class TestEUDIWalletTesterIntegration:
-    """Verify the EUDI wallet tester container is wired to Marty.
-
-    These tests exercise the actual Flask-based EUDI wallet tester
-    container (not our headless client).  They prove:
-      1. The container is running and serving its Flask UI.
-      2. It is configured to point at the Marty gateway (via serv_url).
-      3. Its /preauth endpoint correctly redirects to the gateway.
-    """
-
-    @pytest.mark.asyncio
-    async def test_wallet_tester_is_reachable(
-        self, eudi_wallet_tester: EUDIWalletTesterClient,
-    ):
-        """Wallet tester home page should render."""
-        info = await eudi_wallet_tester.get_home_page()
-        assert info["status_code"] == 200, (
-            f"Wallet tester returned {info['status_code']}"
-        )
-        assert info["contains_wallet_test"], (
-            "Home page missing 'WALLET Test' heading"
-        )
-
-    @pytest.mark.asyncio
-    async def test_wallet_tester_has_credential_offer_button(
-        self, eudi_wallet_tester: EUDIWalletTesterClient,
-    ):
-        """Wallet tester home page should have credential offer action."""
-        info = await eudi_wallet_tester.get_home_page()
-        assert info["contains_credential_offer"], (
-            "Home page missing credential offer button"
-        )
-
-    @pytest.mark.asyncio
-    async def test_wallet_tester_preauth_redirects_to_gateway(
-        self, eudi_wallet_tester: EUDIWalletTesterClient,
-    ):
-        """The /preauth route should redirect to the Marty gateway.
-
-        The wallet tester's serv_url env var should point it at gateway:8000.
-        The /preauth endpoint redirects to {serv_url}/dynamic/preauth.
-        """
-        info = await eudi_wallet_tester.trigger_preauth()
-        assert info["status_code"] in (301, 302, 303, 307, 308), (
-            f"/preauth should redirect, got {info['status_code']}"
-        )
-        assert info["redirects_to_gateway"], (
-            f"/preauth redirect target should mention gateway: "
-            f"{info['redirect_location']}"
-        )
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # EUDI Wallet Tester — Full OID4VCI Metadata Flow
 # ═══════════════════════════════════════════════════════════════════════════
-
-class TestEUDIWalletTesterMetadataFlow:
-    """Drive the EUDI wallet tester through Marty's metadata endpoints.
-
-    These tests exercise the wallet tester's *own* OID4VCI client code
-    against Marty — not our headless wallet.  The tester internally
-    fetches ``.well-known/openid-configuration`` and
-    ``.well-known/openid-credential-issuer`` from the gateway via Docker
-    networking, then parses them with EU reference code.
-
-    A pass here means an independent EU wallet implementation can:
-      - Discover Marty's OpenID configuration
-      - Parse the credential issuer metadata
-      - Extract supported credential formats, VCTs, and endpoints
-    """
-
-    @pytest.mark.asyncio
-    async def test_wallet_tester_parses_marty_metadata(
-        self, eudi_wallet_tester: EUDIWalletTesterClient,
-    ):
-        """The EUDI wallet tester can fetch and parse Marty's metadata.
-
-        Drives /metadata1_na → /metadata_na inside the tester, which
-        makes real HTTP calls to the gateway's .well-known endpoints.
-        """
-        result = await eudi_wallet_tester.fetch_metadata_via_tester()
-        assert result["success"], (
-            f"EUDI wallet tester failed to parse Marty metadata: "
-            f"{result.get('error')}\nSteps: {json.dumps(result['steps'], indent=2)}"
-        )
-
-        # Both metadata steps should have succeeded
-        steps = result["steps"]
-        assert steps["metadata1_na"]["ok"], (
-            "Wallet tester failed on openid-configuration"
-        )
-        assert steps["metadata_na"]["ok"], (
-            "Wallet tester failed on openid-credential-issuer"
-        )
-
-    @pytest.mark.asyncio
-    async def test_wallet_tester_credential_offer_flow(
-        self,
-        authenticated_gateway_client: GatewayClient,
-        eudi_wallet_tester: EUDIWalletTesterClient,
-    ):
-        """The EUDI wallet tester can parse a Marty credential offer
-        and fetch metadata for the offered credential type.
-
-        Flow:
-          1. Issue credential via Marty → get credential_offer_uri
-          2. Feed the offer to the wallet tester's /redirect_preauth
-          3. The tester parses the offer's credential_configuration_ids
-          4. The tester fetches Marty's metadata endpoints
-
-        This proves a real EUDI wallet can handle Marty's credential
-        offers end-to-end through the metadata phase.
-        """
-        # 1. Create a credential offer via Marty
-        result = await authenticated_gateway_client.issue_credential(
-            organization_id=ORG_ID,
-            credential_template_id=TEMPLATES["open_badge"],
-            claims={
-                **TEST_CLAIMS,
-                "test_id": uuid.uuid4().hex[:8],
-                "source": "eudi-wallet-tester-offer-flow",
-            },
-        )
-        offer_uri = result["credential_offer_uri"]
-        assert offer_uri, "No credential_offer_uri from Marty"
-
-        # 2. Drive the wallet tester through the offer → metadata flow
-        flow_result = await eudi_wallet_tester.run_preauth_metadata_flow(offer_uri)
-
-        assert flow_result["success"], (
-            f"EUDI wallet tester failed to process Marty credential offer: "
-            f"{flow_result.get('error')}\n"
-            f"Steps: {json.dumps(flow_result.get('steps', {}), indent=2)}"
-        )
-
-        # 3. Verify each step passed
-        steps = flow_result["steps"]
-        assert steps["redirect_preauth"]["ok"], (
-            f"Wallet tester couldn't parse credential offer: "
-            f"{steps['redirect_preauth']}"
-        )
-        assert steps["metadata1_na"]["ok"], (
-            "Wallet tester couldn't fetch openid-configuration from Marty"
-        )
-        assert steps["metadata_na"]["ok"], (
-            "Wallet tester couldn't fetch credential-issuer metadata from Marty"
-        )
-
-        logger.info(
-            "[EUDI Wallet Tester] Successfully processed Marty credential "
-            "offer and fetched metadata. Steps: %s",
-            {k: v.get("status") for k, v in steps.items()},
-        )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Selective Disclosure — VP with Partial Claims

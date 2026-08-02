@@ -2,7 +2,7 @@
 EUDI Wallet Kit Real-Wallet Compatibility Tests
 
 These tests use the official EUDI Wallet Kit JVM libraries
-(eudi-lib-jvm-openid4vci-kt v0.9.1) running in a Docker container
+(eudi-lib-jvm-openid4vci-kt v0.13.0) running in a Docker container
 to exercise Marty's OID4VCI endpoints. This proves that the same
 SDK used in the EUDI Reference Wallet mobile application can
 successfully interact with Marty.
@@ -342,12 +342,14 @@ class TestEUDIWalletKitIssuance:
     @pytest.mark.asyncio
     async def test_sd_jwt_issuance_via_wallet_kit(
         self,
+        record_property,
         authenticated_gateway_client: GatewayClient,
         wallet_kit: EUDIWalletKitClient,
         eudi_test_org,
         open_badge_template,
     ):
         """Issue SD-JWT VC through Marty, receive via EUDI Wallet Kit."""
+        record_property("evidence_id", "eudi.oid4vci.key-attestation-jwt-proof.v1")
         result = await authenticated_gateway_client.issue_credential(
             organization_id=eudi_test_org["id"],
             credential_template_id=open_badge_template["id"],

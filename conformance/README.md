@@ -188,7 +188,7 @@ built copy of the exact pinned runner revision.
 
 ### Separate EUDI reference Compose project
 
-The pinned EUDI wallet tester, verifier endpoint, and wallet-kit harness also
+The pinned EUDI verifier endpoint and wallet-kit harness also
 run in their own Compose project. Start them only after the Marty OIDF profile
 has created the scoped TLS bridge:
 
@@ -263,7 +263,7 @@ still remove the project if the disposable material directory was deleted.
 
 The generated manifest derives the exact HTTPS origins, host and bridge ports,
 bridge DNS alias, trust root, keystore type, key alias, and passwords. Marty,
-the official wallet tester, the EUDI verifier, and the wallet-kit harness then
+the EUDI verifier and wallet-kit harness then
 use those normal public protocol URLs. No request URI or response URI is
 rewritten to an internal container address, and the JVM harness uses the
 generated truststore instead of a trust-all TLS manager.
@@ -304,7 +304,7 @@ daemon-host paths. This explicit contract prevents a remote run from silently
 assuming that the client's repository exists on the daemon.
 
 After Compose reports its healthchecks, the lifecycle also polls Marty's public
-discovery endpoint, the wallet tester, the verifier Swagger endpoint, and the
+discovery endpoint, the verifier Swagger endpoint, and the
 wallet-kit health endpoint. Startup fails and unwinds all projects if any real
 public path is not ready within the configured timeout.
 
@@ -707,7 +707,7 @@ and public-login gateway from that same private manifest. Explicit endpoint
 flags remain available for externally managed certification deployments, but
 when combined with `--eudi-material` they must exactly match it.
 
-Run the reference wallet tester and verifier as a separate Compose project
+Run the reference verifier and wallet-kit harness as a separate Compose project
 with `conformance/eudi-reference.compose.yml`. It joins only Marty's
 `oidf-runner` TLS-proxy bridge; it cannot access Marty's internal Compose
 network. The wallet-kit harness is likewise a thin facade over pinned official
@@ -717,7 +717,7 @@ endpoints above are the TLS boundaries; do not use private container ports
 from a host-side conformance run.
 
 The manifest records each library independently: OID4VP 0.15.1, OID4VCI
-0.9.1, SD-JWT 0.20.1, and Multipaz 0.100.0, including its Maven coordinate,
+0.13.0, SD-JWT 0.20.1, and Multipaz 0.100.0, including its Maven coordinate,
 official source repository, release tag, and dereferenced commit. The harness build uses
 digest-pinned Gradle and Temurin bases, Gradle dependency locking, and strict
 SHA-256 dependency verification metadata. The monthly upstream review checks
@@ -725,13 +725,11 @@ all four source repositories rather than treating OID4VP as the whole wallet
 kit. Updating a coordinate requires regenerating and reviewing both
 `gradle.lockfile` and `gradle/verification-metadata.xml`.
 
-OID4VCI remains pinned at 0.9.1 while
-[key-attestation-bound proof support](https://github.com/ElevenID/marty-integration-tests/issues/220)
-is implemented through a real issuer-profile trust policy. Current EUDI
-OID4VCI releases no longer expose the plain-JWK proof-construction path used
-by the released Marty stack. The facade does not mint a self-trusted
-attestation merely to make the lane green; the manifest records this
-limitation and the current target release explicitly.
+OID4VCI 0.13.0 uses key-attestation-bound JWT proofs. Each run creates a
+short-lived external wallet-attester chain, mounts its private material only
+into the wallet harness, and configures the Marty issuer profile to trust only
+that disposable root. Marty issuer keys remain in KMS and all credential
+signing continues through the issuer profile and its DID.
 
 It writes JUnit output, the unredacted local runner log, and `evidence.json`
 with the exact EUDI component digests, coverage matrix, endpoints, Marty

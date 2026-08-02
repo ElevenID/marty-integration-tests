@@ -631,6 +631,7 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
         organization_id=fixtures.DEFAULT_ORGANIZATION,
         run_id="run-1",
         mode="eudi",
+        oidf_key_attestation_trust_anchor_pem="wallet-attester-root",
         request=request,
     )
 
@@ -650,6 +651,9 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
     assert profile_body["signing_service_id"] == "managed-service"
     assert profile_body["signing_key_reference"] == "managed-key"
     assert profile_body["algorithm"] == "ES256"
+    assert profile_body["key_attestation_policy"]["trusted_root_certificates_pem"] == [
+        "wallet-attester-root"
+    ]
     assert calls[2][0].startswith("/v1/signing-keys/issuer-profiles/issuer-profile/public-identity?")
     assert calls[2][1] == "GET"
     assert calls[2][2] is None

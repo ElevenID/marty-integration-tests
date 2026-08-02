@@ -2,12 +2,6 @@
   "schema": "elevenid.eudi-reference-interop/v1",
   "review_cadence": "monthly",
   "components": {
-    "wallet_tester": {
-      "repository": "https://github.com/eu-digital-identity-wallet/eudi-app-web-wallet-tester-py.git",
-      "release": "v0.5.2",
-      "commit": "7605672f5a4b22c5f867490cd9b4889e1ec5f748",
-      "image": "ghcr.io/eu-digital-identity-wallet/eudi-app-web-wallet-tester-py@sha256:d2978c7a9bb29b00f8c202d054b8a9a4ec8e9addf2e16314f3ed06426aef19be"
-    },
     "verifier_endpoint": {
       "repository": "https://github.com/eu-digital-identity-wallet/eudi-srv-verifier-endpoint.git",
       "release": "v0.11.0",
@@ -34,10 +28,10 @@
         },
         "oid4vci": {
           "repository": "https://github.com/eu-digital-identity-wallet/eudi-lib-jvm-openid4vci-kt.git",
-          "release": "v0.9.1",
-          "version": "0.9.1",
-          "commit": "ee36d07cd3f78afdd3e7016b3be1f6022f85ef92",
-          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.9.1"
+          "release": "v0.13.0",
+          "version": "0.13.0",
+          "commit": "07dc0b96dcd5c56197414c80c0fb70ce0d4f377d",
+          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.13.0"
         },
         "sd_jwt": {
           "repository": "https://github.com/eu-digital-identity-wallet/eudi-lib-jvm-sdjwt-kt.git",
@@ -61,6 +55,7 @@
     "presentation": ["sd_jwt_vc", "mso_mdoc"],
     "request_object_trust": ["signed_jar_x509_hash_pkix"],
     "response_mode": ["direct_post.jwt"],
+    "wallet_key_attestation": ["jwt_proof_x5c_profile_trust"],
     "negative": [
       "missing_holder_binding_key",
       "replayed_response",
@@ -94,6 +89,9 @@
     },
     "eudi.oid4vp.expired-request.v1": {
       "claims": ["negative:expired_request"]
+    },
+    "eudi.oid4vci.key-attestation-jwt-proof.v1": {
+      "claims": ["wallet_key_attestation:jwt_proof_x5c_profile_trust"]
     }
   },
   "compatibility_only": {
@@ -103,20 +101,6 @@
         "eudi.oid4vp.invalid-signature.v1"
       ],
       "reason": "The official EUDI library creates the holder-bound presentation. The test facade replays or mutates those exact bytes only after resolution so the production Marty callback can be tested deterministically; these cases are not claimed as official-library dispatch evidence."
-    }
-  },
-  "planned_coverage": {
-    "key_attestation_bound_jwt_proofs": {
-      "target_oid4vci_release": "v0.12.3",
-      "tracking_issue": "https://github.com/ElevenID/marty-integration-tests/issues/220",
-      "acceptance": "A configured issuer-profile trust policy validates the attestation issuer, status, lifetime, nonce, claims, attested key, and organization boundary before accepting the holder proof."
-    }
-  },
-  "limitations": {
-    "oid4vci_key_attestation": {
-      "current_release": "v0.9.1",
-      "reason": "Current EUDI OID4VCI releases emit key-attestation-bound JWT proofs, while the released Marty stack has no production key-attestation trust-policy path. The facade will not create a self-trusted attestation to manufacture a green result.",
-      "tracking_issue": "https://github.com/ElevenID/marty-integration-tests/issues/220"
     }
   },
   "target": "digest-pinned EUDI components against the public Marty gateway and normal issuer/verifier flows"
