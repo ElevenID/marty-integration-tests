@@ -143,3 +143,49 @@ def test_browser_issuance_application_request_cannot_change_binding(
 
     with pytest.raises(AssertionError):
         browser_smoke.assert_application_request(body, binding)
+
+
+class _Button:
+    def __init__(self, page: _Page, enable_after: int) -> None:
+        self.page = page
+        self.enable_after = enable_after
+
+    def is_enabled(self) -> bool:
+        return self.page.waits >= self.enable_after
+
+
+class _Alerts:
+    def __init__(self, page: _Page) -> None:
+        self.page = page
+
+    def all_inner_texts(self) -> list[str]:
+        return self.page.alerts
+
+
+class _Page:
+    def __init__(self, *, alerts: list[str] | None = None) -> None:
+        self.alerts = alerts or []
+        self.waits = 0
+
+    def locator(self, selector: str) -> _Alerts:
+        assert selector == "[role=alert]"
+        return _Alerts(self)
+
+    def wait_for_timeout(self, timeout_ms: int) -> None:
+        assert timeout_ms == 250
+        self.waits += 1
+
+
+def test_browser_verification_waits_for_async_did_identity_lookup() -> None:
+    page = _Page()
+
+    browser_smoke.wait_for_verification_identity(page, _Button(page, enable_after=2))
+
+    assert page.waits == 2
+
+
+def test_browser_verification_reports_real_did_identity_error() -> None:
+    page = _Page(alerts=["No active OID4VP issuer DID"])
+
+    with pytest.raises(AssertionError, match="No active OID4VP issuer DID"):
+        browser_smoke.wait_for_verification_identity(page, _Button(page, enable_after=1))

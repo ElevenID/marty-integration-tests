@@ -12,13 +12,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Page, Request, Response
+    from playwright.sync_api import Locator, Page, Request, Response
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from oidf_marty_public_login import login, public_origin, required_env  # noqa: E402
@@ -38,6 +39,19 @@ FORBIDDEN_PUBLIC_SELECTORS = {
     "providerSelector",
 }
 VERIFICATION_PURPOSE = "Released-stack browser DID-first smoke"
+
+
+def wait_for_verification_identity(page: Page, button: Locator, *, timeout_ms: int = 30_000) -> None:
+    """Wait for the released UI's asynchronous DID-first identity lookup."""
+
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    while not button.is_enabled():
+        alerts = " | ".join(page.locator("[role=alert]").all_inner_texts()).strip()
+        if alerts:
+            raise AssertionError(f"verification DID did not resolve: {alerts}")
+        if time.monotonic() >= deadline:
+            raise AssertionError("verification DID identity lookup did not finish before the timeout")
+        page.wait_for_timeout(250)
 
 
 def public_path(url: str) -> str:
@@ -285,9 +299,7 @@ def exercise_verification(page: Page, base_url: str) -> dict[str, object]:
     open_org_console(page, base_url)
     create = page.get_by_role("button", name="New Verification")
     create.wait_for(timeout=30_000)
-    if not create.is_enabled():
-        alerts = " | ".join(page.locator("[role=alert]").all_inner_texts())
-        raise AssertionError(f"verification DID did not resolve: {alerts}")
+    wait_for_verification_identity(page, create)
 
     create.click()
     policy = page.get_by_label("Presentation Policy")
