@@ -38,6 +38,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from .helpers.eudi_attestation import required_eudi_key_attestation_policy
 from .helpers.eudi_stage import eudi_stage, require_presentation_accepted
 from .helpers.eudi_wallet_kit_client import (
     EUDIWalletHarnessError,
@@ -217,6 +218,7 @@ async def _issuer_profile(
     algorithm: str,
     name: str,
     service: dict[str, Any] | None = None,
+    key_attestation_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create an issuer profile backed by Marty's configured signing service."""
     if service is None:
@@ -237,6 +239,7 @@ async def _issuer_profile(
         signing_key_reference=str(service.get("key_reference") or "") or None,
         key_purpose=key_purpose,
         status="active",
+        key_attestation_policy=key_attestation_policy,
     )
 
 
@@ -307,6 +310,7 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
             algorithm="ES256",
             name="EUDI VP mDoc document signer",
             service=service,
+            key_attestation_policy=required_eudi_key_attestation_policy(),
         )
     with eudi_stage("mdoc-issuer-certificate"):
         identity = await authenticated_gateway_client.get_issuer_profile_public_identity(

@@ -1458,6 +1458,7 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     wallet_attester_file = args.output_dir / "private" / "eudi-wallet-attester.jwks.json"
     write_private_json(wallet_attester_file, key_attestation_jwks)
     environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(wallet_attester_file)
+    environment["EUDI_KEY_ATTESTATION_TRUST_ANCHOR_FILE"] = str(key_attestation_root)
     up = compose_command(args, "up", eudi=True, haip=True)
     started = run(up, environment) == 0
     if not started:

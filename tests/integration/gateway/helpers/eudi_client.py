@@ -1,19 +1,17 @@
 """EUDI Reference Implementation clients for interoperability testing.
 
-Provides clients for two official EU Digital Identity Wallet reference services:
+Provides a client for the EUDI Verifier Endpoint
+(eudi-srv-verifier-endpoint):
 
-1. EUDI Wallet Tester (eudi-app-web-wallet-tester-py)
-   - Flask-based OID4VCI wallet client
-   - Tests issuer compliance with OID4VCI draft-13
-   - Image: ghcr.io/eu-digital-identity-wallet/eudi-app-web-wallet-tester-py
-
-2. EUDI Verifier Endpoint (eudi-srv-verifier-endpoint)
    - Kotlin/Spring OID4VP v1 verifier
    - Validates credential presentations against the EU reference stack
    - Image: ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint
 
+Real wallet issuance and presentation use the current official EUDI Wallet Kit
+libraries through ``eudi_wallet_kit_client``. The retired draft-era web-wallet
+tester is intentionally not represented here.
+
 References:
-  - https://github.com/eu-digital-identity-wallet/eudi-app-web-wallet-tester-py
   - https://github.com/eu-digital-identity-wallet/eudi-srv-verifier-endpoint
 """
 

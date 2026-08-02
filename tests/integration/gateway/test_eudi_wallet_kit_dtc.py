@@ -35,6 +35,7 @@ from typing import Any, Dict
 
 import pytest
 
+from .helpers.eudi_attestation import required_eudi_key_attestation_policy
 from .helpers.eudi_stage import eudi_stage, require_presentation_accepted
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
 from .helpers.gateway_client import GatewayClient
@@ -160,6 +161,7 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
             signing_key_reference=str(service.get("key_reference") or "") or None,
             key_purpose="mdoc_dsc",
             status="active",
+            key_attestation_policy=required_eudi_key_attestation_policy(),
         )
     with eudi_stage("dtc-issuer-certificate"):
         identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
