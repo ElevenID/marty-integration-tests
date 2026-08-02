@@ -295,7 +295,6 @@ def test_material_environment_accepts_the_complete_generated_contract(tmp_path: 
         tmp_path,
         hostname="marty-oidf.test",
         marty_port=18443,
-        wallet_tester_port=25051,
         verifier_port=28091,
         wallet_kit_port=29090,
         store_password="store-password",
@@ -1205,7 +1204,6 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
             args,
             {
                 "OIDF_MARTY_GATEWAY_URL": "https://marty.test",
-                "EUDI_WALLET_TESTER_PUBLIC_URL": "https://wallet.test",
                 "EUDI_VERIFIER_PUBLIC_URL": "https://verifier.test",
                 "EUDI_WALLET_KIT_URL": "http://wallet-kit:9090",
             },

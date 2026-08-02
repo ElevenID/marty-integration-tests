@@ -91,10 +91,6 @@ def observe() -> dict:
             "pinned_commit": w3c["commit"],
             "latest_commit": git_head(w3c["repository"], "refs/heads/main"),
         },
-        "eudi_wallet_tester": {
-            "pinned_commit": eudi["wallet_tester"]["commit"],
-            "latest_commit": git_head(eudi["wallet_tester"]["repository"], "refs/heads/main"),
-        },
         "eudi_verifier_endpoint": {
             "pinned_commit": eudi["verifier_endpoint"]["commit"],
             "latest_commit": git_head(eudi["verifier_endpoint"]["repository"], "refs/heads/main"),

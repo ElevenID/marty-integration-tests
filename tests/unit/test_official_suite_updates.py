@@ -33,7 +33,6 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
     assert set(observation["upstreams"]) == {
         "oidf",
         "w3c_vc_data_model_v2",
-        "eudi_wallet_tester",
         "eudi_verifier_endpoint",
         "eudi_wallet_kit_oid4vp",
         "eudi_wallet_kit_oid4vci",

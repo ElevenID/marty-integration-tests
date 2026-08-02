@@ -269,8 +269,6 @@ MATERIAL_ENV_KEYS = {
     "OIDF_CONFORMANCE_BRIDGE_ALIAS",
     "OIDF_TLS_CERT_DIR",
     "OIDF_MARTY_RESOLVE_IP",
-    "EUDI_WALLET_TESTER_PUBLIC_URL",
-    "EUDI_WALLET_TESTER_TLS_HOST_PORT",
     "EUDI_VERIFIER_PUBLIC_URL",
     "EUDI_VERIFIER_TLS_HOST_PORT",
     "EUDI_WALLET_KIT_HOST_PORT",
@@ -1078,9 +1076,9 @@ def bootstrap_fixtures(
         if args.oidf_runner is None:
             raise RuntimeError("oid4vp-mdoc fixture bootstrap requires the exact OIDF runner checkout")
         command.extend(["--oidf-runner-source", str(args.oidf_runner)])
-    elif mode == "oid4vci":
+    elif mode in {"oid4vci", "eudi"}:
         if oidf_key_attestation_trust_anchor is None:
-            raise RuntimeError("OID4VCI fixture bootstrap requires a key-attestation trust anchor")
+            raise RuntimeError(f"{mode} fixture bootstrap requires a key-attestation trust anchor")
         command.extend(
             [
                 "--oidf-key-attestation-trust-anchor",
@@ -1454,6 +1452,12 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # *after* it merges EUDI material, so EUDI's TLS CA cannot accidentally
     # replace the independent request-object trust anchor.
     environment = dict(environment)
+    key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(
+        args.output_dir
+    )
+    wallet_attester_file = args.output_dir / "private" / "eudi-wallet-attester.jwks.json"
+    write_private_json(wallet_attester_file, key_attestation_jwks)
+    environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(wallet_attester_file)
     up = compose_command(args, "up", eudi=True, haip=True)
     started = run(up, environment) == 0
     if not started:
@@ -1462,7 +1466,12 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     result = 1
     try:
         wait_for_public_stack(environment)
-        fixtures = bootstrap_fixtures(args, environment, mode="eudi")
+        fixtures = bootstrap_fixtures(
+            args,
+            environment,
+            mode="eudi",
+            oidf_key_attestation_trust_anchor=key_attestation_root,
+        )
         suite_environment = dict(environment)
         suite_environment.update(load_verifier_environment(args.haip_material))
         # The runner selects only organization-scoped templates. Each template
@@ -1486,8 +1495,6 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "run",
                 "--gateway-url",
                 environment["OIDF_MARTY_GATEWAY_URL"],
-                "--wallet-tester-url",
-                environment["EUDI_WALLET_TESTER_PUBLIC_URL"],
                 "--verifier-url",
                 environment["EUDI_VERIFIER_PUBLIC_URL"],
                 "--wallet-kit-url",
