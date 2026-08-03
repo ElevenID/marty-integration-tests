@@ -343,6 +343,37 @@ def test_generated_haip_material_is_wired_to_marty(tmp_path: Path) -> None:
     assert environment[haip.OID4VP_TRUST_ANCHOR_FILE_ENV] == str((material / haip.TRUST_ANCHOR_FILE).resolve())
 
 
+def test_live_issuer_identity_uses_only_the_did_first_public_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = marty_checkout(tmp_path)
+    args = type(
+        "Args",
+        (),
+        {"marty_ui": checkout, "haip": True, "local_build": False},
+    )()
+    identity = {
+        "issuer_did": "did:web:verifier.example",
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+    }
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=lifecycle.json.dumps(identity), stderr="")
+
+    monkeypatch.setattr(lifecycle.subprocess, "run", run)
+
+    assert lifecycle.resolve_issuer_did_identity(
+        args,
+        {"marty": "marty-conformance-run1"},
+        {},
+    ) == identity
+    assert commands[0][-1] == "issuer-did-identity"
+    assert "issuer-profile-identity" not in commands[0]
+
+
 def test_haip_stage_certifies_only_the_live_issuer_profile_public_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -360,7 +391,7 @@ def test_haip_stage_certifies_only_the_live_issuer_profile_public_key(
             "y": haip._base64url(numbers.y.to_bytes(32, "big")),
         },
     }
-    monkeypatch.setattr(lifecycle, "resolve_issuer_profile_identity", lambda *_args: identity)
+    monkeypatch.setattr(lifecycle, "resolve_issuer_did_identity", lambda *_args: identity)
     args = type("Args", (), {"haip_material": material, "eudi": False})()
     environment = {"OIDF_PUBLIC_BASE_URL": "https://verifier.example:8443"}
 

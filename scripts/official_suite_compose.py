@@ -442,13 +442,13 @@ def marty_command(
     return command
 
 
-def resolve_issuer_profile_identity(
+def resolve_issuer_did_identity(
     args: argparse.Namespace,
     projects: dict[str, str],
     environment: dict[str, str],
 ) -> dict[str, object]:
     """Read only public DID identity from the running Marty gateway container."""
-    command = marty_command(args, projects, "issuer-profile-identity", include_haip=False)
+    command = marty_command(args, projects, "issuer-did-identity", include_haip=False)
     print("+", subprocess.list2cmdline(command), flush=True)
     completed = subprocess.run(command, capture_output=True, text=True, check=False, env=environment)
     if completed.returncode:
@@ -476,7 +476,7 @@ def stage_haip_profile_certificate(
     """Certify the live issuer profile's public DID key without exporting its private key."""
     if args.haip_material is None:
         raise ValueError("issuer-profile HAIP bootstrap requires --haip-material")
-    identity = resolve_issuer_profile_identity(args, projects, environment)
+    identity = resolve_issuer_did_identity(args, projects, environment)
     report = issue_verifier_certificate(
         args.haip_material.resolve(),
         identity["public_jwk"],
