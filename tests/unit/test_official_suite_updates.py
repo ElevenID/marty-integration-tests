@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -27,6 +28,7 @@ def test_drift_requires_a_real_pinned_to_latest_difference() -> None:
 
 def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(updates, "latest_oidf_release", lambda: "release-v5.2.1")
+    monkeypatch.setattr(updates, "latest_github_release", lambda _repository: "latest-eudi")
     monkeypatch.setattr(updates, "git_head", lambda *_args: "f" * 40)
     monkeypatch.setattr(updates, "git_tag_commit", lambda *_args: "e" * 40)
     observation = updates.observe()
@@ -50,6 +52,45 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
         "pinned_commit": w3c_manifest["official_suite"]["commit"],
         "latest_commit": "f" * 40,
     }
+    eudi_manifest = updates.load_json("conformance/eudi-reference-interop.json")
+    verifier = eudi_manifest["components"]["verifier_endpoint"]
+    assert observation["upstreams"]["eudi_verifier_endpoint"] == {
+        "pinned_release": verifier["release"],
+        "latest_release": "latest-eudi",
+        "pinned_commit": verifier["commit"],
+        "latest_commit": "e" * 40,
+    }
+
+
+def test_latest_github_release_uses_only_a_valid_github_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"tag_name":"v1.2.3"}'
+
+    captured: dict[str, object] = {}
+
+    def urlopen(request: Any, timeout: int) -> Response:
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(updates.urllib.request, "urlopen", urlopen)
+
+    assert updates.latest_github_release("https://github.com/example/project.git") == "v1.2.3"
+    assert captured == {
+        "url": "https://api.github.com/repos/example/project/releases/latest",
+        "timeout": 20,
+    }
+    with pytest.raises(RuntimeError, match="not on GitHub"):
+        updates.latest_github_release("https://example.test/project.git")
 
 
 def test_tag_resolution_prefers_the_peeled_commit(monkeypatch: pytest.MonkeyPatch) -> None:

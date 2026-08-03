@@ -17,6 +17,7 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 RECORD = ROOT / "conformance" / "upstream-review.json"
@@ -67,6 +68,34 @@ def latest_oidf_release() -> str:
     return value
 
 
+def latest_github_release(repository: str) -> str:
+    """Return the latest published release tag for an official GitHub repository."""
+    parsed = urlparse(repository)
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com":
+        raise RuntimeError(f"official EUDI repository is not on GitHub: {repository}")
+    path = parsed.path.removesuffix(".git").strip("/")
+    parts = path.split("/")
+    if len(parts) != 2 or not all(parts):
+        raise RuntimeError(f"official GitHub repository URL is invalid: {repository}")
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{parts[0]}/{parts[1]}/releases/latest",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "ElevenID-Official-Suite-Updates",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    # B310: the URL is constrained above to GitHub's fixed HTTPS API origin.
+    with urllib.request.urlopen(request, timeout=20) as response:  # nosec B310
+        payload: object = json.load(response)
+    if not isinstance(payload, dict):
+        raise RuntimeError("GitHub latest-release response is not a JSON object")
+    value = payload.get("tag_name")
+    if not isinstance(value, str) or not value:
+        raise RuntimeError("GitHub latest-release response has no string tag_name")
+    return value
+
+
 def load_json(relative: str) -> dict[str, Any]:
     value: object = json.loads((ROOT / relative).read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -91,19 +120,24 @@ def observe() -> dict:
             "pinned_commit": w3c["commit"],
             "latest_commit": git_head(w3c["repository"], "refs/heads/main"),
         },
-        "eudi_verifier_endpoint": {
-            "pinned_commit": eudi["verifier_endpoint"]["commit"],
-            "latest_commit": git_head(eudi["verifier_endpoint"]["repository"], "refs/heads/main"),
-        },
+        "eudi_verifier_endpoint": _released_upstream(eudi["verifier_endpoint"]),
     }
     for name, library in eudi["wallet_kit"]["libraries"].items():
-        upstreams[f"eudi_wallet_kit_{name}"] = {
-            "pinned_commit": library["commit"],
-            "latest_commit": git_head(library["repository"], "refs/heads/main"),
-        }
+        upstreams[f"eudi_wallet_kit_{name}"] = _released_upstream(library)
     return {
         "schema": "elevenid.official-suite-upstream-review/v1",
         "upstreams": upstreams,
+    }
+
+
+def _released_upstream(component: dict[str, Any]) -> dict[str, str]:
+    """Compare a release pin with the latest tag, never an unreleased head."""
+    latest_release = latest_github_release(component["repository"])
+    return {
+        "pinned_release": component["release"],
+        "latest_release": latest_release,
+        "pinned_commit": component["commit"],
+        "latest_commit": git_tag_commit(component["repository"], latest_release),
     }
 
 

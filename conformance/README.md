@@ -755,9 +755,12 @@ pinned EUDI source through `scripts/official_suite_updates.py`. When it finds
 drift, it creates or refreshes the stable
 `automation/official-suite-updates` draft PR with the observed release and
 commit revisions. It never silently switches versions, changes immutable
-pins, or merges. For OIDF, review an update by changing both the release and
-full commit in `oidf-runner.json`, then run the affected profile against the
-production-path stack before merging. `expected-failures.json` must remain
+pins, or merges. OIDF and EUDI drift is measured against the latest published
+release tag and its dereferenced commit, never an unreleased default-branch
+head; W3C remains commit-pinned to its continuously published official suite.
+For OIDF, review an update by changing both the release and full commit in
+`oidf-runner.json`, then run the affected profile against the production-path
+stack before merging. `expected-failures.json` must remain
 empty: an official result cannot mask a failing executed test. Optional OIDF
 modules that Marty truthfully does not advertise use the
 separate `expected-skips.json`, which requires a matching test name,
