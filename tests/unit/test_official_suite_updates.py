@@ -26,14 +26,13 @@ def test_drift_requires_a_real_pinned_to_latest_difference() -> None:
 
 
 def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(updates, "latest_oidf_release", lambda: "release-v5.2.0")
+    monkeypatch.setattr(updates, "latest_oidf_release", lambda: "release-v5.2.1")
     monkeypatch.setattr(updates, "git_head", lambda *_args: "f" * 40)
     monkeypatch.setattr(updates, "git_tag_commit", lambda *_args: "e" * 40)
     observation = updates.observe()
     assert set(observation["upstreams"]) == {
         "oidf",
         "w3c_vc_data_model_v2",
-        "eudi_wallet_tester",
         "eudi_verifier_endpoint",
         "eudi_wallet_kit_oid4vp",
         "eudi_wallet_kit_oid4vci",
@@ -41,8 +40,8 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
         "eudi_wallet_kit_mdoc",
     }
     assert observation["upstreams"]["oidf"] == {
-        "pinned_release": "release-v5.2.0",
-        "latest_release": "release-v5.2.0",
+        "pinned_release": "release-v5.2.1",
+        "latest_release": "release-v5.2.1",
         "pinned_commit": updates.load_json("conformance/oidf-runner.json")["official_runner"]["commit"],
         "latest_commit": "e" * 40,
     }

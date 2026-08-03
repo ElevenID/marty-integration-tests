@@ -92,6 +92,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--oidf", action="store_true", help="include the official OIDF runner project")
     result.add_argument("--eudi", action="store_true", help="include the EUDI reference project")
     result.add_argument(
+        "--marty-only",
+        action="store_true",
+        help="start only the released Marty project for ElevenID-owned product tests",
+    )
+    result.add_argument(
         "--eudi-material",
         type=Path,
         help="generated EUDI/TLS material; a complete external environment takes precedence",
@@ -169,11 +174,10 @@ def cleanup_eudi_environment(environment: dict[str, str], material_dir: Path) ->
             "OIDF_CONFORMANCE_BRIDGE_ALIAS": "cleanup.invalid",
             "OIDF_TLS_CERT_DIR": str(directory),
             OID4VP_TRUST_ANCHOR_FILE_ENV: str(directory / ROOT_CA_FILE),
-            "EUDI_WALLET_TESTER_PUBLIC_URL": "https://cleanup.invalid:25051",
-            "EUDI_WALLET_TESTER_TLS_HOST_PORT": "25051",
             "EUDI_VERIFIER_PUBLIC_URL": "https://cleanup.invalid:28091",
             "EUDI_VERIFIER_TLS_HOST_PORT": "28091",
             "EUDI_WALLET_KIT_HOST_PORT": "29090",
+            "EUDI_WALLET_ATTESTER_JWKS_FILE": str(directory / "wallet-attester.jwks.json"),
             "EUDI_VERIFIER_KEYSTORE_FILE": str(directory / EUDI_KEYSTORE_FILE),
             "EUDI_VERIFIER_KEYSTORE_TYPE": "JKS",
             "EUDI_VERIFIER_KEYSTORE_PASSWORD": "unused-cleanup-value",
@@ -202,7 +206,6 @@ def wait_for_eudi_readiness(environment: dict[str, str]) -> None:
     )
     probes = {
         "Marty public gateway": environment["OIDF_PUBLIC_BASE_URL"] + "/.well-known/openid-configuration",
-        "EUDI wallet tester": environment["EUDI_WALLET_TESTER_PUBLIC_URL"] + "/",
         "EUDI verifier": environment["EUDI_VERIFIER_PUBLIC_URL"] + "/swagger-ui",
         "EUDI wallet kit": wallet_kit.rstrip("/") + "/health",
     }
@@ -270,6 +273,10 @@ def validate_remote_bind_contract(
         _absolute_remote_path(
             environment.get(OID4VP_TRUST_ANCHOR_FILE_ENV, ""),
             OID4VP_TRUST_ANCHOR_FILE_ENV,
+        )
+        _absolute_remote_path(
+            environment.get("EUDI_WALLET_ATTESTER_JWKS_FILE", ""),
+            "EUDI_WALLET_ATTESTER_JWKS_FILE",
         )
 
 
@@ -570,14 +577,16 @@ def stop_started(
 def execute(args: argparse.Namespace) -> int:
     if not args.run_id:
         raise ValueError("--run-id, OFFICIAL_SUITE_RUN_ID, or GITHUB_RUN_ID is required")
+    if args.marty_only and any((args.oidf, args.eudi, args.haip)):
+        raise ValueError("--marty-only cannot be combined with --oidf, --eudi, or --haip")
     if args.haip and not (args.oidf or args.eudi):
         raise ValueError("--haip requires --oidf or --eudi")
     if args.haip_material is not None and not args.haip:
         raise ValueError("--haip-material requires --haip")
     if args.eudi_material is not None and not args.eudi:
         raise ValueError("--eudi-material requires --eudi")
-    if not any((args.oidf, args.eudi)):
-        raise ValueError("select at least one of --oidf or --eudi")
+    if not any((args.marty_only, args.oidf, args.eudi)):
+        raise ValueError("select --marty-only or at least one of --oidf or --eudi")
 
     projects = project_names(args.run_id)
     environment = child_environment(

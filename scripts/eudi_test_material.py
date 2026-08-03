@@ -61,7 +61,6 @@ DNS_NAME = re.compile(
 DEFAULT_HOSTNAME = "marty-oidf.test"
 DEFAULT_PORTS = {
     "marty": 8443,
-    "wallet_tester": 25051,
     "verifier": 28091,
     "wallet_kit": 29090,
 }
@@ -80,8 +79,6 @@ REQUIRED_ENVIRONMENT = (
     "OIDF_INTERNAL_TLS_PORT",
     "OIDF_CONFORMANCE_BRIDGE_ALIAS",
     "OIDF_TLS_CERT_DIR",
-    "EUDI_WALLET_TESTER_PUBLIC_URL",
-    "EUDI_WALLET_TESTER_TLS_HOST_PORT",
     "EUDI_VERIFIER_PUBLIC_URL",
     "EUDI_VERIFIER_TLS_HOST_PORT",
     "EUDI_WALLET_KIT_HOST_PORT",
@@ -577,7 +574,6 @@ def _environment(
     *,
     hostname: str,
     marty_port: int,
-    wallet_tester_port: int,
     verifier_port: int,
     wallet_kit_port: int,
     store_password: str,
@@ -586,7 +582,6 @@ def _environment(
     alias: str,
 ) -> dict[str, str]:
     marty_origin = f"https://{hostname}:{marty_port}"
-    wallet_tester_origin = f"https://{hostname}:{wallet_tester_port}"
     verifier_origin = f"https://{hostname}:{verifier_port}"
     root = output_dir / ROOT_CA_FILE
     return {
@@ -599,8 +594,6 @@ def _environment(
         "OIDF_CONFORMANCE_BRIDGE_ALIAS": hostname,
         "OIDF_TLS_CERT_DIR": str(output_dir),
         "OIDF_MARTY_RESOLVE_IP": "127.0.0.1",
-        "EUDI_WALLET_TESTER_PUBLIC_URL": wallet_tester_origin,
-        "EUDI_WALLET_TESTER_TLS_HOST_PORT": str(wallet_tester_port),
         "EUDI_VERIFIER_PUBLIC_URL": verifier_origin,
         "EUDI_VERIFIER_TLS_HOST_PORT": str(verifier_port),
         "EUDI_WALLET_KIT_HOST_PORT": str(wallet_kit_port),
@@ -624,7 +617,6 @@ def generate_material(
     *,
     hostname: str = DEFAULT_HOSTNAME,
     marty_port: int = DEFAULT_PORTS["marty"],
-    wallet_tester_port: int = DEFAULT_PORTS["wallet_tester"],
     verifier_port: int = DEFAULT_PORTS["verifier"],
     wallet_kit_port: int = DEFAULT_PORTS["wallet_kit"],
     valid_hours: int = 24,
@@ -636,7 +628,6 @@ def generate_material(
     hostname = _dns_name(hostname, "hostname")
     ports = {
         "marty": _port(marty_port, "Marty port"),
-        "wallet_tester": _port(wallet_tester_port, "wallet tester port"),
         "verifier": _port(verifier_port, "verifier port"),
         "wallet_kit": _port(wallet_kit_port, "wallet kit port"),
     }
@@ -690,7 +681,6 @@ def generate_material(
         output_dir,
         hostname=hostname,
         marty_port=ports["marty"],
-        wallet_tester_port=ports["wallet_tester"],
         verifier_port=ports["verifier"],
         wallet_kit_port=ports["wallet_kit"],
         store_password=store_password,
@@ -739,7 +729,6 @@ def generate_material(
             "hostname": hostname,
             "urls": {
                 "gateway": environment["OIDF_PUBLIC_BASE_URL"],
-                "wallet_tester": environment["EUDI_WALLET_TESTER_PUBLIC_URL"],
                 "verifier": environment["EUDI_VERIFIER_PUBLIC_URL"],
                 "wallet_kit": environment["EUDI_WALLET_KIT_URL"],
             },
@@ -818,10 +807,6 @@ def validate_environment_contract(environment: Mapping[str, str]) -> dict[str, A
     if missing:
         raise ValueError("missing EUDI material environment: " + ", ".join(missing))
     gateway, gateway_host, gateway_port = _https_origin(environment["OIDF_PUBLIC_BASE_URL"], "OIDF_PUBLIC_BASE_URL")
-    wallet_tester, wallet_host, wallet_port = _https_origin(
-        environment["EUDI_WALLET_TESTER_PUBLIC_URL"],
-        "EUDI_WALLET_TESTER_PUBLIC_URL",
-    )
     verifier, verifier_host, verifier_port = _https_origin(
         environment["EUDI_VERIFIER_PUBLIC_URL"],
         "EUDI_VERIFIER_PUBLIC_URL",
@@ -836,7 +821,6 @@ def validate_environment_contract(environment: Mapping[str, str]) -> dict[str, A
     expected_ports = {
         "OIDF_TLS_HOST_PORT": gateway_port,
         "OIDF_INTERNAL_TLS_PORT": gateway_port,
-        "EUDI_WALLET_TESTER_TLS_HOST_PORT": wallet_port,
         "EUDI_VERIFIER_TLS_HOST_PORT": verifier_port,
     }
     for name, expected in expected_ports.items():
@@ -852,7 +836,7 @@ def validate_environment_contract(environment: Mapping[str, str]) -> dict[str, A
         raise ValueError("EUDI_WALLET_KIT_HOST_PORT must be an integer between 1 and 65535") from exc
     if wallet_kit_port != wallet_kit_url_port:
         raise ValueError("EUDI_WALLET_KIT_HOST_PORT must equal the port in EUDI_WALLET_KIT_URL")
-    published_ports = [gateway_port, wallet_port, verifier_port, wallet_kit_port]
+    published_ports = [gateway_port, verifier_port, wallet_kit_port]
     if len(published_ports) != len(set(published_ports)):
         raise ValueError("EUDI and Marty published ports must be distinct")
     _expected_curve(environment["EUDI_VERIFIER_SIGNING_ALGORITHM"])
@@ -862,9 +846,6 @@ def validate_environment_contract(environment: Mapping[str, str]) -> dict[str, A
         "gateway": gateway,
         "gateway_host": gateway_host,
         "gateway_port": gateway_port,
-        "wallet_tester": wallet_tester,
-        "wallet_host": wallet_host,
-        "wallet_port": wallet_port,
         "verifier": verifier,
         "verifier_host": verifier_host,
         "verifier_port": verifier_port,
@@ -882,8 +863,6 @@ def validate_environment(
     contract = validate_environment_contract(environment)
     gateway = contract["gateway"]
     gateway_host = contract["gateway_host"]
-    wallet_tester = contract["wallet_tester"]
-    wallet_host = contract["wallet_host"]
     verifier = contract["verifier"]
     verifier_host = contract["verifier_host"]
 
@@ -923,7 +902,7 @@ def validate_environment(
     if ExtendedKeyUsageOID.SERVER_AUTH not in usage:
         raise ValueError("TLS certificate is not valid for server authentication")
     dns_names = set(san.get_values_for_type(x509.DNSName))
-    required_names = {gateway_host, wallet_host, verifier_host}
+    required_names = {gateway_host, verifier_host}
     if not required_names <= dns_names:
         raise ValueError("TLS certificate SAN does not cover every public HTTPS hostname")
     root = x509.load_pem_x509_certificate(root_path.read_bytes())
@@ -1013,7 +992,6 @@ def validate_environment(
         "mode": environment.get("EUDI_TEST_MATERIAL_MODE", "external"),
         "urls": {
             "gateway": gateway,
-            "wallet_tester": wallet_tester,
             "verifier": verifier,
             "wallet_kit": environment.get("EUDI_WALLET_KIT_URL", ""),
         },
@@ -1033,7 +1011,6 @@ def parser() -> argparse.ArgumentParser:
     generate.add_argument("--output", "--output-dir", dest="output_dir", type=Path, required=True)
     generate.add_argument("--hostname", default=DEFAULT_HOSTNAME)
     generate.add_argument("--marty-port", type=int, default=DEFAULT_PORTS["marty"])
-    generate.add_argument("--wallet-tester-port", type=int, default=DEFAULT_PORTS["wallet_tester"])
     generate.add_argument("--verifier-port", type=int, default=DEFAULT_PORTS["verifier"])
     generate.add_argument("--wallet-kit-port", type=int, default=DEFAULT_PORTS["wallet_kit"])
     generate.add_argument("--valid-hours", type=int, default=24)
@@ -1057,7 +1034,6 @@ def main(argv: list[str] | None = None) -> int:
             args.output_dir,
             hostname=args.hostname,
             marty_port=args.marty_port,
-            wallet_tester_port=args.wallet_tester_port,
             verifier_port=args.verifier_port,
             wallet_kit_port=args.wallet_kit_port,
             valid_hours=args.valid_hours,

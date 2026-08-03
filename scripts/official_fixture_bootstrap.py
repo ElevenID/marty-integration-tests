@@ -12,8 +12,13 @@ import stat
 import sys
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode, urlparse
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -110,7 +115,8 @@ def issuer_profile_payload(
     algorithm: str,
     label: str | None = None,
     key_purpose: str = "vc_jwt_issuer",
-) -> dict[str, str]:
+    key_attestation_trust_anchor_pem: str | None = None,
+) -> dict[str, Any]:
     """Provision an issuer profile whose private key remains in managed custody.
 
     The service and key references are profile-administration inputs only. The
@@ -127,7 +133,7 @@ def issuer_profile_payload(
     if not domain:
         raise ValueError("gateway URL has no hostname for the disposable issuer DID")
     profile_label = label or ("W3C VC Data Model v2" if w3c else "OID4VP SD-JWT")
-    return {
+    result: dict[str, Any] = {
         "name": f"Official {profile_label} issuer {run_id}",
         "issuer_did": f"did:web:{domain}:orgs:{organization_id}",
         "signing_service_id": service_id,
@@ -136,6 +142,34 @@ def issuer_profile_payload(
         "algorithm": algorithm,
         "status": "active",
     }
+    if key_attestation_trust_anchor_pem is not None:
+        result["key_attestation_policy"] = {
+            "mode": "required",
+            "trusted_root_certificates_pem": [key_attestation_trust_anchor_pem],
+            "allowed_algorithms": ["ES256"],
+            "required_key_storage": [],
+            "required_user_authentication": [],
+            "max_age_seconds": 300,
+            "require_nonce": True,
+            # The official OIDF issuer test emits no optional status claim.
+            # This lane tests trusted attester signatures and proof binding;
+            # EUDI status-list validation remains a separate production lane.
+            "status_validation": "disabled",
+        }
+    return result
+
+
+def key_attestation_trust_anchor(path: Path) -> str:
+    """Load one CA certificate used only to trust the official test wallet."""
+    pem = path.resolve().read_text(encoding="ascii")
+    certificate = x509.load_pem_x509_certificate(pem.encode("ascii"))
+    try:
+        constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value
+    except x509.ExtensionNotFound as exc:
+        raise ValueError("OIDF key-attestation trust anchor has no CA constraint") from exc
+    if not constraints.ca:
+        raise ValueError("OIDF key-attestation trust anchor is not a CA certificate")
+    return pem
 
 
 def eudi_compliance_profile_payload(organization_id: str, *, run_id: str) -> dict[str, object]:
@@ -606,6 +640,23 @@ def policy_payload(
         if mdoc
         else "OID4VP SD-JWT"
     )
+    holder_binding: dict[str, object] = {"required": presentation}
+    if presentation:
+        holder_binding.update(
+            {
+                "binding_methods": ["DEVICE_KEY"],
+                "proof_profiles": [
+                    "MDOC_DEVICE_AUTHENTICATION"
+                    if mdoc
+                    else "OID4VP_VERIFIABLE_PRESENTATION"
+                ],
+                "proof_freshness": {
+                    "challenge_required": True,
+                    "audience_binding_required": True,
+                    "replay_detection_required": True,
+                },
+            }
+        )
     return {
         "organization_id": organization_id,
         "name": f"Official {label} {run_id}",
@@ -613,7 +664,12 @@ def policy_payload(
         # OIDF and W3C Data Integrity presentations are holder bound. A JWT VC
         # verified outside a presentation is not: requiring a VP challenge on
         # that path would reject a valid credential before signature checks.
-        "holder_binding": {"required": presentation},
+        # Send the complete public holder-binding contract. The service used
+        # these same fail-closed defaults for older stored policies, but public
+        # callers must now state the proof and freshness requirements
+        # explicitly so policy intent cannot be inferred differently by a
+        # generated client or another service.
+        "holder_binding": holder_binding,
         "credential_requirements": [
             {
                 "credential_template_id": template_id,
@@ -653,7 +709,11 @@ def official_signer_public_jwk(config_path: Path) -> dict[str, str]:
     }
 
 
-def official_mdoc_trust_anchor(runner_source: Path) -> str:
+def official_mdoc_trust_anchor(
+    runner_source: Path,
+    *,
+    now: datetime | None = None,
+) -> str:
     """Read the mock mdoc issuer certificate from the exact OIDF runner source.
 
     The verifier plan's mdoc wallet does not use ``credential.signing_jwk``.
@@ -679,7 +739,26 @@ def official_mdoc_trust_anchor(runner_source: Path) -> str:
             matches.append(certificate)
     if len(matches) != 1:
         raise ValueError("exact OIDF runner source must expose exactly one documentSignerCert mdoc trust anchor")
-    return matches[0]
+    certificate_pem = matches[0]
+    certificate = x509.load_pem_x509_certificate(certificate_pem.encode("ascii"))
+    checked_at = now or datetime.now(UTC)
+    if checked_at.tzinfo is None:
+        raise ValueError("OIDF mdoc certificate validation time must be timezone-aware")
+    not_before = certificate.not_valid_before_utc
+    not_after = certificate.not_valid_after_utc
+    fingerprint = certificate.fingerprint(hashes.SHA256()).hex()
+    if checked_at < not_before:
+        raise ValueError(
+            "official OIDF mdoc documentSignerCert is not valid yet: "
+            f"not_before={not_before.isoformat()} sha256={fingerprint}"
+        )
+    if checked_at >= not_after:
+        raise ValueError(
+            "official OIDF mdoc documentSignerCert has expired: "
+            f"not_after={not_after.isoformat()} sha256={fingerprint}; "
+            "do not bypass certificate validation or modify the imported suite"
+        )
+    return certificate_pem
 
 
 def trust_profile_payload(
@@ -881,6 +960,7 @@ def bootstrap_eudi(
     *,
     organization_id: str,
     run_id: str,
+    key_attestation_trust_anchor_pem: str,
     request: Callable[..., object],
 ) -> dict[str, str]:
     """Create EUDI fixtures while keeping custody details behind the profile.
@@ -896,6 +976,7 @@ def bootstrap_eudi(
         key_purpose: str,
         *,
         attach_certificate: bool = False,
+        trust_wallet_attester: bool = False,
     ) -> tuple[str, str]:
         custody_service = resolve_signing_service(
             gateway_url,
@@ -914,6 +995,9 @@ def bootstrap_eudi(
             algorithm="ES256",
             label=label,
             key_purpose=key_purpose,
+            key_attestation_trust_anchor_pem=(
+                key_attestation_trust_anchor_pem if trust_wallet_attester else None
+            ),
         )
         created = request(
             gateway_url,
@@ -964,6 +1048,7 @@ def bootstrap_eudi(
         "EUDI SD-JWT",
         "vc_jwt_issuer",
         attach_certificate=True,
+        trust_wallet_attester=True,
     )
     request_profile_id, request_issuer_did = provision_profile(
         "EUDI OID4VP request",
@@ -1043,6 +1128,7 @@ def bootstrap(
     mode: str,
     oidf_signer_public_jwk: dict[str, str] | None = None,
     oidf_mdoc_trust_anchor_pem: str | None = None,
+    oidf_key_attestation_trust_anchor_pem: str | None = None,
     request: Callable[..., object] = authenticated_json_request,
 ) -> dict[str, str]:
     if not RUN_ID.fullmatch(run_id):
@@ -1053,12 +1139,15 @@ def bootstrap(
         raise ValueError("OID4VP fixture bootstrap requires the official runner public signing JWK")
     if mode == "oid4vp-mdoc" and oidf_mdoc_trust_anchor_pem is None:
         raise ValueError("OID4VP mdoc fixture bootstrap requires the official runner document certificate")
+    if mode in {"oid4vci", "eudi"} and oidf_key_attestation_trust_anchor_pem is None:
+        raise ValueError(f"{mode} fixture bootstrap requires a key-attestation trust anchor")
     if mode == "eudi":
         return bootstrap_eudi(
             gateway_url,
             session_id,
             organization_id=organization_id,
             run_id=run_id,
+            key_attestation_trust_anchor_pem=oidf_key_attestation_trust_anchor_pem,
             request=request,
         )
     result = {"organization_id": organization_id}
@@ -1085,6 +1174,9 @@ def bootstrap(
             algorithm="EdDSA" if w3c else "ES256",
             label="W3C VC Data Integrity" if w3c else "OID4VCI SD-JWT" if oid4vci else None,
             key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
+            key_attestation_trust_anchor_pem=(
+                oidf_key_attestation_trust_anchor_pem if oid4vci else None
+            ),
         )
         created_issuer_profile = request(
             gateway_url,
@@ -1360,6 +1452,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--run-id", default=os.environ.get("OFFICIAL_SUITE_RUN_ID"), required=False)
     result.add_argument("--oidf-runner-config", type=Path)
     result.add_argument("--oidf-runner-source", type=Path)
+    result.add_argument("--oidf-key-attestation-trust-anchor", type=Path)
     result.add_argument("--output", type=Path, required=True)
     return result
 
@@ -1375,6 +1468,10 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--oidf-runner-config is required for OID4VP fixture bootstrap")
     if args.mode == "oid4vp-mdoc" and args.oidf_runner_source is None:
         raise ValueError("--oidf-runner-source is required for OID4VP mdoc fixture bootstrap")
+    if args.mode in {"oid4vci", "eudi"} and args.oidf_key_attestation_trust_anchor is None:
+        raise ValueError(
+            "--oidf-key-attestation-trust-anchor is required for OID4VCI and EUDI fixture bootstrap"
+        )
     gateway = https_url(args.gateway_url, "gateway URL")
     signer_public_jwk = (
         official_signer_public_jwk(args.oidf_runner_config)
@@ -1386,6 +1483,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.oidf_runner_source is not None and args.mode == "oid4vp-mdoc"
         else None
     )
+    key_attestation_trust_anchor_pem = (
+        key_attestation_trust_anchor(args.oidf_key_attestation_trust_anchor)
+        if args.oidf_key_attestation_trust_anchor is not None and args.mode in {"oid4vci", "eudi"}
+        else None
+    )
     fixtures = bootstrap(
         gateway,
         gateway_session_id(),
@@ -1394,6 +1496,7 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         oidf_signer_public_jwk=signer_public_jwk,
         oidf_mdoc_trust_anchor_pem=mdoc_trust_anchor_pem,
+        oidf_key_attestation_trust_anchor_pem=key_attestation_trust_anchor_pem,
     )
     write_private_json(args.output.resolve(), fixtures)
     # The file contains identifiers only, but keep stdout free of values so it

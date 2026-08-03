@@ -73,6 +73,55 @@ def test_projects_are_unique_and_scoped() -> None:
         lifecycle.project_names("production/stack")
 
 
+def test_marty_only_runs_without_an_official_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(lifecycle, "child_environment", dict)
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+    monkeypatch.setattr(
+        lifecycle,
+        "run",
+        lambda command, _environment: calls.append(
+            (component(command), action(command))
+        )
+        or 0,
+    )
+
+    assert (
+        lifecycle.main(
+            [
+                "up",
+                "--run-id",
+                "product-boundary",
+                "--marty-ui",
+                str(marty_checkout(tmp_path)),
+                "--marty-only",
+            ]
+        )
+        == 0
+    )
+    assert calls == [("marty", "up")]
+
+
+def test_marty_only_is_mutually_exclusive_with_official_runners(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        lifecycle.main(
+            [
+                "up",
+                "--run-id",
+                "invalid-selection",
+                "--marty-ui",
+                str(marty_checkout(tmp_path)),
+                "--marty-only",
+                "--eudi",
+            ]
+        )
+
+
 def test_compose_project_environment_matches_derived_names() -> None:
     projects = lifecycle.project_names("123-1")
     environment = {
@@ -182,6 +231,7 @@ def test_remote_external_mode_requires_explicit_daemon_bind_roots(tmp_path: Path
         "OIDF_TLS_CERT_DIR": "/srv/elevenid/certificates",
         "EUDI_VERIFIER_KEYSTORE_FILE": "/srv/elevenid/certificates/keystore.jks",
         lifecycle.OID4VP_TRUST_ANCHOR_FILE_ENV: "/srv/elevenid/certificates/oid4vp-roots.pem",
+        "EUDI_WALLET_ATTESTER_JWKS_FILE": "/srv/elevenid/certificates/wallet-attester.jwks.json",
     }
 
     lifecycle.validate_remote_bind_contract(args, environment)
@@ -255,7 +305,6 @@ def test_eudi_readiness_probes_every_public_path_with_generated_ca(
             "EUDI_READINESS_TIMEOUT_SECONDS": "5",
             "EUDI_TEST_CA_FILE": str(ca_file),
             "OIDF_PUBLIC_BASE_URL": "https://marty.test:8443",
-            "EUDI_WALLET_TESTER_PUBLIC_URL": "https://wallet.test:25051",
             "EUDI_VERIFIER_PUBLIC_URL": "https://verifier.test:28091",
             "EUDI_WALLET_KIT_URL": "http://127.0.0.1:29090",
             "EUDI_WALLET_KIT_HOST_PORT": "29090",
@@ -265,7 +314,6 @@ def test_eudi_readiness_probes_every_public_path_with_generated_ca(
     assert options["verify"] == str(ca_file)
     assert requested == [
         "https://marty.test:8443/.well-known/openid-configuration",
-        "https://wallet.test:25051/",
         "https://verifier.test:28091/swagger-ui",
         "http://127.0.0.1:29090/health",
     ]

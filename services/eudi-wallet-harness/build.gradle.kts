@@ -19,12 +19,12 @@ dependencyLocking {
 
 dependencies {
     // EUDI Wallet Kit — OID4VCI (wallet role)
-    implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.9.1")
+    implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.13.0")
     // EUDI Wallet Kit — OID4VP (wallet role)
-    implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vp-kt:0.12.3")
+    implementation("eu.europa.ec.eudi:eudi-lib-jvm-openid4vp-kt:0.15.1")
     // EUDI SD-JWT (for decoding issued credentials)
-    implementation("eu.europa.ec.eudi:eudi-lib-jvm-sdjwt-kt:0.18.0")
-    implementation("org.multipaz:multipaz-jvm:0.99.0")
+    implementation("eu.europa.ec.eudi:eudi-lib-jvm-sdjwt-kt:0.20.1")
+    implementation("org.multipaz:multipaz-jvm:0.100.0")
 
     // Ktor server — exposes HTTP API for test orchestration
     implementation("io.ktor:ktor-server-core:3.3.3")
@@ -39,9 +39,9 @@ dependencies {
     implementation("io.ktor:ktor-client-logging:3.3.3")
 
     // Nimbus JOSE+JWT (transitive, but explicit for crypto operations)
-    implementation("com.nimbusds:nimbus-jose-jwt:10.0.2")
+    implementation("com.nimbusds:nimbus-jose-jwt:10.9")
     // Bouncy Castle for X509 certificate support
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.79")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.83")
 
     // Kotlinx serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")

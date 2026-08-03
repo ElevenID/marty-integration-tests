@@ -192,6 +192,7 @@ class TestFlowInstanceLifecycle:
         
         # Start instance
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="test-subject-123",
         )
@@ -216,6 +217,7 @@ class TestFlowInstanceLifecycle:
         )
         
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
         )
         
@@ -241,6 +243,7 @@ class TestFlowInstanceLifecycle:
         
         # Start with context
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="user-456",
             initial_context={
@@ -272,28 +275,11 @@ class TestFlowApprovalStrategies:
             name="Auto Approval Flow",
             flow_type="issuance",
             credential_template_id=mdl_template["id"],
-            steps=[
-                {
-                    "name": "validate",
-                    "type": "validation",
-                },
-                {
-                    "name": "approve",
-                    "type": "approval",
-                    "approval_strategy": "AUTO",
-                },
-                {
-                    "name": "issue",
-                    "type": "issuance",
-                },
-            ],
+            approval_strategy="AUTO",
         )
         
         assert flow_def is not None
-        # Verify approval strategy in steps
-        approval_step = next((s for s in flow_def.get("steps", []) if s["type"] == "approval"), None)
-        if approval_step:
-            assert approval_step["approval_strategy"] == "AUTO"
+        assert flow_def["approval_strategy"] == "AUTO"
             
     async def test_flow_with_manual_approval(
         self,
@@ -307,27 +293,11 @@ class TestFlowApprovalStrategies:
             name="Manual Approval Flow",
             flow_type="issuance",
             credential_template_id=mdl_template["id"],
-            steps=[
-                {
-                    "name": "validate",
-                    "type": "validation",
-                },
-                {
-                    "name": "approve",
-                    "type": "approval",
-                    "approval_strategy": "MANUAL",
-                },
-                {
-                    "name": "issue",
-                    "type": "issuance",
-                },
-            ],
+            approval_strategy="MANUAL",
         )
         
         assert flow_def is not None
-        approval_step = next((s for s in flow_def.get("steps", []) if s["type"] == "approval"), None)
-        if approval_step:
-            assert approval_step["approval_strategy"] == "MANUAL"
+        assert flow_def["approval_strategy"] == "MANUAL"
 
 
 @pytest.mark.asyncio
@@ -397,6 +367,7 @@ class TestIssuanceFlow:
         
         # Start flow instance
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="test-subject-789",
         )
@@ -435,6 +406,7 @@ class TestIssuanceFlow:
         
         # Start flow for this application
         instance = await gateway_client.start_flow_instance(
+            organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="applicant-user-id",
             initial_context={"application_id": application["id"]},
@@ -484,7 +456,7 @@ class TestVerificationFlowIntegration:
 @pytest.mark.asyncio
 @pytest.mark.integration
 class TestFlowSteps:
-    """Test flow step execution"""
+    """Test protocol-defined flow step resolution."""
     
     async def test_flow_with_multiple_steps(
         self,
@@ -492,26 +464,21 @@ class TestFlowSteps:
         test_organization: Dict[str, Any],
         mdl_template: Dict[str, Any],
     ):
-        """Test flow with multiple ordered steps"""
-        steps = [
-            {"name": "collect_data", "type": "data_collection", "order": 1},
-            {"name": "validate", "type": "validation", "order": 2},
-            {"name": "approve", "type": "approval", "order": 3},
-            {"name": "issue", "type": "issuance", "order": 4},
-        ]
-        
+        """Test that a standard flow resolves its protocol-defined steps."""
         flow_def = await gateway_client.create_flow_definition(
             organization_id=test_organization["id"],
             name="Multi-Step Flow",
             flow_type="issuance",
             credential_template_id=mdl_template["id"],
-            steps=steps,
         )
         
         assert flow_def is not None
-        # Steps may not be echoed in the response model
-        if "steps" in flow_def:
-            assert len(flow_def["steps"]) == len(steps)
+        assert flow_def["resolved_steps"] == [
+            "create_offer",
+            "token_exchange",
+            "credential_request",
+            "issue_credential",
+        ]
         
     async def test_flow_step_validation(
         self,
@@ -519,25 +486,17 @@ class TestFlowSteps:
         test_organization: Dict[str, Any],
         mdl_template: Dict[str, Any],
     ):
-        """Test flow with validation step"""
+        """Test that standard flows cannot smuggle legacy top-level steps."""
         flow_def = await gateway_client.create_flow_definition(
             organization_id=test_organization["id"],
             name="Validation Flow",
             flow_type="issuance",
             credential_template_id=mdl_template["id"],
-            steps=[
-                {
-                    "name": "validate_identity",
-                    "type": "validation",
-                    "validation_rules": ["check_age", "verify_document"],
-                },
-            ],
         )
         
         assert flow_def is not None
-        validation_step = flow_def.get("steps", [])[0] if flow_def.get("steps") else None
-        if validation_step:
-            assert validation_step["type"] == "validation"
+        assert "steps" not in flow_def
+        assert flow_def["resolved_steps"][0] == "create_offer"
 
 
 @pytest.mark.asyncio
@@ -578,10 +537,12 @@ class TestFlowErrors:
     async def test_start_instance_invalid_flow(
         self,
         gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
     ):
         """Test starting instance with invalid flow definition ID"""
         with pytest.raises(Exception) as exc_info:
             await gateway_client.start_flow_instance(
+                organization_id=test_organization["id"],
                 flow_definition_id="invalid-flow-999",
             )
         

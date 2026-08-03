@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -37,13 +39,20 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert url_query["status"] == "active"
     assert "[request_method=url_query]" in url_query["test_plan"]
     assert "[client_id_prefix=redirect_uri]" in url_query["test_plan"]
-    assert "Exact unmodified OIDF release-v5.2.0 evidence" in url_query["qualification"]
+    assert "Exact unmodified OIDF release-v5.2.1 evidence" in url_query["qualification"]
     assert "distinct from Marty's signed by-value Request Object" in url_query["qualification"]
     mdoc = manifest["profiles"]["oid4vp-mdoc-verifier"]
     assert mdoc["status"] == "active"
     assert "[credential_format=iso_mdl]" in mdoc["test_plan"]
     assert "[response_mode=direct_post]" in mdoc["test_plan"]
     assert "does not certify Marty as an mdoc issuer" in mdoc["qualification"]
+    assert mdoc["execution_status"] == "blocked_upstream"
+    constraint = mdoc["upstream_constraint"]
+    assert constraint["tracking_issue"].endswith("/issues/243")
+    assert constraint["runner_release"] == manifest["official_runner"]["release"]
+    assert constraint["certificate_not_after"] == "2026-07-30T07:47:22+00:00"
+    assert len(constraint["certificate_sha256"]) == 64
+    assert "Do not replace" in constraint["policy"]
     haip = manifest["profiles"]["oid4vp-haip-verifier"]
     assert haip["status"] == "active"
     assert "oid4vp-1final-verifier-haip-test-plan" in haip["test_plan"]
@@ -73,6 +82,41 @@ def test_official_oidf_evidence_rejects_expected_failure_masking(
         oidf.validate_expected_failures()
 
 
+def test_official_runner_rejects_untracked_local_test_shims(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Compliance Test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "compliance@example.test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    runner_script = tmp_path / "scripts" / "run-test-plan.py"
+    runner_script.parent.mkdir()
+    runner_script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "official fixture"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    commit = oidf.git_revision(tmp_path)
+    manifest = {"official_runner": {"commit": commit}}
+
+    oidf.validate_runner(tmp_path, manifest)
+    (tmp_path / "local-pass-shim.py").write_text(
+        "assert True\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="byte-for-byte clean"):
+        oidf.validate_runner(tmp_path, manifest)
+
+
 def test_optional_encryption_skip_is_documented_narrowly() -> None:
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
     encryption = next(
@@ -80,6 +124,16 @@ def test_optional_encryption_skip_is_documented_narrowly() -> None:
     )
     assert encryption["variant"] == {"vci_credential_encryption": "plain"}
     assert encryption["expires"] == "2027-01-01"
+
+
+def test_invalid_key_attestation_signature_is_not_expected_to_skip() -> None:
+    skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
+    key_attestation = [
+        item
+        for item in skips
+        if item["test-name"] == "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature"
+    ]
+    assert key_attestation == []
 
 
 def test_haip_post_retrieval_module_is_not_expected_to_skip() -> None:
@@ -115,6 +169,103 @@ def test_expected_skips_do_not_start_racy_product_interactions() -> None:
 def test_official_runner_always_emits_actionable_failure_detail() -> None:
     source = (ROOT / "scripts" / "oidf_conformance.py").read_text(encoding="utf-8")
     assert '"--no-parallel",\n        "--verbose",' in source
+
+
+def test_failure_diagnostics_extract_only_allowlisted_public_facts(tmp_path: Path) -> None:
+    output = tmp_path / "results"
+    output.mkdir()
+    exported = {
+        "testInfo": {"testName": "oid4vci-1_0-issuer-happy-flow", "testId": "secret-id"},
+        "results": [
+            {
+                "src": "-START-BLOCK-",
+                "startBlock": True,
+                "blockId": "block-1",
+                "msg": "Verify Credential Endpoint Response",
+            },
+            {
+                "src": "EnsureHttpStatusCodeIsAnyOf",
+                "result": "FAILURE",
+                "blockId": "block-1",
+                "msg": "must not be copied",
+                "args": {
+                    "http_status": 400,
+                    "expected_status_codes": [200, 202],
+                    "body": {"access_token": "must-not-leak"},
+                    "error_description": "Key attestation nonce does not match issuance nonce: must-not-leak",
+                },
+            },
+            {
+                "src": "VCIValidateCredentialErrorResponse",
+                "result": "FAILURE",
+                "blockId": "block-1",
+                "args": {
+                    "error": "invalid_proof",
+                    "expected_error": "invalid_nonce",
+                    "credential": "must-not-leak",
+                },
+            },
+        ],
+    }
+    with zipfile.ZipFile(output / "official.zip", "w") as archive:
+        archive.writestr("module.json", json.dumps(exported))
+
+    diagnostics = oidf.write_failure_diagnostics(output)
+
+    assert diagnostics == [
+        {
+            "module": "oid4vci-1_0-issuer-happy-flow",
+            "condition": "EnsureHttpStatusCodeIsAnyOf",
+            "block": "Verify Credential Endpoint Response",
+            "http_status": 400,
+            "expected_status_codes": [200, 202],
+            "error_category": "key-attestation-nonce",
+        },
+        {
+            "module": "oid4vci-1_0-issuer-happy-flow",
+            "condition": "VCIValidateCredentialErrorResponse",
+            "block": "Verify Credential Endpoint Response",
+            "error": "invalid_proof",
+            "expected_error": "invalid_nonce",
+            "error_category": "key-attestation-nonce",
+        },
+    ]
+    serialized = (output / "failure-diagnostics.json").read_text(encoding="utf-8")
+    assert "must-not-leak" not in serialized
+    assert "secret-id" not in serialized
+
+
+def test_failure_diagnostics_classify_module_response_without_copying_description(tmp_path: Path) -> None:
+    output = tmp_path / "results"
+    output.mkdir()
+    exported = {
+        "testInfo": {"testName": "oid4vci-1_0-issuer-happy-flow"},
+        "results": [
+            {
+                "src": "CallProtectedResource",
+                "result": "INFO",
+                "args": {
+                    "response": {
+                        "error_description": (
+                            "Key-attestation-bound proof has no resolved tenant issuer policy: must-not-leak"
+                        )
+                    }
+                },
+            },
+            {
+                "src": "EnsureHttpStatusCodeIsAnyOf",
+                "result": "FAILURE",
+                "args": {"http_status": 400, "expected_status_codes": [200, 202]},
+            },
+        ],
+    }
+    with zipfile.ZipFile(output / "official.zip", "w") as archive:
+        archive.writestr("module.json", json.dumps(exported))
+
+    diagnostics = oidf.write_failure_diagnostics(output)
+
+    assert diagnostics[0]["error_category"] == "key-attestation-policy-unresolved"
+    assert "must-not-leak" not in (output / "failure-diagnostics.json").read_text(encoding="utf-8")
 
 
 def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:

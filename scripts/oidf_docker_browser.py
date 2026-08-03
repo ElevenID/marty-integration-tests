@@ -40,7 +40,11 @@ def request_json(url: str, *, method: str = "GET", body: bytes | None = None) ->
 
 
 def docker_curl(args: list[str]) -> str:
-    container = os.environ.get("OIDF_CONFORMANCE_CONTAINER", "oidf-conformance-suite-release-v520-server-1")
+    project = os.environ.get(OIDF_PROJECT_ENV, "oidf-runner")
+    container = os.environ.get(
+        "OIDF_CONFORMANCE_CONTAINER",
+        f"{project}-server-1",
+    )
     require_project_container(container, OIDF_PROJECT_ENV)
     completed = subprocess.run(
         docker_command(["exec", container, "curl", "-ksS", *args]),

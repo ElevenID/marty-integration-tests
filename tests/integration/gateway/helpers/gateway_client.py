@@ -17,6 +17,17 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_FLOW_TYPE_ALIASES = {
+    "issuance": "oid4vci_pre_authorized",
+    "issuance_oid4vci": "oid4vci_pre_authorized",
+    "verification": "oid4vp_presentation",
+    "verification_oid4vp": "oid4vp_presentation",
+    "presentation": "oid4vp_presentation",
+    "renewal": "credential_renewal",
+    "revocation": "credential_revocation",
+    "siop_v2": "siopv2",
+}
+
 
 class GatewayClientError(Exception):
     """Base exception for gateway client errors"""
@@ -392,6 +403,13 @@ class GatewayClient:
     async def get_credential_template(self, template_id: str) -> Dict[str, Any]:
         """Get credential template by ID"""
         return await self._request("GET", f"/v1/credential-templates/{template_id}")
+
+    async def activate_credential_template(self, template_id: str) -> Dict[str, Any]:
+        """Activate a credential template through the public gateway."""
+        return await self._request(
+            "POST",
+            f"/v1/credential-templates/{template_id}/activate",
+        )
 
     async def validate_credential_template_artifacts(self, template_id: str) -> Dict[str, Any]:
         """Validate cryptographic artifacts for a credential template."""
@@ -1133,26 +1151,48 @@ class GatewayClient:
         organization_id: str,
         name: str,
         flow_type: Optional[str] = None,
-        type: Optional[str] = None,
-        steps: Optional[List[Dict]] = None,
+        description: Optional[str] = None,
+        approval_strategy: Literal[
+            "AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"
+        ] = "AUTO",
+        hooks: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        trigger: Optional[Dict[str, Any]] = None,
+        extension: Optional[Dict[str, Any]] = None,
         trust_profile_id: Optional[str] = None,
         credential_template_id: Optional[str] = None,
+        application_template_id: Optional[str] = None,
         presentation_policy_id: Optional[str] = None,
+        delivery_destination_profile_id: Optional[str] = None,
+        deployment_profile_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Create a flow definition"""
-        ft = flow_type or type or "issuance"
+        """Create a flow definition using the current public gateway contract."""
+        selected_type = flow_type or "oid4vci_pre_authorized"
+        canonical_type = _FLOW_TYPE_ALIASES.get(selected_type, selected_type)
+        payload: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "name": name,
+            "flow_type": canonical_type,
+            "approval_strategy": approval_strategy,
+            "hooks": hooks or {},
+            "deployment_profile_ids": deployment_profile_ids or [],
+        }
+        optional_fields = {
+            "description": description,
+            "trigger": trigger,
+            "extension": extension,
+            "trust_profile_id": trust_profile_id,
+            "credential_template_id": credential_template_id,
+            "application_template_id": application_template_id,
+            "presentation_policy_id": presentation_policy_id,
+            "delivery_destination_profile_id": delivery_destination_profile_id,
+        }
+        payload.update(
+            {field: value for field, value in optional_fields.items() if value is not None}
+        )
         return await self._request(
             "POST",
             "/v1/flows/definitions",
-            json={
-                "organization_id": organization_id,
-                "name": name,
-                "flow_type": ft,
-                "steps": steps or [],
-                "trust_profile_id": trust_profile_id,
-                "credential_template_id": credential_template_id,
-                "presentation_policy_id": presentation_policy_id,
-            },
+            json=payload,
         )
 
     async def get_flow_definition(self, flow_def_id: str) -> Dict[str, Any]:
@@ -1192,6 +1232,7 @@ class GatewayClient:
 
     async def start_flow_instance(
         self,
+        organization_id: str,
         flow_definition_id: str,
         subject_id: Optional[str] = None,
         initial_context: Optional[Dict] = None,
@@ -1201,6 +1242,7 @@ class GatewayClient:
             "POST",
             "/v1/flows/instances",
             json={
+                "organization_id": organization_id,
                 "flow_definition_id": flow_definition_id,
                 "subject_id": subject_id,
                 "initial_context": initial_context or {},
@@ -1523,6 +1565,7 @@ class GatewayClient:
         signing_key_reference: Optional[str] = None,
         key_purpose: str = "vc_jwt_issuer",
         status: str = "active",
+        key_attestation_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create or return an issuer profile bound to a signing service."""
         payload: Dict[str, Any] = {
@@ -1534,6 +1577,8 @@ class GatewayClient:
         }
         if signing_key_reference:
             payload["signing_key_reference"] = signing_key_reference
+        if key_attestation_policy is not None:
+            payload["key_attestation_policy"] = key_attestation_policy
         response = await self._request(
             "POST",
             "/v1/signing-keys/issuer-profiles",

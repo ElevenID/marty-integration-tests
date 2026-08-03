@@ -89,7 +89,6 @@ def test_generate_writes_short_lived_tls_chain_eudi_access_cert_and_private_envi
     assert environment["OIDF_PUBLIC_BASE_URL"] == "https://marty-oidf.test:8443"
     assert environment["OIDF_INTERNAL_TLS_PORT"] == "8443"
     assert environment["OIDF_CONFORMANCE_BRIDGE_ALIAS"] == material.DEFAULT_HOSTNAME
-    assert environment["EUDI_WALLET_TESTER_PUBLIC_URL"] == "https://marty-oidf.test:25051"
     assert environment["EUDI_VERIFIER_PUBLIC_URL"] == "https://marty-oidf.test:28091"
     assert environment["EUDI_VERIFIER_KEYSTORE_ALIAS"] == "access_certificate"
     assert environment["EUDI_VERIFIER_SIGNING_ALGORITHM"] == "ES512"
@@ -154,7 +153,7 @@ def test_generation_refuses_overwrite_and_invalid_service_contracts(tmp_path: Pa
         material.generate_material(
             tmp_path / "duplicate-ports",
             marty_port=8443,
-            wallet_tester_port=8443,
+            verifier_port=8443,
             keytool=Path(__file__),
             java_store_builder=fake_java_stores,
         )

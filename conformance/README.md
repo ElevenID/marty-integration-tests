@@ -63,15 +63,25 @@ for reproducible evidence, and passes the configuration relative to the runner
 checkout so Windows drive letters cannot be parsed as test-plan syntax. The official suite URL can be supplied with
 `CONFORMANCE_SERVER` when it is not using its normal local default.
 
-Marty's current authorization-server metadata and pre-authorized public-wallet
-flow support `client_auth_type=none`. OIDF release-v5.2.0, however, declares
-every issuer module inapplicable to that variant. The executable official plan
-therefore remains explicitly `planned` and uses `private_key_jwt` only as
-pre-activation interoperability evidence. It must not be described as a pass or
-activated until Marty registers the two official wallet public keys and rejects
-missing, invalid, expired, replayed, wrong-audience, and cross-client
-assertions. The lane separately validates the production credential-issuer
-metadata before creating and selecting the public credential configuration.
+Marty's public-wallet flow supports `client_auth_type=none`, while the active
+official interoperability profile deliberately exercises registered
+`private_key_jwt` clients. The disposable organization owns the two official
+wallet public keys; Marty rejects missing, invalid, expired, replayed,
+wrong-audience, and cross-client assertions. OIDF release-v5.2.1 drives that
+normal public issuer path. Three optional capabilities Marty does not advertise
+remain explicit, owned, expiring skips. The disposable issuer profile requires
+key attestation, trusts only the lane's short-lived attester CA, and advertises
+that policy in the production credential-issuer metadata. The unchanged OIDF
+runner then creates the valid attestation and corrupts its signature for the
+official negative module; ElevenID does not patch the runner or its expected
+result.
+
+The attester key belongs to the external test-wallet role because the official
+runner has no remote-signing interface. It exists only in the mode-0600 runner
+configuration and is destroyed with the disposable lane. It is not a Marty
+issuer key: every Marty credential and request-object key remains in managed
+custody, and every Marty signature is selected through the tenant issuer
+profile and its DID.
 
 ### Driving the real issuer path
 
@@ -178,7 +188,7 @@ built copy of the exact pinned runner revision.
 
 ### Separate EUDI reference Compose project
 
-The pinned EUDI wallet tester, verifier endpoint, and wallet-kit harness also
+The pinned EUDI verifier endpoint and wallet-kit harness also
 run in their own Compose project. Start them only after the Marty OIDF profile
 has created the scoped TLS bridge:
 
@@ -253,7 +263,7 @@ still remove the project if the disposable material directory was deleted.
 
 The generated manifest derives the exact HTTPS origins, host and bridge ports,
 bridge DNS alias, trust root, keystore type, key alias, and passwords. Marty,
-the official wallet tester, the EUDI verifier, and the wallet-kit harness then
+the EUDI verifier and wallet-kit harness then
 use those normal public protocol URLs. No request URI or response URI is
 rewritten to an internal container address, and the JVM harness uses the
 generated truststore instead of a trust-all TLS manager.
@@ -294,7 +304,7 @@ daemon-host paths. This explicit contract prevents a remote run from silently
 assuming that the client's repository exists on the daemon.
 
 After Compose reports its healthchecks, the lifecycle also polls Marty's public
-discovery endpoint, the wallet tester, the verifier Swagger endpoint, and the
+discovery endpoint, the verifier Swagger endpoint, and the
 wallet-kit health endpoint. Startup fails and unwinds all projects if any real
 public path is not ready within the configured timeout.
 
@@ -426,6 +436,17 @@ ISO mDL presentation and checks Marty's public OID4VP request, callback, and
 verification behavior. It is not an OIDF mdoc issuer certification and must
 not be presented as one. Marty mdoc issuance remains covered separately by
 the EUDI reference-library lane until upstream provides a suitable issuer plan.
+
+The exact OIDF `release-v5.2.1` source still embeds an mdoc
+`documentSignerCert` whose validity ended at `2026-07-30T07:47:22Z`
+(SHA-256 `c74e6bfecdd161452009ce10d9e5c1386d9022b10378a3de5e296605d325d48d`).
+The lane now checks that upstream certificate before provisioning trust and
+fails explicitly while it is expired. Do not replace the certificate in the
+imported checkout, disable Marty certificate-time validation, or record an
+expected failure to manufacture a pass. Retain the last pre-expiry official
+evidence and rerun the exact reviewed upstream release or commit once OIDF
+publishes renewed material. Track that upstream dependency in
+[marty-integration-tests#217](https://github.com/ElevenID/marty-integration-tests/issues/217).
 
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
@@ -580,7 +601,7 @@ complete suite from a new detached worktree.
 
 ## Certification later
 
-At the pinned OIDF `release-v5.2.0`, the official source labels both the
+At the pinned OIDF `release-v5.2.1`, the official source labels both the
 OID4VP Final verifier plan and the HAIP verifier plan as alpha tests that are
 not currently part of the certification program. Passing them is valuable
 official-runner interoperability evidence, but it is not an OIDF certificate.
@@ -686,7 +707,7 @@ and public-login gateway from that same private manifest. Explicit endpoint
 flags remain available for externally managed certification deployments, but
 when combined with `--eudi-material` they must exactly match it.
 
-Run the reference wallet tester and verifier as a separate Compose project
+Run the reference verifier and wallet-kit harness as a separate Compose project
 with `conformance/eudi-reference.compose.yml`. It joins only Marty's
 `oidf-runner` TLS-proxy bridge; it cannot access Marty's internal Compose
 network. The wallet-kit harness is likewise a thin facade over pinned official
@@ -695,14 +716,20 @@ used by the EUDI reference wallet, not a mock wallet. The three HTTPS
 endpoints above are the TLS boundaries; do not use private container ports
 from a host-side conformance run.
 
-The manifest records each library independently: OID4VP 0.12.3, OID4VCI
-0.9.1, SD-JWT 0.18.0, and Multipaz 0.99.0, including its Maven coordinate,
+The manifest records each library independently: OID4VP 0.15.1, OID4VCI
+0.13.0, SD-JWT 0.20.1, and Multipaz 0.100.0, including its Maven coordinate,
 official source repository, release tag, and dereferenced commit. The harness build uses
 digest-pinned Gradle and Temurin bases, Gradle dependency locking, and strict
 SHA-256 dependency verification metadata. The monthly upstream review checks
 all four source repositories rather than treating OID4VP as the whole wallet
 kit. Updating a coordinate requires regenerating and reviewing both
 `gradle.lockfile` and `gradle/verification-metadata.xml`.
+
+OID4VCI 0.13.0 uses key-attestation-bound JWT proofs. Each run creates a
+short-lived external wallet-attester chain, mounts its private material only
+into the wallet harness, and configures the Marty issuer profile to trust only
+that disposable root. Marty issuer keys remain in KMS and all credential
+signing continues through the issuer profile and its DID.
 
 It writes JUnit output, the unredacted local runner log, and `evidence.json`
 with the exact EUDI component digests, coverage matrix, endpoints, Marty

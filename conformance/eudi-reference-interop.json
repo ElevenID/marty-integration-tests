@@ -2,16 +2,11 @@
   "schema": "elevenid.eudi-reference-interop/v1",
   "review_cadence": "monthly",
   "components": {
-    "wallet_tester": {
-      "repository": "https://github.com/eu-digital-identity-wallet/eudi-app-web-wallet-tester-py.git",
-      "release": "v0.5.2",
-      "commit": "7605672f5a4b22c5f867490cd9b4889e1ec5f748",
-      "image": "ghcr.io/eu-digital-identity-wallet/eudi-app-web-wallet-tester-py@sha256:d2978c7a9bb29b00f8c202d054b8a9a4ec8e9addf2e16314f3ed06426aef19be"
-    },
     "verifier_endpoint": {
       "repository": "https://github.com/eu-digital-identity-wallet/eudi-srv-verifier-endpoint.git",
-      "commit": "de66a3e311ed413838de240affef4511072b8687",
-      "image": "ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint@sha256:0687ad0bf9c315d64d7cdae1751c8795c2410848f2299adeaaf1c39305366711"
+      "release": "v0.11.0",
+      "commit": "2bc0bd98a81742db321e96d31d88142128006422",
+      "image": "ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint@sha256:2f2772b1df39a529f3683c7e82d10d03221b475e67da7b2d8cb1b9aebe6f71f9"
     },
     "wallet_kit": {
       "implementation": "ElevenID HTTP test facade over official EUDI JVM libraries",
@@ -26,31 +21,31 @@
       "libraries": {
         "oid4vp": {
           "repository": "https://github.com/eu-digital-identity-wallet/eudi-lib-jvm-openid4vp-kt.git",
-          "release": "v0.12.3",
-          "version": "0.12.3",
-          "commit": "ff2af51189e6e9f014d6c7eab65690f99652457e",
-          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vp-kt:0.12.3"
+          "release": "v0.15.1",
+          "version": "0.15.1",
+          "commit": "4a695477b66040229c347d3255099b9f702ec929",
+          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vp-kt:0.15.1"
         },
         "oid4vci": {
           "repository": "https://github.com/eu-digital-identity-wallet/eudi-lib-jvm-openid4vci-kt.git",
-          "release": "v0.9.1",
-          "version": "0.9.1",
-          "commit": "ee36d07cd3f78afdd3e7016b3be1f6022f85ef92",
-          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.9.1"
+          "release": "v0.13.0",
+          "version": "0.13.0",
+          "commit": "07dc0b96dcd5c56197414c80c0fb70ce0d4f377d",
+          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.13.0"
         },
         "sd_jwt": {
           "repository": "https://github.com/eu-digital-identity-wallet/eudi-lib-jvm-sdjwt-kt.git",
-          "release": "v0.18.0",
-          "version": "0.18.0",
-          "commit": "c81ba73c62bae6194fd8ab6e3c5d153b8ed0fc39",
-          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-sdjwt-kt:0.18.0"
+          "release": "v0.20.1",
+          "version": "0.20.1",
+          "commit": "e8a94cb6114efc73812843fb1338913eac427675",
+          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-sdjwt-kt:0.20.1"
         },
         "mdoc": {
           "repository": "https://github.com/openwallet-foundation/multipaz.git",
-          "release": "0.99.0",
-          "version": "0.99.0",
-          "commit": "7486ddbca490038c3580513d8273b9bbf18c6b70",
-          "maven_coordinate": "org.multipaz:multipaz-jvm:0.99.0"
+          "release": "0.100.0",
+          "version": "0.100.0",
+          "commit": "7c0988bee3384d13a0732e0c33336ae0faf3b863",
+          "maven_coordinate": "org.multipaz:multipaz-jvm:0.100.0"
         }
       }
     }
@@ -60,6 +55,7 @@
     "presentation": ["sd_jwt_vc", "mso_mdoc"],
     "request_object_trust": ["signed_jar_x509_hash_pkix"],
     "response_mode": ["direct_post.jwt"],
+    "wallet_key_attestation": ["jwt_proof_x5c_profile_trust"],
     "negative": [
       "missing_holder_binding_key",
       "replayed_response",
@@ -93,6 +89,9 @@
     },
     "eudi.oid4vp.expired-request.v1": {
       "claims": ["negative:expired_request"]
+    },
+    "eudi.oid4vci.key-attestation-jwt-proof.v1": {
+      "claims": ["wallet_key_attestation:jwt_proof_x5c_profile_trust"]
     }
   },
   "compatibility_only": {
@@ -104,7 +103,5 @@
       "reason": "The official EUDI library creates the holder-bound presentation. The test facade replays or mutates those exact bytes only after resolution so the production Marty callback can be tested deterministically; these cases are not claimed as official-library dispatch evidence."
     }
   },
-  "planned_coverage": {},
-  "limitations": {},
   "target": "digest-pinned EUDI components against the public Marty gateway and normal issuer/verifier flows"
 }

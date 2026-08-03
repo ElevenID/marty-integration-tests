@@ -33,6 +33,7 @@ EUDI_MDOC_PRESENTATION_EVIDENCE_ID = "eudi.oid4vp.mdoc-device-response.v1"
 EUDI_REPLAY_EVIDENCE_ID = "eudi.oid4vp.replayed-response.v1"
 EUDI_INVALID_SIGNATURE_EVIDENCE_ID = "eudi.oid4vp.invalid-signature.v1"
 EUDI_EXPIRED_REQUEST_EVIDENCE_ID = "eudi.oid4vp.expired-request.v1"
+EUDI_KEY_ATTESTATION_EVIDENCE_ID = "eudi.oid4vci.key-attestation-jwt-proof.v1"
 REQUIRED_EVIDENCE_CLAIMS = {
     EUDI_MDOC_ISSUANCE_EVIDENCE_ID: frozenset({"issuance:mso_mdoc"}),
     EUDI_MDOC_PRESENTATION_EVIDENCE_ID: frozenset({"presentation:mso_mdoc"}),
@@ -48,6 +49,9 @@ REQUIRED_EVIDENCE_CLAIMS = {
     EUDI_REPLAY_EVIDENCE_ID: frozenset({"negative:replayed_response"}),
     EUDI_INVALID_SIGNATURE_EVIDENCE_ID: frozenset({"negative:invalid_signature"}),
     EUDI_EXPIRED_REQUEST_EVIDENCE_ID: frozenset({"negative:expired_request"}),
+    EUDI_KEY_ATTESTATION_EVIDENCE_ID: frozenset(
+        {"wallet_key_attestation:jwt_proof_x5c_profile_trust"}
+    ),
 }
 
 
@@ -77,7 +81,7 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     if data.get("schema") != "elevenid.eudi-reference-interop/v1":
         raise ValueError("unsupported EUDI interop manifest schema")
     components = data.get("components", {})
-    for name in ("wallet_tester", "verifier_endpoint"):
+    for name in ("verifier_endpoint",):
         component = components.get(name, {})
         if not component.get("repository", "").startswith("https://github.com/eu-digital-identity-wallet/"):
             raise ValueError(f"{name} must point to an official EUDI repository")
@@ -586,7 +590,6 @@ def run_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str,
         validate_environment(environment, validate_java=False)
         material_values = {
             "gateway": environment["OIDF_PUBLIC_BASE_URL"],
-            "wallet_tester": environment["EUDI_WALLET_TESTER_PUBLIC_URL"],
             "verifier": environment["EUDI_VERIFIER_PUBLIC_URL"],
             "wallet_kit": environment.get("EUDI_WALLET_KIT_URL", ""),
         }
@@ -594,7 +597,6 @@ def run_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str,
         raise ValueError("OIDF_INSECURE_TLS is prohibited for EUDI interoperability evidence")
     explicit = {
         "gateway": args.gateway_url,
-        "wallet_tester": args.wallet_tester_url,
         "verifier": args.verifier_url,
         "wallet_kit": args.wallet_kit_url,
     }
@@ -613,7 +615,6 @@ def run_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str,
             "RUN_EUDI_TESTS": "true",
             "GATEWAY_URL": endpoints["gateway"],
             "OIDF_MARTY_GATEWAY_URL": endpoints["gateway"],
-            "EUDI_WALLET_TESTER_URL": endpoints["wallet_tester"],
             "EUDI_VERIFIER_URL": endpoints["verifier"],
             "EUDI_WALLET_KIT_URL": endpoints["wallet_kit"],
         }
@@ -692,7 +693,6 @@ def main() -> int:
     run_parser = sub.add_parser("run")
     run_parser.add_argument("--eudi-material", type=Path, help="generated trust and endpoint environment")
     run_parser.add_argument("--gateway-url")
-    run_parser.add_argument("--wallet-tester-url")
     run_parser.add_argument("--verifier-url")
     run_parser.add_argument("--wallet-kit-url")
     run_parser.add_argument("--output-dir", type=Path, required=True)
@@ -705,7 +705,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "validate":
         manifest = load_manifest()
-        print("EUDI reference interop manifest is valid:", manifest["components"]["wallet_tester"]["commit"])
+        print(
+            "EUDI reference interop manifest is valid:",
+            manifest["components"]["wallet_kit"]["libraries"]["oid4vci"]["commit"],
+        )
         return 0
     return run(args)
 

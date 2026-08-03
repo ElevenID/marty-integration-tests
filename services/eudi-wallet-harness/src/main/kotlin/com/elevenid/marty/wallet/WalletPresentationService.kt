@@ -24,17 +24,16 @@ import eu.europa.ec.eudi.openid4vp.Consensus
 import eu.europa.ec.eudi.openid4vp.DispatchOutcome
 import eu.europa.ec.eudi.openid4vp.EncryptionParameters
 import eu.europa.ec.eudi.openid4vp.HashAlgorithm
-import eu.europa.ec.eudi.openid4vp.JarConfiguration
 import eu.europa.ec.eudi.openid4vp.OpenId4VPConfig
 import eu.europa.ec.eudi.openid4vp.OpenId4Vp
 import eu.europa.ec.eudi.openid4vp.Resolution
 import eu.europa.ec.eudi.openid4vp.ResolvedRequestObject
 import eu.europa.ec.eudi.openid4vp.ResponseEncryptionConfiguration
 import eu.europa.ec.eudi.openid4vp.ResponseMode
+import eu.europa.ec.eudi.openid4vp.SignedRequestConfiguration
 import eu.europa.ec.eudi.openid4vp.SupportedClientIdPrefix
 import eu.europa.ec.eudi.openid4vp.SupportedRequestUriMethods
 import eu.europa.ec.eudi.openid4vp.TransactionData
-import eu.europa.ec.eudi.openid4vp.VPConfiguration
 import eu.europa.ec.eudi.openid4vp.VerifiablePresentation
 import eu.europa.ec.eudi.openid4vp.VerifiablePresentations
 import eu.europa.ec.eudi.openid4vp.VpFormatsSupported
@@ -140,19 +139,17 @@ object WalletPresentationService {
         }
     }
 
-    private fun createOpenId4Vp(httpClient: HttpClient): OpenId4Vp {
+    private fun createOpenId4Vp(httpClient: HttpClient): OpenId4Vp.OverRedirects {
         val certificateTrust = eu.europa.ec.eudi.openid4vp.X509CertificateTrust(::validateCertificateChain)
         val config = OpenId4VPConfig(
-            vpConfiguration = VPConfiguration(
-                vpFormatsSupported = VpFormatsSupported(
-                    sdJwtVc = VpFormatsSupported.SdJwtVc.HAIP,
-                    msoMdoc = VpFormatsSupported.MsoMdoc(
-                        issuerAuthAlgorithms = listOf(eu.europa.ec.eudi.openid4vp.CoseAlgorithm(-7)),
-                        deviceAuthAlgorithms = listOf(eu.europa.ec.eudi.openid4vp.CoseAlgorithm(-7)),
-                    ),
+            vpFormatsSupported = VpFormatsSupported(
+                sdJwtVc = VpFormatsSupported.SdJwtVc.HAIP,
+                msoMdoc = VpFormatsSupported.MsoMdoc(
+                    issuerAuthAlgorithms = listOf(eu.europa.ec.eudi.openid4vp.CoseAlgorithm(-7)),
+                    deviceAuthAlgorithms = listOf(eu.europa.ec.eudi.openid4vp.CoseAlgorithm(-7)),
                 ),
             ),
-            jarConfiguration = JarConfiguration(
+            signedRequestConfiguration = SignedRequestConfiguration(
                 supportedAlgorithms = listOf(
                     JWSAlgorithm.ES256,
                     JWSAlgorithm.ES384,
@@ -176,7 +173,7 @@ object WalletPresentationService {
                 },
             ),
         )
-        return OpenId4Vp(config, httpClient)
+        return OpenId4Vp.overRedirects(config, httpClient)
     }
 
     /**
@@ -647,6 +644,8 @@ object WalletPresentationService {
         is ResponseMode.QueryJwt -> "query.jwt"
         is ResponseMode.Fragment -> "fragment"
         is ResponseMode.FragmentJwt -> "fragment.jwt"
+        ResponseMode.DCApi -> "dc_api"
+        ResponseMode.DCApiJwt -> "dc_api.jwt"
     }
 
     private fun ResponseMode.mdocResponseUri(): String = when (this) {

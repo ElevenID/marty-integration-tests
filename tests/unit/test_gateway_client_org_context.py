@@ -143,3 +143,56 @@ async def test_get_verification_decision_uses_result_endpoint() -> None:
         "GET",
         "/v1/flows/instances/flow-1/result",
     )
+
+
+@pytest.mark.asyncio
+async def test_create_standard_flow_uses_current_public_contract() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(return_value={"id": "flow-1"})
+    client._request = request
+
+    try:
+        await client.create_flow_definition(
+            organization_id="org-1",
+            name="Verification flow",
+            flow_type="verification",
+            presentation_policy_id="policy-1",
+        )
+    finally:
+        await client.close()
+
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/flows/definitions",
+        json={
+            "organization_id": "org-1",
+            "name": "Verification flow",
+            "flow_type": "oid4vp_presentation",
+            "approval_strategy": "AUTO",
+            "hooks": {},
+            "deployment_profile_ids": [],
+            "presentation_policy_id": "policy-1",
+        },
+    )
+    payload = request.await_args.kwargs["json"]
+    assert "steps" not in payload
+    assert "type" not in payload
+    assert "trust_profile_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_activate_credential_template_uses_public_gateway() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(return_value={"id": "template-1", "status": "active"})
+    client._request = request
+
+    try:
+        result = await client.activate_credential_template("template-1")
+    finally:
+        await client.close()
+
+    assert result["status"] == "active"
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/credential-templates/template-1/activate",
+    )

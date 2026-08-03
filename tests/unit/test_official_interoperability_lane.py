@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -111,6 +112,24 @@ def test_keycloak_initializer_diagnostic_redacts_secret_values() -> None:
     assert "bearer-value" not in redacted
     assert "opaque-cookie" not in redacted
     assert redacted.count("<redacted>") == 4
+
+
+def test_oid4vci_runtime_diagnostic_emits_only_fixed_categories(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log = tmp_path / "compose.log"
+    log.write_text(
+        "proof verification failed: Key-attestation-bound proof has no resolved tenant issuer policy "
+        "token=must-not-leak\n",
+        encoding="utf-8",
+    )
+
+    lane.emit_oid4vci_runtime_diagnostic(log)
+
+    output = capsys.readouterr().err
+    assert "key-attestation-policy-unresolved" in output
+    assert "must-not-leak" not in output
+    assert "proof verification failed" not in output
 
 
 def test_keycloak_startup_diagnostic_includes_service_logs_and_redacts(
@@ -276,7 +295,6 @@ def test_material_environment_accepts_the_complete_generated_contract(tmp_path: 
         tmp_path,
         hostname="marty-oidf.test",
         marty_port=18443,
-        wallet_tester_port=25051,
         verifier_port=28091,
         wallet_kit_port=29090,
         store_password="store-password",
@@ -427,6 +445,7 @@ def test_oid4vci_fixture_bootstrap_accepts_public_configuration_fragment(
         args,
         {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
         mode="oid4vci",
+        oidf_key_attestation_trust_anchor=tmp_path / "attester-root.pem",
     )
 
     assert result["oid4vci_credential_configuration_id"] == "PID#sd-jwt"
@@ -464,10 +483,12 @@ def test_fixture_bootstrap_rejects_control_characters(
             args,
             {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
             mode="oid4vci",
+            oidf_key_attestation_trust_anchor=tmp_path / "attester-root.pem",
         )
 
 
 def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> None:
+    key_attestation_jwks, root_path = lane.oidf_key_attestation_material(tmp_path)
     config, request = lane.oid4vci_issuer_config(
         tmp_path,
         "https://marty.test",
@@ -477,6 +498,7 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
             "oid4vci_credential_configuration_id": "PID#sd-jwt",
             "oid4vci_issuer_did": "did:web:marty.test:orgs:org-1",
         },
+        key_attestation_jwks,
     )
 
     data = json.loads(config.read_text(encoding="utf-8"))
@@ -488,6 +510,12 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
     }
     assert data["client"]["client_id"] == "marty-official-wallet-org-1"
     assert data["client2"]["client_id"] == "marty-official-wallet-2-org-1"
+    attester = data["client_attestation"]["key_attestation_jwks"]["keys"][0]
+    assert attester["alg"] == "ES256"
+    assert attester["d"]
+    assert len(attester["x5c"]) == 2
+    if os.name != "nt":
+        assert root_path.stat().st_mode & 0o777 == 0o600
     request_data = json.loads(request.read_text(encoding="utf-8"))
     assert request_data["claims"]["employee_id"] == "oidf-conformance"
     for runner_client, registered_client in zip(
@@ -501,6 +529,18 @@ def test_oid4vci_config_uses_disposable_public_fixture_ids(tmp_path: Path) -> No
         assert "d" not in public_key
         assert public_key == {name: value for name, value in private_key.items() if name != "d"}
         assert registered_client["client_id"] == runner_client["client_id"]
+
+
+def test_oidf_key_attestation_material_is_disposable_ca_bound(tmp_path: Path) -> None:
+    jwks, root_path = lane.oidf_key_attestation_material(tmp_path)
+
+    root = lane.x509.load_pem_x509_certificate(root_path.read_bytes())
+    assert root.extensions.get_extension_for_class(lane.x509.BasicConstraints).value.ca is True
+    key = jwks["keys"][0]
+    leaf = lane.x509.load_der_x509_certificate(lane.base64.b64decode(key["x5c"][0]))
+    assert leaf.issuer == root.subject
+    assert leaf.extensions.get_extension_for_class(lane.x509.BasicConstraints).value.ca is False
+    assert key["d"]
 
 
 def test_oid4vci_lane_runs_official_plan_through_public_issuance(
@@ -1164,7 +1204,6 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
             args,
             {
                 "OIDF_MARTY_GATEWAY_URL": "https://marty.test",
-                "EUDI_WALLET_TESTER_PUBLIC_URL": "https://wallet.test",
                 "EUDI_VERIFIER_PUBLIC_URL": "https://verifier.test",
                 "EUDI_WALLET_KIT_URL": "http://wallet-kit:9090",
             },

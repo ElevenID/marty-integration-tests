@@ -1,0 +1,141 @@
+name: Public tenant boundary
+
+on:
+  schedule:
+    - cron: "17 6 15 * *"
+  workflow_dispatch:
+    inputs:
+      stack_release_tag:
+        description: Optional reviewed stack tag override (requires its SHA-256)
+        type: string
+        required: false
+      stack_manifest_sha256:
+        description: Optional sha256:<digest> for the overridden stack manifest
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  packages: read
+  attestations: read
+
+concurrency:
+  group: public-tenant-boundary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  two-organization-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUNBUFFERED: "1"
+      PUBLIC_BOUNDARY_RUN_ID: tenant-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout ElevenID test harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/official-py312.lock
+
+      - name: Install hash-locked test dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --require-hashes --only-binary=:all:
+          --requirement requirements/official-py312.lock
+
+      - name: Resolve and attest released stack
+        id: stack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_RELEASE_TAG: ${{ inputs.stack_release_tag }}
+          STACK_MANIFEST_SHA256: ${{ inputs.stack_manifest_sha256 }}
+        shell: bash
+        run: |
+          stack_args=(
+            --pin conformance/stack-under-test.json
+            --release-tag "$STACK_RELEASE_TAG"
+            --manifest-sha256 "$STACK_MANIFEST_SHA256"
+            --output-dir work/stack
+            --metadata-output work/stack/stack-metadata.json
+          )
+          python scripts/official_stack_release.py materialize "${stack_args[@]}"
+          python -c "import json, os; value=json.load(open('work/stack/stack-metadata.json', encoding='utf-8'))['marty_commit']; open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8').write(f'marty_commit={value}\n')"
+
+      - name: Verify and pull attested stack images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          while IFS=$'\t' read -r repository reference; do
+            gh attestation verify "oci://$reference" --repo "$repository"
+            docker pull "$reference"
+          done < <(jq -r '.images[] | [.repository, .reference] | @tsv' work/stack/stack-metadata.json)
+          python scripts/render_stack_env.py --manifest work/stack/stack-manifest.json --output work/stack/.env.stack
+
+      - name: Checkout released deployment adapter
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: ElevenID/marty-ui
+          ref: ${{ steps.stack.outputs.marty_commit }}
+          path: work/marty-ui
+          persist-credentials: false
+
+      - name: Generate disposable TLS material
+        run: |
+          python scripts/eudi_test_material.py generate --output work/material --marty-port 18443
+          python scripts/eudi_test_material.py validate --material work/material
+          python -c "import json; from urllib.parse import urlsplit; data=json.load(open('work/material/report.json', encoding='utf-8')); hosts=sorted({urlsplit(value).hostname for value in data['urls'].values()}); print('127.0.0.1 ' + ' '.join(host for host in hosts if host and host != 'localhost'))" | sudo tee -a /etc/hosts
+
+      - name: Generate disposable principal credentials
+        shell: bash
+        run: |
+          admin_password="$(openssl rand -hex 32)!A1"
+          reviewer_password="$(openssl rand -hex 32)!B2"
+          echo "::add-mask::$admin_password"
+          echo "::add-mask::$reviewer_password"
+          echo "MARTY_CONFORMANCE_ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"
+          echo "MARTY_CONFORMANCE_REVIEWER_PASSWORD=$reviewer_password" >> "$GITHUB_ENV"
+
+      - name: Run ElevenID-owned public-boundary matrix
+        id: boundary
+        shell: bash
+        run: |
+          set +e
+          python scripts/public_boundary_lane.py \
+            --run-id "$PUBLIC_BOUNDARY_RUN_ID" \
+            --marty-ui work/marty-ui \
+            --stack-manifest work/stack/stack-manifest.json \
+            --stack-metadata work/stack/stack-metadata.json \
+            --stack-env work/stack/.env.stack \
+            --material work/material \
+            --output-dir work/evidence
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload public product-security evidence
+        if: always() && hashFiles('work/evidence/summary.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tenant-boundary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/evidence/summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce boundary result
+        if: always()
+        env:
+          BOUNDARY_EXIT_CODE: ${{ steps.boundary.outputs.exit_code }}
+        shell: bash
+        run: |
+          if [[ -z "$BOUNDARY_EXIT_CODE" ]]; then
+            echo "Public-boundary lane did not reach its dispatcher." >&2
+            exit 1
+          fi
+          exit "$BOUNDARY_EXIT_CODE"

@@ -69,8 +69,8 @@ fun Application.configureRoutes() {
             call.respond(HealthResponse(
                 status = "ok",
                 service = "eudi-wallet-harness",
-                openid4vciVersion = "0.9.1",
-                openid4vpVersion = "0.12.3",
+                openid4vciVersion = "0.13.0",
+                openid4vpVersion = "0.15.1",
                 capabilities = WalletCapabilities(
                     officialOid4vciIssuance = true,
                     officialOid4vpPresentation = true,

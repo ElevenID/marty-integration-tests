@@ -13,12 +13,16 @@ import subprocess
 import sys
 import time
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = Path(__file__).resolve().parent
@@ -64,6 +68,26 @@ PROXY_DIAGNOSTIC_CLASSES = {
     "upstream-connect": re.compile(r"(?i)(?:connect\(\) failed|connection refused)"),
     "upstream-timeout": re.compile(r"(?i)(?:upstream timed out|connection timed out)"),
     "no-live-upstream": re.compile(r"(?i)no live upstreams"),
+}
+OID4VCI_RUNTIME_DIAGNOSTIC_CLASSES = {
+    "key-attestation-policy-unresolved": re.compile(
+        r"(?i)key-attestation-bound proof has no resolved tenant issuer policy"
+    ),
+    "key-attestation-missing": re.compile(
+        r"(?i)issuer profile requires a key-attestation-bound proof"
+    ),
+    "key-attestation-nonce": re.compile(r"(?i)key attestation nonce does not match"),
+    "key-attestation-untrusted-certificate": re.compile(
+        r"(?i)key attestation certificate chain is not trusted"
+    ),
+    "key-attestation-signature": re.compile(
+        r"(?i)key attestation signature verification failed"
+    ),
+    "key-attestation-holder-binding": re.compile(
+        r"(?i)(?:attested public key|attested key).{0,100}(?:proof|match|binding)"
+    ),
+    "proof-signature": re.compile(r"(?i)proof (?:jwt )?signature.{0,80}(?:invalid|failed)"),
+    "invalid-nonce": re.compile(r"(?i)(?:invalid_nonce|proof nonce is missing, expired, or already used)"),
 }
 
 
@@ -245,8 +269,6 @@ MATERIAL_ENV_KEYS = {
     "OIDF_CONFORMANCE_BRIDGE_ALIAS",
     "OIDF_TLS_CERT_DIR",
     "OIDF_MARTY_RESOLVE_IP",
-    "EUDI_WALLET_TESTER_PUBLIC_URL",
-    "EUDI_WALLET_TESTER_TLS_HOST_PORT",
     "EUDI_VERIFIER_PUBLIC_URL",
     "EUDI_VERIFIER_TLS_HOST_PORT",
     "EUDI_WALLET_KIT_HOST_PORT",
@@ -498,10 +520,129 @@ def oidf_wallet_jwks() -> tuple[dict[str, list[dict[str, str]]], dict[str, list[
     return {"keys": [private_key_jwk]}, {"keys": [public_key]}
 
 
+def oidf_key_attestation_material(
+    output_dir: Path,
+) -> tuple[dict[str, list[dict[str, object]]], Path]:
+    """Create a disposable external-wallet attester for the official runner.
+
+    This key belongs to the third-party test wallet role, not to Marty. Marty
+    issuer keys remain non-exportable and every product signature continues to
+    flow through the resolved issuer profile and DID. The official runner has
+    no remote-signing interface, so its short-lived wallet-provider key is
+    generated in the mode-0600 runner area and destroyed with the lane.
+    """
+
+    private_dir = output_dir / "private"
+    private_dir.mkdir(parents=True, exist_ok=True)
+    private_dir.chmod(stat.S_IRWXU)
+
+    now = datetime.now(UTC)
+    root_key = ec.generate_private_key(ec.SECP256R1())
+    root_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "ElevenID disposable OIDF attester root")]
+    )
+    root_certificate = (
+        x509.CertificateBuilder()
+        .subject_name(root_name)
+        .issuer_name(root_name)
+        .public_key(root_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(root_key, hashes.SHA256())
+    )
+
+    attester_key = ec.generate_private_key(ec.SECP256R1())
+    leaf_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "OIDF disposable wallet key attester")]
+    )
+    leaf_certificate = (
+        x509.CertificateBuilder()
+        .subject_name(leaf_name)
+        .issuer_name(root_name)
+        .public_key(attester_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(hours=4))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(root_key, hashes.SHA256())
+    )
+
+    private_numbers = attester_key.private_numbers()
+    public_numbers = private_numbers.public_numbers
+
+    def b64url(value: int) -> str:
+        return base64.urlsafe_b64encode(value.to_bytes(32, "big")).decode("ascii").rstrip("=")
+
+    public_key = {
+        "kty": "EC",
+        "crv": "P-256",
+        "alg": "ES256",
+        "use": "sig",
+        "x": b64url(public_numbers.x),
+        "y": b64url(public_numbers.y),
+    }
+    thumbprint_input = json.dumps(
+        {name: public_key[name] for name in ("crv", "kty", "x", "y")},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    kid = base64.urlsafe_b64encode(sha256(thumbprint_input).digest()).decode("ascii").rstrip("=")
+    private_jwk: dict[str, object] = {
+        **public_key,
+        "kid": kid,
+        "d": b64url(private_numbers.private_value),
+        "x5c": [
+            base64.b64encode(leaf_certificate.public_bytes(serialization.Encoding.DER)).decode("ascii"),
+            base64.b64encode(root_certificate.public_bytes(serialization.Encoding.DER)).decode("ascii"),
+        ],
+    }
+    root_path = private_dir / "oidf-key-attestation-root.pem"
+    descriptor = os.open(
+        root_path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        stat.S_IRUSR | stat.S_IWUSR,
+    )
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(root_certificate.public_bytes(serialization.Encoding.PEM))
+    root_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    return {"keys": [private_jwk]}, root_path
+
+
 def oid4vci_issuer_config(
     output_dir: Path,
     gateway_url: str,
     fixtures: dict[str, str],
+    key_attestation_jwks: dict[str, list[dict[str, object]]],
 ) -> tuple[Path, Path]:
     """Write the official runner config and fixed public issuance request."""
     private_dir = output_dir / "private"
@@ -534,7 +675,7 @@ def oid4vci_issuer_config(
                 "client_id": client2_id,
                 "jwks": client2_jwks,
             },
-            "client_attestation": {"key_attestation_jwks": {"keys": []}},
+            "client_attestation": {"key_attestation_jwks": key_attestation_jwks},
         },
     )
     write_private_json(
@@ -725,6 +866,27 @@ def emit_mdoc_runtime_diagnostic(path: Path) -> None:
     print("--- end mdoc verifier runtime diagnostic ---", file=sys.stderr)
 
 
+def classify_oid4vci_runtime_diagnostics(text: str) -> list[str]:
+    """Return fixed issuer categories without exposing private Compose logs."""
+    categories = [
+        name for name, pattern in OID4VCI_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)
+    ]
+    return categories or ["unclassified-runtime-failure"]
+
+
+def emit_oid4vci_runtime_diagnostic(path: Path) -> None:
+    """Print only allowlisted OID4VCI categories from the private log."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        categories = ["runtime-log-unavailable"]
+    else:
+        categories = classify_oid4vci_runtime_diagnostics(text)
+    print("--- OID4VCI issuer runtime diagnostic (redacted) ---", file=sys.stderr)
+    print(f"categories={','.join(categories)}", file=sys.stderr)
+    print("--- end OID4VCI issuer runtime diagnostic ---", file=sys.stderr)
+
+
 def emit_public_proxy_diagnostic(project: str, environment: dict[str, str]) -> None:
     """Classify proxy failures before Compose teardown without publishing logs."""
     containers = subprocess.run(
@@ -858,6 +1020,7 @@ def compose_command(
     args: argparse.Namespace,
     action: str,
     *,
+    marty_only: bool = False,
     oidf: bool = False,
     eudi: bool = False,
     haip: bool = False,
@@ -871,6 +1034,8 @@ def compose_command(
         "--marty-ui",
         str(args.marty_ui),
     ]
+    if marty_only:
+        command.append("--marty-only")
     if oidf:
         command.extend(["--oidf-runner", str(args.oidf_runner), "--oidf"])
     if eudi:
@@ -885,6 +1050,7 @@ def bootstrap_fixtures(
     environment: dict[str, str],
     *,
     mode: str,
+    oidf_key_attestation_trust_anchor: Path | None = None,
 ) -> dict[str, str]:
     destination = args.output_dir / "private" / f"{mode}-fixtures.json"
     command = [
@@ -910,6 +1076,15 @@ def bootstrap_fixtures(
         if args.oidf_runner is None:
             raise RuntimeError("oid4vp-mdoc fixture bootstrap requires the exact OIDF runner checkout")
         command.extend(["--oidf-runner-source", str(args.oidf_runner)])
+    elif mode in {"oid4vci", "eudi"}:
+        if oidf_key_attestation_trust_anchor is None:
+            raise RuntimeError(f"{mode} fixture bootstrap requires a key-attestation trust anchor")
+        command.extend(
+            [
+                "--oidf-key-attestation-trust-anchor",
+                str(oidf_key_attestation_trust_anchor),
+            ]
+        )
     result = run(command, environment)
     if result:
         raise RuntimeError(f"{mode} public fixture bootstrap failed with exit code {result}")
@@ -1135,13 +1310,23 @@ def run_oid4vci_issuer(
     if not started:
         emit_keycloak_initializer_diagnostic(args.run_id)
         return 1
+    result = 1
     try:
         wait_for_public_stack(environment)
-        fixtures = bootstrap_fixtures(args, environment, mode="oid4vci")
+        key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(
+            args.output_dir
+        )
+        fixtures = bootstrap_fixtures(
+            args,
+            environment,
+            mode="oid4vci",
+            oidf_key_attestation_trust_anchor=key_attestation_root,
+        )
         config, issuance_request = oid4vci_issuer_config(
             args.output_dir,
             environment["OIDF_MARTY_GATEWAY_URL"],
             fixtures,
+            key_attestation_jwks,
         )
         suite_environment = dict(environment)
         suite_environment.update(
@@ -1158,7 +1343,7 @@ def run_oid4vci_issuer(
                 "OIDF_MARTY_ISSUER_DID": fixtures["oid4vci_issuer_did"],
             }
         )
-        return run(
+        result = run(
             [
                 sys.executable,
                 str(ROOT / "scripts" / "oidf_conformance.py"),
@@ -1179,12 +1364,16 @@ def run_oid4vci_issuer(
             suite_environment,
         )
     finally:
+        compose_log = args.output_dir / "private" / "compose.log"
         run(
             compose_command(args, "logs", oidf=True),
             environment,
-            capture=args.output_dir / "private" / "compose.log",
+            capture=compose_log,
         )
+        if result:
+            emit_oid4vci_runtime_diagnostic(compose_log)
         run(compose_command(args, "down", oidf=True), environment)
+    return result
 
 
 def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
@@ -1263,6 +1452,13 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # *after* it merges EUDI material, so EUDI's TLS CA cannot accidentally
     # replace the independent request-object trust anchor.
     environment = dict(environment)
+    key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(
+        args.output_dir
+    )
+    wallet_attester_file = args.output_dir / "private" / "eudi-wallet-attester.jwks.json"
+    write_private_json(wallet_attester_file, key_attestation_jwks)
+    environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(wallet_attester_file)
+    environment["EUDI_KEY_ATTESTATION_TRUST_ANCHOR_FILE"] = str(key_attestation_root)
     up = compose_command(args, "up", eudi=True, haip=True)
     started = run(up, environment) == 0
     if not started:
@@ -1271,7 +1467,12 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     result = 1
     try:
         wait_for_public_stack(environment)
-        fixtures = bootstrap_fixtures(args, environment, mode="eudi")
+        fixtures = bootstrap_fixtures(
+            args,
+            environment,
+            mode="eudi",
+            oidf_key_attestation_trust_anchor=key_attestation_root,
+        )
         suite_environment = dict(environment)
         suite_environment.update(load_verifier_environment(args.haip_material))
         # The runner selects only organization-scoped templates. Each template
@@ -1295,8 +1496,6 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "run",
                 "--gateway-url",
                 environment["OIDF_MARTY_GATEWAY_URL"],
-                "--wallet-tester-url",
-                environment["EUDI_WALLET_TESTER_PUBLIC_URL"],
                 "--verifier-url",
                 environment["EUDI_VERIFIER_PUBLIC_URL"],
                 "--wallet-kit-url",

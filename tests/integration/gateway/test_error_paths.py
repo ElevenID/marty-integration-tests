@@ -370,12 +370,14 @@ class TestInvalidFlowErrors:
     async def test_start_flow_instance_with_invalid_definition(
         self,
         gateway_client: GatewayClient,
+        test_organization: Dict[str, Any],
     ):
         """Test starting flow instance with non-existent flow definition"""
         with pytest.raises(Exception) as exc_info:
             await gateway_client.start_flow_instance(
+                organization_id=test_organization["id"],
                 flow_definition_id="00000000-0000-0000-0000-000000000000",
-                context={"test": "data"},
+                initial_context={"test": "data"},
             )
         
         error_msg = str(exc_info.value).lower()

@@ -18,7 +18,6 @@ SPEC.loader.exec_module(eudi)
 
 def test_eudi_reference_components_are_immutable_and_complete() -> None:
     manifest = eudi.load_manifest()
-    assert "@sha256:" in manifest["components"]["wallet_tester"]["image"]
     assert "@sha256:" in manifest["components"]["verifier_endpoint"]["image"]
     assert manifest["coverage"]["issuance"] == ["sd_jwt_vc", "mso_mdoc"]
     assert manifest["coverage"]["presentation"] == ["sd_jwt_vc", "mso_mdoc"]
@@ -35,14 +34,13 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
         eudi.EUDI_REPLAY_EVIDENCE_ID,
         eudi.EUDI_INVALID_SIGNATURE_EVIDENCE_ID,
     }
-    assert manifest["planned_coverage"] == {}
-    assert manifest["limitations"] == {}
+    assert manifest["coverage"]["wallet_key_attestation"] == ["jwt_proof_x5c_profile_trust"]
     libraries = manifest["components"]["wallet_kit"]["libraries"]
     assert {name: value["version"] for name, value in libraries.items()} == {
-        "oid4vp": "0.12.3",
-        "oid4vci": "0.9.1",
-        "sd_jwt": "0.18.0",
-        "mdoc": "0.99.0",
+        "oid4vp": "0.15.1",
+        "oid4vci": "0.13.0",
+        "sd_jwt": "0.20.1",
+        "mdoc": "0.100.0",
     }
     assert all(value["maven_coordinate"].endswith(value["version"]) for value in libraries.values())
     build = manifest["components"]["wallet_kit"]["build"]
@@ -96,9 +94,10 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert 'System.getProperty("javax.net.ssl.trustStore")' in issuance_source
     assert "TrustManagerFactory.getDefaultAlgorithm()" in issuance_source
     assert "sslContext(tlsContext)" in issuance_source
-    assert "CredentialOfferRequestResolver(httpClient, vciConfig.issuerMetadataPolicy)" in issuance_source
-    assert 'OfferResolutionStageException("resolver", exception)' in issuance_source
-    assert 'OfferResolutionStageException("issuer-construction", exception)' in issuance_source
+    assert "Issuer.make(vciConfig, credentialOfferUri, httpClient).getOrThrow().first" in issuance_source
+    assert 'OfferResolutionStageException("offer-and-issuer-resolution", exception)' in issuance_source
+    assert 'System.getenv("EUDI_WALLET_ATTESTER_JWKS_FILE")' in issuance_source
+    assert "ProofSpecification.JwtProof" in issuance_source
     assert "stage = staged?.stage" in issuance_source
     assert 'issuanceStage("authorization")' in issuance_source
     assert 'issuanceStage("credential-request")' in issuance_source
@@ -137,7 +136,6 @@ def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
     (output / "junit.xml").write_text("<testsuites/>", encoding="utf-8")
     endpoints = {
         "gateway": "https://marty.test",
-        "wallet_tester": "http://wallet:5050",
         "verifier": "http://verifier:8090",
         "wallet_kit": "http://kit:9090",
     }
@@ -154,7 +152,7 @@ def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
     )
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["result"] == {"exit_code": 0, "passed": True, "skipped": 0}
-    assert evidence["components"]["wallet_tester"]["image"].startswith("ghcr.io/")
+    assert evidence["components"]["verifier_endpoint"]["image"].startswith("ghcr.io/")
     assert evidence["observed_evidence"] == observed
 
 
@@ -576,7 +574,6 @@ def test_run_environment_loads_material_trust_and_public_login_values(
 ) -> None:
     generated = {
         "OIDF_PUBLIC_BASE_URL": "https://marty-oidf.test:8443",
-        "EUDI_WALLET_TESTER_PUBLIC_URL": "https://marty-oidf.test:25051",
         "EUDI_VERIFIER_PUBLIC_URL": "https://marty-oidf.test:28091",
         "EUDI_WALLET_KIT_URL": "http://127.0.0.1:29090",
         "SSL_CERT_FILE": str(tmp_path / "root-ca.pem"),
@@ -587,7 +584,6 @@ def test_run_environment_loads_material_trust_and_public_login_values(
     args = argparse.Namespace(
         eudi_material=tmp_path,
         gateway_url=None,
-        wallet_tester_url=None,
         verifier_url=None,
         wallet_kit_url=None,
     )
@@ -606,7 +602,6 @@ def test_explicit_endpoint_cannot_deviate_from_material(
 ) -> None:
     generated = {
         "OIDF_PUBLIC_BASE_URL": "https://marty-oidf.test:8443",
-        "EUDI_WALLET_TESTER_PUBLIC_URL": "https://marty-oidf.test:25051",
         "EUDI_VERIFIER_PUBLIC_URL": "https://marty-oidf.test:28091",
         "EUDI_WALLET_KIT_URL": "http://127.0.0.1:29090",
     }
@@ -615,7 +610,6 @@ def test_explicit_endpoint_cannot_deviate_from_material(
     args = argparse.Namespace(
         eudi_material=tmp_path,
         gateway_url="https://different.test:8443",
-        wallet_tester_url=None,
         verifier_url=None,
         wallet_kit_url=None,
     )

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -21,10 +26,41 @@ PUBLIC_SIGNING_JWK = {
     "x": "public-x",
     "y": "public-y",
 }
-MDOC_TRUST_ANCHOR_PEM = """-----BEGIN CERTIFICATE-----
-Y2VydGlmaWNhdGU=
------END CERTIFICATE-----
-"""
+
+
+def mdoc_trust_anchor_pem(*, not_before: datetime, not_after: datetime) -> str:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "OIDF mdoc fixture")])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_before)
+        .not_valid_after(not_after)
+        .sign(private_key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+MDOC_TRUST_ANCHOR_PEM = mdoc_trust_anchor_pem(
+    not_before=datetime(2025, 1, 1, tzinfo=UTC),
+    not_after=datetime(2035, 1, 1, tzinfo=UTC),
+)
+
+
+def write_mdoc_runner_certificate(root: Path, certificate_pem: str) -> None:
+    source = root / "src" / "main" / "kotlin" / "org" / "multipaz" / "testapp" / "TestAppUtils.kt"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        f"""
+        val documentSignerCert = X509Cert.fromPem(
+            \"\"\"{certificate_pem.rstrip()}\"\"\"
+        )
+        """,
+        encoding="utf-8",
+    )
 
 
 def test_mdoc_mode_is_a_supported_public_fixture_mode() -> None:
@@ -88,6 +124,7 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
         organization_id=fixtures.DEFAULT_ORGANIZATION,
         run_id="run-1",
         mode="oid4vci",
+        oidf_key_attestation_trust_anchor_pem="-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n",
         request=request,
     )
 
@@ -103,6 +140,20 @@ def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
     paths = [path for path, _method, _body in calls]
     assert paths[0].startswith("/v1/signing-keys/config/resolve?")
     assert paths[1].startswith("/v1/signing-keys/issuer-profiles?")
+    issuer_profile = calls[1][2]
+    assert issuer_profile is not None
+    assert issuer_profile["key_attestation_policy"] == {
+        "mode": "required",
+        "trusted_root_certificates_pem": [
+            "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n"
+        ],
+        "allowed_algorithms": ["ES256"],
+        "required_key_storage": [],
+        "required_user_authentication": [],
+        "max_age_seconds": 300,
+        "require_nonce": True,
+        "status_validation": "disabled",
+    }
     assert paths[2:] == [
         "/v1/compliance-profiles",
         "/v1/revocation-profiles",
@@ -246,7 +297,16 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert requirement["credential_template_id"] == "template-2"
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[21][2]["holder_binding"] == {"required": True}
+    assert calls[21][2]["holder_binding"] == {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
     presentation_requirement = calls[21][2]["credential_requirements"][0]
     assert presentation_requirement["credential_template_id"] == "template-3"
     assert presentation_requirement["credential_payload_format"] == ("w3c_vcdm_v2_di")
@@ -363,7 +423,16 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
         "family_name",
         "birthdate",
     ]
-    assert policy["holder_binding"] == {"required": True}
+    assert policy["holder_binding"] == {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
 
 
 def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
@@ -423,6 +492,16 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
         mdoc=True,
     )
     requirement = policy["credential_requirements"][0]
+    assert policy["holder_binding"] == {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["MDOC_DEVICE_AUTHENTICATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
     assert requirement["credential_payload_format"] == "MDOC"
     assert [claim["claim_name"] for claim in requirement["requested_claims"]] == [
         "family_name",
@@ -552,6 +631,7 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
         organization_id=fixtures.DEFAULT_ORGANIZATION,
         run_id="run-1",
         mode="eudi",
+        oidf_key_attestation_trust_anchor_pem="wallet-attester-root",
         request=request,
     )
 
@@ -571,6 +651,9 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
     assert profile_body["signing_service_id"] == "managed-service"
     assert profile_body["signing_key_reference"] == "managed-key"
     assert profile_body["algorithm"] == "ES256"
+    assert profile_body["key_attestation_policy"]["trusted_root_certificates_pem"] == [
+        "wallet-attester-root"
+    ]
     assert calls[2][0].startswith("/v1/signing-keys/issuer-profiles/issuer-profile/public-identity?")
     assert calls[2][1] == "GET"
     assert calls[2][2] is None
@@ -704,7 +787,16 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     credential_requirement = credential_policy["credential_requirements"][0]
     assert credential_requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert credential_requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert presentation_policy["holder_binding"] == {"required": True}
+    assert presentation_policy["holder_binding"] == {
+        "required": True,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
+    }
     assert presentation_policy["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
 
@@ -751,20 +843,36 @@ def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_
 
 
 def test_mdoc_trust_anchor_is_read_from_exact_runner_source(tmp_path: Path) -> None:
-    source = tmp_path / "src" / "main" / "kotlin" / "org" / "multipaz" / "testapp" / "TestAppUtils.kt"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        """
-        val documentSignerCert = X509Cert.fromPem(
-            \"\"\"-----BEGIN CERTIFICATE-----
-            Y2VydGlmaWNhdGU=
-            -----END CERTIFICATE-----\"\"\"
+    certificate_pem = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC),
+        not_after=datetime(2030, 1, 1, tzinfo=UTC),
+    )
+    write_mdoc_runner_certificate(tmp_path, certificate_pem)
+
+    assert (
+        fixtures.official_mdoc_trust_anchor(
+            tmp_path,
+            now=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        """,
-        encoding="utf-8",
+        == certificate_pem
     )
 
-    assert fixtures.official_mdoc_trust_anchor(tmp_path) == MDOC_TRUST_ANCHOR_PEM
+
+def test_mdoc_trust_anchor_rejects_expired_official_fixture(tmp_path: Path) -> None:
+    certificate_pem = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC),
+        not_after=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    write_mdoc_runner_certificate(tmp_path, certificate_pem)
+
+    with pytest.raises(
+        ValueError,
+        match=r"official OIDF mdoc documentSignerCert has expired: .*do not bypass",
+    ):
+        fixtures.official_mdoc_trust_anchor(
+            tmp_path,
+            now=datetime(2026, 1, 2, tzinfo=UTC),
+        )
 
 
 def test_mdoc_bootstrap_requires_the_runner_document_certificate() -> None:
