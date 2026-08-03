@@ -5,11 +5,13 @@ Last updated: 2026-08-02
 
 ## Current evidence snapshot
 
-The immutable `marty-ui` v1.1.94 stack is the current checked-in target. Its
+The immutable `marty-ui` v1.1.97 stack is the current checked-in target. Its
 manifest digest is
-`sha256:76305f22fd21e5939aae26d903028d2d5fa30c409842a752424fe6511c8f5e7c`.
-The evidence bullets immediately below retain the prior v1.1.90 results where
-named; they are not reinterpreted as v1.1.93 evidence.
+`sha256:5e9625e896bcac1d66f36545d23b15241bff17a7dc865dc2c2e591fbd61559ca`.
+The evidence bullets immediately below retain the earlier released-stack
+results where named; changing the target does not reinterpret them as v1.1.97
+evidence. A v1.1.97 result is recorded only after the corresponding official
+lane completes against this exact manifest.
 
 - The unchanged OIDF issuer lane passed 16 modules with 1,076 successes,
   zero failures, and zero warnings in
