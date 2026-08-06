@@ -954,7 +954,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         # organization-bound API key as the foreign principal. This exercises
         # the same holder and reviewer routes as the UI without forging an
         # impossible B session for the organization-A user.
-        applicant_secret = f"applicant-{uuid.uuid4().hex}@example.test"
+        applicant_secret = f"applicant-{uuid.uuid4().hex}@example.com"
         templates_a = await admin.list_credential_templates(organization_a_id)
         active_template_a = next(
             (
