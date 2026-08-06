@@ -948,8 +948,8 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             if isinstance(flow, dict)
         }
 
-        # Applications contain applicant PII and submitted evidence. Create a
-        # real B-owned record through the ordinary public application journey,
+        # Applications contain applicant PII and generate vetting state. Create
+        # a real B-owned record through the current public application journey,
         # prove the B owner can read its organization-scoped projection, then
         # exercise the exact organization-scoped routes used by the console.
         applicant_secret = f"applicant-{uuid.uuid4().hex}@example.test"
@@ -975,29 +975,53 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             ],
             approval_strategy="MANUAL",
         )
-        application_b = await admin.create_application(
-            application_template_id=application_template_b["id"],
-            applicant_data={
-                "given_name": "Foreign",
-                "family_name": "Applicant",
-                "email": applicant_secret,
+        application_create = await admin.client.post(
+            "/v1/me/applications",
+            json={
+                "organization_id": organization_b_id,
+                "application_template_id": application_template_b["id"],
+                "form_data": {
+                    "email": applicant_secret,
+                },
             },
         )
-        application_b = await admin.submit_evidence(
-            application_id=application_b["id"],
-            evidence=TestDataBuilder.identity_document_evidence(),
-        )
+        assert application_create.status_code in {200, 201}, application_create.text
+        application_b = application_create.json()
         application_b_id = str(application_b["id"])
+        application_submit = await admin.client.post(
+            f"/v1/me/applications/{application_b_id}/submit"
+        )
+        assert application_submit.status_code == 200, application_submit.text
+        application_b = application_submit.json()
+        assert str(application_b.get("status") or "").upper() in {
+            "SUBMITTED",
+            "UNDER_REVIEW",
+        }, application_b
 
-        owner_applicant = await admin.client.get(f"/v1/organizations/{organization_b_id}/applicants/{application_b_id}")
+        owner_application = await admin.client.get(
+            f"/v1/me/applications/{application_b_id}"
+        )
+        assert owner_application.status_code == 200, owner_application.text
+        owner_application_body = owner_application.json()
+        assert owner_application_body.get("form_data") == {
+            "email": applicant_secret,
+        }
+
+        owner_applicant = await admin.client.get(
+            f"/v1/organizations/{organization_b_id}/applicants/{application_b_id}"
+        )
         assert owner_applicant.status_code == 200, owner_applicant.text
         owner_applicant_body = owner_applicant.json()
-        assert owner_applicant_body.get("evidence_submissions"), owner_applicant_body
+        assert owner_applicant_body.get("form_data") == {
+            "email": applicant_secret,
+        }
         owner_checks = await admin.client.get(
             f"/v1/organizations/{organization_b_id}/applicants/{application_b_id}/checks"
         )
         assert owner_checks.status_code == 200, owner_checks.text
-        assert isinstance(owner_checks.json(), list)
+        owner_checks_body = owner_checks.json()
+        assert isinstance(owner_checks_body, list)
+        assert owner_checks_body, "Submitted manual-review application created no vetting checks"
 
         applicants_a = await reviewer.client.get(f"/v1/organizations/{organization_a_id}/applicants")
         assert applicants_a.status_code == 200, applicants_a.text

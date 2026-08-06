@@ -125,6 +125,6 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
         "issuance transaction and revocation-status isolation",
         "issued-credential lifecycle and revocation isolation",
         "trust-profile ownership and mutation isolation",
-        "applicant, vetting, and submitted-evidence isolation",
+        "applicant form-data and vetting isolation",
         "deployment-profile, lane, and device-assignment isolation",
     } <= set(summary["coverage"])
