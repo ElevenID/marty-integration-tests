@@ -127,4 +127,5 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
         "trust-profile ownership and mutation isolation",
         "applicant form-data and vetting isolation",
         "deployment-profile, lane, and device-assignment isolation",
+        "wallet catalogue and organization-override isolation",
     } <= set(summary["coverage"])
