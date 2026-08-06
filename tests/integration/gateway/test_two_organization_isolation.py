@@ -613,6 +613,20 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             f"/v1/organizations/{organization_a_id}"
         )
         assert organization_a_response.status_code == 200, organization_a_response.text
+        issuer_identities_a = await admin.list_issuer_identities(
+            organization_id=organization_a_id,
+            key_purpose="vc_jwt_issuer",
+        )
+        active_issuer_identities_a = issuer_identities_a.get("identities")
+        assert isinstance(active_issuer_identities_a, list)
+        assert len(active_issuer_identities_a) == 1, (
+            "The default organization must expose exactly one active VC issuer "
+            f"identity, got {active_issuer_identities_a}"
+        )
+        issuer_identity_a = active_issuer_identities_a[0]
+        assert isinstance(issuer_identity_a, dict)
+        _assert_no_private_signing_selectors(issuer_identity_a)
+        assert str(issuer_identity_a.get("issuer_did") or "").startswith("did:")
         permissions_response = await reviewer.client.get(
             f"/v1/organizations/{organization_a_id}/members/me/permissions"
         )
@@ -1494,11 +1508,28 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
 
         # Use a second manual-review application for the notification test so
         # approval does not weaken the original application's revoked-evidence
-        # fail-closed assertion below.
+        # fail-closed assertion below. Applications intentionally reject a
+        # second active application for the same applicant and credential
+        # template, so bind this independent journey to a different active
+        # template already provisioned through the public catalogue.
+        notification_credential_template = next(
+            (
+                template
+                for template in templates_a
+                if isinstance(template, dict)
+                and template.get("id") != active_template_a["id"]
+                and str(template.get("status") or "").upper() == "ACTIVE"
+            ),
+            None,
+        )
+        assert notification_credential_template is not None, (
+            "Default organization needs a second active credential template "
+            "for the independent notification application journey"
+        )
         sse_application_template = await admin.create_application_template(
             organization_id=organization_a_id,
             name=f"Organization A notification workflow {uuid.uuid4().hex}",
-            credential_template_id=active_template_a["id"],
+            credential_template_id=notification_credential_template["id"],
             form_fields=[
                 {
                     "field_id": "email",

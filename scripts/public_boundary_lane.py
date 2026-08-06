@@ -252,6 +252,8 @@ def write_summary(
 def execute(args: argparse.Namespace) -> int:
     lane_environment, metadata = environment(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    private = args.output_dir / "private"
+    private.mkdir(parents=True, exist_ok=True)
     started = run(
         boundary_compose_command(args, "up"),
         lane_environment,
@@ -279,11 +281,10 @@ def execute(args: argparse.Namespace) -> int:
                     TEST_PATH,
                 ],
                 lane_environment,
+                capture=private / "pytest.log",
             )
     finally:
         write_summary(args, metadata, exit_code)
-        private = args.output_dir / "private"
-        private.mkdir(parents=True, exist_ok=True)
         run(
             boundary_compose_command(args, "logs"),
             lane_environment,

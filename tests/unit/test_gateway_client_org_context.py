@@ -10,6 +10,44 @@ from tests.integration.gateway.helpers.gateway_client import GatewayClient
 
 
 @pytest.mark.asyncio
+async def test_issuer_identity_discovery_uses_did_first_public_contract() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(
+        return_value={
+            "identities": [
+                {
+                    "issuer_did": "did:web:issuer.example",
+                    "key_purpose": "vc_jwt_issuer",
+                    "algorithm": "ES256",
+                    "status": "active",
+                }
+            ]
+        }
+    )
+    client._request = request
+
+    try:
+        result = await client.list_issuer_identities(
+            organization_id="org-1",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+        )
+    finally:
+        await client.close()
+
+    assert result["identities"][0]["issuer_did"] == "did:web:issuer.example"
+    request.assert_awaited_once_with(
+        "GET",
+        "/v1/signing-keys/issuer-identities",
+        params={
+            "organization_id": "org-1",
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_credential_template_with_did_never_exposes_custody_selectors() -> None:
     client = GatewayClient("https://gateway.example")
     request = AsyncMock(return_value={"id": "template-1"})

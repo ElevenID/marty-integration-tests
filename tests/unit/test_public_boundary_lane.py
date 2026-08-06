@@ -202,3 +202,57 @@ def test_local_summary_cannot_be_mistaken_for_release_evidence(
     }
     assert summary["stack"]["marty_commit"] == "b" * 40
     assert summary["stack"]["bootstrap_marty_commit"] == "a" * 40
+
+
+def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "evidence"
+    args = SimpleNamespace(output_dir=output)
+    calls: list[tuple[list[str], Path | None]] = []
+
+    monkeypatch.setattr(
+        lane,
+        "environment",
+        lambda _args: (
+            {
+                "MARTY_CONFORMANCE_ADMIN_EMAIL": "admin@example.test",
+                "MARTY_CONFORMANCE_ADMIN_PASSWORD": "admin-secret",
+                "MARTY_CONFORMANCE_REVIEWER_EMAIL": "reviewer@example.test",
+                "MARTY_CONFORMANCE_REVIEWER_PASSWORD": "reviewer-secret",
+            },
+            {"marty_commit": "a" * 40},
+        ),
+    )
+    monkeypatch.setattr(
+        lane,
+        "boundary_compose_command",
+        lambda _args, action: ["compose", action],
+    )
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(
+        lane,
+        "public_session",
+        lambda _environment, **_identity: "session",
+    )
+    monkeypatch.setattr(lane, "write_summary", lambda *_args: None)
+
+    def fake_run(
+        command: list[str],
+        _environment: dict[str, str],
+        *,
+        capture: Path | None = None,
+    ) -> int:
+        calls.append((command, capture))
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+
+    assert lane.execute(args) == 0
+    pytest_calls = [
+        capture
+        for command, capture in calls
+        if command[:3] == [sys.executable, "-m", "pytest"]
+    ]
+    assert pytest_calls == [output / "private" / "pytest.log"]

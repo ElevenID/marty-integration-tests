@@ -1531,6 +1531,26 @@ class GatewayClient:
             params={"organization_id": organization_id},
         )
 
+    async def list_issuer_identities(
+        self,
+        *,
+        organization_id: str,
+        key_purpose: Optional[str] = None,
+        algorithm: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List DID-first signing identities without exposing custody selectors."""
+
+        params: Dict[str, str] = {"organization_id": organization_id}
+        if key_purpose:
+            params["key_purpose"] = key_purpose
+        if algorithm:
+            params["algorithm"] = algorithm
+        return await self._request(
+            "GET",
+            "/v1/signing-keys/issuer-identities",
+            params=params,
+        )
+
     async def store_issuer_profile_certificate(
         self,
         *,
