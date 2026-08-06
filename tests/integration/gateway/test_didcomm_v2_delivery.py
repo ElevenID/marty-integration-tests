@@ -7,18 +7,21 @@ Tests DIDComm v2 push delivery of credentials:
 3. Holder DID validation / error handling
 4. Auto-delivery via wallet_configs with format_variant="didcomm_v2"
 
-Requires a running DIDComm agent endpoint or a mock service that accepts
-DIDComm plaintext messages (application/didcomm-plain+json).
+Requires a running DIDComm agent endpoint or an explicitly enabled private
+test agent that receives encrypted DIDComm messages.
 """
 
-import asyncio
+import base64
 import json
 import os
-from typing import Any, Dict
-from uuid import uuid4
+import threading
+from collections.abc import AsyncGenerator
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 
-import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519
 
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.test_data import TestDataBuilder
@@ -33,35 +36,59 @@ DIDCOMM_AGENT_URL = os.getenv("DIDCOMM_AGENT_URL", "")
 # A did:web DID that resolves to a DID Document with a DIDComm service endpoint.
 # Used for live delivery tests. Example: did:web:agent.example.com
 DIDCOMM_HOLDER_DID = os.getenv("DIDCOMM_HOLDER_DID", "")
+DIDCOMM_PRIVATE_AGENT_TESTS = os.getenv("DIDCOMM_PRIVATE_AGENT_TESTS", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
-def _make_did_peer_2_with_service(endpoint: str) -> str:
+def _base58btc_encode(value: bytes) -> str:
+    number = int.from_bytes(value, "big")
+    encoded = ""
+    while number:
+        number, remainder = divmod(number, 58)
+        encoded = _BASE58_ALPHABET[remainder] + encoded
+    leading_zeroes = len(value) - len(value.lstrip(b"\0"))
+    return (_BASE58_ALPHABET[0] * leading_zeroes) + encoded
+
+
+def _make_did_peer_2_with_service(endpoint: str) -> tuple[str, bytes]:
     """Construct a did:peer:2 DID that embeds a DIDComm service endpoint.
 
-    did:peer method 2 encodes verification and key agreement keys plus
+    did:peer method 2 encodes key agreement keys plus
     services directly in the DID string using purpose-prefixed segments:
-      V = verification, E = key agreement, S = service
+      E = key agreement, S = service
 
     This builds a minimal peer DID with a DIDCommMessaging service entry
     pointing at the given endpoint URL, suitable for testing push delivery.
     """
-    import base64 as _b64
+    private_key = x25519.X25519PrivateKey.generate()
+    private_key_bytes = private_key.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    public_key_bytes = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    key_multibase = "z" + _base58btc_encode(bytes((0xEC, 0x01)) + public_key_bytes)
 
-    # Minimal Ed25519 key (32 zero bytes — NOT cryptographically valid,
-    # but sufficient for DID resolution and endpoint extraction tests).
-    dummy_key_multibase = "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
-
-    # Service block encoded as base64url JSON (per did:peer spec §2)
+    # Use the full service shape accepted by the production resolver. The old
+    # abbreviated fixture did not produce a usable service entry.
     service_obj = {
-        "t": "dm",  # type = DIDCommMessaging (abbreviated per spec)
-        "s": endpoint,
+        "id": "#didcomm-1",
+        "type": "DIDCommMessaging",
+        "serviceEndpoint": endpoint,
     }
-    service_b64 = _b64.urlsafe_b64encode(
-        json.dumps(service_obj).encode()
-    ).rstrip(b"=").decode()
+    service_b64 = (
+        base64.urlsafe_b64encode(json.dumps(service_obj, separators=(",", ":")).encode()).rstrip(b"=").decode()
+    )
 
-    # Assemble: .V<key>.E<key>.S<service>
-    return f"did:peer:2.V{dummy_key_multibase}.E{dummy_key_multibase}.S{service_b64}"
+    return f"did:peer:2.E{key_multibase}.S{service_b64}", private_key_bytes
 
 
 # =============================================================================
@@ -75,10 +102,12 @@ class TestDidcommDeliverEndpoint:
     async def test_deliver_requires_transaction_id(
         self,
         gateway_client: GatewayClient,
-    ):
+        test_organization: dict[str, Any],
+    ) -> None:
         """Delivery without a valid transaction_id should fail."""
         with pytest.raises(GatewayClientError, match="4[0-9]{2}"):
             await gateway_client.didcomm_deliver(
+                organization_id=test_organization["id"],
                 transaction_id="nonexistent-tx-id",
                 holder_did="did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
             )
@@ -86,9 +115,9 @@ class TestDidcommDeliverEndpoint:
     async def test_deliver_requires_holder_did_with_endpoint(
         self,
         gateway_client: GatewayClient,
-        test_organization: Dict[str, Any],
-        sd_jwt_mdl_template: Dict[str, Any],
-    ):
+        test_organization: dict[str, Any],
+        sd_jwt_mdl_template: dict[str, Any],
+    ) -> None:
         """Delivery to a did:key (no service endpoint) should return 422."""
         claims = TestDataBuilder.mdl_claims(
             given_name="DIDComm",
@@ -103,6 +132,7 @@ class TestDidcommDeliverEndpoint:
         # did:key has no service endpoint — delivery should fail with 422
         with pytest.raises(GatewayClientError, match="422"):
             await gateway_client.didcomm_deliver(
+                organization_id=test_organization["id"],
                 transaction_id=issuance["id"],
                 holder_did="did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
             )
@@ -110,9 +140,9 @@ class TestDidcommDeliverEndpoint:
     async def test_deliver_already_issued_returns_409(
         self,
         gateway_client: GatewayClient,
-        test_organization: Dict[str, Any],
-        sd_jwt_mdl_template: Dict[str, Any],
-    ):
+        test_organization: dict[str, Any],
+        sd_jwt_mdl_template: dict[str, Any],
+    ) -> None:
         """Delivering to an already-issued transaction should return 409."""
         claims = TestDataBuilder.mdl_claims(
             given_name="DIDComm",
@@ -130,6 +160,7 @@ class TestDidcommDeliverEndpoint:
         if retrieved.get("status") == "issued":
             with pytest.raises(GatewayClientError, match="409"):
                 await gateway_client.didcomm_deliver(
+                    organization_id=test_organization["id"],
                     transaction_id=issuance["id"],
                     holder_did="did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
                 )
@@ -140,6 +171,13 @@ class TestDidcommDeliverEndpoint:
 # =============================================================================
 
 
+@pytest.mark.skipif(
+    not DIDCOMM_PRIVATE_AGENT_TESTS,
+    reason=(
+        "Set DIDCOMM_PRIVATE_AGENT_TESTS=true and enable private DIDComm endpoints "
+        "only in the disposable test deployment"
+    ),
+)
 class TestDidcommDeliveryWithMockAgent:
     """Test DIDComm v2 push delivery using a mock DIDComm agent.
 
@@ -148,19 +186,18 @@ class TestDidcommDeliveryWithMockAgent:
     """
 
     @pytest.fixture
-    async def mock_agent(self):
+    async def mock_agent(
+        self,
+    ) -> AsyncGenerator[tuple[str, list[dict[str, Any]]], None]:
         """Start a minimal HTTP server that captures DIDComm messages.
 
         Returns (base_url, received_messages_list).
         The server listens on a random port and captures all POSTs.
         """
-        from http.server import HTTPServer, BaseHTTPRequestHandler
-        import threading
-
-        received: list[dict] = []
+        received: list[dict[str, Any]] = []
 
         class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):
+            def do_POST(self) -> None:
                 length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(length)
                 content_type = self.headers.get("Content-Type", "")
@@ -168,16 +205,18 @@ class TestDidcommDeliveryWithMockAgent:
                     msg = json.loads(body)
                 except Exception:
                     msg = {"raw": body.decode("utf-8", errors="replace")}
-                received.append({
-                    "content_type": content_type,
-                    "body": msg,
-                })
+                received.append(
+                    {
+                        "content_type": content_type,
+                        "body": msg,
+                    }
+                )
                 self.send_response(202)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(b'{"status":"accepted"}')
 
-            def log_message(self, format, *args):
+            def log_message(self, format_string: str, *args: Any) -> None:
                 pass  # Suppress server logs in test output
 
         # Docker reaches this host-side callback via host.docker.internal.
@@ -193,10 +232,10 @@ class TestDidcommDeliveryWithMockAgent:
     async def test_deliver_to_mock_agent(
         self,
         gateway_client: GatewayClient,
-        test_organization: Dict[str, Any],
-        sd_jwt_mdl_template: Dict[str, Any],
-        mock_agent,
-    ):
+        test_organization: dict[str, Any],
+        sd_jwt_mdl_template: dict[str, Any],
+        mock_agent: tuple[str, list[dict[str, Any]]],
+    ) -> None:
         """Test full DIDComm v2 delivery to a mock agent.
 
         1. Create issuance transaction
@@ -207,7 +246,7 @@ class TestDidcommDeliveryWithMockAgent:
         agent_url, received = mock_agent
 
         # Construct a did:peer:2 DID that points to the mock agent
-        holder_did = _make_did_peer_2_with_service(agent_url)
+        holder_did, holder_private_key = _make_did_peer_2_with_service(agent_url)
 
         claims = TestDataBuilder.mdl_claims(
             given_name="DIDComm",
@@ -222,39 +261,49 @@ class TestDidcommDeliveryWithMockAgent:
         assert issuance is not None
         assert "id" in issuance
 
-        # Deliver via DIDComm v2
-        try:
-            result = await gateway_client.didcomm_deliver(
-                transaction_id=issuance["id"],
-                holder_did=holder_did,
-            )
-        except GatewayClientError as e:
-            # If the service can't reach host.docker.internal (non-Docker),
-            # try localhost
-            if "delivery_failed" in str(e) or "Connection" in str(e):
-                pytest.skip("Mock agent not reachable from issuance service (Docker network)")
-            raise
+        result = await gateway_client.didcomm_deliver(
+            organization_id=test_organization["id"],
+            transaction_id=issuance["id"],
+            holder_did=holder_did,
+        )
 
         # Verify delivery result
         assert result["transaction_id"] == issuance["id"]
         assert result["holder_did"] == holder_did
         assert result["credential_id"]
         assert result["didcomm_message_id"]
-        assert result["status"] in ("delivered", "delivery_failed")
+        assert result["status"] == "delivered"
 
-        if result["status"] == "delivered":
-            # Verify mock agent received the message
-            assert len(received) == 1
-            msg = received[0]
-            assert "didcomm" in msg["content_type"].lower()
-            assert msg["body"]["type"] == "https://didcomm.org/issue-credential/3.0/issue-credential"
-            assert msg["body"]["from"]  # issuer DID
-            assert msg["body"]["to"] == [holder_did]
-            assert len(msg["body"]["attachments"]) >= 1
+        assert len(received) == 1
+        encrypted = received[0]
+        assert encrypted["content_type"] == "application/didcomm-encrypted+json"
+        assert {
+            "protected",
+            "recipients",
+            "iv",
+            "ciphertext",
+            "tag",
+        } <= encrypted["body"].keys()
 
-            # Verify the transaction is now ISSUED
-            tx = await gateway_client.get_issuance(issuance["id"])
-            assert tx["status"] == "issued"
+        try:
+            from marty_rs import _marty_rs
+        except ImportError:
+            import _marty_rs  # type: ignore[no-redef]
+
+        plaintext = json.loads(
+            _marty_rs.didcomm_decrypt(
+                json.dumps(encrypted["body"]),
+                holder_private_key,
+            )
+        )
+        assert plaintext["type"] == ("https://didcomm.org/issue-credential/3.0/issue-credential")
+        assert plaintext["from"]
+        assert plaintext["to"] == [holder_did]
+        assert plaintext["thid"] == issuance["id"]
+        assert len(plaintext["attachments"]) >= 1
+
+        tx = await gateway_client.get_issuance(issuance["id"])
+        assert tx["status"] == "issued"
 
 
 # =============================================================================
@@ -272,9 +321,9 @@ class TestDidcommLiveAgentDelivery:
     async def test_deliver_to_live_agent(
         self,
         gateway_client: GatewayClient,
-        test_organization: Dict[str, Any],
-        sd_jwt_mdl_template: Dict[str, Any],
-    ):
+        test_organization: dict[str, Any],
+        sd_jwt_mdl_template: dict[str, Any],
+    ) -> None:
         """Deliver a credential to a live DIDComm agent."""
         claims = TestDataBuilder.mdl_claims(
             given_name="DIDComm",
@@ -288,6 +337,7 @@ class TestDidcommLiveAgentDelivery:
         )
 
         result = await gateway_client.didcomm_deliver(
+            organization_id=test_organization["id"],
             transaction_id=issuance["id"],
             holder_did=DIDCOMM_HOLDER_DID,
         )
@@ -313,9 +363,9 @@ class TestDidResolution:
     async def test_invalid_did_format(
         self,
         gateway_client: GatewayClient,
-        test_organization: Dict[str, Any],
-        sd_jwt_mdl_template: Dict[str, Any],
-    ):
+        test_organization: dict[str, Any],
+        sd_jwt_mdl_template: dict[str, Any],
+    ) -> None:
         """Delivery with an invalid DID should fail."""
         claims = TestDataBuilder.mdl_claims()
         issuance = await gateway_client.issue_credential(
@@ -326,6 +376,7 @@ class TestDidResolution:
 
         with pytest.raises(GatewayClientError, match="4[0-9]{2}|5[0-9]{2}"):
             await gateway_client.didcomm_deliver(
+                organization_id=test_organization["id"],
                 transaction_id=issuance["id"],
                 holder_did="not-a-valid-did",
             )
@@ -333,9 +384,9 @@ class TestDidResolution:
     async def test_unsupported_did_method(
         self,
         gateway_client: GatewayClient,
-        test_organization: Dict[str, Any],
-        sd_jwt_mdl_template: Dict[str, Any],
-    ):
+        test_organization: dict[str, Any],
+        sd_jwt_mdl_template: dict[str, Any],
+    ) -> None:
         """Delivery with an unsupported DID method (no Universal Resolver) should fail."""
         claims = TestDataBuilder.mdl_claims()
         issuance = await gateway_client.issue_credential(
@@ -346,6 +397,7 @@ class TestDidResolution:
 
         with pytest.raises(GatewayClientError, match="4[0-9]{2}|5[0-9]{2}"):
             await gateway_client.didcomm_deliver(
+                organization_id=test_organization["id"],
                 transaction_id=issuance["id"],
                 holder_did="did:unsupported:abc123",
             )

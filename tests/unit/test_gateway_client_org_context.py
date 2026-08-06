@@ -90,6 +90,41 @@ async def test_start_verification_flow_sends_selected_organization_header() -> N
 
 
 @pytest.mark.asyncio
+async def test_didcomm_delivery_uses_current_tenant_scoped_contract() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(return_value={"status": "delivered"})
+    client._request = request
+
+    try:
+        await client.didcomm_deliver(
+            organization_id="org-1",
+            transaction_id="tx-1",
+            holder_did="did:peer:2.EzExample",
+        )
+    finally:
+        await client.close()
+
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/issuance/didcomm/deliver",
+        json={
+            "organization_id": "org-1",
+            "transaction_id": "tx-1",
+            "holder_did": "did:peer:2.EzExample",
+        },
+        headers={"X-Organization-ID": "org-1"},
+    )
+
+    with pytest.raises(TypeError, match="universal_resolver_url"):
+        await client.didcomm_deliver(
+            organization_id="org-1",
+            transaction_id="tx-1",
+            holder_did="did:peer:2.EzExample",
+            universal_resolver_url="https://attacker.example",  # type: ignore[call-arg]
+        )
+
+
+@pytest.mark.asyncio
 async def test_start_verification_flow_can_select_the_production_haip_transport() -> None:
     client = GatewayClient("https://gateway.example")
     request = AsyncMock(return_value={"instance_id": "flow-haip"})

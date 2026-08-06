@@ -1064,27 +1064,31 @@ class GatewayClient:
 
     async def didcomm_deliver(
         self,
+        organization_id: str,
         transaction_id: str,
         holder_did: str,
-        universal_resolver_url: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Deliver a credential via DIDComm v2 push.
+        """Deliver a credential through the current encrypted DIDComm boundary.
 
         Args:
+            organization_id: Selected organization context for authorization
             transaction_id: Issuance transaction ID
             holder_did: Holder's DID (must have a DIDComm service endpoint)
-            universal_resolver_url: Optional Universal Resolver URL for unknown DID methods
 
         Returns:
             DIDComm delivery result with transaction_id, credential_id, status, etc.
         """
         payload: Dict[str, Any] = {
+            "organization_id": organization_id,
             "transaction_id": transaction_id,
             "holder_did": holder_did,
         }
-        if universal_resolver_url:
-            payload["universal_resolver_url"] = universal_resolver_url
-        return await self._request("POST", "/v1/issuance/didcomm/deliver", json=payload)
+        return await self._request(
+            "POST",
+            "/v1/issuance/didcomm/deliver",
+            json=payload,
+            headers={"X-Organization-ID": organization_id},
+        )
 
     # =============================================================================
     # Verification Flows (Async Wallet Interaction)
