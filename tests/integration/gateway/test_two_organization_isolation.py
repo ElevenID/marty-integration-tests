@@ -948,23 +948,32 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             if isinstance(flow, dict)
         }
 
-        # Applications contain applicant PII and generate vetting state. Create
-        # a real B-owned record through the current public application journey,
-        # prove the B owner can read its organization-scoped projection, then
-        # exercise the exact organization-scoped routes used by the console.
+        # Applications contain applicant PII and generate vetting state. The
+        # self-service contract is bound to the principal's session organization,
+        # so create a real A-owned application as the A reviewer and use B's
+        # organization-bound API key as the foreign principal. This exercises
+        # the same holder and reviewer routes as the UI without forging an
+        # impossible B session for the organization-A user.
         applicant_secret = f"applicant-{uuid.uuid4().hex}@example.test"
-        application_template_b = await admin.create_application_template(
-            organization_id=organization_b_id,
-            name=f"Organization B applicant workflow {uuid.uuid4().hex}",
-            credential_template_id=template_b["id"],
-            evidence_requirements=[
-                {
-                    "evidence_id": "identity_document",
-                    "evidence_type": "DOCUMENT_SCAN",
-                    "description": "Government-issued identity document",
-                    "required": True,
-                }
-            ],
+        templates_a = await admin.list_credential_templates(organization_a_id)
+        active_template_a = next(
+            (
+                template
+                for template in templates_a
+                if isinstance(template, dict)
+                and template.get("id")
+                and str(template.get("status") or "").upper() == "ACTIVE"
+            ),
+            None,
+        )
+        assert active_template_a is not None, (
+            "Default organization has no active credential template for the "
+            "current applicant journey"
+        )
+        application_template_a = await admin.create_application_template(
+            organization_id=organization_a_id,
+            name=f"Organization A applicant workflow {uuid.uuid4().hex}",
+            credential_template_id=active_template_a["id"],
             form_fields=[
                 {
                     "field_id": "email",
@@ -975,35 +984,49 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             ],
             approval_strategy="MANUAL",
         )
-        application_template_b = await admin.activate_application_template(
-            application_template_b["id"]
+        application_template_a = await admin.activate_application_template(
+            application_template_a["id"]
         )
-        assert str(application_template_b.get("status") or "").upper() == "ACTIVE"
-        application_create = await admin.client.post(
+        assert str(application_template_a.get("status") or "").upper() == "ACTIVE"
+
+        applicant_profile = await reviewer.client.patch(
+            "/v1/me/applicant-profile",
+            json={
+                "email": applicant_secret,
+                "given_name": "Boundary",
+                "family_name": "Applicant",
+            },
+        )
+        assert applicant_profile.status_code == 200, applicant_profile.text
+        applicant_profile_body = applicant_profile.json()
+        assert applicant_profile_body.get("organization_id") == organization_a_id
+        assert applicant_profile_body.get("email") == applicant_secret
+
+        application_create = await reviewer.client.post(
             "/v1/me/applications",
             json={
-                "organization_id": organization_b_id,
-                "application_template_id": application_template_b["id"],
+                "organization_id": organization_a_id,
+                "application_template_id": application_template_a["id"],
                 "form_data": {
                     "email": applicant_secret,
                 },
             },
         )
         assert application_create.status_code in {200, 201}, application_create.text
-        application_b = application_create.json()
-        application_b_id = str(application_b["id"])
-        application_submit = await admin.client.post(
-            f"/v1/me/applications/{application_b_id}/submit"
+        application_a = application_create.json()
+        application_a_id = str(application_a["id"])
+        application_submit = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/submit"
         )
         assert application_submit.status_code == 200, application_submit.text
-        application_b = application_submit.json()
-        assert str(application_b.get("status") or "").upper() in {
+        application_a = application_submit.json()
+        assert str(application_a.get("status") or "").upper() in {
             "SUBMITTED",
             "UNDER_REVIEW",
-        }, application_b
+        }, application_a
 
-        owner_application = await admin.client.get(
-            f"/v1/me/applications/{application_b_id}"
+        owner_application = await reviewer.client.get(
+            f"/v1/me/applications/{application_a_id}"
         )
         assert owner_application.status_code == 200, owner_application.text
         owner_application_body = owner_application.json()
@@ -1012,7 +1035,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         }
 
         owner_applicant = await admin.client.get(
-            f"/v1/organizations/{organization_b_id}/applicants/{application_b_id}"
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}"
         )
         assert owner_applicant.status_code == 200, owner_applicant.text
         owner_applicant_body = owner_applicant.json()
@@ -1020,47 +1043,49 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             "email": applicant_secret,
         }
         owner_checks = await admin.client.get(
-            f"/v1/organizations/{organization_b_id}/applicants/{application_b_id}/checks"
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/checks"
         )
         assert owner_checks.status_code == 200, owner_checks.text
         owner_checks_body = owner_checks.json()
         assert isinstance(owner_checks_body, list)
         assert owner_checks_body, "Submitted manual-review application created no vetting checks"
 
-        applicants_a = await reviewer.client.get(f"/v1/organizations/{organization_a_id}/applicants")
-        assert applicants_a.status_code == 200, applicants_a.text
-        applicants_a_body = applicants_a.json()
-        assert isinstance(applicants_a_body, dict), applicants_a_body
-        assert application_b_id not in {
+        applicants_b = await api_key_client.client.get(
+            f"/v1/organizations/{organization_b_id}/applicants",
+            headers=api_headers,
+        )
+        assert applicants_b.status_code == 200, applicants_b.text
+        applicants_b_body = applicants_b.json()
+        assert isinstance(applicants_b_body, dict), applicants_b_body
+        assert application_a_id not in {
             str(applicant.get("id") or applicant.get("application_id"))
-            for applicant in applicants_a_body.get("items", [])
+            for applicant in applicants_b_body.get("items", [])
             if isinstance(applicant, dict)
         }
 
         for path in (
-            f"/v1/organizations/{organization_b_id}/applicants/{application_b_id}",
-            f"/v1/organizations/{organization_a_id}/applicants/{application_b_id}",
-            f"/v1/organizations/{organization_a_id}/applicants/{application_b_id}/checks",
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/checks",
         ):
-            response = await reviewer.client.get(path)
+            response = await api_key_client.client.get(path, headers=api_headers)
             _assert_public_denial(
                 response,
                 foreign_values=(
-                    organization_b_name,
-                    application_b_id,
+                    application_a_id,
                     applicant_secret,
                 ),
             )
 
-        applicant_mutation = await reviewer.client.post(
-            f"/v1/organizations/{organization_a_id}/applicants/{application_b_id}/request-information",
+        applicant_mutation = await api_key_client.client.post(
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/request-information",
             json={"message": "foreign applicant substitution"},
+            headers=api_headers,
         )
         _assert_public_denial(
             applicant_mutation,
             foreign_values=(
-                organization_b_name,
-                application_b_id,
+                application_a_id,
                 applicant_secret,
             ),
         )
