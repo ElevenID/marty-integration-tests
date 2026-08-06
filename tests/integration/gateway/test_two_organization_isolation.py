@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
+import json
 import os
 import uuid
 from typing import Any
@@ -76,6 +78,26 @@ def _assert_no_private_signing_selectors(value: Any, *, path: str = "$") -> None
     elif isinstance(value, list):
         for index, child in enumerate(value):
             _assert_no_private_signing_selectors(child, path=f"{path}[{index}]")
+
+
+async def _next_sse_frame(lines: Any, *, timeout: float = 10.0) -> tuple[str, Any]:
+    """Read one complete SSE frame from an already-open public stream."""
+
+    async def read() -> tuple[str, Any]:
+        event_type = "message"
+        data_lines: list[str] = []
+        while True:
+            line = await anext(lines)
+            if not line:
+                if data_lines:
+                    return event_type, json.loads("\n".join(data_lines))
+                continue
+            if line.startswith("event:"):
+                event_type = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.removeprefix("data:").lstrip())
+
+    return await asyncio.wait_for(read(), timeout=timeout)
 
 
 async def _reviewer_session() -> str:
@@ -1469,6 +1491,112 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert reviewer_download.status_code == 200, reviewer_download.text
         assert reviewer_download.content == evidence_bytes
+
+        # Use a second manual-review application for the notification test so
+        # approval does not weaken the original application's revoked-evidence
+        # fail-closed assertion below.
+        sse_application_template = await admin.create_application_template(
+            organization_id=organization_a_id,
+            name=f"Organization A notification workflow {uuid.uuid4().hex}",
+            credential_template_id=active_template_a["id"],
+            form_fields=[
+                {
+                    "field_id": "email",
+                    "field_type": "EMAIL",
+                    "label": "Email",
+                    "required": True,
+                }
+            ],
+            approval_strategy="MANUAL",
+        )
+        sse_application_template = await admin.activate_application_template(
+            sse_application_template["id"]
+        )
+        sse_application_create = await reviewer.client.post(
+            "/v1/me/applications",
+            json={
+                "organization_id": organization_a_id,
+                "application_template_id": sse_application_template["id"],
+                "form_data": {"email": applicant_secret},
+            },
+        )
+        assert sse_application_create.status_code in {200, 201}, (
+            sse_application_create.text
+        )
+        sse_application = sse_application_create.json()
+        sse_application_id = str(sse_application["id"])
+        sse_submit = await reviewer.client.post(
+            f"/v1/me/applications/{sse_application_id}/submit"
+        )
+        assert sse_submit.status_code == 200, sse_submit.text
+
+        # Open two real public SSE connections before approving the A-owned
+        # notification application. The A browser session must receive the originating
+        # event, while the independent B-scoped API key must receive nothing.
+        async with (
+            reviewer.client.stream(
+                "GET",
+                "/v1/notifications/events/push",
+                params={
+                    "organization_id": organization_a_id,
+                    "subscriptions": "application.approved",
+                },
+            ) as organization_a_events,
+            api_key_client.client.stream(
+                "GET",
+                "/v1/notifications/events/push",
+                params={
+                    "organization_id": organization_b_id,
+                    "subscriptions": "application.approved",
+                },
+                headers=api_headers,
+            ) as organization_b_events,
+        ):
+            assert organization_a_events.status_code == 200, (
+                await organization_a_events.aread()
+            ).decode(errors="replace")
+            assert organization_b_events.status_code == 200, (
+                await organization_b_events.aread()
+            ).decode(errors="replace")
+            lines_a = organization_a_events.aiter_lines()
+            lines_b = organization_b_events.aiter_lines()
+            assert await _next_sse_frame(lines_a) == (
+                "message",
+                {"type": "connected"},
+            )
+            assert await _next_sse_frame(lines_b) == (
+                "message",
+                {"type": "connected"},
+            )
+
+            lock = await admin.client.post(
+                f"/v1/organizations/{organization_a_id}/applicants/"
+                f"{sse_application_id}/lock",
+                json={},
+            )
+            assert lock.status_code == 200, lock.text
+
+            event_a_task = asyncio.create_task(_next_sse_frame(lines_a))
+            event_b_task = asyncio.create_task(_next_sse_frame(lines_b, timeout=30))
+            approval = await admin.client.post(
+                f"/v1/organizations/{organization_a_id}/applicants/"
+                f"{sse_application_id}/approve",
+                json={"notes": "tenant-boundary SSE delivery"},
+            )
+            assert approval.status_code == 200, approval.text
+
+            event_type_a, event_a = await event_a_task
+            assert event_type_a == "application.approved"
+            assert event_a["organization_id"] == organization_a_id
+            assert event_a["aggregate_id"] == sse_application_id
+            assert event_a["data"]["application_id"] == sse_application_id
+            assert event_a["data"]["applicant_id"] == sse_application["applicant_id"]
+
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(event_b_task), timeout=1.0)
+            event_b_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await event_b_task
 
         applicants_b = await api_key_client.client.get(
             f"/v1/organizations/{organization_b_id}/applicants",

@@ -195,6 +195,7 @@ def write_summary(
             "deployment-profile, lane, and device-assignment isolation",
             "webhook ownership and secret leakage prevention",
             "wallet catalogue and organization-override isolation",
+            "notification SSE delivery and subscription isolation",
             "audit-event isolation",
             "DID-first issuance and verification",
             "public custody-selector rejection",

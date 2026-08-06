@@ -130,4 +130,5 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
         "application evidence collection, deletion, revocation, and tenant isolation",
         "deployment-profile, lane, and device-assignment isolation",
         "wallet catalogue and organization-override isolation",
+        "notification SSE delivery and subscription isolation",
     } <= set(summary["coverage"])
