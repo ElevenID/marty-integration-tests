@@ -760,6 +760,15 @@ class GatewayClient:
         """Get application template by ID"""
         return await self._request("GET", f"/v1/application-templates/{template_id}")
 
+    async def activate_application_template(
+        self, template_id: str
+    ) -> Dict[str, Any]:
+        """Activate an application template through the public lifecycle API."""
+        return await self._request(
+            "POST",
+            f"/v1/application-templates/{template_id}/activate",
+        )
+
     async def list_application_templates(
         self,
         organization_id: str,

@@ -975,6 +975,10 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             ],
             approval_strategy="MANUAL",
         )
+        application_template_b = await admin.activate_application_template(
+            application_template_b["id"]
+        )
+        assert str(application_template_b.get("status") or "").upper() == "ACTIVE"
         application_create = await admin.client.post(
             "/v1/me/applications",
             json={

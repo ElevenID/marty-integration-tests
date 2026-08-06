@@ -256,3 +256,25 @@ async def test_application_template_helper_uses_only_current_mip_contract() -> N
     assert payload["form_fields"][0]["field_type"] == "EMAIL"
     assert payload["claim_collection_rules"][0]["source"] == "FORM_FIELD"
     assert "notifications" not in payload
+
+
+@pytest.mark.asyncio
+async def test_activate_application_template_uses_public_lifecycle_route() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(
+        return_value={"id": "application-template-1", "status": "ACTIVE"}
+    )
+    client._request = request
+
+    try:
+        result = await client.activate_application_template(
+            "application-template-1"
+        )
+    finally:
+        await client.close()
+
+    assert result["status"] == "ACTIVE"
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/application-templates/application-template-1/activate",
+    )
