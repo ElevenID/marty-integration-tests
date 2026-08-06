@@ -28,6 +28,34 @@ _FLOW_TYPE_ALIASES = {
     "siop_v2": "siopv2",
 }
 
+_APPLICATION_APPROVAL_STRATEGIES = {"AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"}
+_APPLICATION_EVIDENCE_TYPES = {
+    "DOCUMENT_SCAN",
+    "BIOMETRIC",
+    "SELFIE",
+    "THIRD_PARTY_VERIFICATION",
+    "EXTERNAL_FACT",
+    "EXTERNAL_API",
+}
+_APPLICATION_FIELD_TYPES = {
+    "TEXT",
+    "DATE",
+    "DATETIME",
+    "SELECT",
+    "FILE_UPLOAD",
+    "INTEGER",
+    "NUMBER",
+    "BOOLEAN",
+    "EMAIL",
+    "URL",
+}
+_APPLICATION_CLAIM_SOURCES = {
+    "FORM_FIELD",
+    "EVIDENCE_EXTRACTION",
+    "EXTERNAL_API",
+    "SYSTEM",
+}
+
 
 class GatewayClientError(Exception):
     """Base exception for gateway client errors"""
@@ -643,12 +671,14 @@ class GatewayClient:
         organization_id: str,
         name: str,
         credential_template_id: Optional[str] = None,
-        evidence_requirements: Optional[List[str]] = None,
+        evidence_requirements: Optional[List[Dict[str, Any]]] = None,
         form_fields: Optional[List[Dict]] = None,
         claim_collection_rules: Optional[List[Dict]] = None,
-        approval_strategy: str = "auto",
+        required_checks: Optional[List[Dict]] = None,
+        approval_strategy: str = "MANUAL",
+        approval_policy_set_id: Optional[str] = None,
         application_validity_days: int = 30,
-        notifications: Optional[Dict] = None,
+        notification_config: Optional[Dict] = None,
         ui_config: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """
@@ -658,23 +688,54 @@ class GatewayClient:
             organization_id: Organization ID
             name: Template name
             credential_template_id: Credential template ID for issuance
-            evidence_requirements: List of required evidence types (e.g., ["identity_document", "portrait"])
+            evidence_requirements: Canonical MIP evidence requirement objects
             form_fields: Form field definitions for user data entry
             claim_collection_rules: How to collect claim values from applicant
-            approval_strategy: How approvals are handled (auto, manual, rules_based)
+            required_checks: Server-enforced vetting checks
+            approval_strategy: AUTO, MANUAL, RULES_BASED, or EXTERNAL
+            approval_policy_set_id: Optional policy set controlling approval
             application_validity_days: How long applications remain valid
-            notifications: Notification configuration
+            notification_config: Notification configuration
             ui_config: UI/UX customization
 
         Returns:
             Application template object
         """
+        evidence_requirements = evidence_requirements or []
+        form_fields = form_fields or []
+        claim_collection_rules = claim_collection_rules or []
+        required_checks = required_checks or []
+
+        if approval_strategy not in _APPLICATION_APPROVAL_STRATEGIES:
+            raise ValueError(
+                "approval_strategy must use the current uppercase MIP value"
+            )
+        for requirement in evidence_requirements:
+            if not isinstance(requirement, dict):
+                raise ValueError(
+                    "evidence_requirements must contain current MIP objects, not legacy string IDs"
+                )
+            required_fields = {"evidence_id", "evidence_type", "description", "required"}
+            if not required_fields <= requirement.keys():
+                raise ValueError(
+                    "every evidence requirement needs evidence_id, evidence_type, description, and required"
+                )
+            if requirement["evidence_type"] not in _APPLICATION_EVIDENCE_TYPES:
+                raise ValueError("unsupported current MIP evidence_type")
+        for field in form_fields:
+            if not isinstance(field, dict) or field.get("field_type") not in _APPLICATION_FIELD_TYPES:
+                raise ValueError("form_fields must use current uppercase MIP field types")
+        for rule in claim_collection_rules:
+            if not isinstance(rule, dict) or rule.get("source") not in _APPLICATION_CLAIM_SOURCES:
+                raise ValueError("claim_collection_rules must use current uppercase MIP sources")
+
         payload = {
             "organization_id": organization_id,
             "name": name,
-            "evidence_requirements": evidence_requirements or ["identity_document", "portrait"],
-            "form_fields": form_fields or [],
-            "claim_collection_rules": claim_collection_rules or [],
+            "evidence_requirements": evidence_requirements,
+            "form_fields": form_fields,
+            "claim_collection_rules": claim_collection_rules,
+            "required_checks": required_checks,
             "approval_strategy": approval_strategy,
             "application_validity_days": application_validity_days,
         }
@@ -682,8 +743,10 @@ class GatewayClient:
         if credential_template_id:
             payload["credential_template_id"] = credential_template_id
 
-        if notifications:
-            payload["notifications"] = notifications
+        if approval_policy_set_id:
+            payload["approval_policy_set_id"] = approval_policy_set_id
+        if notification_config:
+            payload["notification_config"] = notification_config
         if ui_config:
             payload["ui_config"] = ui_config
 

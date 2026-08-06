@@ -7,16 +7,19 @@ Provides fixtures for gateway client, test organizations, and common test data.
 import asyncio
 import logging
 import os
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional
 
 import httpx
 import pytest
 
 from .helpers.auth_helper import AuthHelper
-from .helpers.gateway_client import GatewayClient, GatewayClientError
+from .helpers.gateway_client import GatewayClient
 from .helpers.marty_wallet_client import MartyHeadlessWalletClient
 from .helpers.test_data import TestDataBuilder
 from .helpers.waltid_wallet_client import WaltIdWalletClient
+
+if TYPE_CHECKING:
+    from .helpers.cli_client import MartyCLIClient
 
 logger = logging.getLogger(__name__)
 
@@ -590,13 +593,13 @@ async def mdl_application_template(
         form_fields=[
             {
                 "field_id": "given_name",
-                "field_type": "text",
+                "field_type": "TEXT",
                 "label": "Given Name",
                 "required": True
             },
             {
                 "field_id": "family_name",
-                "field_type": "text",
+                "field_type": "TEXT",
                 "label": "Family Name",
                 "required": True
             }
@@ -833,7 +836,7 @@ async def test_wallet(
     
     # Create unique wallet for this test
     wallet_name = f"test-wallet-{uuid.uuid4().hex[:8]}"
-    wallet_result = await waltid_wallet_client.create_wallet(wallet_name)
+    await waltid_wallet_client.create_wallet(wallet_name)
     
     # Create a DID for the wallet
     did_result = await waltid_wallet_client.create_did(method="key")

@@ -21,7 +21,6 @@ import uuid
 import pytest
 
 from .helpers.gateway_client import GatewayClient
-from .helpers.test_data import TestDataBuilder
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +566,10 @@ class TestOwnOrgResourceCRUD:
         assert fetched_lane["id"] == lane_id
 
         lanes = await gateway_client.list_lanes(profile_id)
-        lane_ids = [l["id"] for l in (lanes if isinstance(lanes, list) else lanes.get("items", []))]
+        lane_ids = [
+            item["id"]
+            for item in (lanes if isinstance(lanes, list) else lanes.get("items", []))
+        ]
         assert lane_id in lane_ids
 
         # Delete lane, then profile
@@ -637,8 +639,15 @@ class TestOwnOrgResourceCRUD:
         template = await gateway_client.create_application_template(
             organization_id=org_id,
             name=f"test-at-{uuid.uuid4().hex[:8]}",
-            evidence_requirements=["identity_document"],
-            approval_strategy="manual",
+            evidence_requirements=[
+                {
+                    "evidence_id": "identity_document",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Government-issued identity document",
+                    "required": True,
+                }
+            ],
+            approval_strategy="MANUAL",
         )
         template_id = template["id"]
         assert template["organization_id"] == org_id

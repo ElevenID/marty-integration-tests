@@ -957,16 +957,23 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             organization_id=organization_b_id,
             name=f"Organization B applicant workflow {uuid.uuid4().hex}",
             credential_template_id=template_b["id"],
-            evidence_requirements=["identity_document"],
+            evidence_requirements=[
+                {
+                    "evidence_id": "identity_document",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Government-issued identity document",
+                    "required": True,
+                }
+            ],
             form_fields=[
                 {
                     "field_id": "email",
-                    "field_type": "email",
+                    "field_type": "EMAIL",
                     "label": "Email",
                     "required": True,
                 }
             ],
-            approval_strategy="manual",
+            approval_strategy="MANUAL",
         )
         application_b = await admin.create_application(
             application_template_id=application_template_b["id"],

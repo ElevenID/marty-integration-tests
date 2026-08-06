@@ -554,57 +554,67 @@ class TestDataBuilder:
     def application_template(
         organization_id: str,
         name: Optional[str] = None,
-        evidence_requirements: Optional[List[str]] = None,
+        evidence_requirements: Optional[List[Dict[str, Any]]] = None,
         credential_template_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create application template data (user-facing workflow)"""
+        """Create current MIP application-template data."""
         return {
             "organization_id": organization_id,
             "name": name or f"test-application-template-{str(uuid4())[:8]}",
             "credential_template_id": credential_template_id or "",
-            "evidence_requirements": evidence_requirements or ["drivers_license", "selfie"],
+            "evidence_requirements": evidence_requirements
+            or [
+                {
+                    "evidence_id": "identity_document",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Government-issued identity document",
+                    "required": True,
+                },
+                {
+                    "evidence_id": "selfie",
+                    "evidence_type": "SELFIE",
+                    "description": "Current applicant selfie",
+                    "required": True,
+                },
+            ],
             "form_fields": [
                 {
-                    "name": "given_name",
-                    "display_name": "First Name",
-                    "field_type": "text",
+                    "field_id": "given_name",
+                    "label": "First Name",
+                    "field_type": "TEXT",
                     "required": True,
                 },
                 {
-                    "name": "family_name",
-                    "display_name": "Last Name",
-                    "field_type": "text",
+                    "field_id": "family_name",
+                    "label": "Last Name",
+                    "field_type": "TEXT",
                     "required": True,
                 },
                 {
-                    "name": "birth_date",
-                    "display_name": "Date of Birth",
-                    "field_type": "date",
+                    "field_id": "birth_date",
+                    "label": "Date of Birth",
+                    "field_type": "DATE",
                     "required": True,
                 },
             ],
             "claim_collection_rules": [
                 {
                     "claim_name": "given_name",
-                    "source": "form_field",
-                    "source_field": "given_name",
-                    "verification_required": False,
+                    "source": "FORM_FIELD",
+                    "source_config": {"field_id": "given_name"},
                 },
                 {
                     "claim_name": "family_name",
-                    "source": "form_field",
-                    "source_field": "family_name",
-                    "verification_required": False,
+                    "source": "FORM_FIELD",
+                    "source_config": {"field_id": "family_name"},
                 },
                 {
                     "claim_name": "birth_date",
-                    "source": "form_field",
-                    "source_field": "birth_date",
-                    "verification_required": True,
-                    "verification_method": "document_scan",
+                    "source": "FORM_FIELD",
+                    "source_config": {"field_id": "birth_date"},
                 },
             ],
-            "approval_strategy": "auto",
+            "approval_strategy": "AUTO",
             "application_validity_days": 30,
         }
         
