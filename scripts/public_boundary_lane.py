@@ -194,6 +194,7 @@ def write_summary(
             "application evidence collection, deletion, revocation, and tenant isolation",
             "deployment-profile, lane, and device-assignment isolation",
             "webhook ownership and secret leakage prevention",
+            "wallet catalogue and organization-override isolation",
             "audit-event isolation",
             "DID-first issuance and verification",
             "public custody-selector rejection",

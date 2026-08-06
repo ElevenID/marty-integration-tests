@@ -699,6 +699,114 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         foreign_api_key = str(api_key_create.json()["key"])
         api_headers = {"X-API-Key": foreign_api_key}
 
+        # Wallet catalogue entries may be global or organization-owned. Create
+        # a real B override through the public administration API, prove B's
+        # organization-bound machine principal can use it, and then attempt
+        # enumeration, dereference, open-link, mutation, and deletion from A.
+        wallet_name_b = f"Organization B wallet override {uuid.uuid4().hex}"
+        wallet_create = await admin.client.post(
+            "/v1/wallet-registry",
+            json={
+                "organization_id": organization_b_id,
+                "name": wallet_name_b,
+                "wallet_apps": [wallet_name_b],
+                "deep_link_pattern": (
+                    "tenant-b-wallet://open?inner={inner_uri_encoded}"
+                ),
+                "supported_platforms": ["web"],
+                "supports_deeplink": True,
+            },
+        )
+        assert wallet_create.status_code == 201, wallet_create.text
+        wallet_b = wallet_create.json()
+        wallet_b_id = str(wallet_b["id"])
+
+        wallets_b = await api_key_client.client.get(
+            "/v1/wallet-registry",
+            params={"organization_id": organization_b_id},
+            headers=api_headers,
+        )
+        assert wallets_b.status_code == 200, wallets_b.text
+        assert wallet_b_id in {
+            str(wallet.get("id"))
+            for wallet in wallets_b.json()
+            if isinstance(wallet, dict)
+        }
+        wallet_b_owner = await api_key_client.client.get(
+            f"/v1/wallet-registry/{wallet_b_id}",
+            headers=api_headers,
+        )
+        assert wallet_b_owner.status_code == 200, wallet_b_owner.text
+
+        global_wallets_a = await reviewer.client.get("/v1/wallet-registry")
+        assert global_wallets_a.status_code == 200, global_wallets_a.text
+        assert wallet_b_id not in {
+            str(wallet.get("id"))
+            for wallet in global_wallets_a.json()
+            if isinstance(wallet, dict)
+        }
+        wallets_a = await reviewer.client.get(
+            "/v1/wallet-registry",
+            params={"organization_id": organization_a_id},
+        )
+        assert wallets_a.status_code == 200, wallets_a.text
+        assert wallet_b_id not in {
+            str(wallet.get("id"))
+            for wallet in wallets_a.json()
+            if isinstance(wallet, dict)
+        }
+
+        foreign_wallet_list = await reviewer.client.get(
+            "/v1/wallet-registry",
+            params={"organization_id": organization_b_id},
+        )
+        _assert_public_denial(
+            foreign_wallet_list,
+            foreign_values=(wallet_b_id, wallet_name_b, organization_b_name),
+        )
+        foreign_wallet_requests = (
+            (
+                "GET",
+                f"/v1/wallet-registry/{wallet_b_id}",
+                None,
+                None,
+            ),
+            (
+                "GET",
+                f"/v1/wallet-registry/{wallet_b_id}/open-link",
+                None,
+                {
+                    "inner_uri": (
+                        "openid-credential-offer://?credential_offer_uri="
+                        "https%3A%2F%2Fissuer.example%2Foffers%2Fboundary"
+                    )
+                },
+            ),
+            (
+                "PATCH",
+                f"/v1/wallet-registry/{wallet_b_id}",
+                {"name": "foreign wallet mutation"},
+                None,
+            ),
+            (
+                "DELETE",
+                f"/v1/wallet-registry/{wallet_b_id}",
+                None,
+                None,
+            ),
+        )
+        for method, path, body, params in foreign_wallet_requests:
+            response = await reviewer.client.request(
+                method,
+                path,
+                json=body,
+                params=params,
+            )
+            _assert_public_denial(
+                response,
+                foreign_values=(wallet_b_id, wallet_name_b, organization_b_name),
+            )
+
         key_b_response = await api_key_client.client.get(
             "/v1/credential-templates",
             params={"organization_id": organization_b_id},
