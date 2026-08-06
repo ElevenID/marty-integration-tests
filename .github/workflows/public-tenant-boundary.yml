@@ -49,6 +49,9 @@ jobs:
           --require-hashes --only-binary=:all:
           --requirement requirements/official-py312.lock
 
+      - name: Install released-stack browser
+        run: python -m playwright install --with-deps chromium
+
       - name: Resolve and attest released stack
         id: stack
         env:

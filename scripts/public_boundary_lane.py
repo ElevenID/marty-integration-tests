@@ -233,6 +233,7 @@ def write_summary(
             "deployment-profile, lane, and device-assignment isolation",
             "webhook ownership and secret leakage prevention",
             "wallet catalogue and organization-override isolation",
+            "browser-driven issuance and verification through the shipped UI",
             "notification SSE delivery and subscription isolation",
             "audit-event isolation",
             "DID-first issuance and verification",
@@ -254,6 +255,9 @@ def execute(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     private = args.output_dir / "private"
     private.mkdir(parents=True, exist_ok=True)
+    lane_environment["MARTY_BROWSER_EVIDENCE_DIR"] = str(
+        (private / "browser").resolve()
+    )
     started = run(
         boundary_compose_command(args, "up"),
         lane_environment,

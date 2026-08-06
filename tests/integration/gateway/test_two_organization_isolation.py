@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import uuid
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -115,6 +116,141 @@ async def _reviewer_session() -> str:
             "two-principal public-boundary matrix"
         )
     return await AuthHelper().get_session_id(email, password)
+
+
+async def _exercise_browser_issuance_and_verification(
+    *,
+    base_url: str,
+    session_id: str,
+    organization_id: str,
+    application_reference: str,
+    presentation_policy_name: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Drive real issuance and verification actions through the shipped UI."""
+    from playwright.async_api import async_playwright, expect
+
+    assert session_id, "A real public OIDC session is required for browser evidence"
+    evidence_dir_value = os.getenv("MARTY_BROWSER_EVIDENCE_DIR", "").strip()
+    evidence_dir = Path(evidence_dir_value) if evidence_dir_value else None
+    if evidence_dir:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        context = await browser.new_context(ignore_https_errors=True)
+        await context.add_cookies(
+            [{"name": "sessionId", "value": session_id, "url": base_url}]
+        )
+        page = await context.new_page()
+        await page.add_init_script(
+            "localStorage.setItem('activeOrgId', "
+            f"{json.dumps(organization_id)});"
+        )
+        try:
+            await page.goto(
+                f"{base_url}/console/org/operate/applications",
+                wait_until="domcontentloaded",
+            )
+            await expect(
+                page.get_by_role("heading", name="Applications", exact=True)
+            ).to_be_visible(timeout=30_000)
+            application_row = page.get_by_role("row").filter(
+                has_text=application_reference
+            )
+            await expect(application_row).to_have_count(1, timeout=30_000)
+
+            approve_button = application_row.get_by_role(
+                "button", name="Approve"
+            )
+            await expect(approve_button).to_be_enabled(timeout=30_000)
+            async with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url.endswith("/approve"),
+                timeout=30_000,
+            ) as approval_info:
+                await approve_button.click()
+            approval_response = await approval_info.value
+            assert approval_response.status == 200, await approval_response.text()
+            approval = await approval_response.json()
+            _assert_no_private_signing_selectors(approval)
+
+            await expect(application_row).to_contain_text(
+                "approved", ignore_case=True, timeout=30_000
+            )
+            row_buttons = application_row.get_by_role("button")
+            # The details affordance is an accessible link; the sole button on
+            # an approved row is the real "issue" action.
+            await expect(row_buttons).to_have_count(1, timeout=30_000)
+            async with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url.endswith("/issue"),
+                timeout=30_000,
+            ) as issuance_info:
+                await row_buttons.last.click()
+            issuance_response = await issuance_info.value
+            assert issuance_response.status == 200, await issuance_response.text()
+            issuance = await issuance_response.json()
+            _assert_no_private_signing_selectors(issuance)
+            assert issuance.get("offer_url") or issuance.get("credential_offer_uri"), (
+                "The browser issuance action did not produce a wallet offer"
+            )
+
+            await page.goto(
+                f"{base_url}/console/org/operate/verify",
+                wait_until="domcontentloaded",
+            )
+            new_verification = page.get_by_role(
+                "button", name="New Verification"
+            )
+            await expect(new_verification).to_be_enabled(timeout=30_000)
+            await new_verification.click()
+
+            policy_select = page.get_by_role(
+                "combobox", name="Presentation Policy"
+            )
+            await expect(policy_select).to_be_visible(timeout=30_000)
+            await policy_select.click()
+            await page.get_by_role(
+                "option", name=presentation_policy_name, exact=True
+            ).click()
+            await page.get_by_role("button", name="Next").click()
+            await page.get_by_label("Verification Purpose").fill(
+                "Released-stack browser boundary verification"
+            )
+
+            async with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url.endswith("/v1/flows/verify"),
+                timeout=30_000,
+            ) as verification_info:
+                await page.get_by_role("button", name="Start Session").click()
+            verification_response = await verification_info.value
+            assert verification_response.status == 200, (
+                await verification_response.text()
+            )
+            verification = await verification_response.json()
+            _assert_no_private_signing_selectors(verification)
+            await expect(page.get_by_text("Scan & Verify", exact=True)).to_be_visible(
+                timeout=30_000
+            )
+
+            if evidence_dir:
+                await page.screenshot(
+                    path=evidence_dir / "issuance-and-verification.png",
+                    full_page=True,
+                )
+            return approval, issuance, verification
+        except Exception:
+            if evidence_dir:
+                with contextlib.suppress(Exception):
+                    await page.screenshot(
+                        path=evidence_dir / "failure.png",
+                        full_page=True,
+                    )
+            raise
+        finally:
+            await context.close()
+            await browser.close()
 
 
 async def _grant_reviewer_boundary_roles(
@@ -626,7 +762,8 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         issuer_identity_a = active_issuer_identities_a[0]
         assert isinstance(issuer_identity_a, dict)
         _assert_no_private_signing_selectors(issuer_identity_a)
-        assert str(issuer_identity_a.get("issuer_did") or "").startswith("did:")
+        issuer_did_a = str(issuer_identity_a.get("issuer_did") or "")
+        assert issuer_did_a.startswith("did:")
         permissions_response = await reviewer.client.get(
             f"/v1/organizations/{organization_a_id}/members/me/permissions"
         )
@@ -1327,6 +1464,17 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             "Default organization has no active credential template for the "
             "current applicant journey"
         )
+        browser_policy_name = f"Browser boundary policy {uuid.uuid4().hex}"
+        browser_policy = await admin.create_presentation_policy(
+            **TestDataBuilder.presentation_policy_employee_access(
+                organization_id=organization_a_id,
+                credential_template_id=active_template_a["id"],
+                name=browser_policy_name,
+            )
+        )
+        browser_policy = await admin.activate_presentation_policy(
+            browser_policy["id"]
+        )
         application_template_a = await admin.create_application_template(
             organization_id=organization_a_id,
             name=f"Organization A applicant workflow {uuid.uuid4().hex}",
@@ -1510,21 +1658,21 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         # approval does not weaken the original application's revoked-evidence
         # fail-closed assertion below. Applications intentionally reject a
         # second active application for the same applicant and credential
-        # template, so bind this independent journey to a different active
-        # template already provisioned through the public catalogue.
-        notification_credential_template = next(
-            (
-                template
-                for template in templates_a
-                if isinstance(template, dict)
-                and template.get("id") != active_template_a["id"]
-                and str(template.get("status") or "").upper() == "ACTIVE"
-            ),
-            None,
+        # template, so provision this independent journey through the current
+        # public authoring API and the DID resolved above. Do not pick an
+        # arbitrary seeded catalogue entry: an ACTIVE status alone does not
+        # prove that its current issuer identity can satisfy this operation.
+        notification_template_data = await _employee_badge_template_data(
+            admin,
+            organization_id=organization_a_id,
+            name=f"Browser notification credential {uuid.uuid4().hex}",
+            issuer_did=issuer_did_a,
         )
-        assert notification_credential_template is not None, (
-            "Default organization needs a second active credential template "
-            "for the independent notification application journey"
+        notification_credential_template = await admin.create_credential_template(
+            **notification_template_data
+        )
+        notification_credential_template = await admin.activate_credential_template(
+            notification_credential_template["id"]
         )
         sse_application_template = await admin.create_application_template(
             organization_id=organization_a_id,
@@ -1542,6 +1690,35 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         sse_application_template = await admin.activate_application_template(
             sse_application_template["id"]
+        )
+        browser_issuance_flow = await admin.create_flow_definition(
+            organization_id=organization_a_id,
+            name=f"Browser issuance flow {uuid.uuid4().hex}",
+            flow_type="custom",
+            approval_strategy="MANUAL",
+            credential_template_id=notification_credential_template["id"],
+            trigger={
+                "trigger_type": "WEBHOOK",
+                "config": {"event_type": "APPLICATION_APPROVED"},
+            },
+            extension={
+                "extension_uri": "urn:elevenid:flow:application-approved-issuance",
+                "extension_version": "1.0.0",
+                "extends_flow_type": "oid4vci_pre_authorized",
+                "entry_step_id": "create_offer",
+                "steps": [
+                    {
+                        "step_id": "create_offer",
+                        "action": "create_offer",
+                        "config": {},
+                    }
+                ],
+                "transitions": [],
+                "config": {},
+            },
+        )
+        browser_issuance_flow = await admin.activate_flow_definition(
+            browser_issuance_flow["id"]
         )
         sse_application_create = await reviewer.client.post(
             "/v1/me/applications",
@@ -1600,21 +1777,40 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 {"type": "connected"},
             )
 
-            lock = await admin.client.post(
-                f"/v1/organizations/{organization_a_id}/applicants/"
-                f"{sse_application_id}/lock",
-                json={},
-            )
-            assert lock.status_code == 200, lock.text
-
             event_a_task = asyncio.create_task(_next_sse_frame(lines_a))
             event_b_task = asyncio.create_task(_next_sse_frame(lines_b, timeout=30))
-            approval = await admin.client.post(
-                f"/v1/organizations/{organization_a_id}/applicants/"
-                f"{sse_application_id}/approve",
-                json={"notes": "tenant-boundary SSE delivery"},
+            try:
+                browser_session_id = str(
+                    admin.client.cookies.get("sessionId") or ""
+                )
+                approval, browser_issuance, browser_verification = (
+                    await _exercise_browser_issuance_and_verification(
+                        base_url=admin.base_url,
+                        session_id=browser_session_id,
+                        organization_id=organization_a_id,
+                        application_reference=str(
+                            sse_application.get("reference_number") or ""
+                        ),
+                        presentation_policy_name=browser_policy_name,
+                    )
+                )
+            except BaseException:
+                for pending_event in (event_a_task, event_b_task):
+                    pending_event.cancel()
+                await asyncio.gather(
+                    event_a_task,
+                    event_b_task,
+                    return_exceptions=True,
+                )
+                raise
+            assert str(approval.get("status") or "").upper() == "APPROVED"
+            assert str(browser_issuance.get("status") or "").upper() in {
+                "OFFERED",
+                "WALLET_INVITE_READY",
+            }
+            assert browser_verification.get("session_id") or browser_verification.get(
+                "instance_id"
             )
-            assert approval.status_code == 200, approval.text
 
             event_type_a, event_a = await event_a_task
             assert event_type_a == "application.approved"
