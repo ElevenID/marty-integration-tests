@@ -19,11 +19,11 @@ help:
 	@echo "  make test-ui-contracts - Run browser UI contracts against MARTY_UI_URL"
 	@echo "  make test-interop      - Run OID4VC wallet interoperability tests"
 	@echo "  make test-eudi         - Run EUDI reference wallet/verifier interop tests"
-	@echo "  make conformance-local - Run strict Marty OID4VC regression tests through the gateway"
+	@echo "  make conformance-local - Run ElevenID-owned OID4VCI product regressions through the gateway"
 	@echo "  make conformance-oidf-validate - Validate the pinned official OIDF runner contract"
 	@echo "  make conformance-stack-start - Start a disposable conformance stack on an isolated Docker context"
 	@echo "  make conformance-stack-stop  - Stop that isolated conformance stack"
-	@echo "  make conformance       - Alias for conformance-local; official runs use scripts/oidf_conformance.py"
+	@echo "  make conformance       - Alias for conformance-local; it is not official-suite evidence"
 	@echo "  make logs              - Show service logs"
 	@echo "  make clean             - Clean up containers and volumes"
 	@echo ""
@@ -77,12 +77,10 @@ test-wallet-kit: start
 conformance: conformance-local
 
 conformance-local:
-	@echo "Running strict Marty OID4VC regression tests through the public gateway..."
+	@echo "Running ElevenID-owned OID4VCI product regressions through the public gateway..."
+	@echo "These checks are not imported OIDF tests and do not constitute official-suite evidence."
 	@echo "Set SESSION_ID, GATEWAY_BASE, ORG_ID, CREDENTIAL_TEMPLATE_ID env vars before running."
-	pytest tests/integration/test_oid4vci_issuer_conformance.py \
-		tests/integration/test_oid4vp_verifier_conformance.py \
-		tests/integration/test_siop_v2_conformance.py \
-		-v
+	pytest tests/integration/test_oid4vci_issuer_conformance.py -v
 
 conformance-oidf-validate:
 	python scripts/oidf_conformance.py validate

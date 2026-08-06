@@ -68,15 +68,18 @@ The harness creates an isolated temporary config directory and never reads the d
 
 ## Conformance
 
-Protocol conformance tests in this repository exercise the running public stack. Crate-level cryptographic and mDoc conformance remains in `marty-core`, where it is tested by that component's own CI.
+The local command below runs ElevenID-owned OID4VCI product regressions against
+the public stack. It is useful fast feedback, but it is not imported official
+suite evidence. Crate-level cryptographic and mdoc conformance remains in
+`marty-core`, where it is tested by that component's own CI.
 
 ```bash
 make conformance-local
 ```
 
-The fast regression suite is strict: a failure fails the command. The actual
-OpenID Foundation runner is pinned separately and runs against the same
-gateway-facing production-path deployment. See
+The fast regression is strict: a failure fails the command. Current OID4VP,
+HAIP, and mdoc coverage comes from the separately pinned, unmodified OpenID
+Foundation runner and the released browser product-path smoke. See
 [conformance/README.md](conformance/README.md) for the official issuer plan,
 evidence handling, certification switch, and the single monthly draft-PR
 review of every official suite pin.

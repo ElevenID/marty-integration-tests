@@ -1001,9 +1001,10 @@ def test_metadata_consistency():
 
 
 # ============================================================================
-# NEW: OIDF-Mirrored Tests (OID4VCI 1.0 Final)
-# All tests below route through the gateway (GATEWAY_BASE) and mirror the
-# OIDF conformance suite module names from vci10issuer/.
+# ElevenID-owned, spec-derived regressions (OID4VCI 1.0 Final).
+# These tests route through the gateway and use descriptive names aligned with
+# the specification. Official evidence comes only from the pinned unmodified
+# OIDF runner.
 # ============================================================================
 
 
@@ -1982,7 +1983,8 @@ def main():
     test_full_e2e_flow()
     test_metadata_consistency()
 
-    # OIDF-mirrored conformance tests (OID4VCI 1.0 Final)
+    # ElevenID-owned, spec-derived regressions (OID4VCI 1.0 Final).
+    # Official evidence comes only from the pinned unmodified OIDF runner.
     test_issuer_metadata_required_fields()
     test_issuer_metadata_credential_configurations_format()
     test_issuer_metadata_authorization_servers()

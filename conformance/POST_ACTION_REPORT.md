@@ -56,6 +56,28 @@ remains supported for a short migration period under
 authorize restoring any private signing selector or weakening Open Badges 3
 coverage.
 
+## Owned pseudo-conformance retirement (2026-08-06)
+
+The local regression target previously included two obsolete ElevenID-owned
+files that could be mistaken for official evidence. One called itself
+"OIDF-mirrored" while its positive OID4VP path embedded a placeholder
+credential and could construct a zero-signature token. The other targeted
+SIOPv2 Draft 13, generated only zero-signature ID tokens, and explicitly said
+all tests were expected to fail until an unimplemented feature existed.
+
+Both files were removed rather than repaired or relabeled. They did not import
+or execute the official runner, did not provide passing production evidence,
+and their removal does not remove a supported product capability. Current
+OID4VP coverage remains the exact unmodified OIDF OID4VP Final, URL-query, and
+HAIP plans plus the released browser product-path smoke. Current local
+`conformance-local` is explicitly an ElevenID-owned OID4VCI regression and
+cannot be presented as official-suite evidence. A repository guard rejects a
+future owned suite that uses mirrored/official claims, placeholder positive
+credentials, dummy signatures, or expected-to-fail semantics.
+
+Imported official source remains unchanged. Open Badges 2 is also unchanged
+and remains the sole time-bounded legacy exception described above.
+
 ## Current EUDI wallet-library upgrade audit (2026-08-02)
 
 The EUDI lane now pins the current official OID4VCI wallet library v0.13.0
