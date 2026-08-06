@@ -196,3 +196,85 @@ async def test_activate_credential_template_uses_public_gateway() -> None:
         "POST",
         "/v1/credential-templates/template-1/activate",
     )
+
+
+@pytest.mark.asyncio
+async def test_application_template_helper_uses_only_current_mip_contract() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(return_value={"id": "application-template-1"})
+    client._request = request
+
+    try:
+        await client.create_application_template(
+            organization_id="org-1",
+            name="Current application",
+            evidence_requirements=[
+                {
+                    "evidence_id": "identity_document",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Government-issued identity document",
+                    "required": True,
+                }
+            ],
+            form_fields=[
+                {
+                    "field_id": "email",
+                    "field_type": "EMAIL",
+                    "label": "Email",
+                    "required": True,
+                }
+            ],
+            claim_collection_rules=[
+                {
+                    "claim_name": "email",
+                    "source": "FORM_FIELD",
+                    "source_config": {"field_id": "email"},
+                }
+            ],
+            approval_strategy="MANUAL",
+        )
+
+        with pytest.raises(ValueError, match="legacy string IDs"):
+            await client.create_application_template(
+                organization_id="org-1",
+                name="Legacy application",
+                evidence_requirements=["identity_document"],  # type: ignore[list-item]
+            )
+        with pytest.raises(ValueError, match="uppercase MIP value"):
+            await client.create_application_template(
+                organization_id="org-1",
+                name="Legacy strategy",
+                approval_strategy="manual",
+            )
+    finally:
+        await client.close()
+
+    request.assert_awaited_once()
+    payload = request.await_args.kwargs["json"]
+    assert payload["approval_strategy"] == "MANUAL"
+    assert payload["evidence_requirements"][0]["evidence_type"] == "DOCUMENT_SCAN"
+    assert payload["form_fields"][0]["field_type"] == "EMAIL"
+    assert payload["claim_collection_rules"][0]["source"] == "FORM_FIELD"
+    assert "notifications" not in payload
+
+
+@pytest.mark.asyncio
+async def test_activate_application_template_uses_public_lifecycle_route() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(
+        return_value={"id": "application-template-1", "status": "ACTIVE"}
+    )
+    client._request = request
+
+    try:
+        result = await client.activate_application_template(
+            "application-template-1"
+        )
+    finally:
+        await client.close()
+
+    assert result["status"] == "ACTIVE"
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/application-templates/application-template-1/activate",
+    )

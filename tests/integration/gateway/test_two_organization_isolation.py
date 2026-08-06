@@ -948,6 +948,246 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             if isinstance(flow, dict)
         }
 
+        # Applications contain applicant PII and generate vetting state. The
+        # self-service contract is bound to the principal's session organization,
+        # so create a real A-owned application as the A reviewer and use B's
+        # organization-bound API key as the foreign principal. This exercises
+        # the same holder and reviewer routes as the UI without forging an
+        # impossible B session for the organization-A user.
+        applicant_secret = f"applicant-{uuid.uuid4().hex}@example.com"
+        templates_a = await admin.list_credential_templates(organization_a_id)
+        active_template_a = next(
+            (
+                template
+                for template in templates_a
+                if isinstance(template, dict)
+                and template.get("id")
+                and str(template.get("status") or "").upper() == "ACTIVE"
+            ),
+            None,
+        )
+        assert active_template_a is not None, (
+            "Default organization has no active credential template for the "
+            "current applicant journey"
+        )
+        application_template_a = await admin.create_application_template(
+            organization_id=organization_a_id,
+            name=f"Organization A applicant workflow {uuid.uuid4().hex}",
+            credential_template_id=active_template_a["id"],
+            form_fields=[
+                {
+                    "field_id": "email",
+                    "field_type": "EMAIL",
+                    "label": "Email",
+                    "required": True,
+                }
+            ],
+            approval_strategy="MANUAL",
+        )
+        application_template_a = await admin.activate_application_template(
+            application_template_a["id"]
+        )
+        assert str(application_template_a.get("status") or "").upper() == "ACTIVE"
+
+        applicant_profile = await reviewer.client.patch(
+            "/v1/me/applicant-profile",
+            json={
+                "email": applicant_secret,
+                "given_name": "Boundary",
+                "family_name": "Applicant",
+            },
+        )
+        assert applicant_profile.status_code == 200, applicant_profile.text
+        applicant_profile_body = applicant_profile.json()
+        assert applicant_profile_body.get("organization_id") == organization_a_id
+        assert applicant_profile_body.get("email") == applicant_secret
+
+        application_create = await reviewer.client.post(
+            "/v1/me/applications",
+            json={
+                "organization_id": organization_a_id,
+                "application_template_id": application_template_a["id"],
+                "form_data": {
+                    "email": applicant_secret,
+                },
+            },
+        )
+        assert application_create.status_code in {200, 201}, application_create.text
+        application_a = application_create.json()
+        application_a_id = str(application_a["id"])
+        application_submit = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/submit"
+        )
+        assert application_submit.status_code == 200, application_submit.text
+        application_a = application_submit.json()
+        assert str(application_a.get("status") or "").upper() in {
+            "SUBMITTED",
+            "UNDER_REVIEW",
+        }, application_a
+
+        owner_application = await reviewer.client.get(
+            f"/v1/me/applications/{application_a_id}"
+        )
+        assert owner_application.status_code == 200, owner_application.text
+        owner_application_body = owner_application.json()
+        assert owner_application_body.get("form_data") == {
+            "email": applicant_secret,
+        }
+
+        owner_applicant = await admin.client.get(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}"
+        )
+        assert owner_applicant.status_code == 200, owner_applicant.text
+        owner_applicant_body = owner_applicant.json()
+        assert owner_applicant_body.get("form_data") == {
+            "email": applicant_secret,
+        }
+        owner_checks = await admin.client.get(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/checks"
+        )
+        assert owner_checks.status_code == 200, owner_checks.text
+        owner_checks_body = owner_checks.json()
+        assert isinstance(owner_checks_body, list)
+        assert owner_checks_body, "Submitted manual-review application created no vetting checks"
+
+        applicants_b = await api_key_client.client.get(
+            f"/v1/organizations/{organization_b_id}/applicants",
+            headers=api_headers,
+        )
+        assert applicants_b.status_code == 200, applicants_b.text
+        applicants_b_body = applicants_b.json()
+        assert isinstance(applicants_b_body, dict), applicants_b_body
+        assert application_a_id not in {
+            str(applicant.get("id") or applicant.get("application_id"))
+            for applicant in applicants_b_body.get("items", [])
+            if isinstance(applicant, dict)
+        }
+
+        for path in (
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/checks",
+        ):
+            response = await api_key_client.client.get(path, headers=api_headers)
+            _assert_public_denial(
+                response,
+                foreign_values=(
+                    application_a_id,
+                    applicant_secret,
+                ),
+            )
+
+        applicant_mutation = await api_key_client.client.post(
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/request-information",
+            json={"message": "foreign applicant substitution"},
+            headers=api_headers,
+        )
+        _assert_public_denial(
+            applicant_mutation,
+            foreign_values=(
+                application_a_id,
+                applicant_secret,
+            ),
+        )
+
+        # Deployment profiles bind trust, presentation, credential, flow, API
+        # key, lane, and device configuration. A leaked profile or lane ID must
+        # not let an A principal read B configuration or trigger mutations.
+        deployment_name = f"Organization B deployment {uuid.uuid4().hex}"
+        deployment_create = await admin.client.post(
+            "/v1/deployment-profiles",
+            json={
+                "organization_id": organization_b_id,
+                "name": deployment_name,
+                "environment": "development",
+                "trust_profile_id": trust_profile_b_id,
+                "presentation_policy_ids": [policy_b["id"]],
+                "credential_template_ids": [template_b["id"]],
+                "default_policy_id": policy_b["id"],
+                "enabled_flow_ids": [flow_b["id"]],
+                "network_mode": "ONLINE",
+            },
+        )
+        assert deployment_create.status_code in {200, 201}, deployment_create.text
+        deployment_b = deployment_create.json()
+        deployment_b_id = str(deployment_b["id"])
+
+        lane_name = f"Organization B lane {uuid.uuid4().hex}"
+        lane_create = await admin.client.post(
+            f"/v1/deployment-profiles/{deployment_b_id}/lanes",
+            json={
+                "name": lane_name,
+                "description": "Foreign organization boundary lane",
+                "location": "Private organization B site",
+                "device_type": "kiosk",
+            },
+        )
+        assert lane_create.status_code in {200, 201}, lane_create.text
+        lane_b = lane_create.json()
+        lane_b_id = str(lane_b["id"])
+
+        owner_deployment = await admin.client.get(f"/v1/deployment-profiles/{deployment_b_id}")
+        assert owner_deployment.status_code == 200, owner_deployment.text
+        owner_lane = await admin.client.get(f"/v1/deployment-profiles/{deployment_b_id}/lanes/{lane_b_id}")
+        assert owner_lane.status_code == 200, owner_lane.text
+
+        deployments_a = await reviewer.client.get(
+            "/v1/deployment-profiles",
+            params={"organization_id": organization_a_id},
+        )
+        assert deployments_a.status_code == 200, deployments_a.text
+        assert deployment_b_id not in {
+            str(profile.get("id")) for profile in deployments_a.json() if isinstance(profile, dict)
+        }
+
+        for method, path, body in (
+            ("GET", f"/v1/deployment-profiles/{deployment_b_id}", None),
+            (
+                "PATCH",
+                f"/v1/deployment-profiles/{deployment_b_id}",
+                {"name": "foreign deployment substitution"},
+            ),
+            ("POST", f"/v1/deployment-profiles/{deployment_b_id}/activate", None),
+            (
+                "POST",
+                f"/v1/deployment-profiles/{deployment_b_id}/generate-api-key",
+                None,
+            ),
+            ("GET", f"/v1/deployment-profiles/{deployment_b_id}/lanes", None),
+            (
+                "GET",
+                f"/v1/deployment-profiles/{deployment_b_id}/lanes/{lane_b_id}",
+                None,
+            ),
+            (
+                "PUT",
+                f"/v1/deployment-profiles/{deployment_b_id}/lanes/{lane_b_id}",
+                {
+                    "name": "foreign lane substitution",
+                    "device_type": "kiosk",
+                },
+            ),
+            (
+                "POST",
+                f"/v1/deployment-profiles/{deployment_b_id}/lanes/{lane_b_id}/devices",
+                {
+                    "device_id": f"foreign-device-{uuid.uuid4().hex}",
+                    "device_name": "Foreign device substitution",
+                },
+            ),
+        ):
+            response = await reviewer.client.request(method, path, json=body)
+            _assert_public_denial(
+                response,
+                foreign_values=(
+                    organization_b_name,
+                    deployment_name,
+                    lane_name,
+                    deployment_b_id,
+                    lane_b_id,
+                ),
+            )
+
         # API-key creation emits a real audit record. Its identifier must not
         # become an oracle when substituted into A's public audit route.
         foreign_events: list[dict[str, Any]] = []

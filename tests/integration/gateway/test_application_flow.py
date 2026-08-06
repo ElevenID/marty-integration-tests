@@ -35,19 +35,35 @@ class TestApplicationTemplateFlow:
             form_fields=[
                 {
                     "field_id": "given_name",
-                    "field_type": "text",
+                    "field_type": "TEXT",
                     "label": "Given Name",
                     "required": True
                 }
             ],
-            evidence_requirements=["drivers_license", "selfie"],
+            evidence_requirements=[
+                {
+                    "evidence_id": "drivers_license",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Driver license document",
+                    "required": True,
+                },
+                {
+                    "evidence_id": "selfie",
+                    "evidence_type": "SELFIE",
+                    "description": "Current applicant selfie",
+                    "required": True,
+                },
+            ],
         )
         
         assert app_template is not None
         assert "id" in app_template
         assert app_template["organization_id"] == test_organization["id"]
-        assert "drivers_license" in app_template["evidence_requirements"]
-        assert "selfie" in app_template["evidence_requirements"]
+        evidence_ids = {
+            requirement["evidence_id"]
+            for requirement in app_template["evidence_requirements"]
+        }
+        assert {"drivers_license", "selfie"} <= evidence_ids
         
     async def test_get_application_template(
         self,
@@ -334,7 +350,20 @@ class TestCompleteApplicationFlow:
             organization_id=test_organization["id"],
             name="Driver's License Application",
             credential_template_id=mdl_template["id"],
-            evidence_requirements=["drivers_license", "selfie"],
+            evidence_requirements=[
+                {
+                    "evidence_id": "drivers_license",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Driver license document",
+                    "required": True,
+                },
+                {
+                    "evidence_id": "selfie",
+                    "evidence_type": "SELFIE",
+                    "description": "Current applicant selfie",
+                    "required": True,
+                },
+            ],
         )
         
         # Step 2: Submit application

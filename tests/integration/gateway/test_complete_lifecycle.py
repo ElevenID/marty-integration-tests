@@ -14,7 +14,6 @@ deployment would use.
 """
 
 import pytest
-import asyncio
 from typing import Dict, Any
 
 from .helpers.gateway_client import GatewayClient
@@ -69,7 +68,7 @@ class TestCompleteCredentialLifecycle:
             compliance_code="AAMVA_MDL",
             credential_format="mso_mdoc",
         )
-        compliance_profile = await gateway_client.create_compliance_profile(
+        await gateway_client.create_compliance_profile(
             **compliance_profile_data
         )
         
@@ -101,7 +100,20 @@ class TestCompleteCredentialLifecycle:
         app_template_data = TestDataBuilder.application_template(
             organization_id=org_id,
             name="Driver's License Application",
-            evidence_requirements=["identity_document", "portrait"],
+            evidence_requirements=[
+                {
+                    "evidence_id": "identity_document",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Government-issued identity document",
+                    "required": True,
+                },
+                {
+                    "evidence_id": "portrait",
+                    "evidence_type": "SELFIE",
+                    "description": "Current applicant portrait",
+                    "required": True,
+                },
+            ],
             credential_template_id=mdl_template["id"],
         )
         app_template = await gateway_client.create_application_template(
@@ -651,7 +663,7 @@ class TestRevocationScenarios:
         
         # Revoke the credential
         issuance = app_issuances[0]
-        result = await gateway_client.revoke_credential(issuance_id=issuance["id"])
+        await gateway_client.revoke_credential(issuance_id=issuance["id"])
         
         # Verify revocation
         revoked_issuance = await gateway_client.get_issuance(issuance["id"])
