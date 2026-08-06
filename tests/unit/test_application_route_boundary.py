@@ -5,9 +5,10 @@ from pathlib import Path
 INTEGRATION_ROOT = Path(__file__).parents[1] / "integration"
 
 # These routes predate the applicant/reviewer public boundary.  The current
-# browser-facing contract is rooted at /v1/me and /v1/reviewer.  Passport
-# application routes are a separate product surface and are intentionally not
-# matched by these exact fragments.
+# browser-facing contract uses applicant-owned /v1/me routes and
+# organization-scoped reviewer routes.  Passport application routes are a
+# separate product surface and are intentionally not matched by these exact
+# fragments.
 RETIRED_FRAGMENTS = (
     '"/v1/applications',
     'f"/v1/applications',
@@ -35,5 +36,6 @@ def test_first_party_integration_tests_use_current_application_boundary() -> Non
 
     assert not violations, (
         "Retired generic or internal application routes found. Use the "
-        "authenticated /v1/me or /v1/reviewer public boundary:\n" + "\n".join(violations)
+        "authenticated /v1/me or organization-scoped reviewer boundary:\n"
+        + "\n".join(violations)
     )

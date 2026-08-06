@@ -1,7 +1,7 @@
 """Application-template integration tests for the current public gateway API.
 
 Applicant submission, evidence, review, and issuance are intentionally covered by
-the authenticated ``/v1/me`` and ``/v1/reviewer`` tests in
+the authenticated ``/v1/me`` and organization-scoped reviewer tests in
 ``test_two_organization_isolation.py``.  Do not reintroduce the retired generic
 application routes here.
 """
