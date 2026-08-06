@@ -381,37 +381,27 @@ class TestIssuanceFlow:
         # 3. Credential issuance
         # This test validates the flow can be started
         
-    async def test_issuance_flow_with_application(
+    async def test_issuance_flow_with_subject_context(
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
         mdl_template: Dict[str, Any],
-        mdl_application_template: Dict[str, Any],
     ):
-        """Test issuance flow linked to an application template"""
-        # Create application-based issuance flow
+        """Test issuance flow using public subject context."""
         flow_def = await gateway_client.create_flow_definition(
             organization_id=test_organization["id"],
-            name="Application Issuance Flow",
+            name="Subject Issuance Flow",
             flow_type="issuance",
             credential_template_id=mdl_template["id"],
         )
-        
-        # Create application
-        applicant_data = TestDataBuilder.mdl_application_data()
-        application = await gateway_client.create_application(
-            application_template_id=mdl_application_template["id"],
-            applicant_data=applicant_data,
-        )
-        
-        # Start flow for this application
+
         instance = await gateway_client.start_flow_instance(
             organization_id=test_organization["id"],
             flow_definition_id=flow_def["id"],
             subject_id="applicant-user-id",
-            initial_context={"application_id": application["id"]},
+            initial_context={"requested_claims": TestDataBuilder.mdl_claims()},
         )
-        
+
         assert instance is not None
 
 
