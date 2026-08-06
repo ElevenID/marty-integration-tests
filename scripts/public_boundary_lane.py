@@ -189,6 +189,7 @@ def write_summary(
             "issuance transaction and revocation-status isolation",
             "issued-credential lifecycle and revocation isolation",
             "trust-profile ownership and mutation isolation",
+            "issuer-entity and trust-profile relationship isolation",
             "applicant form-data and vetting isolation",
             "deployment-profile, lane, and device-assignment isolation",
             "webhook ownership and secret leakage prevention",

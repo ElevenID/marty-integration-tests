@@ -851,22 +851,155 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 ),
             )
 
-        # A trust profile is also tenant-owned security policy.  Prove the
-        # normal B owner path first, then ensure an A-only principal cannot
-        # enumerate, read, activate, or mutate the foreign profile by ID.
+        # Trust configuration uses the same public resource sequence as the
+        # UI: create an organization-scoped IssuerEntity, then link its UUID
+        # to a TrustProfile.  It must not fall back to a denormalized pinned-DID
+        # object or expose any signing/custody selector.
         trust_profile_b = await admin.create_trust_profile(
             organization_id=organization_b_id,
             name=f"Organization B trust policy {uuid.uuid4().hex}",
-            trust_sources=[
-                {
-                    "source_type": "PINNED_ISSUER",
-                    "issuer_did": issuer_did_b,
-                    "organization_id": organization_b_id,
-                }
-            ],
         )
         trust_profile_b_id = str(trust_profile_b["id"])
         trust_profile_b_name = str(trust_profile_b["name"])
+        trust_profile_a = await admin.create_trust_profile(
+            organization_id=organization_a_id,
+            name=f"Organization A substitution target {uuid.uuid4().hex}",
+        )
+        trust_profile_a_id = str(trust_profile_a["id"])
+
+        issuer_entity_b_did = f"did:web:trust-{uuid.uuid4().hex}.example"
+        issuer_entity_b_name = f"Organization B trust issuer {uuid.uuid4().hex}"
+        issuer_entity_payload = {
+            "organization_id": organization_b_id,
+            "issuer_id": issuer_entity_b_did,
+            "issuer_type": "ORGANIZATION",
+            "display_name": issuer_entity_b_name,
+            "description": "Foreign tenant issuer-registry evidence",
+            "metadata": {"jurisdiction": "US"},
+        }
+        issuer_entity_create = await admin.client.post(
+            "/v1/issuer-entities",
+            json=issuer_entity_payload,
+        )
+        assert issuer_entity_create.status_code in {200, 201}, issuer_entity_create.text
+        issuer_entity_b = issuer_entity_create.json()
+        issuer_entity_b_id = str(issuer_entity_b["id"])
+        assert issuer_entity_b["organization_id"] == organization_b_id
+        assert issuer_entity_b["issuer_id"] == issuer_entity_b_did
+        _assert_no_private_signing_selectors(issuer_entity_b)
+
+        relationship_create = await admin.client.post(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers",
+            json={
+                "issuer_id": issuer_entity_b_id,
+                "trust_level": 100,
+                "relationship_status": "TRUSTED",
+                "cascade_revocation_policy": "NOTIFY_ONLY",
+                "metadata": {"credential_template_ids": []},
+            },
+        )
+        assert relationship_create.status_code in {200, 201}, relationship_create.text
+        relationship_b = relationship_create.json()
+        relationship_b_id = str(relationship_b["id"])
+        assert relationship_b["trust_profile_id"] == trust_profile_b_id
+        assert relationship_b["issuer_id"] == issuer_entity_b_id
+        assert "issuer_did" not in relationship_b
+        assert "name" not in relationship_b
+        _assert_no_private_signing_selectors(relationship_b)
+
+        # Extensible metadata is not a custody escape hatch.  Both selector
+        # fields and private JWK parameters must fail before persistence.
+        for selector in FORBIDDEN_PUBLIC_SIGNING_SELECTORS:
+            rejected_entity = await admin.client.post(
+                "/v1/issuer-entities",
+                json={
+                    **issuer_entity_payload,
+                    "issuer_id": f"did:example:rejected-{selector}-{uuid.uuid4().hex}",
+                    "metadata": {"nested": {selector: "untrusted-custody-route"}},
+                },
+            )
+            assert rejected_entity.status_code == 422, rejected_entity.text
+
+            rejected_relationship = await admin.client.post(
+                f"/v1/trust-profiles/{trust_profile_b_id}/issuers",
+                json={
+                    "issuer_id": issuer_entity_b_id,
+                    "metadata": {"nested": {selector: "untrusted-custody-route"}},
+                },
+            )
+            assert rejected_relationship.status_code == 422, rejected_relationship.text
+
+        rejected_private_jwk = await admin.client.post(
+            "/v1/issuer-entities",
+            json={
+                **issuer_entity_payload,
+                "issuer_id": f"did:example:private-jwk-{uuid.uuid4().hex}",
+                "metadata": {
+                    "verification_keys": [
+                        {
+                            "kty": "EC",
+                            "crv": "P-256",
+                            "x": "public-x",
+                            "y": "public-y",
+                            "d": "must-remain-in-managed-custody",
+                        }
+                    ]
+                },
+            },
+        )
+        assert rejected_private_jwk.status_code == 422, rejected_private_jwk.text
+
+        owner_entity_list = await admin.client.get(
+            "/v1/issuer-entities",
+            params={"organization_id": organization_b_id},
+        )
+        assert owner_entity_list.status_code == 200, owner_entity_list.text
+        assert issuer_entity_b_id in {
+            str(entity.get("id"))
+            for entity in owner_entity_list.json()
+            if isinstance(entity, dict)
+        }
+        owner_entity = await admin.client.get(
+            f"/v1/issuer-entities/{issuer_entity_b_id}"
+        )
+        assert owner_entity.status_code == 200, owner_entity.text
+        owner_entity_update = await admin.client.patch(
+            f"/v1/issuer-entities/{issuer_entity_b_id}",
+            json={
+                "organization_id": organization_b_id,
+                "display_name": f"{issuer_entity_b_name} updated",
+            },
+        )
+        assert owner_entity_update.status_code == 200, owner_entity_update.text
+
+        owner_relationships = await admin.client.get(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers"
+        )
+        assert owner_relationships.status_code == 200, owner_relationships.text
+        assert relationship_b_id in {
+            str(relationship.get("id"))
+            for relationship in owner_relationships.json()
+            if isinstance(relationship, dict)
+        }
+        owner_relationship = await admin.client.get(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}"
+        )
+        assert owner_relationship.status_code == 200, owner_relationship.text
+        owner_relationship_update = await admin.client.patch(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+            json={
+                "trust_level": 85,
+                "relationship_status": "UNDER_REVIEW",
+                "cascade_revocation_policy": "MANUAL",
+                "metadata": {"credential_template_ids": []},
+            },
+        )
+        assert owner_relationship_update.status_code == 200, owner_relationship_update.text
+        assert owner_relationship_update.json()["trust_level"] == 85
+
+        # A trust profile and its issuer registry/relationship resources are
+        # tenant-owned security policy. Prove the B owner path first, then
+        # ensure an A-only principal cannot enumerate or substitute their IDs.
         owner_trust_profile = await admin.client.get(
             f"/v1/trust-profiles/{trust_profile_b_id}",
         )
@@ -882,6 +1015,66 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             for profile in trust_profiles_a.json()
             if isinstance(profile, dict)
         }
+
+        issuer_entities_a = await reviewer.client.get(
+            "/v1/issuer-entities",
+            params={"organization_id": organization_a_id},
+        )
+        assert issuer_entities_a.status_code == 200, issuer_entities_a.text
+        assert issuer_entity_b_id not in {
+            str(entity.get("id"))
+            for entity in issuer_entities_a.json()
+            if isinstance(entity, dict)
+        }
+        assert issuer_entity_b_did not in {
+            str(entity.get("issuer_id"))
+            for entity in issuer_entities_a.json()
+            if isinstance(entity, dict)
+        }
+
+        for method, path, body in (
+            ("GET", f"/v1/issuer-entities/{issuer_entity_b_id}", None),
+            (
+                "PATCH",
+                f"/v1/issuer-entities/{issuer_entity_b_id}",
+                {
+                    "organization_id": organization_a_id,
+                    "display_name": "foreign issuer-entity substitution",
+                },
+            ),
+            ("DELETE", f"/v1/issuer-entities/{issuer_entity_b_id}", None),
+            (
+                "GET",
+                f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+                None,
+            ),
+            (
+                "PATCH",
+                f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+                {"trust_level": 1},
+            ),
+            (
+                "DELETE",
+                f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+                None,
+            ),
+            (
+                "GET",
+                f"/v1/trust-profiles/{trust_profile_a_id}/issuers/{relationship_b_id}",
+                None,
+            ),
+        ):
+            response = await reviewer.client.request(method, path, json=body)
+            _assert_public_denial(
+                response,
+                foreign_values=(
+                    organization_b_name,
+                    issuer_entity_b_name,
+                    issuer_entity_b_did,
+                    issuer_entity_b_id,
+                    relationship_b_id,
+                ),
+            )
 
         for method, path, body in (
             ("GET", f"/v1/trust-profiles/{trust_profile_b_id}", None),
@@ -906,6 +1099,24 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                     issuer_did_b,
                 ),
             )
+
+        owner_relationship_delete = await admin.client.delete(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}"
+        )
+        assert owner_relationship_delete.status_code == 200, owner_relationship_delete.text
+        deleted_relationship = await admin.client.get(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}"
+        )
+        assert deleted_relationship.status_code == 404, deleted_relationship.text
+
+        owner_entity_delete = await admin.client.delete(
+            f"/v1/issuer-entities/{issuer_entity_b_id}"
+        )
+        assert owner_entity_delete.status_code == 200, owner_entity_delete.text
+        deleted_entity = await admin.client.get(
+            f"/v1/issuer-entities/{issuer_entity_b_id}"
+        )
+        assert deleted_entity.status_code == 404, deleted_entity.text
 
         policy_b_data = TestDataBuilder.presentation_policy_age_verification(
             organization_id=organization_b_id,
