@@ -192,6 +192,7 @@ def write_summary(
             "applicant form-data and vetting isolation",
             "deployment-profile, lane, and device-assignment isolation",
             "webhook ownership and secret leakage prevention",
+            "notification SSE delivery and subscription isolation",
             "audit-event isolation",
             "DID-first issuance and verification",
             "public custody-selector rejection",
