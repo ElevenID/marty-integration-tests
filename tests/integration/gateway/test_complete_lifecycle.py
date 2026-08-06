@@ -3,11 +3,10 @@ Complete Credential Lifecycle Integration Test
 
 Tests the entire credential lifecycle from creation to revocation:
 1. Setup organization with all necessary resources
-2. Application submission and approval
-3. Credential issuance
-4. Credential verification (stateless)
-5. Credential revocation
-6. Re-verification shows revoked status
+2. Credential issuance through the public gateway
+3. Credential verification
+4. Credential revocation
+5. Re-verification shows revoked status
 
 This test validates the complete end-to-end flow that a real-world
 deployment would use.
@@ -33,13 +32,10 @@ class TestCompleteCredentialLifecycle:
         Test complete mDL credential lifecycle:
         1. Create organization
         2. Setup trust profile and credential template
-        3. Create application template
-        4. Submit application
-        5. Submit evidence
-        6. Approve application (triggers issuance)
-        7. Verify credential can be used
-        8. Revoke credential
-        9. Verify revocation is reflected
+        3. Issue through the current public API
+        4. Verify credential can be used
+        5. Revoke credential
+        6. Verify revocation is reflected
         """
         # =====================================================================
         # Phase 1: Organization Setup
@@ -93,92 +89,26 @@ class TestCompleteCredentialLifecycle:
         )
         
         # =====================================================================
-        # Phase 2: Application Process
+        # Phase 2: Credential Issuance
         # =====================================================================
-        
-        # Step 6: Create application template (user-facing workflow)
-        app_template_data = TestDataBuilder.application_template(
-            organization_id=org_id,
-            name="Driver's License Application",
-            evidence_requirements=[
-                {
-                    "evidence_id": "identity_document",
-                    "evidence_type": "DOCUMENT_SCAN",
-                    "description": "Government-issued identity document",
-                    "required": True,
-                },
-                {
-                    "evidence_id": "portrait",
-                    "evidence_type": "SELFIE",
-                    "description": "Current applicant portrait",
-                    "required": True,
-                },
-            ],
-            credential_template_id=mdl_template["id"],
-        )
-        app_template = await gateway_client.create_application_template(
-            **app_template_data
-        )
-        
-        # Note: In the new architecture, the credential template would reference
-        # the application template if this is an application-based flow.
-        # For this test, we're using direct issuance after application approval.
-        
-        # Step 7: Applicant submits application
-        applicant_data = TestDataBuilder.mdl_application_data(
+
+        claims = TestDataBuilder.mdl_claims(
             given_name="Katherine",
             family_name="Johnson",
             birth_date="1991-08-26",
         )
-        application = await gateway_client.create_application(
-            application_template_id=app_template["id"],
-            applicant_data=applicant_data,
+        issuance = await gateway_client.issue_credential(
+            organization_id=org_id,
+            credential_template_id=mdl_template["id"],
+            claims=claims,
         )
-        app_id = application["id"]
-        
-        assert application["status"] == "pending"
-        
-        # Step 7: Submit required evidence
-        portrait = TestDataBuilder.portrait_evidence()
-        await gateway_client.submit_evidence(
-            application_id=app_id,
-            evidence=portrait,
-        )
-        
-        id_doc = TestDataBuilder.identity_document_evidence()
-        await gateway_client.submit_evidence(
-            application_id=app_id,
-            evidence=id_doc,
-        )
-        
-        # Step 8: Admin approves application
-        approved = await gateway_client.approve_application(app_id)
-        assert approved["status"] == "approved"
-        
-        # =====================================================================
-        # Phase 3: Credential Issuance
-        # =====================================================================
-        
-        # Step 9: Verify credential was issued
-        issuances = await gateway_client.list_issuances(
-            organization_id=org_id
-        )
-
-        # Find issuance linked to this application
-        app_issuances = [
-            i for i in issuances
-            if i.get("application_id") == app_id
-        ]
-        assert len(app_issuances) > 0, "Credential should be issued after approval"
-        
-        issuance = app_issuances[0]
         assert issuance["credential_template_id"] == mdl_template["id"]
         
         # =====================================================================
         # Phase 4: Verification
         # =====================================================================
         
-        # Step 10: Start verification flow
+        # Start verification flow
         verification_flow = await gateway_client.start_verification_flow(
             presentation_policy_id=verification_policy["id"],
             trust_profile_id=trust_profile["id"],
@@ -188,7 +118,7 @@ class TestCompleteCredentialLifecycle:
         assert "instance_id" in verification_flow
         assert "request_uri" in verification_flow or "qr_code_data" in verification_flow
         
-        # Step 11: Verify request can be retrieved (wallet would do this)
+        # Verify request can be retrieved (wallet would do this)
         request_obj = await gateway_client.get_verification_request(
             verification_flow["instance_id"]
         )
@@ -200,18 +130,18 @@ class TestCompleteCredentialLifecycle:
         
         issuance_id = issuance["id"]
         
-        # Step 12: Revoke the credential
+        # Revoke the credential
         revocation_result = await gateway_client.revoke_credential(
             issuance_id=issuance_id,
             reason="License suspended - integration test",
         )
         assert revocation_result is not None
         
-        # Step 13: Verify issuance record reflects the revocation
+        # Verify issuance record reflects the revocation
         revoked_issuance = await gateway_client.get_issuance(issuance_id)
         assert revoked_issuance["status"] == "revoked"
         
-        # Step 14: Verify revocation status endpoint confirms it
+        # Verify revocation status endpoint confirms it
         revocation_status = await gateway_client.get_revocation_status(issuance_id)
         assert revocation_status is not None
         assert revocation_status.get("revoked") is True or revocation_status.get("status") == "revoked"
@@ -224,7 +154,6 @@ class TestCompleteCredentialLifecycle:
         assert trust_profile["organization_id"] == org_id
         assert mdl_template["organization_id"] == org_id
         assert verification_policy["organization_id"] == org_id
-        assert app_template["organization_id"] == org_id
         assert issuance["organization_id"] == org_id
         
         # Verify we can retrieve everything
@@ -241,81 +170,36 @@ class TestCompleteCredentialLifecycle:
 class TestMultipleCredentialLifecycles:
     """Test managing multiple credentials for the same organization"""
     
-    async def test_multiple_applicants_lifecycle(
+    async def test_multiple_credential_lifecycles(
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
         mdl_template: Dict[str, Any],
-        mdl_application_template: Dict[str, Any],
     ):
-        """
-        Test multiple applicants going through the lifecycle:
-        - 3 applicants submit applications
-        - 2 get approved, 1 gets rejected
-        - Verify correct number of credentials issued
-        """
-        applicants = [
-            ("Laura", "Adams", "approved"),
-            ("Michael", "Brown", "approved"),
-            ("Nathan", "Clark", "rejected"),
-        ]
-        
-        applications = {}
-        
-        # Submit applications for all applicants
-        for given_name, family_name, expected_status in applicants:
-            applicant_data = TestDataBuilder.mdl_application_data(
+        """Issue and retrieve distinct credentials for multiple subjects."""
+        issued = []
+        for given_name, family_name in [
+            ("Laura", "Adams"),
+            ("Michael", "Brown"),
+        ]:
+            claims = TestDataBuilder.mdl_claims(
                 given_name=given_name,
                 family_name=family_name,
             )
-            app = await gateway_client.create_application(
-                application_template_id=mdl_application_template["id"],
-                applicant_data=applicant_data,
+            issued.append(
+                await gateway_client.issue_credential(
+                    organization_id=test_organization["id"],
+                    credential_template_id=mdl_template["id"],
+                    claims=claims,
+                )
             )
-            
-            # Submit evidence
-            evidence = TestDataBuilder.portrait_evidence()
-            await gateway_client.submit_evidence(
-                application_id=app["id"],
-                evidence=evidence,
-            )
-            
-            applications[given_name] = {
-                "application": app,
-                "expected_status": expected_status,
-            }
-        
-        # Process applications (approve or reject)
-        for name, data in applications.items():
-            app = data["application"]
-            expected = data["expected_status"]
-            
-            if expected == "approved":
-                result = await gateway_client.approve_application(app["id"])
-                assert result["status"] == "approved"
-            else:
-                result = await gateway_client.reject_application(app["id"])
-                assert result["status"] == "rejected"
-        
-        # Verify correct number of issuances
+
         issuances = await gateway_client.list_issuances(
             organization_id=test_organization["id"]
         )
-        
-        # Verify credentials issued for approved applications
-        issuances = await gateway_client.list_issuances(
-            organization_id=test_organization["id"]
-        )
-        
-        # Count issuances for our applications
-        our_app_ids = [d["application"]["id"] for d in applications.values()]
-        our_issuances = [
-            i for i in issuances
-            if i.get("application_id") in our_app_ids
-        ]
-        
-        # Should have exactly 2 issuances (2 approved, 1 rejected)
-        assert len(our_issuances) == 2
+
+        listed_ids = {issuance["id"] for issuance in issuances}
+        assert {issuance["id"] for issuance in issued} <= listed_ids
 
 
 @pytest.mark.asyncio
@@ -623,49 +507,25 @@ class TestRevocationLifecycle:
 class TestRevocationScenarios:
     """Test various revocation scenarios"""
     
-    async def test_revoke_after_application_approval(
+    async def test_revoke_after_direct_issuance(
         self,
         gateway_client: GatewayClient,
         test_organization: Dict[str, Any],
         mdl_template: Dict[str, Any],
-        mdl_application_template: Dict[str, Any],
     ):
-        """Test revoking a credential that was issued through application process"""
-        # Submit application
-        applicant_data = TestDataBuilder.mdl_application_data(
+        """Test revoking a credential issued through the current public API."""
+        claims = TestDataBuilder.mdl_claims(
             given_name="Robert",
             family_name="Johnson",
         )
-        application = await gateway_client.create_application(
-            application_template_id=mdl_application_template["id"],
-            applicant_data=applicant_data,
+        issuance = await gateway_client.issue_credential(
+            organization_id=test_organization["id"],
+            credential_template_id=mdl_template["id"],
+            claims=claims,
         )
-        
-        # Submit evidence
-        evidence = TestDataBuilder.portrait_evidence()
-        await gateway_client.submit_evidence(
-            application_id=application["id"],
-            evidence=evidence,
-        )
-        
-        # Approve (triggers issuance)
-        await gateway_client.approve_application(application["id"])
-        
-        # Find the issuance
-        issuances = await gateway_client.list_issuances(
-            organization_id=test_organization["id"]
-        )
-        app_issuances = [
-            i for i in issuances
-            if i.get("application_id") == application["id"]
-        ]
-        assert len(app_issuances) > 0
-        
-        # Revoke the credential
-        issuance = app_issuances[0]
+
         await gateway_client.revoke_credential(issuance_id=issuance["id"])
-        
-        # Verify revocation
+
         revoked_issuance = await gateway_client.get_issuance(issuance["id"])
         assert revoked_issuance["status"] == "revoked"
         
