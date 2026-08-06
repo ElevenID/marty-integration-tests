@@ -191,6 +191,7 @@ def write_summary(
             "trust-profile ownership and mutation isolation",
             "issuer-entity and trust-profile relationship isolation",
             "applicant form-data and vetting isolation",
+            "application evidence collection, deletion, revocation, and tenant isolation",
             "deployment-profile, lane, and device-assignment isolation",
             "webhook ownership and secret leakage prevention",
             "audit-event isolation",

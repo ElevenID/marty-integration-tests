@@ -9,6 +9,8 @@ adapter, or KMS endpoint is involved.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import os
 import uuid
 from typing import Any
@@ -1193,6 +1195,16 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                     "required": True,
                 }
             ],
+            evidence_requirements=[
+                {
+                    "evidence_id": "identity_scan",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Current government identity scan",
+                    "required": True,
+                    "accepted_formats": ["image/png"],
+                    "max_file_size_bytes": 4096,
+                }
+            ],
             approval_strategy="MANUAL",
         )
         application_template_a = await admin.activate_application_template(
@@ -1226,6 +1238,80 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert application_create.status_code in {200, 201}, application_create.text
         application_a = application_create.json()
         application_a_id = str(application_a["id"])
+
+        # Submission must fail closed until the holder supplies the exact
+        # application-bound evidence required by the active template.
+        missing_evidence = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/submit"
+        )
+        assert missing_evidence.status_code == 422, missing_evidence.text
+
+        evidence_bytes = b"released-stack tenant-boundary identity scan"
+        evidence_payload = {
+            "evidence_requirement_id": "identity_scan",
+            "media_type": "image/png",
+            "filename": "identity-scan.png",
+            "content_base64": base64.b64encode(evidence_bytes).decode("ascii"),
+        }
+        first_upload = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/evidence",
+            json=evidence_payload,
+        )
+        assert first_upload.status_code == 200, first_upload.text
+        first_evidence_id = str(first_upload.json()["id"])
+
+        # Deletion removes the bytes from the current public path and restores
+        # the required-evidence submission failure before a replacement upload.
+        evidence_delete = await reviewer.client.delete(
+            f"/v1/me/applications/{application_a_id}/evidence/{first_evidence_id}"
+        )
+        assert evidence_delete.status_code == 200, evidence_delete.text
+        deleted_download = await reviewer.client.get(
+            f"/v1/me/applications/{application_a_id}/evidence/{first_evidence_id}/content"
+        )
+        assert deleted_download.status_code == 404, deleted_download.text
+        missing_after_delete = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/submit"
+        )
+        assert missing_after_delete.status_code == 422, missing_after_delete.text
+
+        evidence_upload = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/evidence",
+            json=evidence_payload,
+        )
+        assert evidence_upload.status_code == 200, evidence_upload.text
+        evidence = evidence_upload.json()
+        evidence_id = str(evidence["id"])
+        assert evidence["organization_id"] == organization_a_id
+        assert evidence["application_id"] == application_a_id
+        assert evidence["sha256"] == hashlib.sha256(evidence_bytes).hexdigest()
+        assert evidence["status"] == "ACTIVE"
+        assert evidence["content_url"].startswith("/v1/me/applications/")
+        _assert_no_private_signing_selectors(evidence)
+        for forbidden_field in (
+            "storage_key",
+            "storage_path",
+            "bucket",
+            "service_id",
+            "provider_id",
+            "kms_id",
+        ):
+            assert forbidden_field not in evidence
+
+        owner_evidence_list = await reviewer.client.get(
+            f"/v1/me/applications/{application_a_id}/evidence"
+        )
+        assert owner_evidence_list.status_code == 200, owner_evidence_list.text
+        assert evidence_id in {
+            str(item.get("id"))
+            for item in owner_evidence_list.json()
+            if isinstance(item, dict)
+        }
+        owner_evidence_download = await reviewer.client.get(evidence["content_url"])
+        assert owner_evidence_download.status_code == 200, owner_evidence_download.text
+        assert owner_evidence_download.content == evidence_bytes
+        assert owner_evidence_download.headers["cache-control"] == "private, no-store"
+
         application_submit = await reviewer.client.post(
             f"/v1/me/applications/{application_a_id}/submit"
         )
@@ -1261,6 +1347,21 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert isinstance(owner_checks_body, list)
         assert owner_checks_body, "Submitted manual-review application created no vetting checks"
 
+        owner_reviewer_evidence = await admin.client.get(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/evidence"
+        )
+        assert owner_reviewer_evidence.status_code == 200, owner_reviewer_evidence.text
+        assert evidence_id in {
+            str(item.get("id"))
+            for item in owner_reviewer_evidence.json()
+            if isinstance(item, dict)
+        }
+        reviewer_download = await admin.client.get(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/evidence/{evidence_id}/content"
+        )
+        assert reviewer_download.status_code == 200, reviewer_download.text
+        assert reviewer_download.content == evidence_bytes
+
         applicants_b = await api_key_client.client.get(
             f"/v1/organizations/{organization_b_id}/applicants",
             headers=api_headers,
@@ -1278,6 +1379,9 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}",
             f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}",
             f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/checks",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/evidence",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/evidence/{evidence_id}",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/evidence/{evidence_id}/content",
         ):
             response = await api_key_client.client.get(path, headers=api_headers)
             _assert_public_denial(
@@ -1299,6 +1403,43 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 application_a_id,
                 applicant_secret,
             ),
+        )
+
+        # A reviewer can bind only same-application evidence to a check. The
+        # canonical response records the evidence ID without exposing custody.
+        reviewer_lock = await admin.client.post(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/lock",
+            json={},
+        )
+        assert reviewer_lock.status_code == 200, reviewer_lock.text
+        check_id = str(owner_checks_body[0]["id"])
+        completed_check = await admin.client.post(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/checks/{check_id}/complete",
+            json={
+                "passed": True,
+                "notes": "Released-stack evidence binding control",
+                "evidence_submission_ids": [evidence_id],
+            },
+        )
+        assert completed_check.status_code == 200, completed_check.text
+        assert completed_check.json().get("evidence_refs") == [evidence_id]
+
+        revoked_evidence = await admin.client.post(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/evidence/{evidence_id}/revoke",
+            json={"reason": "Released-stack revocation control"},
+        )
+        assert revoked_evidence.status_code == 200, revoked_evidence.text
+        assert revoked_evidence.json()["status"] == "REVOKED"
+        revoked_download = await admin.client.get(
+            revoked_evidence.json()["content_url"]
+        )
+        assert revoked_download.status_code == 410, revoked_download.text
+        approval_with_revoked_evidence = await admin.client.post(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/approve",
+            json={"notes": "must fail after evidence revocation"},
+        )
+        assert approval_with_revoked_evidence.status_code == 422, (
+            approval_with_revoked_evidence.text
         )
 
         # Deployment profiles bind trust, presentation, credential, flow, API
