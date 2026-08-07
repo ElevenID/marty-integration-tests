@@ -275,6 +275,93 @@ def test_failure_diagnostics_classify_module_response_without_copying_descriptio
     assert "must-not-leak" not in (output / "failure-diagnostics.json").read_text(encoding="utf-8")
 
 
+def test_browser_diagnostics_report_only_allowlisted_lifecycle_facts(tmp_path: Path) -> None:
+    output = tmp_path / "results"
+    output.mkdir()
+    exported = {
+        "testInfo": {
+            "testName": "oid4vp-1final-verifier-happy-flow",
+            "testId": "must-not-leak-id",
+            "status": "WAITING",
+            "result": "UNKNOWN",
+        },
+        "results": [
+            {
+                "src": "WebRunner",
+                "msg": "Scripted browser HTTP request",
+                "args": {"request_uri": "https://must-not-leak.example/secret"},
+            },
+            {
+                "src": "WebRunner",
+                "msg": "Scripted browser HTTP response",
+                "args": {"response_content": "must-not-leak-credential"},
+            },
+            {"src": "WebRunner", "msg": "Waiting"},
+            {
+                "src": "WebRunner",
+                "msg": "TLS failure at https://must-not-leak.example",
+                "result": "FAILURE",
+                "current_dom": "must-not-leak-dom",
+            },
+        ],
+    }
+    with zipfile.ZipFile(output / "official.zip", "w") as archive:
+        archive.writestr("module.json", json.dumps(exported))
+
+    diagnostics = oidf.write_browser_automation_diagnostics(output)
+
+    assert diagnostics == [
+        {
+            "module": "oid4vp-1final-verifier-happy-flow",
+            "events": [
+                "browser-runner-failure",
+                "request-started",
+                "response-received",
+                "wait-started",
+            ],
+            "status": "WAITING",
+            "result": "UNKNOWN",
+        }
+    ]
+    serialized = (output / "browser-automation-diagnostics.json").read_text(encoding="utf-8")
+    assert "must-not-leak" not in serialized
+
+
+def test_browser_diagnostics_distinguish_missing_automation_from_unrelated_modules(tmp_path: Path) -> None:
+    output = tmp_path / "results"
+    output.mkdir()
+    waiting = {
+        "testInfo": {
+            "testName": "oid4vp-1final-verifier-minimal-cnf-jwk",
+            "status": "WAITING",
+            "result": "UNKNOWN",
+        },
+        "results": [],
+    }
+    finished = {
+        "testInfo": {
+            "testName": "oid4vp-1final-verifier-invalid-signature",
+            "status": "FINISHED",
+            "result": "PASSED",
+        },
+        "results": [],
+    }
+    with zipfile.ZipFile(output / "official.zip", "w") as archive:
+        archive.writestr("waiting.json", json.dumps(waiting))
+        archive.writestr("finished.json", json.dumps(finished))
+
+    diagnostics = oidf.write_browser_automation_diagnostics(output)
+
+    assert diagnostics == [
+        {
+            "module": "oid4vp-1final-verifier-minimal-cnf-jwk",
+            "events": ["automation-not-observed"],
+            "status": "WAITING",
+            "result": "UNKNOWN",
+        }
+    ]
+
+
 def test_issuer_offer_fixture_has_no_credential_or_secret() -> None:
     payload = json.loads((ROOT / "conformance" / "marty-issuer.offer-request.example.json").read_text(encoding="utf-8"))
     assert payload["claims"]["email"].endswith("@example.test")
