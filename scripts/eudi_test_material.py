@@ -660,7 +660,10 @@ def generate_material(
         current,
         valid_hours,
         common_name=hostname,
-        dns_names=[hostname],
+        # The same disposable certificate terminates the owned DIDComm holder
+        # callback on the CI host. The issuance container reaches it through
+        # Docker's explicit conformance-only host-gateway mapping.
+        dns_names=[hostname, "host.docker.internal"],
         server_auth=True,
     )
     eudi_key = ec.generate_private_key(ec.SECP521R1())
