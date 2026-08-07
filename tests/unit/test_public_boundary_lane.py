@@ -170,7 +170,11 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
         "wallet catalogue and organization-override isolation",
         "notification SSE delivery and subscription isolation",
         "ambiguous compatible issuer-profile rejection and recovery",
+        "encrypted DIDComm v2 delivery with holder-key decryption",
     } <= set(summary["coverage"])
+    assert summary["test_source"]["additional_paths"] == [
+        lane.DIDCOMM_TEST_PATH
+    ]
 
 
 def test_local_summary_cannot_be_mistaken_for_release_evidence(
@@ -212,17 +216,18 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     output = tmp_path / "evidence"
     args = SimpleNamespace(output_dir=output)
     calls: list[tuple[list[str], Path | None]] = []
+    execution_environment = {
+        "MARTY_CONFORMANCE_ADMIN_EMAIL": "admin@example.test",
+        "MARTY_CONFORMANCE_ADMIN_PASSWORD": "admin-secret",
+        "MARTY_CONFORMANCE_REVIEWER_EMAIL": "reviewer@example.test",
+        "MARTY_CONFORMANCE_REVIEWER_PASSWORD": "reviewer-secret",
+    }
 
     monkeypatch.setattr(
         lane,
         "environment",
         lambda _args: (
-            {
-                "MARTY_CONFORMANCE_ADMIN_EMAIL": "admin@example.test",
-                "MARTY_CONFORMANCE_ADMIN_PASSWORD": "admin-secret",
-                "MARTY_CONFORMANCE_REVIEWER_EMAIL": "reviewer@example.test",
-                "MARTY_CONFORMANCE_REVIEWER_PASSWORD": "reviewer-secret",
-            },
+            execution_environment,
             {"marty_commit": "a" * 40},
         ),
     )
@@ -257,3 +262,60 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
         if command[:3] == [sys.executable, "-m", "pytest"]
     ]
     assert pytest_calls == [output / "private" / "pytest.log"]
+    pytest_command = next(
+        command
+        for command, _capture in calls
+        if command[:3] == [sys.executable, "-m", "pytest"]
+    )
+    assert pytest_command[-2:] == [lane.TEST_PATH, lane.DIDCOMM_TEST_PATH]
+    assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"
+
+
+def test_pytest_diagnostic_is_bounded_and_redacts_private_values(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log = tmp_path / "pytest.log"
+    log.write_text(
+        "\n".join(
+            [f"unrelated-{index}" for index in range(170)]
+            + [
+                "password=admin-secret",
+                "session_id=session-secret",
+                "FAILED test_delivery - connection refused",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    lane.emit_pytest_diagnostic(
+        log,
+        {
+            "MARTY_CONFORMANCE_ADMIN_PASSWORD": "admin-secret",
+            "MARTY_CONFORMANCE_REVIEWER_PASSWORD": "reviewer-secret",
+            "MARTY_TEST_SESSION_ID": "session-secret",
+            "MARTY_REVIEWER_TEST_SESSION_ID": "reviewer-session-secret",
+        },
+    )
+
+    diagnostic = capsys.readouterr().err
+    assert "FAILED test_delivery - connection refused" in diagnostic
+    assert "admin-secret" not in diagnostic
+    assert "session-secret" not in diagnostic
+    assert "password=<redacted>" in diagnostic
+    assert "session_id=<redacted>" in diagnostic
+    assert "unrelated-0" not in diagnostic
+
+
+def test_public_boundary_workflow_installs_manifest_pinned_didcomm_verifier() -> None:
+    workflow = (
+        Path(__file__).parents[2] / ".github" / "workflows" / "public-tenant-boundary.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "Install attested released DIDComm verifier" in workflow
+    assert 'select(.name == "marty-core-python")' in workflow
+    assert 'test "$repository" = "ElevenID/marty-core"' in workflow
+    assert 'printf \'%s  %s\\n\' "${digest#sha256:}" "$wheel"' in workflow
+    assert 'gh attestation verify "$wheel" --repo "$repository"' in workflow
+    assert "--no-deps --no-index" in workflow
+    assert "callable(_marty_rs.didcomm_decrypt)" in workflow

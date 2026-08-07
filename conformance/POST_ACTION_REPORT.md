@@ -1,22 +1,23 @@
 # Protocol Compliance Post-Action Report
 
 Status: in progress  
-Last updated: 2026-08-03
+Last updated: 2026-08-06
 
 ## Current evidence snapshot
 
-The immutable `marty-ui` v1.1.97 stack is the current checked-in target. Its
-manifest digest is
-`sha256:5e9625e896bcac1d66f36545d23b15241bff17a7dc865dc2c2e591fbd61559ca`.
+The current official interoperability evidence is bound to immutable
+`marty-ui` v1.1.105 at release commit
+`8f19866a2e756492eab78189f6d6bd69a35ab583` and manifest digest
+`sha256:68b2150c54c01602be8c3e3453060b5587c35def1f8368ca05640f66d25b0fb8`.
 Full-matrix
-[run 30789127694](https://github.com/ElevenID/marty-integration-tests/actions/runs/30789127694)
-executed harness commit `74c934018f0739a9f5eaed7317d4cc5399f9526c`
+[run 31144091769](https://github.com/ElevenID/marty-integration-tests/actions/runs/31144091769)
+executed harness commit `9fee02453c1303dd3039fb12df2409e7b11a9669`
 against that exact immutable manifest. Imported official source, assertions,
-expected results, selections, and exclusions were unchanged.
+fixtures, expected results, selections, and exclusions were unchanged.
 
 - The exact OIDF `release-v5.2.1` issuer, OID4VP Final, native URL-query,
-  and HAIP lanes passed. OID4VP Final also passed the released browser
-  issuance and verification smoke path without observing a private selector.
+  and HAIP lanes passed. The separately labeled released browser evidence also
+  passed without observing a private selector.
 - The unchanged W3C VC Data Model v2 suite at commit
   `e92936564867da9150b99b167fe1c73b9370ad6c` passed its issuer, credential
   verifier, and presentation verifier capabilities under Node 24.
@@ -31,10 +32,27 @@ expected results, selections, and exclusions were unchanged.
   [issue 243](https://github.com/ElevenID/marty-integration-tests/issues/243).
   ElevenID does not substitute the certificate, change validation time,
   disable certificate validation, modify the imported suite, or exclude the
-  lane. The monthly upstream-review workflow will surface the next official
-  release for reviewed adoption and an unchanged-suite rerun.
+  lane. Upstream master now contains a rotated certificate, but there is no
+  newer reviewed tag; the monthly upstream-review workflow will surface the
+  first official release for unchanged-suite adoption.
 
-One earlier W3C invocation in the full matrix reported a single transient
+Separately labeled ElevenID-owned product-security evidence now includes:
+
+- forced ambiguous issuer-profile rejection and recovery against exact
+  v1.1.105 in
+  [run 31145134598](https://github.com/ElevenID/marty-integration-tests/actions/runs/31145134598);
+  and
+- CA-validated HTTPS DIDComm v2 delivery, holder-key decryption, and Issue
+  Credential message-shape evidence against exact v1.1.108 in
+  [run 31153194710](https://github.com/ElevenID/marty-integration-tests/actions/runs/31153194710).
+
+Neither owned lane is an official standards-conformance result. The DIDComm
+receiver is an ElevenID-owned minimal HTTPS agent and the released Marty
+library performs decryption, so this proves the released production path and
+self-interoperability, not independent cross-vendor interoperability or full
+DIDComm compliance.
+
+One earlier v1.1.97 W3C invocation reported a single transient
 issuer request failure. The exact same immutable images and upstream commit
 then passed. The released native binding, released issuance wrapper, and
 concurrent canonicalization path also completed repeated copies of the exact
@@ -1456,13 +1474,64 @@ imported `documentSignerCert` expired at `2026-07-30T07:47:22Z` and has SHA-256
 `c74e6bfecdd161452009ce10d9e5c1386d9022b10378a3de5e296605d325d48d`.
 The sanitized artifact contains zero official evidence rather than a fabricated
 failure or pass. As of this audit, upstream still has no release newer than
-`release-v5.2.1`; current upstream master
-`daf33d61b982d5d33d134b07e9a36f76176b3eff` leaves
-`src/main/kotlin/org/multipaz/testapp/VciMdocUtils.kt` and that embedded
-certificate unchanged. Renewal remains tracked by
+`release-v5.2.1`. Upstream master commit
+`8f69782356ef61c77907fdc33718b159e80b9f74` now contains a regenerated signer
+certificate valid from 2026-08-03 through 2027-08-03, but mutable master is not
+being substituted for the reviewed release pin. Renewal remains tracked by
 [marty-integration-tests#243](https://github.com/ElevenID/marty-integration-tests/issues/243).
-ElevenID will adopt a reviewed upstream release or commit when available; it
-will not replace the certificate inside the imported suite.
+ElevenID will adopt the first reviewed upstream release containing the rotation;
+it will not replace the certificate inside the imported suite.
+
+### 13. DIDComm delivery exposed authorization, transport, and harness gaps
+
+The new ElevenID-owned DIDComm lane exercises the authenticated public gateway,
+a real disposable organization, DID-first managed issuer resolution, the
+released credentials service, a fresh `did:peer:2` X25519 holder key, and a
+holder-controlled HTTPS service endpoint. The public issuance request supplies
+no issuer-profile, signing-service, key, KMS, or provider selector. Platform
+signing remains mediated by the issuer profile and its managed custody service;
+the disposable holder's TLS and X25519 private keys are external test-agent
+material, not platform signing keys.
+
+The unchanged positive test exposed three distinct gaps in sequence:
+
+- [run 31147992185](https://github.com/ElevenID/marty-integration-tests/actions/runs/31147992185)
+  reached the production route but received HTTP 403 because the exact DIDComm
+  path was absent from the shared Cedar authorization map. `marty-common`
+  0.2.5 added the exact tenant-scoped route instead of bypassing authorization.
+- [run 31149067032](https://github.com/ElevenID/marty-integration-tests/actions/runs/31149067032)
+  then reached delivery and correctly failed HTTP 422 because the owned mock
+  endpoint used plaintext HTTP. The HTTPS requirement was retained. The
+  disposable conformance topology now generates a CA-signed holder certificate,
+  mounts only that root into the issuance service, and reaches the host receiver
+  through an explicitly isolated bridge. Production compose files contain none
+  of those conformance-only settings.
+- [run 31152798249](https://github.com/ElevenID/marty-integration-tests/actions/runs/31152798249)
+  delivered the encrypted body, but the owned runner lacked the released
+  `marty-core` wheel needed for its holder-side decryption assertion. The
+  workflow now selects exactly one `marty-core-python` artifact from the
+  attested stack manifest, constrains it to the ElevenID release repository,
+  verifies its SHA-256 and GitHub provenance, installs it without dependency
+  resolution or an index, and confirms `didcomm_decrypt` exists. No source
+  checkout or mutable package lookup was added.
+
+The final immutable
+[run 31153194710](https://github.com/ElevenID/marty-integration-tests/actions/runs/31153194710)
+passed all five selected tests against stack v1.1.108, manifest
+`sha256:39bed88b9ac6bf3946835c870188a1bdd0909fe68247690dc087e13846a83cec`,
+and harness `592a24fef4b982fd1419ee8f0498a063144ac713`. The positive DIDComm assertion
+proves that the holder endpoint received one
+`application/didcomm-encrypted+json` JWE-shaped body, the holder private key
+decrypted it, the plaintext carried the Issue Credential 3.0 message type,
+sender, intended holder, issuance thread ID, and an attachment, and the
+transaction became `issued`.
+
+This evidence does not prove independent-agent interoperability, every DIDComm
+2.1 algorithm or message mode, mediator/routing behavior, multiple recipients,
+the complete Issue Credential state machine, general DID-method resolution, or
+cross-tenant DIDComm isolation. Those require an independent implementation and
+additional negative/multitenant cases; this lane must not be presented as an
+official suite or certification.
 
 ## Does the suite use the UI's general API?
 
@@ -1489,18 +1558,19 @@ the official suite itself remains API-driven and unmodified.
 
 | Capability | Current evidence | Remaining gap |
 | --- | --- | --- |
-| DID-first OID4VCI issuance | Native official OIDF issuer evidence on immutable v1.1.97: pre-authorized code, DPoP, `private_key_jwt`, SD-JWT VC, multiple clients, tenant/profile-owned key-attestation trust, nonce/proof/configuration negatives, notifications, and token-query rejection | Signed metadata, batch issuance, and credential-response encryption are optional, unadvertised gaps tracked by [marty-integration-tests#225](https://github.com/ElevenID/marty-integration-tests/issues/225); keep the active profile green as the runner updates |
-| DID-first signed OID4VP request | The exact unmodified OIDF Final plan and separately labeled browser path pass on immutable v1.1.87 with zero expected failures/skips and no private selector observed | Keep the active profile green as the official runner updates |
-| HAIP request-object trust | The exact unmodified HAIP verifier plan passes on immutable v1.1.87 with zero expected failures/skips | Keep the active pre-certification profile green; fund certification separately |
-| SD-JWT holder binding | Exact v1.1.97 EUDI evidence uses the official library for key-attestation-bound issuance and holder-bound presentation, rejects a missing binding key before presentation, and proves a tampered holder signature is denied by the production callback | Retain the native-versus-owned evidence labels: official libraries construct and resolve the positive path, while deterministic replay/signature mutations remain explicitly ElevenID-owned negative evidence |
-| mdoc issuance/presentation | Exact v1.1.97 EUDI evidence passes mdoc issuance and presentation with independent COSE/CBOR/X.509 validation; historical unmodified OIDF verifier evidence passed before its embedded signer certificate expired | The current OIDF runner cannot dispatch its mdoc plan because the imported certificate is expired; adopt a reviewed upstream renewal under [#243](https://github.com/ElevenID/marty-integration-tests/issues/243) without patching the suite. OIDF still has no suitable mdoc issuer plan, so issuance claims remain EUDI/reference evidence |
-| EUDI reference interoperability | Exact v1.1.97 artifacts pass 45/45 tests through current pinned EUDI OID4VCI 0.13.0, OID4VP, SD-JWT, verifier-endpoint, and Multipaz components. Required key-attestation-bound issuance, mdoc issuance/presentation, SD-JWT presentation, signed JAR trust, replay, invalid-signature, real expired-request, and missing-holder-binding evidence is green | The HTTP facade and deterministic negative mutations remain ElevenID-owned and accurately labeled; current upstream libraries and their assertions are unchanged |
-| OID4VP URL-query transport | Exact unmodified OIDF `url_query` + `redirect_uri` plan passes against immutable v1.1.87 with zero expected failures/skips; signed by-value Request Objects remain a separate `request_object` transport | Keep the active profile green as the pinned official runner advances; do not merge the two transport claims |
-| W3C VCDM v2 verification and issuance | The exact pinned upstream suite passes from an unmodified disposable worktree against immutable v1.1.87; issuer, VC-verifier, and VP-verifier roles execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
-| UI issuance/verification | Released v1.1.87 browser smoke completes disposable application, submit, claim, credential-offer, and signed-verification journeys using public DIDs; no private selector or issuer-profile collection request is observed | Add adversarial cross-tenant browser cases under [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) and continue generated-client response drift checks under [marty-ui#222](https://github.com/ElevenID/marty-ui/issues/222) |
-| Multitenancy | Released v1.1.87 two-principal matrix passes with distinct issuer DIDs/profiles, membership/RBAC, template/policy/DID substitution, API-key binding, SCIM, flows/results, issuance transactions, revocation status, issued-credential lifecycle/revocation, trust-profile ownership/mutation, webhooks, audit, and non-leaking denials; the DID matrix rejects all public custody selectors plus unknown, draft/non-active, and purpose-incompatible mappings and proves idempotent profile uniqueness; Canvas provenance separately covers delivery/external/canonical credential selectors | Add forced ambiguous-state evidence beyond the public uniqueness guard, notification/SSE delivery, adversarial browser paths, trust registries beyond organization profiles, wallet, device/deployment, and DIDComm isolation under [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) |
+| DID-first OID4VCI issuance | Native official OIDF issuer evidence on immutable v1.1.105: pre-authorized code, DPoP, `private_key_jwt`, SD-JWT VC, multiple clients, tenant/profile-owned key-attestation trust, nonce/proof/configuration negatives, notifications, and token-query rejection | Signed metadata, batch issuance, and credential-response encryption are optional, unadvertised gaps tracked by [marty-integration-tests#225](https://github.com/ElevenID/marty-integration-tests/issues/225); keep the active profile green as the runner updates |
+| DID-first signed OID4VP request | The exact unmodified OIDF Final plan and separately labeled browser path pass on immutable v1.1.105 with zero expected failures/skips and no private selector observed | Keep the active profile green as the official runner updates |
+| HAIP request-object trust | The exact unmodified HAIP verifier plan passes on immutable v1.1.105 with zero expected failures/skips | Keep the active pre-certification profile green; fund certification separately |
+| SD-JWT holder binding | Exact v1.1.105 EUDI evidence uses the official library for key-attestation-bound issuance and holder-bound presentation, rejects a missing binding key before presentation, and proves a tampered holder signature is denied by the production callback | Retain the native-versus-owned evidence labels: official libraries construct and resolve the positive path, while deterministic replay/signature mutations remain explicitly ElevenID-owned negative evidence |
+| mdoc issuance/presentation | Exact v1.1.105 EUDI evidence passes mdoc issuance and presentation with independent COSE/CBOR/X.509 validation; historical unmodified OIDF verifier evidence passed before its embedded signer certificate expired | The current tagged OIDF runner cannot dispatch its mdoc plan because the imported certificate is expired; adopt the first reviewed upstream release containing the rotated certificate under [#243](https://github.com/ElevenID/marty-integration-tests/issues/243) without patching the suite. OIDF still has no suitable mdoc issuer plan, so issuance claims remain EUDI/reference evidence |
+| EUDI reference interoperability | Exact v1.1.105 artifacts pass 45/45 tests through current pinned EUDI OID4VCI, OID4VP, SD-JWT, verifier-endpoint, and Multipaz components. Required key-attestation-bound issuance, mdoc issuance/presentation, SD-JWT presentation, signed JAR trust, replay, invalid-signature, real expired-request, and missing-holder-binding evidence is green | The HTTP facade and deterministic negative mutations remain ElevenID-owned and accurately labeled; current upstream libraries and their assertions are unchanged |
+| OID4VP URL-query transport | Exact unmodified OIDF `url_query` + `redirect_uri` plan passes against immutable v1.1.105 with zero expected failures/skips; signed by-value Request Objects remain a separate `request_object` transport | Keep the active profile green as the pinned official runner advances; do not merge the two transport claims |
+| W3C VCDM v2 verification and issuance | The exact pinned upstream suite passes from an unmodified disposable worktree against immutable v1.1.105; issuer, VC-verifier, and VP-verifier roles execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
+| UI issuance/verification | Separately labeled released v1.1.105 browser evidence completes disposable application, submit, claim, credential-offer, and signed-verification journeys using public DIDs; no private selector or issuer-profile collection request is observed | Add adversarial cross-tenant browser cases under [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) and continue generated-client response drift checks under [marty-ui#222](https://github.com/ElevenID/marty-ui/issues/222) |
+| DIDComm delivery | Exact v1.1.108 owned evidence resolves a fresh `did:peer:2` X25519 holder, performs CA-validated HTTPS delivery, receives a DIDComm-encrypted JWE shape, decrypts with the holder key through the attested released library, validates core Issue Credential fields, and observes the issued transaction state | This is self-interoperability, not an official or independent-agent result. Add cross-vendor agents, normative algorithm/message-mode vectors, the complete Issue Credential exchange, broader DID methods, routing/mediation, malformed-input negatives, and two-organization DIDComm substitution checks |
+| Multitenancy | Released v1.1.108 owned evidence runs the current two-principal/two-organization matrix plus the separately one-organization DIDComm positive case. It covers membership/RBAC, template/policy/DID substitution, API-key binding, SCIM, flows/results, issuance/revocation, trust, applicant/evidence, deployment/device, webhook, wallet, notification/SSE, audit, custody-selector rejection, unknown/inactive/incompatible DID denial, idempotent uniqueness, forced ambiguity rejection/recovery, and non-leaking denials | DIDComm itself still needs cross-tenant substitution coverage, and the shipped browser still needs adversarial cross-tenant cases. Broader trust registries beyond organization trust profiles remain open under [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) |
 | Protocol contract | Public DID-only Credential Template, Organization Trust Profile, issuance and issued-credential lifecycle, verification-flow start/resource/execution/result, complete Presentation Policy and Organization operations, strict IssuerEntity trust-record operations, and a DID-only IssuerIdentity projection are merged. `marty-ui#230` pins exact protocol commit `85770d02b6c225acbe4fc3446b71c4d206933bfd`, validates runtime parity and representative tenant-scoped operations, rejects raw-model and private-field bypasses, fails closed on cross-tenant or global/system mutation, and exposes canonical `PATCH` updates | Consume or mechanically compare all generated-client types under [marty-ui#222](https://github.com/ElevenID/marty-ui/issues/222); retain public/internal adapter separation rather than exposing persistence types |
-| Wider Marty feature model | Official suites do not cover it; the ElevenID-owned released matrix now covers membership/RBAC, API keys, SCIM, saved verification flows/results, issuance transactions, issued-credential lifecycle/revocation, organization trust profiles, webhooks, and audit boundaries | Applicant/vetting, devices/deployments, broader trust registries, notification/SSE delivery, wallet profiles, and DIDComm are owned by [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) |
+| Wider Marty feature model | Official suites do not cover it; the ElevenID-owned released matrix now covers membership/RBAC, API keys, SCIM, saved verification flows/results, issuance and revocation, organization trust profiles, applicant/vetting and evidence, deployments/devices, webhooks, wallet profiles, notification/SSE delivery, audit, DID resolution, forced ambiguity, and a DIDComm positive path | Broader trust registries, cross-tenant DIDComm, independent-agent DIDComm, and adversarial cross-tenant browser paths remain owned work under [marty-integration-tests#224](https://github.com/ElevenID/marty-integration-tests/issues/224) |
 
 ### Exposed-gap action ledger
 
@@ -1546,6 +1616,7 @@ the official suite itself remains API-driven and unmodified.
 | OIDF mdoc verifier adapter omitted `organization_id` | Harness public-boundary defect | Every official module reached the production gateway, which correctly rejected `/v1/flows/verify` with HTTP 422 before request-object creation; the runner then timed out in `WAITING`, so the run provides no mdoc cryptographic evidence | Pass the disposable fixture organization through `OIDF_MARTY_ORGANIZATION_ID` and include it in the normal authenticated public flow request | Fixed locally with 57 focused tests; merge and immutable official rerun required |
 | Signed issuer metadata, batch issuance, and credential-response encryption are not advertised | Missing optional features | The active profile is narrower than the complete optional OID4VCI feature set | Keep explicit capability metadata and owned, expiring skip records; implement each only through a separately reviewed production path | Open by design; never represent these skipped modules as passed. Key-attestation-bound proof trust is implemented and no longer belongs in this gap row |
 | Official lanes use one organization | Missing official evidence, addressed by separate product-security evidence | Official results cannot prove tenant isolation | `marty-integration-tests#203` adds a separately labeled two-organization public-boundary lane; `#204`, `#207`, `#208`, `#209`, `#212`, and `#213` add and correct owned setup, lifecycle, and DID-negative evidence without touching imported suites | Released-stack runs 30524717116 and 30528390251 pass on v1.1.78. Together they cover two principals, distinct issuer DIDs/profiles, template/policy/DID substitution, RBAC, API key, SCIM, flows/results, webhook, audit, leakage prevention, custody-selector rejection, unknown/non-active/incompatible DID denial, and idempotent uniqueness; wider feature rows remain open |
+| DIDComm positive delivery lacked an exact authorization rule, a valid HTTPS test agent, and an installed released holder-side verifier | Product authorization/transport defects plus owned harness dependency defect | The route initially failed closed at authorization, then correctly rejected plaintext transport; after product delivery succeeded, the runner could not perform its decryption assertion | [marty-common 0.2.5](https://github.com/ElevenID/Marty/commit/2f14f77fa7e70c1ea9655ea94dd22c2af8bf7f59) publishes the exact Cedar rule; `marty-credentials#120`/`#121` publish operator-only additional TLS roots while retaining system trust and mandatory HTTPS; `marty-ui#293` confines the private-IP bridge and root mount to conformance; `marty-integration-tests#267` installs only the manifest-pinned, digest- and provenance-verified released wheel | Exact stack v1.1.108 and owned harness `592a24fef4b982fd1419ee8f0498a063144ac713` pass run 31153194710 with artifact `sha256:d6333c0718f1ae90bf1e13b6904525fd4b08bd4f64d65e048b65c0eddd5cc898`. This proves released self-interoperability, not official or cross-vendor conformance; cross-tenant and independent-agent cases remain open |
 | SCIM `externalId` exceeded the organization member identity column | Product persistence/error-boundary defect | A valid opaque external identifier caused PostgreSQL rejection and a public HTTP 500 | `marty-ui#210` expands the field to 255 characters with migration and schema/route regressions | Released before v1.1.78; the unchanged external matrix creates and isolates the non-UUID SCIM identity successfully |
 | Notification and webhook routes were absent from the Cedar route map | Public BOLA/authorization defect | An organization-A session could enumerate organization-B webhook metadata; resource routes and SSE could select conflicting tenant inputs | `marty-ui#208` adds ownership checks; `marty-ui#212` maps webhook/subscription/notification/SSE permissions, rejects conflicting selectors, and rechecks ownership in the service | Released before v1.1.78; webhook collection/resource/secret isolation passes externally, while notification/SSE delivery retains focused gateway/service/UI regressions and still needs an external matrix row |
 | Organization-bound API keys were treated as human members | Authentication-principal defect | A valid B-scoped machine credential failed its own organization access, encouraging unsafe bypasses; selector substitution still had to remain denied | `Marty#14` and `#15` introduce fail-closed machine-principal authorization in `marty-common` 0.2.2; `marty-ui#214` consumes the attested artifact | Released in v1.1.77; the unchanged external matrix proves the B key reads B and cannot select A |
@@ -1645,6 +1716,11 @@ the official suite itself remains API-driven and unmodified.
 | Released browser and two-organization boundary run [31134184550](https://github.com/ElevenID/marty-integration-tests/actions/runs/31134184550), artifact ID `8977328426`, artifact digest `sha256:9309b49cae7940de70469cdc1a151fd45bd096c728f2a4a86e386d5fb6edab35`, summary `sha256:ec37065479232270220e1fa399943f1d08f49fee926ceba29ca4882486e5aaba` | Exact v1.1.103 artifacts and owned harness `6049b39262b1414bb949f83363174619a45488ea` passed in immutable-release mode. The shipped browser UI completed application approval, credential-offer issuance, and signed verification through public organization + DID requests. The wider matrix passed two-principal/two-organization RBAC, resource substitution, API-key, SCIM, flow/result, issuance/revocation, trust, applicant-evidence, deployment/device, webhook, wallet, notification-SSE, audit, DID-resolution, and leakage checks. Evidence is explicitly ElevenID-owned, invokes no official suite, modifies no imported source, and uploads no screenshot or private diagnostics. |
 | v1.1.103 official interoperability matrix [31134185874](https://github.com/ElevenID/marty-integration-tests/actions/runs/31134185874), exact harness `6049b39262b1414bb949f83363174619a45488ea` | Exact unmodified OIDF `release-v5.2.1` commit `932b46f1e507871eb0b34621aaef65ff04442e6f` passed OID4VCI issuer at 16 modules and 1,076/0/0 conditions, OID4VP Final at 11 modules and 417/0/0, URL-query at 11 modules and 273/0/0, and HAIP at 11 modules and 510/0/0. OID4VCI retained three explicit, owned, expiring skips for optional unadvertised capabilities; the passing verifier profiles had no exclusions. Exact unmodified W3C commit `e92936564867da9150b99b167fe1c73b9370ad6c` passed issuer, VC-verifier, and VP-verifier capabilities with no exclusions. The EUDI lane passed 45/45, including SD-JWT and mdoc issuance/presentation plus missing-holder-binding, replay, invalid-signature, and expired-request negatives; owned replay/mutation evidence remains separately labeled. Passing artifact digests are OID4VCI `sha256:8bd5896b902af273b9db5fb7a80920e4f24170ca95609bb5dbe6de0d54f99792`, OID4VP Final `sha256:b6bd2f5aa680572c4935f4b009fbba2252d1033bf5961fe6f54aab1bf1272917`, URL-query `sha256:b1cef9647428fb6e35620ca5f051cf2fe2943e7fcc81a93db0266d9535eea737`, HAIP `sha256:bbc11887254c82adbda099ecb7cc392efdb8ad8bcd885ee86be49ea174da3a07`, W3C `sha256:e59ec533ea1361fc954312e63e44f8dd680496df24d0db0b4dccc4b72df81387`, and EUDI `sha256:416b842890334267369405f9ef16dc6ebe3741b894bc736ebfd8db5feef8de1a`. |
 | v1.1.103 OIDF mdoc pre-dispatch evidence from run [31134185874](https://github.com/ElevenID/marty-integration-tests/actions/runs/31134185874), artifact ID `8977333651`, artifact digest `sha256:3dd63156c6d76939bf4a61ae5503fdc29b0992af9fe61a9c2b2ab78df49cd3b0`, summary `sha256:309c87b3cceb623e255b6397a13e96d13099ca2a6d28800c635a434062a38f54` | The exact imported OIDF document-signer certificate still expired at `2026-07-30T07:47:22Z`, so the guard stopped before official dispatch with zero official evidence. It did not patch the suite, bypass X.509 validation, add an expected failure, or claim a Marty regression. Renewal remains tracked by #243. |
+| v1.1.105 official interoperability run [31144091769](https://github.com/ElevenID/marty-integration-tests/actions/runs/31144091769), exact harness `9fee02453c1303dd3039fb12df2409e7b11a9669`, manifest `sha256:68b2150c54c01602be8c3e3453060b5587c35def1f8368ca05640f66d25b0fb8` | The unmodified OIDF OID4VCI issuer, OID4VP Final, native URL-query, and HAIP plans passed, as did the unmodified W3C VCDM v2 suite and the 45/45 EUDI lane. Artifact IDs/digests are OID4VCI `8980918065`/`sha256:743fb5fc24c8847e3fef4c0df42e43e2608da0556d649ff2dc27e886650f97db`, OID4VP Final `8980931689`/`sha256:7a7e0569870c36b6486830a0e4cd01f45ee51a36708e2b87233f81a2ad6a96e5`, URL-query `8980916672`/`sha256:8953e0d143a5e23083c4d500fb48d1ab1b40a9a62b6352a44d5a140004e83536`, HAIP `8980922958`/`sha256:2374b84192503fd1c9866786ba746b4fdd947443963db4d262c0a5b4072d91e2`, W3C `8980902011`/`sha256:d4ec3ec20622e6caa1af86ced887fac1d74b64d154197a84acf563a36dce54f6`, and EUDI `8980949898`/`sha256:9844611d912979daa44bd9ba7e7bbed179817309f9e04b7c20eba58c3dcd7df0`. |
+| v1.1.105 OIDF mdoc pre-dispatch artifact from run [31144091769](https://github.com/ElevenID/marty-integration-tests/actions/runs/31144091769), artifact ID `8980916895`, digest `sha256:e306c077f6ce78f4f30beb796c4b8ee5eae18aa2942ac19edda2d49c88be9b91` | The exact tagged suite still contains the expired document-signer certificate, so official evidence is empty. Upstream master `8f69782356ef61c77907fdc33718b159e80b9f74` contains a rotated certificate but no newer tag; ElevenID will adopt the first reviewed release rather than mutable master or a local patch. |
+| Forced ambiguous DID-resolution run [31145134598](https://github.com/ElevenID/marty-integration-tests/actions/runs/31145134598), artifact ID `8981342977`, digest `sha256:6ca4d9c27d1494d75bcdc81e270737f84858eff853c9ce10ab65ef453289ad30` | Owned harness `c59c52f50982b0ef67395cfc1ad552218d62c02c` passed against exact v1.1.105. It creates an otherwise compatible duplicate managed profile through controlled internal setup, proves the public organization-plus-DID path fails closed without exposing custody coordinates, removes the ambiguity, and proves recovery. It is product-security evidence, not official-suite evidence. |
+| `marty-ui` v1.1.108 release [31152274114](https://github.com/ElevenID/marty-ui/actions/runs/31152274114), release commit `313930401bb4bc8cc9a670da2881c887c1e346a6`, manifest `sha256:39bed88b9ac6bf3946835c870188a1bdd0909fe68247690dc087e13846a83cec` | Immutable input/provenance validation, UI and services builds, signed SBOMs, anonymous artifact-only public-stack smoke, and manifest publication passed. It pins credentials 0.1.46 issuance `sha256:b4ba8d83f6250edced7d38b25ca1eb2116bcf19da995d93bc1e2ada684d340fb`; stack images are UI `sha256:e066f77fc380723f37068e34e5f37153cc57dd1ffdb2c917e20e2aa389d6456a`, services `sha256:3b767f7a5c2c43fc475dfb36a36a71fd767734aed42cf0d5bf77ecc9539f2cf7`, and migrations `sha256:ac63874db5cf09d1ec958b6f94f6aa98523f863e34a96428d4687e7bc001b340`. |
+| Released DIDComm production-path run [31153194710](https://github.com/ElevenID/marty-integration-tests/actions/runs/31153194710), artifact ID `8984169004`, digest `sha256:d6333c0718f1ae90bf1e13b6904525fd4b08bd4f64d65e048b65c0eddd5cc898` | Exact v1.1.108 and owned harness `592a24fef4b982fd1419ee8f0498a063144ac713` passed five selected tests. The positive case used the public organization path, managed DID-first issuer resolution, CA-validated HTTPS holder transport, an X25519 `did:peer:2`, the attested released holder-side library, encrypted-envelope receipt, holder-key decryption, core Issue Credential fields, and issued transaction state. The artifact explicitly records `elevenid-owned-product-security`, `official_suite_invoked=false`, and `official_suite_source_modified=false`; it is not cross-vendor or full-spec evidence. |
 
 The v1.1.66 image digests are signed, attested, and pinned, but the services and
 migrations images produced different digests when the failed release job was

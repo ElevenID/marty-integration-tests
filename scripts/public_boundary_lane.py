@@ -23,6 +23,7 @@ from official_interoperability_lane import (
     load_material_environment,
     load_stack_environment,
     load_stack_metadata,
+    redact_initializer_log,
     run,
     validate_stack_binding,
     wait_for_public_stack,
@@ -32,6 +33,10 @@ ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 TEST_PATH = (
     "tests/integration/gateway/test_two_organization_isolation.py"
+)
+DIDCOMM_TEST_PATH = (
+    "tests/integration/gateway/test_didcomm_v2_delivery.py::"
+    "TestDidcommDeliveryWithMockAgent::test_deliver_to_mock_agent"
 )
 PUBLIC_LOGIN = ROOT / "scripts" / "oidf_marty_public_login.py"
 
@@ -178,6 +183,33 @@ def public_session(
     return session_id
 
 
+def emit_pytest_diagnostic(
+    path: Path,
+    environment: dict[str, str],
+) -> None:
+    """Print a bounded, redacted test failure without publishing raw evidence."""
+    print("--- public-boundary pytest diagnostic (redacted) ---", file=sys.stderr)
+    if not path.is_file():
+        print("No pytest diagnostic was captured.", file=sys.stderr)
+        print("--- end public-boundary pytest diagnostic ---", file=sys.stderr)
+        return
+
+    diagnostic = redact_initializer_log(path.read_text(encoding="utf-8"))
+    for name in (
+        "MARTY_CONFORMANCE_ADMIN_PASSWORD",
+        "MARTY_CONFORMANCE_REVIEWER_PASSWORD",
+        "MARTY_TEST_SESSION_ID",
+        "MARTY_REVIEWER_TEST_SESSION_ID",
+    ):
+        secret = environment.get(name, "")
+        if secret:
+            diagnostic = diagnostic.replace(secret, "<redacted>")
+
+    for line in diagnostic.splitlines()[-160:]:
+        print(line[:500], file=sys.stderr)
+    print("--- end public-boundary pytest diagnostic ---", file=sys.stderr)
+
+
 def write_summary(
     args: argparse.Namespace,
     metadata: dict[str, object],
@@ -210,6 +242,7 @@ def write_summary(
             "repository": "ElevenID/marty-integration-tests",
             "commit": os.environ.get("GITHUB_SHA", "local"),
             "path": TEST_PATH,
+            "additional_paths": [DIDCOMM_TEST_PATH],
             "owner": "ElevenID",
         },
         "official_suite_boundary": {
@@ -241,6 +274,7 @@ def write_summary(
             "unknown, inactive, and purpose-incompatible DID rejection",
             "idempotent issuer-profile uniqueness",
             "ambiguous compatible issuer-profile rejection and recovery",
+            "encrypted DIDComm v2 delivery with holder-key decryption",
             "public response custody-metadata minimization",
         ],
     }
@@ -259,6 +293,7 @@ def execute(args: argparse.Namespace) -> int:
     lane_environment["MARTY_BROWSER_EVIDENCE_DIR"] = str(
         (private / "browser").resolve()
     )
+    lane_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] = "true"
     started = run(
         boundary_compose_command(args, "up"),
         lane_environment,
@@ -284,10 +319,13 @@ def execute(args: argparse.Namespace) -> int:
                     "pytest",
                     "-q",
                     TEST_PATH,
+                    DIDCOMM_TEST_PATH,
                 ],
                 lane_environment,
                 capture=private / "pytest.log",
             )
+            if exit_code:
+                emit_pytest_diagnostic(private / "pytest.log", lane_environment)
     finally:
         write_summary(args, metadata, exit_code)
         run(

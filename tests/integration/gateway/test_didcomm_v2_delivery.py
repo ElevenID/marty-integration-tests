@@ -14,9 +14,11 @@ test agent that receives encrypted DIDComm messages.
 import base64
 import json
 import os
+import ssl
 import threading
 from collections.abc import AsyncGenerator
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -221,11 +223,19 @@ class TestDidcommDeliveryWithMockAgent:
 
         # Docker reaches this host-side callback via host.docker.internal.
         server = HTTPServer(("0.0.0.0", 0), Handler)  # nosec B104
+        certificate_dir = Path(os.environ["OIDF_TLS_CERT_DIR"])
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        tls_context.load_cert_chain(
+            certfile=certificate_dir / "tls.crt",
+            keyfile=certificate_dir / "tls.key",
+        )
+        server.socket = tls_context.wrap_socket(server.socket, server_side=True)
         port = server.server_address[1]
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
 
-        yield f"http://host.docker.internal:{port}", received
+        yield f"https://host.docker.internal:{port}", received
 
         server.shutdown()
 
