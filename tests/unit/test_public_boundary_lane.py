@@ -269,3 +269,39 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     )
     assert pytest_command[-2:] == [lane.TEST_PATH, lane.DIDCOMM_TEST_PATH]
     assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"
+
+
+def test_pytest_diagnostic_is_bounded_and_redacts_private_values(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log = tmp_path / "pytest.log"
+    log.write_text(
+        "\n".join(
+            [f"unrelated-{index}" for index in range(170)]
+            + [
+                "password=admin-secret",
+                "session_id=session-secret",
+                "FAILED test_delivery - connection refused",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    lane.emit_pytest_diagnostic(
+        log,
+        {
+            "MARTY_CONFORMANCE_ADMIN_PASSWORD": "admin-secret",
+            "MARTY_CONFORMANCE_REVIEWER_PASSWORD": "reviewer-secret",
+            "MARTY_TEST_SESSION_ID": "session-secret",
+            "MARTY_REVIEWER_TEST_SESSION_ID": "reviewer-session-secret",
+        },
+    )
+
+    diagnostic = capsys.readouterr().err
+    assert "FAILED test_delivery - connection refused" in diagnostic
+    assert "admin-secret" not in diagnostic
+    assert "session-secret" not in diagnostic
+    assert "password=<redacted>" in diagnostic
+    assert "session_id=<redacted>" in diagnostic
+    assert "unrelated-0" not in diagnostic
