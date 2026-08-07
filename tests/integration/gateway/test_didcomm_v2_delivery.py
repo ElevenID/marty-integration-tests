@@ -12,6 +12,7 @@ test agent that receives encrypted DIDComm messages.
 """
 
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -95,6 +96,33 @@ def _independent_didcomm_decrypt(
     holder_private_key: bytes,
 ) -> dict[str, Any] | None:
     """Decrypt Marty's envelope with the separately maintained Go implementation."""
+    completed = _run_independent_didcomm_verifier(
+        encrypted,
+        holder_did,
+        holder_private_key,
+    )
+    if completed is None:
+        return None
+    assert completed.returncode == 0, (
+        "independent DIDComm verifier rejected Marty's selected profile: "
+        f"{completed.stderr.strip()[:300]}"
+    )
+    output: object = json.loads(completed.stdout)
+    assert isinstance(output, dict)
+    assert output.get("encrypted") is True
+    assert output.get("anonymous") is True, "anoncrypt must remain anonymous"
+    assert output.get("signed") is False, "anoncrypt must not authenticate plaintext from"
+    message = output.get("message")
+    assert isinstance(message, dict)
+    return message
+
+
+def _run_independent_didcomm_verifier(
+    encrypted: dict[str, Any],
+    holder_did: str,
+    holder_private_key: bytes,
+) -> subprocess.CompletedProcess[str] | None:
+    """Run the pinned independent verifier without interpreting its result."""
     required = os.getenv("DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED", "").lower() in {
         "1",
         "true",
@@ -143,7 +171,7 @@ def _independent_didcomm_decrypt(
     with tempfile.TemporaryDirectory(prefix="didcomm-independent-") as temporary:
         keys = Path(temporary) / "keys.json"
         keys.write_text(json.dumps(key_material), encoding="utf-8")
-        completed = subprocess.run(
+        return subprocess.run(
             [
                 str(cli),
                 "unpack",
@@ -156,17 +184,57 @@ def _independent_didcomm_decrypt(
             check=False,
             timeout=30,
         )
-    assert completed.returncode == 0, (
-        f"independent DIDComm verifier rejected Marty's selected profile: {completed.stderr.strip()[:300]}"
+
+
+def _assert_independent_didcomm_rejects(
+    encrypted: dict[str, Any],
+    holder_did: str,
+    holder_private_key: bytes,
+    case: str,
+) -> bool | None:
+    """Require the independent implementation to reject a tampered envelope."""
+    completed = _run_independent_didcomm_verifier(
+        encrypted,
+        holder_did,
+        holder_private_key,
     )
-    output: object = json.loads(completed.stdout)
-    assert isinstance(output, dict)
-    assert output.get("encrypted") is True
-    assert output.get("anonymous") is True, "anoncrypt must remain anonymous"
-    assert output.get("signed") is False, "anoncrypt must not authenticate plaintext from"
-    message = output.get("message")
-    assert isinstance(message, dict)
-    return message
+    if completed is None:
+        return None
+    assert completed.returncode != 0, (
+        "independent DIDComm verifier accepted a tampered envelope "
+        f"({case})"
+    )
+    return True
+
+
+def _flip_base64url_byte(value: str) -> str:
+    decoded = bytearray(_base64url_decode(value))
+    assert decoded, "DIDComm encoded value must not be empty"
+    decoded[-1] ^= 0x01
+    return base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+
+
+def _tampered_envelopes(encrypted: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Produce integrity-breaking mutations without exposing plaintext data."""
+    cases: dict[str, dict[str, Any]] = {}
+    for name, path in {
+        "ciphertext": ("ciphertext",),
+        "authentication-tag": ("tag",),
+        "protected-header": ("protected",),
+        "wrapped-content-key": ("recipients", 0, "encrypted_key"),
+    }.items():
+        mutated = copy.deepcopy(encrypted)
+        if len(path) == 1:
+            member = path[0]
+            value = mutated[member]
+            assert isinstance(value, str)
+            mutated[member] = _flip_base64url_byte(value)
+        else:
+            value = mutated["recipients"][0]["encrypted_key"]
+            assert isinstance(value, str)
+            mutated["recipients"][0]["encrypted_key"] = _flip_base64url_byte(value)
+        cases[name] = mutated
+    return cases
 
 
 def _assert_same_didcomm_plaintext(
@@ -427,6 +495,21 @@ class TestDidcommDeliveryWithMockAgent:
         )
         if independent_plaintext is not None:
             _assert_same_didcomm_plaintext(independent_plaintext, plaintext)
+
+        for case, tampered in _tampered_envelopes(encrypted["body"]).items():
+            with pytest.raises(Exception, match=r"(?i)(decrypt|unpack|crypto|jwe|tag)"):
+                _marty_rs.didcomm_decrypt(
+                    json.dumps(tampered),
+                    holder_private_key,
+                )
+            independent_rejected = _assert_independent_didcomm_rejects(
+                tampered,
+                holder_did,
+                holder_private_key,
+                case,
+            )
+            if independent_plaintext is not None:
+                assert independent_rejected is True
 
         tx = await gateway_client.get_issuance(issuance["id"])
         assert tx["status"] == "issued"

@@ -221,6 +221,8 @@ def test_summary_records_only_executed_independent_didcomm_evidence(
         "commit": "5ffd085c2b5088a639c1c0d3910d668887298ce5",
     }
     assert "independent go-didcomm decryption of Marty's released anoncrypt envelope" in summary["coverage"]
+    assert summary["didcomm_interoperability"]["cross_implementation_tamper_rejection_passed"] is True
+    assert any("wrapped-key tampering" in item for item in summary["coverage"])
 
 
 def test_local_summary_cannot_be_mistaken_for_release_evidence(

@@ -786,6 +786,11 @@ the attested released Marty binding and the independent Go implementation must
 decrypt the same JWE to the same plaintext. The independent implementation
 must classify the message as encrypted anoncrypt with no authenticated sender;
 the plaintext `from` value is not promoted into an authentication result.
+The released Marty binding and independent implementation must also both
+reject separately mutated ciphertext, authentication tag, integrity-protected
+header, and wrapped content-encryption key. These negative cases establish
+cryptographic fail-closed behavior for the selected envelope profile; they do
+not expand the supported profile or simulate a complete agent exchange.
 
 This is deliberately a narrow interoperability claim: one recipient, General
 JSON JWE, `ECDH-ES+A256KW`, X25519, `A256CBC-HS512`, and the final Issue
