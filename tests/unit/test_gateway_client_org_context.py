@@ -45,6 +45,7 @@ async def test_issuer_identity_discovery_uses_did_first_public_contract() -> Non
         result = await client.list_issuer_identities(
             organization_id="org-1",
             key_purpose="vc_jwt_issuer",
+            credential_format="SD_JWT_VC",
             algorithm="ES256",
         )
     finally:
@@ -57,9 +58,60 @@ async def test_issuer_identity_discovery_uses_did_first_public_contract() -> Non
         params={
             "organization_id": "org-1",
             "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
             "algorithm": "ES256",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_issuer_identity_creation_cannot_select_private_custody() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(
+        return_value={
+            "identity": {
+                "organization_id": "org-1",
+                "issuer_did": "did:web:issuer.example",
+                "key_purpose": "vc_jwt_issuer",
+                "credential_format": "SD_JWT_VC",
+                "algorithm": "ES256",
+                "status": "active",
+            },
+            "created": True,
+        }
+    )
+    client._request = request
+
+    try:
+        identity = await client.create_issuer_identity(
+            organization_id="org-1",
+            issuer_did="did:web:issuer.example",
+            key_purpose="vc_jwt_issuer",
+            credential_format="SD_JWT_VC",
+            algorithm="ES256",
+        )
+    finally:
+        await client.close()
+
+    assert identity["issuer_did"] == "did:web:issuer.example"
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/signing-keys/issuer-identities",
+        json={
+            "organization_id": "org-1",
+            "issuer_did": "did:web:issuer.example",
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "ES256",
+        },
+    )
+
+    with pytest.raises(TypeError, match="signing_service_id"):
+        await client.create_issuer_identity(
+            organization_id="org-1",
+            issuer_did="did:web:issuer.example",
+            signing_service_id="private-service",  # type: ignore[call-arg]
+        )
 
 
 @pytest.mark.asyncio

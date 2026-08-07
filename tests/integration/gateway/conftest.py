@@ -345,6 +345,7 @@ async def vc_jwt_issuer_did(
     identities = await gateway_client.list_issuer_identities(
         organization_id=organization_id,
         key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
         algorithm="ES256",
     )
     active = identities.get("identities")
@@ -352,16 +353,6 @@ async def vc_jwt_issuer_did(
         raise AssertionError(f"Malformed issuer-identity response: {identities}")
 
     if not active:
-        resolved = await gateway_client.resolve_signing_service(
-            organization_id=organization_id,
-            credential_format="dc+sd-jwt",
-            key_purpose="vc_jwt_issuer",
-            algorithm="ES256",
-        )
-        service = resolved.get("service")
-        if not isinstance(service, dict) or not service.get("id"):
-            raise AssertionError("No managed ES256 VC signing service is available")
-
         domain = os.getenv("PUBLIC_DOMAIN", "").strip()
         if not domain:
             domain = urlsplit(
@@ -373,22 +364,17 @@ async def vc_jwt_issuer_did(
         if not domain or not slug:
             raise AssertionError("The organization has no canonical public DID context")
         issuer_did = f"did:web:{domain}:orgs:{slug}"
-        await gateway_client.create_issuer_profile(
+        await gateway_client.create_issuer_identity(
             organization_id=organization_id,
-            name=f"{slug} managed VC issuer",
             issuer_did=issuer_did,
-            signing_service_id=str(service["id"]),
-            signing_key_reference=(
-                str(service["key_reference"])
-                if service.get("key_reference")
-                else None
-            ),
             key_purpose="vc_jwt_issuer",
-            status="active",
+            credential_format="SD_JWT_VC",
+            algorithm="ES256",
         )
         identities = await gateway_client.list_issuer_identities(
             organization_id=organization_id,
             key_purpose="vc_jwt_issuer",
+            credential_format="SD_JWT_VC",
             algorithm="ES256",
         )
         active = identities.get("identities")

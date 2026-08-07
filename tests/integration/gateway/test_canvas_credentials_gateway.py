@@ -191,43 +191,18 @@ async def canvas_sd_jwt_issuer_profile(
     authenticated_gateway_client: GatewayClient,
     test_organization,
 ):
-    """Provision an active issuer profile so Canvas SD-JWT offers can be redeemed."""
-
-    service = None
-    resolve_error: Exception | None = None
-    for organization_id in (test_organization["id"], None):
-        try:
-            resolved = await authenticated_gateway_client.resolve_signing_service(
-                organization_id=organization_id,
-                credential_format="dc+sd-jwt",
-                key_purpose="vc_jwt_issuer",
-                algorithm="ES256",
-            )
-            candidate = resolved.get("service")
-            if isinstance(candidate, dict) and candidate.get("id"):
-                service = candidate
-                break
-        except GatewayClientError as exc:
-            resolve_error = exc
-
-    if not service:
-        pytest.skip(
-            "No signing service was resolvable for dc+sd-jwt issuance in this environment. "
-            f"Last resolver error: {resolve_error}"
-        )
+    """Provision a DID-first Canvas issuer without selecting private custody."""
 
     public_domain = os.getenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     domain = public_domain.replace("https://", "").replace("http://", "").strip("/")
     issuer_did = f"did:web:{domain.replace('/', ':')}:orgs:{test_organization['id']}"
 
-    return await authenticated_gateway_client.create_issuer_profile(
+    return await authenticated_gateway_client.create_issuer_identity(
         organization_id=test_organization["id"],
-        name="Canvas Test Issuer",
         issuer_did=issuer_did,
-        signing_service_id=str(service["id"]),
-        signing_key_reference=str(service.get("key_reference") or "") or None,
         key_purpose="vc_jwt_issuer",
-        status="active",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
     )
 
 

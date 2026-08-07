@@ -11,7 +11,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List, Literal, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
@@ -1517,25 +1517,12 @@ class GatewayClient:
             params={"organization_id": organization_id},
         )
 
-    async def get_issuer_profile_public_identity(
-        self,
-        *,
-        issuer_profile_id: str,
-        organization_id: str,
-    ) -> Dict[str, Any]:
-        """Resolve public DID/key material without exposing KMS coordinates."""
-
-        return await self._request(
-            "GET",
-            f"/v1/signing-keys/issuer-profiles/{issuer_profile_id}/public-identity",
-            params={"organization_id": organization_id},
-        )
-
     async def list_issuer_identities(
         self,
         *,
         organization_id: str,
         key_purpose: Optional[str] = None,
+        credential_format: Optional[str] = None,
         algorithm: Optional[str] = None,
     ) -> Dict[str, Any]:
         """List DID-first signing identities without exposing custody selectors."""
@@ -1543,6 +1530,8 @@ class GatewayClient:
         params: Dict[str, str] = {"organization_id": organization_id}
         if key_purpose:
             params["key_purpose"] = key_purpose
+        if credential_format:
+            params["credential_format"] = credential_format
         if algorithm:
             params["algorithm"] = algorithm
         return await self._request(
@@ -1551,57 +1540,105 @@ class GatewayClient:
             params=params,
         )
 
-    async def store_issuer_profile_certificate(
+    async def get_public_did_document(self, *, issuer_did: str) -> Dict[str, Any]:
+        """Resolve a did:web document through its public HTTPS representation."""
+
+        if not issuer_did.startswith("did:web:"):
+            raise ValueError("integration DID resolution currently supports did:web only")
+        parts = issuer_did.removeprefix("did:web:").split(":")
+        authority = unquote(parts[0])
+        if not authority:
+            raise ValueError("did:web authority is required")
+        path = "/.well-known/did.json" if len(parts) == 1 else f"/{'/'.join(parts[1:])}/did.json"
+        url = f"https://{authority}{path}"
+        response = await self.client.get(url, headers={"Accept": "application/did+json, application/json"})
+        if response.status_code >= 400:
+            raise GatewayClientError(
+                f"GET {url} failed with status {response.status_code}",
+                status_code=response.status_code,
+            )
+        value = response.json()
+        if not isinstance(value, dict) or value.get("id") != issuer_did:
+            raise GatewayClientError("DID document did not match the requested issuer DID")
+        return value
+
+    async def resolve_issuer_identity_public_key(
         self,
         *,
-        issuer_profile_id: str,
         organization_id: str,
+        issuer_did: str,
+        key_purpose: str,
+        credential_format: str,
+        algorithm: str,
+    ) -> Dict[str, Any]:
+        """Resolve exact public key material without a profile or key selector."""
+        return await self._request(
+            "POST",
+            "/v1/signing-keys/issuer-identities/resolve",
+            json={
+                "organization_id": organization_id,
+                "issuer_did": issuer_did,
+                "key_purpose": key_purpose,
+                "credential_format": credential_format,
+                "algorithm": algorithm,
+            },
+        )
+
+    async def store_issuer_identity_certificate(
+        self,
+        *,
+        organization_id: str,
+        issuer_did: str,
+        key_purpose: str,
+        credential_format: str,
+        algorithm: str,
         cert_pem: str,
         cert_chain_pem: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Attach a certificate to the profile's DID key, never a caller-selected KMS key."""
+        """Attach a matching public certificate to one DID-selected identity."""
 
-        body: Dict[str, Any] = {"cert_pem": cert_pem}
+        body: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "issuer_did": issuer_did,
+            "key_purpose": key_purpose,
+            "credential_format": credential_format,
+            "algorithm": algorithm,
+            "cert_pem": cert_pem,
+        }
         if cert_chain_pem is not None:
             body["cert_chain_pem"] = cert_chain_pem
         return await self._request(
             "PUT",
-            f"/v1/signing-keys/issuer-profiles/{issuer_profile_id}/certificate",
+            "/v1/signing-keys/issuer-identities/certificate",
             json=body,
-            params={"organization_id": organization_id},
         )
 
-    async def create_issuer_profile(
+    async def create_issuer_identity(
         self,
         *,
         organization_id: str,
-        name: str,
         issuer_did: str,
-        signing_service_id: str,
-        signing_key_reference: Optional[str] = None,
         key_purpose: str = "vc_jwt_issuer",
-        status: str = "active",
+        credential_format: str = "SD_JWT_VC",
+        algorithm: str = "ES256",
         key_attestation_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Create or return an issuer profile bound to a signing service."""
+        """Ensure one managed DID identity without selecting its private custody."""
         payload: Dict[str, Any] = {
-            "name": name,
+            "organization_id": organization_id,
             "issuer_did": issuer_did,
-            "signing_service_id": signing_service_id,
             "key_purpose": key_purpose,
-            "status": status,
+            "credential_format": credential_format,
+            "algorithm": algorithm,
         }
-        if signing_key_reference:
-            payload["signing_key_reference"] = signing_key_reference
         if key_attestation_policy is not None:
             payload["key_attestation_policy"] = key_attestation_policy
         response = await self._request(
             "POST",
-            "/v1/signing-keys/issuer-profiles",
+            "/v1/signing-keys/issuer-identities",
             json=payload,
-            params={"organization_id": organization_id},
         )
-        return response.get("profile", response)
+        return response.get("identity", response)
 
     # =============================================================================
     # Revocation

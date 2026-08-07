@@ -134,54 +134,41 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
             frameworks=["icao_doc_9303"],
         )
     with eudi_stage("dtc-issuer-profile"):
-        service = None
-        for organization_id in (dtc_test_org["id"], None):
-            try:
-                resolved = await authenticated_gateway_client.resolve_signing_service(
-                    organization_id=organization_id,
-                    credential_format="mso_mdoc",
-                    key_purpose="mdoc_dsc",
-                    algorithm="ES256",
-                )
-                candidate = resolved.get("service")
-                if isinstance(candidate, dict) and candidate.get("id"):
-                    service = candidate
-                    break
-            except Exception:
-                continue
-        if not isinstance(service, dict) or not service.get("id"):
-            raise RuntimeError("mDoc document signer is unavailable")
         domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
         domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
-        issuer = await authenticated_gateway_client.create_issuer_profile(
+        issuer = await authenticated_gateway_client.create_issuer_identity(
             organization_id=dtc_test_org["id"],
-            name="EUDI DTC document signer",
             issuer_did=f"did:web:{domain.replace('/', ':')}:orgs:{dtc_test_org['id']}",
-            signing_service_id=str(service["id"]),
-            signing_key_reference=str(service.get("key_reference") or "") or None,
             key_purpose="mdoc_dsc",
-            status="active",
+            credential_format="MDOC",
+            algorithm="ES256",
             key_attestation_policy=required_eudi_key_attestation_policy(),
         )
     with eudi_stage("dtc-issuer-certificate"):
-        identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
-            issuer_profile_id=issuer["id"],
+        identity = await authenticated_gateway_client.resolve_issuer_identity_public_key(
             organization_id=dtc_test_org["id"],
+            issuer_did=issuer["issuer_did"],
+            key_purpose="mdoc_dsc",
+            credential_format="MDOC",
+            algorithm="ES256",
         )
         public_jwk = identity.get("public_jwk")
         if not isinstance(public_jwk, dict):
-            raise RuntimeError("issuer profile public identity is incomplete")
+            raise RuntimeError("issuer identity public key resolution is incomplete")
         certificate = create_disposable_mdoc_certificate_chain(
             public_jwk,
             organization_id=dtc_test_org["id"],
         )
-        stored = await authenticated_gateway_client.store_issuer_profile_certificate(
-            issuer_profile_id=issuer["id"],
+        stored = await authenticated_gateway_client.store_issuer_identity_certificate(
             organization_id=dtc_test_org["id"],
+            issuer_did=issuer["issuer_did"],
+            key_purpose="mdoc_dsc",
+            credential_format="MDOC",
+            algorithm="ES256",
             cert_pem=certificate.leaf_pem,
             cert_chain_pem=certificate.chain_pem,
         )
-        assert stored.get("ok") is True
+        assert stored.get("issuer_did") == issuer["issuer_did"]
     with eudi_stage("dtc-trust-profile-create"):
         trust_profile = await authenticated_gateway_client.create_trust_profile(
             organization_id=dtc_test_org["id"],
