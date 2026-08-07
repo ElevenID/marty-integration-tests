@@ -1,4 +1,5 @@
 {
+  "alias": "oidf-vp-test-wallet",
   "credential": {
     "signing_jwk": {
       "kty": "EC",

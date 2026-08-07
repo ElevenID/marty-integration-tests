@@ -79,6 +79,8 @@ def test_prepare_then_certify_uses_only_issuer_profile_public_key(tmp_path: Path
 
     config_path = output / certificates.CONFIG_FILE
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config["alias"] == certificates.OIDF_VERIFIER_ALIAS
+    assert config["alias"] == oidf.OIDF_VERIFIER_ALIAS
     assert config["client"]["request_object_trust_anchor_pem"] == (output / certificates.TRUST_ANCHOR_FILE).read_text(
         encoding="ascii"
     )

@@ -36,6 +36,7 @@ DEFAULT_GATEWAY_URL = "https://marty-oidf.test:8443"
 MAX_VALIDITY_HOURS = 168
 PEM_CERTIFICATE = re.compile(rb"-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----")
 OID4VP_TRUST_ANCHOR_FILE_ENV = "EUDI_OID4VP_TRUST_ANCHOR_FILE"
+OIDF_VERIFIER_ALIAS = "oidf-vp-test-wallet"
 VERIFICATION_EVIDENCE_BROWSER_AUTOMATION = [
     {
         "comment": (
@@ -248,6 +249,7 @@ def generate_material(
     )
     root_pem = root_certificate.public_bytes(serialization.Encoding.PEM)
     runner_config = {
+        "alias": OIDF_VERIFIER_ALIAS,
         "credential": {"signing_jwk": _private_jwk(credential_key)},
         "client": {"request_object_trust_anchor_pem": root_pem.decode("ascii")},
         "verifier": {"gateway_url": gateway_url, "profile": "oid4vp-haip-1.0"},
