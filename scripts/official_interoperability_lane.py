@@ -1395,6 +1395,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
     base = [sys.executable, str(launcher), "--project", project]
+    result = 1
     try:
         if run([*base, "up"], environment):
             emit_keycloak_initializer_diagnostic(args.run_id)
@@ -1431,14 +1432,17 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
             ],
             suite_environment,
         )
-        if result:
-            emit_w3c_issuance_diagnostic(args.run_id)
         return result
     except RuntimeError as error:
         if "public TLS endpoint" in str(error):
             emit_public_proxy_diagnostic(project, environment)
         raise
     finally:
+        if result:
+            # Fixture provisioning is part of the production path too. Emit
+            # the same bounded, redacted service diagnostic when it fails
+            # before the imported W3C suite can start.
+            emit_w3c_issuance_diagnostic(args.run_id)
         run([*base, "down"], environment)
 
 

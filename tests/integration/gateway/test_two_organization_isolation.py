@@ -665,6 +665,35 @@ async def test_public_signing_is_did_first_and_fails_closed(
     assert unknown_response.status_code in {403, 404, 409, 422}, unknown_response.text
     _assert_no_private_signing_selectors(unknown_response.json())
 
+    # Retiring the issuance tuple must not fall back to the still-active
+    # request-object identity with the same DID.
+    retired = await client.client.request(
+        "DELETE",
+        "/v1/signing-keys/issuer-identities",
+        headers={"X-Organization-ID": organization_id},
+        json={
+            "organization_id": organization_id,
+            "issuer_did": issuer_did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "ES256",
+        },
+    )
+    assert retired.status_code == 200, retired.text
+    inactive_response = await client.client.post(
+        "/v1/issuance",
+        json={
+            "organization_id": organization_id,
+            "issuer_did": issuer_did,
+            "claims": {"credential_format": "dc+sd-jwt"},
+        },
+    )
+    assert inactive_response.status_code in {403, 404, 409, 422}, inactive_response.text
+    _assert_no_private_signing_selectors(inactive_response.json())
+
+    # Creating a new organization changes the authenticated session's selected
+    # organization, so exercise this distinct incompatible-purpose case only
+    # after every assertion against the original organization is complete.
     request_only_organization = await client.create_organization(
         **TestDataBuilder.organization()
     )
@@ -688,31 +717,6 @@ async def test_public_signing_is_did_first_and_fails_closed(
         422,
     }, incompatible_response.text
     _assert_no_private_signing_selectors(incompatible_response.json())
-
-    # Retiring the issuance tuple must not fall back to the still-active
-    # request-object identity with the same DID.
-    retired = await client.client.request(
-        "DELETE",
-        "/v1/signing-keys/issuer-identities",
-        json={
-            "organization_id": organization_id,
-            "issuer_did": issuer_did,
-            "key_purpose": "vc_jwt_issuer",
-            "credential_format": "SD_JWT_VC",
-            "algorithm": "ES256",
-        },
-    )
-    assert retired.status_code == 200, retired.text
-    inactive_response = await client.client.post(
-        "/v1/issuance",
-        json={
-            "organization_id": organization_id,
-            "issuer_did": issuer_did,
-            "claims": {"credential_format": "dc+sd-jwt"},
-        },
-    )
-    assert inactive_response.status_code in {403, 404, 409, 422}, inactive_response.text
-    _assert_no_private_signing_selectors(inactive_response.json())
 
 
 @pytest.mark.asyncio
@@ -755,9 +759,22 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             f"/v1/organizations/{organization_a_id}"
         )
         assert organization_a_response.status_code == 200, organization_a_response.text
+        organization_a = organization_a_response.json()
+        assert isinstance(organization_a, dict)
+        # Each test provisions the public state it consumes. The released
+        # stack bootstrap is intentionally not a hidden issuer-identity
+        # fixture, and this call is idempotent when an identity already exists.
+        await _provision_issuer_identity(admin, organization_a)
+        await _provision_issuer_identity(
+            admin,
+            organization_a,
+            key_purpose="oid4vp_request_signing",
+        )
         issuer_identities_a = await admin.list_issuer_identities(
             organization_id=organization_a_id,
             key_purpose="vc_jwt_issuer",
+            credential_format="SD_JWT_VC",
+            algorithm="ES256",
         )
         active_issuer_identities_a = issuer_identities_a.get("identities")
         assert isinstance(active_issuer_identities_a, list)
