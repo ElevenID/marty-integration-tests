@@ -132,6 +132,35 @@ def test_oid4vci_runtime_diagnostic_emits_only_fixed_categories(
     assert "proof verification failed" not in output
 
 
+def test_oid4vp_browser_runtime_diagnostic_emits_only_fixed_categories(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log = tmp_path / "compose.log"
+    log.write_text(
+        "token=must-not-leak\n"
+        "Issuer DID resolves to multiple active issuer profiles for the requested tuple\n"
+        "POST /v1/flows/verify HTTP/1.1 500\n",
+        encoding="utf-8",
+    )
+
+    lane.emit_oid4vp_browser_runtime_diagnostic(log)
+
+    output = capsys.readouterr().err
+    assert "issuer-did-ambiguous" in output
+    assert "public-flow-http-500" in output
+    assert "must-not-leak" not in output
+    assert "multiple active issuer profiles" not in output
+
+
+def test_oid4vp_browser_runtime_diagnostic_reports_unavailable_log(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lane.emit_oid4vp_browser_runtime_diagnostic(tmp_path / "missing.log")
+
+    output = capsys.readouterr().err
+    assert "categories=runtime-log-unavailable" in output
+
+
 def test_keycloak_startup_diagnostic_includes_service_logs_and_redacts(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -773,6 +802,58 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     )
     assert compose_commands
     assert all("--haip" in command for command in compose_commands)
+
+
+def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostics: list[Path] = []
+
+    def fake_run(command: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
+        if "oidf_marty_browser_smoke.py" in " ".join(command):
+            return 2
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(lane, "emit_oid4vp_browser_runtime_diagnostic", diagnostics.append)
+    monkeypatch.setattr(lane, "refresh_request_signing_certificate", lambda *_args: {})
+    monkeypatch.setattr(
+        lane,
+        "bootstrap_fixtures",
+        lambda *_args, **_kwargs: {
+            "organization_id": "org-1",
+            "oid4vp_policy_id": "policy-1",
+            "oid4vp_trust_profile_id": "trust-1",
+            "oid4vp_issuer_did": "did:web:marty.test:orgs:org-1",
+            "oid4vp_request_issuer_public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "public-x",
+                "y": "public-y",
+            },
+            "browser_credential_template_id": "browser-credential-1",
+            "browser_application_template_id": "browser-application-1",
+        },
+    )
+    monkeypatch.setattr(
+        lane,
+        "standard_verifier_config",
+        lambda _material, _gateway: tmp_path / "marty-verifier.json",
+    )
+    args = SimpleNamespace(
+        lane="oid4vp-final",
+        marty_ui=tmp_path / "marty-ui",
+        run_id="run-1",
+        oidf_runner=tmp_path / "runner",
+        haip_material=tmp_path / "haip",
+        output_dir=tmp_path / "output",
+        stack_manifest=tmp_path / "stack-manifest.json",
+    )
+
+    assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 2
+    assert diagnostics == [tmp_path / "output" / "private" / "compose.log"]
 
 
 def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
