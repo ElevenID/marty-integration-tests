@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from .helpers.auth_helper import AuthHelper
+from .helpers.didcomm import make_did_peer_2_with_service
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.marty_wallet_client import MartyHeadlessWalletClient
 from .helpers.test_data import TestDataBuilder
@@ -63,9 +64,7 @@ def _assert_public_denial(response: Any, *, foreign_values: tuple[str, ...] = ()
     normalized = response.text.lower()
     for index, value in enumerate(foreign_values, start=1):
         if value:
-            assert value.lower() not in normalized, (
-                f"Cross-tenant denial exposed protected foreign value #{index}"
-            )
+            assert value.lower() not in normalized, f"Cross-tenant denial exposed protected foreign value #{index}"
 
 
 def _assert_no_private_signing_selectors(value: Any, *, path: str = "$") -> None:
@@ -111,10 +110,7 @@ async def _reviewer_session() -> str:
     ).strip()
     password = os.getenv("MARTY_CONFORMANCE_REVIEWER_PASSWORD", "").strip()
     if not password:
-        pytest.skip(
-            "MARTY_CONFORMANCE_REVIEWER_PASSWORD is required for the "
-            "two-principal public-boundary matrix"
-        )
+        pytest.skip("MARTY_CONFORMANCE_REVIEWER_PASSWORD is required for the two-principal public-boundary matrix")
     return await AuthHelper().get_session_id(email, password)
 
 
@@ -138,34 +134,22 @@ async def _exercise_browser_issuance_and_verification(
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         context = await browser.new_context(ignore_https_errors=True)
-        await context.add_cookies(
-            [{"name": "sessionId", "value": session_id, "url": base_url}]
-        )
+        await context.add_cookies([{"name": "sessionId", "value": session_id, "url": base_url}])
         page = await context.new_page()
-        await page.add_init_script(
-            "localStorage.setItem('activeOrgId', "
-            f"{json.dumps(organization_id)});"
-        )
+        await page.add_init_script(f"localStorage.setItem('activeOrgId', {json.dumps(organization_id)});")
         try:
             await page.goto(
                 f"{base_url}/console/org/operate/applications",
                 wait_until="domcontentloaded",
             )
-            await expect(
-                page.get_by_role("heading", name="Applications", exact=True)
-            ).to_be_visible(timeout=30_000)
-            application_row = page.get_by_role("row").filter(
-                has_text=application_reference
-            )
+            await expect(page.get_by_role("heading", name="Applications", exact=True)).to_be_visible(timeout=30_000)
+            application_row = page.get_by_role("row").filter(has_text=application_reference)
             await expect(application_row).to_have_count(1, timeout=30_000)
 
-            approve_button = application_row.get_by_role(
-                "button", name="Approve"
-            )
+            approve_button = application_row.get_by_role("button", name="Approve")
             await expect(approve_button).to_be_enabled(timeout=30_000)
             async with page.expect_response(
-                lambda response: response.request.method == "POST"
-                and response.url.endswith("/approve"),
+                lambda response: response.request.method == "POST" and response.url.endswith("/approve"),
                 timeout=30_000,
             ) as approval_info:
                 await approve_button.click()
@@ -174,16 +158,13 @@ async def _exercise_browser_issuance_and_verification(
             approval = await approval_response.json()
             _assert_no_private_signing_selectors(approval)
 
-            await expect(application_row).to_contain_text(
-                "approved", ignore_case=True, timeout=30_000
-            )
+            await expect(application_row).to_contain_text("approved", ignore_case=True, timeout=30_000)
             row_buttons = application_row.get_by_role("button")
             # The details affordance is an accessible link; the sole button on
             # an approved row is the real "issue" action.
             await expect(row_buttons).to_have_count(1, timeout=30_000)
             async with page.expect_response(
-                lambda response: response.request.method == "POST"
-                and response.url.endswith("/issue"),
+                lambda response: response.request.method == "POST" and response.url.endswith("/issue"),
                 timeout=30_000,
             ) as issuance_info:
                 await row_buttons.last.click()
@@ -199,40 +180,27 @@ async def _exercise_browser_issuance_and_verification(
                 f"{base_url}/console/org/operate/verify",
                 wait_until="domcontentloaded",
             )
-            new_verification = page.get_by_role(
-                "button", name="New Verification"
-            )
+            new_verification = page.get_by_role("button", name="New Verification")
             await expect(new_verification).to_be_enabled(timeout=30_000)
             await new_verification.click()
 
-            policy_select = page.get_by_role(
-                "combobox", name="Presentation Policy"
-            )
+            policy_select = page.get_by_role("combobox", name="Presentation Policy")
             await expect(policy_select).to_be_visible(timeout=30_000)
             await policy_select.click()
-            await page.get_by_role(
-                "option", name=presentation_policy_name, exact=True
-            ).click()
+            await page.get_by_role("option", name=presentation_policy_name, exact=True).click()
             await page.get_by_role("button", name="Next").click()
-            await page.get_by_label("Verification Purpose").fill(
-                "Released-stack browser boundary verification"
-            )
+            await page.get_by_label("Verification Purpose").fill("Released-stack browser boundary verification")
 
             async with page.expect_response(
-                lambda response: response.request.method == "POST"
-                and response.url.endswith("/v1/flows/verify"),
+                lambda response: response.request.method == "POST" and response.url.endswith("/v1/flows/verify"),
                 timeout=30_000,
             ) as verification_info:
                 await page.get_by_role("button", name="Start Session").click()
             verification_response = await verification_info.value
-            assert verification_response.status == 200, (
-                await verification_response.text()
-            )
+            assert verification_response.status == 200, await verification_response.text()
             verification = await verification_response.json()
             _assert_no_private_signing_selectors(verification)
-            await expect(page.get_by_text("Scan & Verify", exact=True)).to_be_visible(
-                timeout=30_000
-            )
+            await expect(page.get_by_text("Scan & Verify", exact=True)).to_be_visible(timeout=30_000)
 
             if evidence_dir:
                 await page.screenshot(
@@ -260,9 +228,7 @@ async def _grant_reviewer_boundary_roles(
     reviewer_email: str,
 ) -> None:
     """Assign access-admin + viewer through the same public API used by the UI."""
-    roles_response = await admin.client.get(
-        f"/v1/organizations/{organization_id}/roles"
-    )
+    roles_response = await admin.client.get(f"/v1/organizations/{organization_id}/roles")
     assert roles_response.status_code == 200, roles_response.text
     role_ids = {
         role["name"]: role["id"]
@@ -271,9 +237,7 @@ async def _grant_reviewer_boundary_roles(
     }
     assert {"access_admin", "viewer"} <= role_ids.keys(), role_ids
 
-    members_response = await admin.client.get(
-        f"/v1/organizations/{organization_id}/members"
-    )
+    members_response = await admin.client.get(f"/v1/organizations/{organization_id}/members")
     assert members_response.status_code == 200, members_response.text
     reviewer = next(
         (
@@ -283,9 +247,7 @@ async def _grant_reviewer_boundary_roles(
         ),
         None,
     )
-    assert reviewer is not None, (
-        f"Disposable reviewer membership {reviewer_email!r} was not bootstrapped"
-    )
+    assert reviewer is not None, f"Disposable reviewer membership {reviewer_email!r} was not bootstrapped"
     update_response = await admin.client.put(
         f"/v1/organizations/{organization_id}/members/{reviewer['id']}/roles",
         json={"role_ids": [role_ids["access_admin"], role_ids["viewer"]]},
@@ -430,6 +392,54 @@ async def test_two_organizations_cannot_substitute_templates_or_policies(
     with pytest.raises(GatewayClientError) as policy_error:
         await client.create_presentation_policy(**policy_b_for_template_a)
     _assert_cross_tenant_denied(policy_error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_didcomm_delivery_cannot_substitute_a_foreign_transaction(
+    authenticated_gateway_client: GatewayClient,
+) -> None:
+    """DIDComm resolves no holder endpoint for another tenant's transaction."""
+    client = authenticated_gateway_client
+    organization_a = await client.create_organization(**TestDataBuilder.organization())
+    organization_b = await client.create_organization(**TestDataBuilder.organization())
+    issuer_did_b = await _provision_issuer(client, organization_b)
+    template_b_data = await _employee_badge_template_data(
+        client,
+        organization_id=organization_b["id"],
+        name="Organization B DIDComm credential",
+        issuer_did=issuer_did_b,
+    )
+    template_b = await client.create_credential_template(**template_b_data)
+    issuance_b = await client.issue_credential(
+        organization_id=organization_b["id"],
+        credential_template_id=template_b["id"],
+        claims=TestDataBuilder.employee_badge_claims(),
+        subject_did=f"did:key:z6Mk{uuid.uuid4().hex}",
+    )
+    transaction_id = str(issuance_b["id"])
+
+    async def current_snapshot() -> dict[str, Any]:
+        issuances = await client.list_issuances(str(organization_b["id"]))
+        matches = [item for item in issuances if str(item.get("id")) == transaction_id]
+        assert len(matches) == 1, "Organization B transaction disappeared"
+        return matches[0]
+
+    before = await current_snapshot()
+    holder_did, _ = make_did_peer_2_with_service("https://127.0.0.1:9/should-never-be-resolved")
+    with pytest.raises(GatewayClientError) as delivery_error:
+        await client.didcomm_deliver(
+            organization_id=str(organization_a["id"]),
+            transaction_id=transaction_id,
+            holder_did=holder_did,
+        )
+
+    # A 422 here could come from resolving the attacker-controlled endpoint.
+    # Require a non-enumerating tenant denial before DID resolution or delivery.
+    assert delivery_error.value.status_code in {403, 404}, str(delivery_error.value)
+    assert transaction_id not in str(delivery_error.value)
+    after = await current_snapshot()
+    assert after == before, "Cross-tenant DIDComm attempt mutated the transaction"
 
 
 @pytest.mark.asyncio
@@ -694,9 +704,7 @@ async def test_public_signing_is_did_first_and_fails_closed(
     # Creating a new organization changes the authenticated session's selected
     # organization, so exercise this distinct incompatible-purpose case only
     # after every assertion against the original organization is complete.
-    request_only_organization = await client.create_organization(
-        **TestDataBuilder.organization()
-    )
+    request_only_organization = await client.create_organization(**TestDataBuilder.organization())
     request_only_profile = await _provision_issuer_identity(
         client,
         request_only_organization,
@@ -755,9 +763,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
     api_key_client = GatewayClient()
     wallet = MartyHeadlessWalletClient(gateway_url=admin.base_url)
     try:
-        organization_a_response = await reviewer.client.get(
-            f"/v1/organizations/{organization_a_id}"
-        )
+        organization_a_response = await reviewer.client.get(f"/v1/organizations/{organization_a_id}")
         assert organization_a_response.status_code == 200, organization_a_response.text
         organization_a = organization_a_response.json()
         assert isinstance(organization_a, dict)
@@ -798,13 +804,9 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         }
         assert {"access_admin", "viewer"} <= assigned_roles
 
-        organization_b = await admin.create_organization(
-            **TestDataBuilder.organization()
-        )
+        organization_b = await admin.create_organization(**TestDataBuilder.organization())
         organization_b_id = str(organization_b["id"])
-        organization_b_name = str(
-            organization_b.get("display_name") or organization_b.get("name") or ""
-        )
+        organization_b_name = str(organization_b.get("display_name") or organization_b.get("name") or "")
         issuer_did_b = await _provision_issuer(admin, organization_b)
 
         # A real foreign SCIM resource must not be addressable by substituting
@@ -855,9 +857,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert webhook_create.status_code == 200, webhook_create.text
         foreign_webhook = webhook_create.json()
         foreign_webhook_id = str(foreign_webhook["id"])
-        foreign_webhook_secret = str(
-            foreign_webhook.get("signing_secret") or ""
-        )
+        foreign_webhook_secret = str(foreign_webhook.get("signing_secret") or "")
 
         webhook_substitution = await reviewer.client.get(
             f"/v1/webhooks/{foreign_webhook_id}",
@@ -906,9 +906,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "organization_id": organization_b_id,
                 "name": wallet_name_b,
                 "wallet_apps": [wallet_name_b],
-                "deep_link_pattern": (
-                    "tenant-b-wallet://open?inner={inner_uri_encoded}"
-                ),
+                "deep_link_pattern": ("tenant-b-wallet://open?inner={inner_uri_encoded}"),
                 "supported_platforms": ["web"],
                 "supports_deeplink": True,
             },
@@ -923,11 +921,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             headers=api_headers,
         )
         assert wallets_b.status_code == 200, wallets_b.text
-        assert wallet_b_id in {
-            str(wallet.get("id"))
-            for wallet in wallets_b.json()
-            if isinstance(wallet, dict)
-        }
+        assert wallet_b_id in {str(wallet.get("id")) for wallet in wallets_b.json() if isinstance(wallet, dict)}
         wallet_b_owner = await api_key_client.client.get(
             f"/v1/wallet-registry/{wallet_b_id}",
             headers=api_headers,
@@ -937,20 +931,14 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         global_wallets_a = await reviewer.client.get("/v1/wallet-registry")
         assert global_wallets_a.status_code == 200, global_wallets_a.text
         assert wallet_b_id not in {
-            str(wallet.get("id"))
-            for wallet in global_wallets_a.json()
-            if isinstance(wallet, dict)
+            str(wallet.get("id")) for wallet in global_wallets_a.json() if isinstance(wallet, dict)
         }
         wallets_a = await reviewer.client.get(
             "/v1/wallet-registry",
             params={"organization_id": organization_a_id},
         )
         assert wallets_a.status_code == 200, wallets_a.text
-        assert wallet_b_id not in {
-            str(wallet.get("id"))
-            for wallet in wallets_a.json()
-            if isinstance(wallet, dict)
-        }
+        assert wallet_b_id not in {str(wallet.get("id")) for wallet in wallets_a.json() if isinstance(wallet, dict)}
 
         foreign_wallet_list = await reviewer.client.get(
             "/v1/wallet-registry",
@@ -1086,15 +1074,11 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             (
                 credential
                 for credential in owner_credentials.json()
-                if isinstance(credential, dict)
-                and str(credential.get("flow_execution_id") or "")
-                == issuance_b_id
+                if isinstance(credential, dict) and str(credential.get("flow_execution_id") or "") == issuance_b_id
             ),
             None,
         )
-        assert issued_credential_b is not None, (
-            "Organization-B issuance produced no public lifecycle record"
-        )
+        assert issued_credential_b is not None, "Organization-B issuance produced no public lifecycle record"
         issued_credential_b_id = str(issued_credential_b["id"])
 
         transaction_list_a = await reviewer.client.get(
@@ -1103,9 +1087,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert transaction_list_a.status_code == 200, transaction_list_a.text
         assert issuance_b_id not in {
-            str(transaction.get("id"))
-            for transaction in transaction_list_a.json()
-            if isinstance(transaction, dict)
+            str(transaction.get("id")) for transaction in transaction_list_a.json() if isinstance(transaction, dict)
         }
         credential_list_a = await reviewer.client.get(
             "/v1/issued-credentials",
@@ -1113,9 +1095,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert credential_list_a.status_code == 200, credential_list_a.text
         assert issued_credential_b_id not in {
-            str(credential.get("id"))
-            for credential in credential_list_a.json()
-            if isinstance(credential, dict)
+            str(credential.get("id")) for credential in credential_list_a.json() if isinstance(credential, dict)
         }
 
         for method, path, body in (
@@ -1261,13 +1241,9 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert owner_entity_list.status_code == 200, owner_entity_list.text
         assert issuer_entity_b_id in {
-            str(entity.get("id"))
-            for entity in owner_entity_list.json()
-            if isinstance(entity, dict)
+            str(entity.get("id")) for entity in owner_entity_list.json() if isinstance(entity, dict)
         }
-        owner_entity = await admin.client.get(
-            f"/v1/issuer-entities/{issuer_entity_b_id}"
-        )
+        owner_entity = await admin.client.get(f"/v1/issuer-entities/{issuer_entity_b_id}")
         assert owner_entity.status_code == 200, owner_entity.text
         owner_entity_update = await admin.client.patch(
             f"/v1/issuer-entities/{issuer_entity_b_id}",
@@ -1278,14 +1254,10 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert owner_entity_update.status_code == 200, owner_entity_update.text
 
-        owner_relationships = await admin.client.get(
-            f"/v1/trust-profiles/{trust_profile_b_id}/issuers"
-        )
+        owner_relationships = await admin.client.get(f"/v1/trust-profiles/{trust_profile_b_id}/issuers")
         assert owner_relationships.status_code == 200, owner_relationships.text
         assert relationship_b_id in {
-            str(relationship.get("id"))
-            for relationship in owner_relationships.json()
-            if isinstance(relationship, dict)
+            str(relationship.get("id")) for relationship in owner_relationships.json() if isinstance(relationship, dict)
         }
         owner_relationship = await admin.client.get(
             f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}"
@@ -1317,9 +1289,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert trust_profiles_a.status_code == 200, trust_profiles_a.text
         assert trust_profile_b_id not in {
-            str(profile.get("id"))
-            for profile in trust_profiles_a.json()
-            if isinstance(profile, dict)
+            str(profile.get("id")) for profile in trust_profiles_a.json() if isinstance(profile, dict)
         }
 
         issuer_entities_a = await reviewer.client.get(
@@ -1328,14 +1298,10 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert issuer_entities_a.status_code == 200, issuer_entities_a.text
         assert issuer_entity_b_id not in {
-            str(entity.get("id"))
-            for entity in issuer_entities_a.json()
-            if isinstance(entity, dict)
+            str(entity.get("id")) for entity in issuer_entities_a.json() if isinstance(entity, dict)
         }
         assert issuer_entity_b_did not in {
-            str(entity.get("issuer_id"))
-            for entity in issuer_entities_a.json()
-            if isinstance(entity, dict)
+            str(entity.get("issuer_id")) for entity in issuer_entities_a.json() if isinstance(entity, dict)
         }
 
         for method, path, body in (
@@ -1415,13 +1381,9 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert deleted_relationship.status_code == 404, deleted_relationship.text
 
-        owner_entity_delete = await admin.client.delete(
-            f"/v1/issuer-entities/{issuer_entity_b_id}"
-        )
+        owner_entity_delete = await admin.client.delete(f"/v1/issuer-entities/{issuer_entity_b_id}")
         assert owner_entity_delete.status_code == 200, owner_entity_delete.text
-        deleted_entity = await admin.client.get(
-            f"/v1/issuer-entities/{issuer_entity_b_id}"
-        )
+        deleted_entity = await admin.client.get(f"/v1/issuer-entities/{issuer_entity_b_id}")
         assert deleted_entity.status_code == 404, deleted_entity.text
 
         policy_b_data = TestDataBuilder.presentation_policy_age_verification(
@@ -1459,11 +1421,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             params={"organization_id": organization_a_id},
         )
         assert flows_a.status_code == 200, flows_a.text
-        assert flow_b["id"] not in {
-            flow.get("id")
-            for flow in flows_a.json()
-            if isinstance(flow, dict)
-        }
+        assert flow_b["id"] not in {flow.get("id") for flow in flows_a.json() if isinstance(flow, dict)}
 
         # Applications contain applicant PII and generate vetting state. The
         # self-service contract is bound to the principal's session organization,
@@ -1484,8 +1442,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             None,
         )
         assert active_template_a is not None, (
-            "Default organization has no active credential template for the "
-            "current applicant journey"
+            "Default organization has no active credential template for the current applicant journey"
         )
         browser_policy_name = f"Browser boundary policy {uuid.uuid4().hex}"
         browser_policy = await admin.create_presentation_policy(
@@ -1495,9 +1452,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 name=browser_policy_name,
             )
         )
-        browser_policy = await admin.activate_presentation_policy(
-            browser_policy["id"]
-        )
+        browser_policy = await admin.activate_presentation_policy(browser_policy["id"])
         application_template_a = await admin.create_application_template(
             organization_id=organization_a_id,
             name=f"Organization A applicant workflow {uuid.uuid4().hex}",
@@ -1522,9 +1477,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             ],
             approval_strategy="MANUAL",
         )
-        application_template_a = await admin.activate_application_template(
-            application_template_a["id"]
-        )
+        application_template_a = await admin.activate_application_template(application_template_a["id"])
         assert str(application_template_a.get("status") or "").upper() == "ACTIVE"
 
         applicant_profile = await reviewer.client.patch(
@@ -1556,9 +1509,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
 
         # Submission must fail closed until the holder supplies the exact
         # application-bound evidence required by the active template.
-        missing_evidence = await reviewer.client.post(
-            f"/v1/me/applications/{application_a_id}/submit"
-        )
+        missing_evidence = await reviewer.client.post(f"/v1/me/applications/{application_a_id}/submit")
         assert missing_evidence.status_code == 422, missing_evidence.text
 
         evidence_bytes = b"released-stack tenant-boundary identity scan"
@@ -1585,9 +1536,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             f"/v1/me/applications/{application_a_id}/evidence/{first_evidence_id}/content"
         )
         assert deleted_download.status_code == 404, deleted_download.text
-        missing_after_delete = await reviewer.client.post(
-            f"/v1/me/applications/{application_a_id}/submit"
-        )
+        missing_after_delete = await reviewer.client.post(f"/v1/me/applications/{application_a_id}/submit")
         assert missing_after_delete.status_code == 422, missing_after_delete.text
 
         evidence_upload = await reviewer.client.post(
@@ -1613,23 +1562,15 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         ):
             assert forbidden_field not in evidence
 
-        owner_evidence_list = await reviewer.client.get(
-            f"/v1/me/applications/{application_a_id}/evidence"
-        )
+        owner_evidence_list = await reviewer.client.get(f"/v1/me/applications/{application_a_id}/evidence")
         assert owner_evidence_list.status_code == 200, owner_evidence_list.text
-        assert evidence_id in {
-            str(item.get("id"))
-            for item in owner_evidence_list.json()
-            if isinstance(item, dict)
-        }
+        assert evidence_id in {str(item.get("id")) for item in owner_evidence_list.json() if isinstance(item, dict)}
         owner_evidence_download = await reviewer.client.get(evidence["content_url"])
         assert owner_evidence_download.status_code == 200, owner_evidence_download.text
         assert owner_evidence_download.content == evidence_bytes
         assert owner_evidence_download.headers["cache-control"] == "private, no-store"
 
-        application_submit = await reviewer.client.post(
-            f"/v1/me/applications/{application_a_id}/submit"
-        )
+        application_submit = await reviewer.client.post(f"/v1/me/applications/{application_a_id}/submit")
         assert application_submit.status_code == 200, application_submit.text
         application_a = application_submit.json()
         assert str(application_a.get("status") or "").upper() in {
@@ -1637,18 +1578,14 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             "UNDER_REVIEW",
         }, application_a
 
-        owner_application = await reviewer.client.get(
-            f"/v1/me/applications/{application_a_id}"
-        )
+        owner_application = await reviewer.client.get(f"/v1/me/applications/{application_a_id}")
         assert owner_application.status_code == 200, owner_application.text
         owner_application_body = owner_application.json()
         assert owner_application_body.get("form_data") == {
             "email": applicant_secret,
         }
 
-        owner_applicant = await admin.client.get(
-            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}"
-        )
+        owner_applicant = await admin.client.get(f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}")
         assert owner_applicant.status_code == 200, owner_applicant.text
         owner_applicant_body = owner_applicant.json()
         assert owner_applicant_body.get("form_data") == {
@@ -1666,11 +1603,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/evidence"
         )
         assert owner_reviewer_evidence.status_code == 200, owner_reviewer_evidence.text
-        assert evidence_id in {
-            str(item.get("id"))
-            for item in owner_reviewer_evidence.json()
-            if isinstance(item, dict)
-        }
+        assert evidence_id in {str(item.get("id")) for item in owner_reviewer_evidence.json() if isinstance(item, dict)}
         reviewer_download = await admin.client.get(
             f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/evidence/{evidence_id}/content"
         )
@@ -1691,9 +1624,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             name=f"Browser notification credential {uuid.uuid4().hex}",
             issuer_did=issuer_did_a,
         )
-        notification_credential_template = await admin.create_credential_template(
-            **notification_template_data
-        )
+        notification_credential_template = await admin.create_credential_template(**notification_template_data)
         notification_credential_template = await admin.activate_credential_template(
             notification_credential_template["id"]
         )
@@ -1711,9 +1642,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             ],
             approval_strategy="MANUAL",
         )
-        sse_application_template = await admin.activate_application_template(
-            sse_application_template["id"]
-        )
+        sse_application_template = await admin.activate_application_template(sse_application_template["id"])
         browser_issuance_flow = await admin.create_flow_definition(
             organization_id=organization_a_id,
             name=f"Browser issuance flow {uuid.uuid4().hex}",
@@ -1740,9 +1669,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "config": {},
             },
         )
-        browser_issuance_flow = await admin.activate_flow_definition(
-            browser_issuance_flow["id"]
-        )
+        browser_issuance_flow = await admin.activate_flow_definition(browser_issuance_flow["id"])
         sse_application_create = await reviewer.client.post(
             "/v1/me/applications",
             json={
@@ -1751,14 +1678,10 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "form_data": {"email": applicant_secret},
             },
         )
-        assert sse_application_create.status_code in {200, 201}, (
-            sse_application_create.text
-        )
+        assert sse_application_create.status_code in {200, 201}, sse_application_create.text
         sse_application = sse_application_create.json()
         sse_application_id = str(sse_application["id"])
-        sse_submit = await reviewer.client.post(
-            f"/v1/me/applications/{sse_application_id}/submit"
-        )
+        sse_submit = await reviewer.client.post(f"/v1/me/applications/{sse_application_id}/submit")
         assert sse_submit.status_code == 200, sse_submit.text
 
         # Open two real public SSE connections before approving the A-owned
@@ -1783,12 +1706,12 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 headers=api_headers,
             ) as organization_b_events,
         ):
-            assert organization_a_events.status_code == 200, (
-                await organization_a_events.aread()
-            ).decode(errors="replace")
-            assert organization_b_events.status_code == 200, (
-                await organization_b_events.aread()
-            ).decode(errors="replace")
+            assert organization_a_events.status_code == 200, (await organization_a_events.aread()).decode(
+                errors="replace"
+            )
+            assert organization_b_events.status_code == 200, (await organization_b_events.aread()).decode(
+                errors="replace"
+            )
             lines_a = organization_a_events.aiter_lines()
             lines_b = organization_b_events.aiter_lines()
             assert await _next_sse_frame(lines_a) == (
@@ -1803,19 +1726,13 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             event_a_task = asyncio.create_task(_next_sse_frame(lines_a))
             event_b_task = asyncio.create_task(_next_sse_frame(lines_b, timeout=30))
             try:
-                browser_session_id = str(
-                    admin.client.cookies.get("sessionId") or ""
-                )
-                approval, browser_issuance, browser_verification = (
-                    await _exercise_browser_issuance_and_verification(
-                        base_url=admin.base_url,
-                        session_id=browser_session_id,
-                        organization_id=organization_a_id,
-                        application_reference=str(
-                            sse_application.get("reference_number") or ""
-                        ),
-                        presentation_policy_name=browser_policy_name,
-                    )
+                browser_session_id = str(admin.client.cookies.get("sessionId") or "")
+                approval, browser_issuance, browser_verification = await _exercise_browser_issuance_and_verification(
+                    base_url=admin.base_url,
+                    session_id=browser_session_id,
+                    organization_id=organization_a_id,
+                    application_reference=str(sse_application.get("reference_number") or ""),
+                    presentation_policy_name=browser_policy_name,
                 )
             except BaseException:
                 for pending_event in (event_a_task, event_b_task):
@@ -1831,9 +1748,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "OFFERED",
                 "WALLET_INVITE_READY",
             }
-            assert browser_verification.get("session_id") or browser_verification.get(
-                "instance_id"
-            )
+            assert browser_verification.get("session_id") or browser_verification.get("instance_id")
 
             event_type_a, event_a = await event_a_task
             assert event_type_a == "application.approved"
@@ -1916,17 +1831,13 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert revoked_evidence.status_code == 200, revoked_evidence.text
         assert revoked_evidence.json()["status"] == "REVOKED"
-        revoked_download = await admin.client.get(
-            revoked_evidence.json()["content_url"]
-        )
+        revoked_download = await admin.client.get(revoked_evidence.json()["content_url"])
         assert revoked_download.status_code == 410, revoked_download.text
         approval_with_revoked_evidence = await admin.client.post(
             f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/approve",
             json={"notes": "must fail after evidence revocation"},
         )
-        assert approval_with_revoked_evidence.status_code == 422, (
-            approval_with_revoked_evidence.text
-        )
+        assert approval_with_revoked_evidence.status_code == 422, approval_with_revoked_evidence.text
 
         # Deployment profiles bind trust, presentation, credential, flow, API
         # key, lane, and device configuration. A leaked profile or lane ID must
@@ -2036,9 +1947,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             )
             assert audit_b.status_code == 200, audit_b.text
             foreign_events = [
-                event
-                for event in audit_b.json().get("events", [])
-                if isinstance(event, dict) and event.get("id")
+                event for event in audit_b.json().get("events", []) if isinstance(event, dict) and event.get("id")
             ]
             if foreign_events:
                 break
@@ -2053,9 +1962,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             foreign_values=(organization_b_name, scim_email, webhook_name),
         )
 
-        audit_direct = await reviewer.client.get(
-            f"/v1/organizations/{organization_b_id}/audit-events"
-        )
+        audit_direct = await reviewer.client.get(f"/v1/organizations/{organization_b_id}/audit-events")
         _assert_public_denial(
             audit_direct,
             foreign_values=(organization_b_name, scim_email, webhook_name),

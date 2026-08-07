@@ -11,7 +11,6 @@ Requires a running DIDComm agent endpoint or an explicitly enabled private
 test agent that receives encrypted DIDComm messages.
 """
 
-import base64
 import json
 import os
 import ssl
@@ -22,9 +21,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import x25519
 
+from .helpers.didcomm import make_did_peer_2_with_service
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.test_data import TestDataBuilder
 
@@ -43,55 +41,6 @@ DIDCOMM_PRIVATE_AGENT_TESTS = os.getenv("DIDCOMM_PRIVATE_AGENT_TESTS", "").lower
     "true",
     "yes",
 }
-
-_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-
-
-def _base58btc_encode(value: bytes) -> str:
-    number = int.from_bytes(value, "big")
-    encoded = ""
-    while number:
-        number, remainder = divmod(number, 58)
-        encoded = _BASE58_ALPHABET[remainder] + encoded
-    leading_zeroes = len(value) - len(value.lstrip(b"\0"))
-    return (_BASE58_ALPHABET[0] * leading_zeroes) + encoded
-
-
-def _make_did_peer_2_with_service(endpoint: str) -> tuple[str, bytes]:
-    """Construct a did:peer:2 DID that embeds a DIDComm service endpoint.
-
-    did:peer method 2 encodes key agreement keys plus
-    services directly in the DID string using purpose-prefixed segments:
-      E = key agreement, S = service
-
-    This builds a minimal peer DID with a DIDCommMessaging service entry
-    pointing at the given endpoint URL, suitable for testing push delivery.
-    """
-    private_key = x25519.X25519PrivateKey.generate()
-    private_key_bytes = private_key.private_bytes(
-        serialization.Encoding.Raw,
-        serialization.PrivateFormat.Raw,
-        serialization.NoEncryption(),
-    )
-    public_key_bytes = private_key.public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
-    )
-    key_multibase = "z" + _base58btc_encode(bytes((0xEC, 0x01)) + public_key_bytes)
-
-    # Use the full service shape accepted by the production resolver. The old
-    # abbreviated fixture did not produce a usable service entry.
-    service_obj = {
-        "id": "#didcomm-1",
-        "type": "DIDCommMessaging",
-        "serviceEndpoint": endpoint,
-    }
-    service_b64 = (
-        base64.urlsafe_b64encode(json.dumps(service_obj, separators=(",", ":")).encode()).rstrip(b"=").decode()
-    )
-
-    return f"did:peer:2.E{key_multibase}.S{service_b64}", private_key_bytes
-
 
 # =============================================================================
 # Test: DIDComm Deliver Endpoint
@@ -256,7 +205,7 @@ class TestDidcommDeliveryWithMockAgent:
         agent_url, received = mock_agent
 
         # Construct a did:peer:2 DID that points to the mock agent
-        holder_did, holder_private_key = _make_did_peer_2_with_service(agent_url)
+        holder_did, holder_private_key = make_did_peer_2_with_service(agent_url)
 
         claims = TestDataBuilder.mdl_claims(
             given_name="DIDComm",
