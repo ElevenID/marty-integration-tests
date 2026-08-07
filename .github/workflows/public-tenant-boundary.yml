@@ -32,12 +32,12 @@ jobs:
       PUBLIC_BOUNDARY_RUN_ID: tenant-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout ElevenID test harness
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
           cache: pip
@@ -50,13 +50,13 @@ jobs:
           --requirement requirements/official-py312.lock
 
       - name: Set up Go for independent DIDComm verification
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: "1.25.0"
           cache: false
 
       - name: Checkout pinned independent DIDComm implementation
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: notabene-id/go-didcomm
           ref: 5ffd085c2b5088a639c1c0d3910d668887298ce5
@@ -144,7 +144,7 @@ jobs:
           python -c "from marty_rs import _marty_rs; assert callable(_marty_rs.didcomm_decrypt)"
 
       - name: Checkout released deployment adapter
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-ui
           ref: ${{ steps.stack.outputs.marty_commit }}
