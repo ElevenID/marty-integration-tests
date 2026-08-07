@@ -119,10 +119,20 @@ async def _exercise_browser_issuance_and_verification(
     base_url: str,
     session_id: str,
     organization_id: str,
+    foreign_organization_id: str,
     application_reference: str,
     presentation_policy_name: str,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Drive real issuance and verification actions through the shipped UI."""
+    foreign_presentation_policy_id: str,
+    foreign_values: tuple[str, ...] = (),
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, int]]:
+    """Drive positive and adversarial actions through the shipped UI.
+
+    The negative cases mutate requests emitted by the real UI after it has
+    selected valid organization-A resources.  This proves the gateway rejects
+    both organization substitution and a foreign policy identifier even when
+    the browser principal is otherwise authorized to use the console.  It is
+    ElevenID-owned product-security evidence, not an imported conformance test.
+    """
     from playwright.async_api import async_playwright, expect
 
     assert session_id, "A real public OIDC session is required for browser evidence"
@@ -146,6 +156,62 @@ async def _exercise_browser_issuance_and_verification(
             application_row = page.get_by_role("row").filter(has_text=application_reference)
             await expect(application_row).to_have_count(1, timeout=30_000)
 
+            approve_button = application_row.get_by_role("button", name="Approve")
+            await expect(approve_button).to_be_enabled(timeout=30_000)
+
+            # Mutate the real UI's organization-scoped approval request while
+            # retaining its genuine organization-A application identifier.
+            # An owner of both organizations must still be unable to combine
+            # an A resource ID with B's path namespace.
+            approval_request: dict[str, Any] = {}
+
+            async def substitute_approval_organization(route: Any) -> None:
+                original_url = route.request.url
+                own_path = f"/v1/organizations/{organization_id}/applicants/"
+                assert own_path in original_url, original_url
+                mutated_url = original_url.replace(
+                    own_path,
+                    f"/v1/organizations/{foreign_organization_id}/applicants/",
+                    1,
+                )
+                approval_request.update(
+                    {
+                        "method": route.request.method,
+                        "original_url": original_url,
+                        "mutated_url": mutated_url,
+                    }
+                )
+                await route.continue_(url=mutated_url)
+
+            await page.route("**/approve", substitute_approval_organization, times=1)
+            try:
+                async with page.expect_response(
+                    lambda response: response.request.method == "POST"
+                    and response.url.endswith("/approve"),
+                    timeout=30_000,
+                ) as substituted_approval_info:
+                    await approve_button.click()
+                substituted_approval = await substituted_approval_info.value
+            finally:
+                await page.unroute("**/approve", substitute_approval_organization)
+
+            assert approval_request.get("method") == "POST", approval_request
+            assert approval_request.get("original_url") != approval_request.get("mutated_url")
+            substituted_approval_body = await substituted_approval.text()
+            assert substituted_approval.status in {403, 404}, substituted_approval_body
+            normalized_approval_denial = substituted_approval_body.lower()
+            for foreign_value in foreign_values:
+                if foreign_value:
+                    assert foreign_value.lower() not in normalized_approval_denial, (
+                        "Browser issuance organization substitution exposed "
+                        f"foreign tenant data: {foreign_value!r}"
+                    )
+
+            # Reload after the intentionally rejected mutation so the normal
+            # positive control starts from fresh UI state.
+            await page.reload(wait_until="domcontentloaded")
+            application_row = page.get_by_role("row").filter(has_text=application_reference)
+            await expect(application_row).to_have_count(1, timeout=30_000)
             approve_button = application_row.get_by_role("button", name="Approve")
             await expect(approve_button).to_be_enabled(timeout=30_000)
             async with page.expect_response(
@@ -176,20 +242,80 @@ async def _exercise_browser_issuance_and_verification(
                 "The browser issuance action did not produce a wallet offer"
             )
 
-            await page.goto(
-                f"{base_url}/console/org/operate/verify",
-                wait_until="domcontentloaded",
-            )
-            new_verification = page.get_by_role("button", name="New Verification")
-            await expect(new_verification).to_be_enabled(timeout=30_000)
-            await new_verification.click()
+            async def open_verification_wizard() -> None:
+                await page.goto(
+                    f"{base_url}/console/org/operate/verify",
+                    wait_until="domcontentloaded",
+                )
+                new_verification = page.get_by_role("button", name="New Verification")
+                await expect(new_verification).to_be_enabled(timeout=30_000)
+                await new_verification.click()
 
-            policy_select = page.get_by_role("combobox", name="Presentation Policy")
-            await expect(policy_select).to_be_visible(timeout=30_000)
-            await policy_select.click()
-            await page.get_by_role("option", name=presentation_policy_name, exact=True).click()
-            await page.get_by_role("button", name="Next").click()
-            await page.get_by_label("Verification Purpose").fill("Released-stack browser boundary verification")
+                policy_select = page.get_by_role("combobox", name="Presentation Policy")
+                await expect(policy_select).to_be_visible(timeout=30_000)
+                await policy_select.click()
+                await page.get_by_role(
+                    "option", name=presentation_policy_name, exact=True
+                ).click()
+                await page.get_by_role("button", name="Next").click()
+                await page.get_by_label("Verification Purpose").fill(
+                    "Released-stack browser boundary verification"
+                )
+
+            async def attempt_verification_substitution(
+                **overrides: str,
+            ) -> tuple[int, str, dict[str, Any]]:
+                await open_verification_wizard()
+                observed: dict[str, Any] = {}
+
+                async def mutate_verification_request(route: Any) -> None:
+                    payload = route.request.post_data_json
+                    assert isinstance(payload, dict), payload
+                    _assert_no_private_signing_selectors(payload)
+                    assert payload.get("organization_id") == organization_id, payload
+                    observed.update(payload)
+                    await route.continue_(
+                        post_data=json.dumps({**payload, **overrides})
+                    )
+
+                pattern = "**/v1/flows/verify"
+                await page.route(pattern, mutate_verification_request, times=1)
+                try:
+                    async with page.expect_response(
+                        lambda response: response.request.method == "POST"
+                        and response.url.endswith("/v1/flows/verify"),
+                        timeout=30_000,
+                    ) as response_info:
+                        await page.get_by_role("button", name="Start Session").click()
+                    response = await response_info.value
+                finally:
+                    await page.unroute(pattern, mutate_verification_request)
+                body = await response.text()
+                assert response.status in {403, 404, 422}, body
+                normalized_denial = body.lower()
+                for foreign_value in foreign_values:
+                    if foreign_value:
+                        assert foreign_value.lower() not in normalized_denial, (
+                            "Browser verification substitution exposed foreign "
+                            f"tenant data: {foreign_value!r}"
+                        )
+                return response.status, body, observed
+
+            policy_substitution_status, _, policy_original = (
+                await attempt_verification_substitution(
+                    presentation_policy_id=foreign_presentation_policy_id,
+                )
+            )
+            assert policy_original.get("presentation_policy_id") != foreign_presentation_policy_id
+
+            organization_substitution_status, _, organization_original = (
+                await attempt_verification_substitution(
+                    organization_id=foreign_organization_id,
+                )
+            )
+            assert organization_original.get("organization_id") == organization_id
+
+            await open_verification_wizard()
 
             async with page.expect_response(
                 lambda response: response.request.method == "POST" and response.url.endswith("/v1/flows/verify"),
@@ -207,7 +333,11 @@ async def _exercise_browser_issuance_and_verification(
                     path=evidence_dir / "issuance-and-verification.png",
                     full_page=True,
                 )
-            return approval, issuance, verification
+            return approval, issuance, verification, {
+                "issuance_organization_substitution": substituted_approval.status,
+                "verification_policy_substitution": policy_substitution_status,
+                "verification_organization_substitution": organization_substitution_status,
+            }
         except Exception:
             if evidence_dir:
                 with contextlib.suppress(Exception):
@@ -1723,16 +1853,32 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 {"type": "connected"},
             )
 
-            event_a_task = asyncio.create_task(_next_sse_frame(lines_a))
-            event_b_task = asyncio.create_task(_next_sse_frame(lines_b, timeout=30))
+            # Browser adversarial mutations deliberately add two rejected
+            # round trips before the positive approval. Keep both streams open
+            # long enough to observe the eventual A event without weakening
+            # the explicit no-event assertion for B below.
+            event_a_task = asyncio.create_task(_next_sse_frame(lines_a, timeout=90))
+            event_b_task = asyncio.create_task(_next_sse_frame(lines_b, timeout=90))
             try:
                 browser_session_id = str(admin.client.cookies.get("sessionId") or "")
-                approval, browser_issuance, browser_verification = await _exercise_browser_issuance_and_verification(
+                (
+                    approval,
+                    browser_issuance,
+                    browser_verification,
+                    browser_boundary_denials,
+                ) = await _exercise_browser_issuance_and_verification(
                     base_url=admin.base_url,
                     session_id=browser_session_id,
                     organization_id=organization_a_id,
+                    foreign_organization_id=organization_b_id,
                     application_reference=str(sse_application.get("reference_number") or ""),
                     presentation_policy_name=browser_policy_name,
+                    foreign_presentation_policy_id=str(policy_b["id"]),
+                    foreign_values=(
+                        organization_b_name,
+                        str(policy_b.get("name") or ""),
+                        issuer_did_b,
+                    ),
                 )
             except BaseException:
                 for pending_event in (event_a_task, event_b_task):
@@ -1749,6 +1895,15 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "WALLET_INVITE_READY",
             }
             assert browser_verification.get("session_id") or browser_verification.get("instance_id")
+            assert set(browser_boundary_denials) == {
+                "issuance_organization_substitution",
+                "verification_policy_substitution",
+                "verification_organization_substitution",
+            }
+            assert all(
+                status in {403, 404, 422}
+                for status in browser_boundary_denials.values()
+            )
 
             event_type_a, event_a = await event_a_task
             assert event_type_a == "application.approved"

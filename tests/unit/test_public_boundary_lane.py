@@ -171,10 +171,27 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
         "notification SSE delivery and subscription isolation",
         "ambiguous compatible issuer-profile rejection and recovery",
         "encrypted DIDComm v2 delivery with holder-key decryption",
+        (
+            "browser-driven issuance and verification through the shipped UI, "
+            "including adversarial organization and policy substitution"
+        ),
     } <= set(summary["coverage"])
     assert summary["test_source"]["additional_paths"] == [lane.DIDCOMM_TEST_PATH]
     assert summary["didcomm_interoperability"]["required"] is False
     assert summary["didcomm_interoperability"]["cross_implementation_decryption_passed"] is False
+
+
+def test_owned_browser_lane_mutates_real_ui_requests_for_adversarial_checks() -> None:
+    source = (
+        ROOT / "tests" / "integration" / "gateway" / "test_two_organization_isolation.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'page.route("**/approve", substitute_approval_organization, times=1)' in source
+    assert 'pattern = "**/v1/flows/verify"' in source
+    assert "presentation_policy_id=foreign_presentation_policy_id" in source
+    assert "organization_id=foreign_organization_id" in source
+    assert "substituted_approval.status in {403, 404}" in source
+    assert "response.status in {403, 404, 422}" in source
 
 
 def test_summary_records_only_executed_independent_didcomm_evidence(
