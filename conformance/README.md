@@ -759,10 +759,36 @@ Attach the pinned runner revision, stack manifest, image digests, sanitized
 configuration, exported result JSON, logs, and the commit under test. There is
 no second certification-only implementation to drift from daily testing.
 
+## DIDComm cross-implementation evidence
+
+The public tenant-boundary lane tests Marty's selected outbound DIDComm
+Messaging 2.1 profile against the separately maintained
+`notabene-id/go-didcomm` implementation pinned in
+`didcomm-interoperability.json`. The workflow checks out the exact reviewed
+commit, requires a clean source tree, and builds its command with read-only Go
+module resolution and the public checksum database. It does not download a
+moving binary or substitute another Marty binding.
+
+After Marty issues through the normal organization-plus-issuer-DID path and
+delivers to a fresh X25519 `did:peer:2` holder over CA-validated HTTPS, both
+the attested released Marty binding and the independent Go implementation must
+decrypt the same JWE to the same plaintext. The independent implementation
+must classify the message as encrypted anoncrypt with no authenticated sender;
+the plaintext `from` value is not promoted into an authentication result.
+
+This is deliberately a narrow interoperability claim: one recipient, General
+JSON JWE, `ECDH-ES+A256KW`, X25519, `A256CBC-HS512`, and the final Issue
+Credential 3.0 delivery message. It is not an official DIDComm certification,
+full protocol-flow coverage, inbound Marty agent coverage, authcrypt, signed
+message, multi-recipient, routing/mediation, DID rotation, or broad DID-method
+evidence. Those capabilities require separate production APIs and tests before
+they may be claimed.
+
 ## Updating official suites
 
-The monthly `official-suite-updates.yml` workflow checks OIDF, W3C, and every
-pinned EUDI source through `scripts/official_suite_updates.py`. When it finds
+The monthly `official-suite-updates.yml` workflow checks OIDF, W3C, every
+pinned EUDI source, and the independent DIDComm implementation through
+`scripts/official_suite_updates.py`. When it finds
 drift, it creates or refreshes the stable
 `automation/official-suite-updates` draft PR with the observed release and
 commit revisions. It never silently switches versions, changes immutable

@@ -11,9 +11,13 @@ Requires a running DIDComm agent endpoint or an explicitly enabled private
 test agent that receives encrypted DIDComm messages.
 """
 
+import base64
+import hashlib
 import json
 import os
 import ssl
+import subprocess
+import tempfile
 import threading
 from collections.abc import AsyncGenerator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -21,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519
 
 from .helpers.didcomm import make_did_peer_2_with_service
 from .helpers.gateway_client import GatewayClient, GatewayClientError
@@ -41,6 +47,126 @@ DIDCOMM_PRIVATE_AGENT_TESTS = os.getenv("DIDCOMM_PRIVATE_AGENT_TESTS", "").lower
     "true",
     "yes",
 }
+INDEPENDENT_IMPLEMENTATION = "notabene-id/go-didcomm@v0.4.0#5ffd085c2b5088a639c1c0d3910d668887298ce5"
+
+
+def _base64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + ("=" * (-len(value) % 4)))
+
+
+def _assert_selected_anoncrypt_profile(encrypted: dict[str, Any]) -> dict[str, Any]:
+    """Enforce the normative headers for Marty's selected DIDComm 2.1 profile."""
+    recipients = encrypted.get("recipients")
+    assert isinstance(recipients, list)
+    assert len(recipients) == 1
+    recipient_header = recipients[0].get("header")
+    assert isinstance(recipient_header, dict)
+    recipient_kid = recipient_header.get("kid")
+    assert isinstance(recipient_kid, str)
+    assert recipient_kid
+    assert "epk" not in recipient_header, "DIDComm requires epk to be integrity protected"
+
+    protected_value = encrypted.get("protected")
+    assert isinstance(protected_value, str)
+    protected: object = json.loads(_base64url_decode(protected_value))
+    assert isinstance(protected, dict)
+    assert protected.get("typ") == "application/didcomm-encrypted+json"
+    assert protected.get("alg") == "ECDH-ES+A256KW"
+    assert protected.get("enc") == "A256CBC-HS512"
+    assert protected.get("apu") is None
+    assert protected.get("skid") is None
+    ephemeral_key = protected.get("epk")
+    assert isinstance(ephemeral_key, dict)
+    assert ephemeral_key.get("kty") == "OKP"
+    assert ephemeral_key.get("crv") == "X25519"
+    ephemeral_x = ephemeral_key.get("x")
+    assert isinstance(ephemeral_x, str)
+    assert len(_base64url_decode(ephemeral_x)) == 32
+
+    expected_apv = base64.urlsafe_b64encode(hashlib.sha256(recipient_kid.encode()).digest()).rstrip(b"=").decode()
+    assert protected.get("apv") == expected_apv
+    return protected
+
+
+def _independent_didcomm_decrypt(
+    encrypted: dict[str, Any],
+    holder_did: str,
+    holder_private_key: bytes,
+) -> dict[str, Any] | None:
+    """Decrypt Marty's envelope with the separately maintained Go implementation."""
+    required = os.getenv("DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    cli_value = os.getenv("DIDCOMM_INTEROP_CLI", "").strip()
+    implementation = os.getenv("DIDCOMM_INTEROP_IMPLEMENTATION", "").strip()
+    if not required and not cli_value:
+        return None
+    assert required, "an independent DIDComm verifier must be explicitly required"
+    assert implementation == INDEPENDENT_IMPLEMENTATION
+
+    cli = Path(cli_value)
+    assert cli.is_file(), "the pinned independent DIDComm verifier is unavailable"
+    recipients = encrypted.get("recipients")
+    assert isinstance(recipients, list)
+    assert len(recipients) == 1
+    recipient_kid = recipients[0].get("header", {}).get("kid")
+    assert isinstance(recipient_kid, str)
+    assert recipient_kid.startswith(f"{holder_did}#")
+
+    holder_public_key = (
+        x25519.X25519PrivateKey.from_private_bytes(holder_private_key)
+        .public_key()
+        .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    )
+
+    def base64url(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+    # The upstream CLI accepts a standard private JWK Set. This disposable
+    # holder key is generated solely for the test and is never a Marty custody
+    # or issuer key.
+    key_material = {
+        "keys": [
+            {
+                "kty": "OKP",
+                "crv": "X25519",
+                "kid": recipient_kid,
+                "alg": "ECDH-ES+A256KW",
+                "x": base64url(holder_public_key),
+                "d": base64url(holder_private_key),
+            }
+        ]
+    }
+    with tempfile.TemporaryDirectory(prefix="didcomm-independent-") as temporary:
+        keys = Path(temporary) / "keys.json"
+        keys.write_text(json.dumps(key_material), encoding="utf-8")
+        completed = subprocess.run(
+            [
+                str(cli),
+                "unpack",
+                "--key-file",
+                str(keys),
+            ],
+            input=json.dumps(encrypted),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    assert completed.returncode == 0, (
+        f"independent DIDComm verifier rejected Marty's selected profile: {completed.stderr.strip()[:300]}"
+    )
+    output: object = json.loads(completed.stdout)
+    assert isinstance(output, dict)
+    assert output.get("encrypted") is True
+    assert output.get("anonymous") is True, "anoncrypt must remain anonymous"
+    assert output.get("signed") is False, "anoncrypt must not authenticate plaintext from"
+    message = output.get("message")
+    assert isinstance(message, dict)
+    return message
+
 
 # =============================================================================
 # Test: DIDComm Deliver Endpoint
@@ -243,6 +369,7 @@ class TestDidcommDeliveryWithMockAgent:
             "ciphertext",
             "tag",
         } <= encrypted["body"].keys()
+        _assert_selected_anoncrypt_profile(encrypted["body"])
 
         try:
             from marty_rs import _marty_rs
@@ -260,6 +387,14 @@ class TestDidcommDeliveryWithMockAgent:
         assert plaintext["to"] == [holder_did]
         assert plaintext["thid"] == issuance["id"]
         assert len(plaintext["attachments"]) >= 1
+
+        independent_plaintext = _independent_didcomm_decrypt(
+            encrypted["body"],
+            holder_did,
+            holder_private_key,
+        )
+        if independent_plaintext is not None:
+            assert independent_plaintext == plaintext
 
         tx = await gateway_client.get_issuance(issuance["id"])
         assert tx["status"] == "issued"

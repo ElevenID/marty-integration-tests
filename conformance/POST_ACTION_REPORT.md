@@ -7,7 +7,7 @@ Last updated: 2026-08-07
 
 The current stack under test is immutable `marty-ui` v1.1.112 at release
 commit `f83f068e2d201b9cbb248d8741b49d470f0cd4fc` and manifest digest
-`sha256:698180c0946ef345916e1cfb9e99a28a22c9b7122e3ea661af70bcfc88166190`.
+`sha256:698180c0e3f2df93ff52ad05442206216c029c7f79208a246edabc60f5366190`.
 [Run 31193237615](https://github.com/ElevenID/marty-integration-tests/actions/runs/31193237615)
 executed exact harness `8b9303f8957f407cb6fd37ce26976a62a5c55427`
 and unmodified OIDF `release-v5.2.2` commit

@@ -35,6 +35,7 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
     assert set(observation["upstreams"]) == {
         "oidf",
         "w3c_vc_data_model_v2",
+        "didcomm_independent_implementation",
         "eudi_verifier_endpoint",
         "eudi_wallet_kit_oid4vp",
         "eudi_wallet_kit_oid4vci",
@@ -51,6 +52,14 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
     assert observation["upstreams"]["w3c_vc_data_model_v2"] == {
         "pinned_commit": w3c_manifest["official_suite"]["commit"],
         "latest_commit": "f" * 40,
+    }
+    didcomm_manifest = updates.load_json("conformance/didcomm-interoperability.json")
+    didcomm = didcomm_manifest["independent_implementation"]
+    assert observation["upstreams"]["didcomm_independent_implementation"] == {
+        "pinned_release": didcomm["release"],
+        "latest_release": "latest-eudi",
+        "pinned_commit": didcomm["commit"],
+        "latest_commit": "e" * 40,
     }
     eudi_manifest = updates.load_json("conformance/eudi-reference-interop.json")
     verifier = eudi_manifest["components"]["verifier_endpoint"]

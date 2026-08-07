@@ -172,9 +172,38 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
         "ambiguous compatible issuer-profile rejection and recovery",
         "encrypted DIDComm v2 delivery with holder-key decryption",
     } <= set(summary["coverage"])
-    assert summary["test_source"]["additional_paths"] == [
-        lane.DIDCOMM_TEST_PATH
-    ]
+    assert summary["test_source"]["additional_paths"] == [lane.DIDCOMM_TEST_PATH]
+    assert summary["didcomm_interoperability"]["required"] is False
+    assert summary["didcomm_interoperability"]["cross_implementation_decryption_passed"] is False
+
+
+def test_summary_records_only_executed_independent_didcomm_evidence(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "stack-manifest.json"
+    manifest.write_text(json.dumps({"release": "marty-ui@test"}) + "\n", encoding="utf-8")
+    output = tmp_path / "evidence"
+    implementation = lane.independent_didcomm_record()
+    implementation["required"] = True
+
+    lane.write_summary(
+        SimpleNamespace(stack_manifest=manifest, output_dir=output),
+        {
+            "marty_commit": "a" * 40,
+            "didcomm_interoperability": implementation,
+        },
+        0,
+    )
+
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    interop = summary["didcomm_interoperability"]
+    assert interop["cross_implementation_decryption_passed"] is True
+    assert interop["implementation"] == {
+        "repository": "https://github.com/notabene-id/go-didcomm.git",
+        "release": "v0.4.0",
+        "commit": "5ffd085c2b5088a639c1c0d3910d668887298ce5",
+    }
+    assert "independent go-didcomm decryption of Marty's released anoncrypt envelope" in summary["coverage"]
 
 
 def test_local_summary_cannot_be_mistaken_for_release_evidence(
@@ -256,17 +285,9 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     monkeypatch.setattr(lane, "run", fake_run)
 
     assert lane.execute(args) == 0
-    pytest_calls = [
-        capture
-        for command, capture in calls
-        if command[:3] == [sys.executable, "-m", "pytest"]
-    ]
+    pytest_calls = [capture for command, capture in calls if command[:3] == [sys.executable, "-m", "pytest"]]
     assert pytest_calls == [output / "private" / "pytest.log"]
-    pytest_command = next(
-        command
-        for command, _capture in calls
-        if command[:3] == [sys.executable, "-m", "pytest"]
-    )
+    pytest_command = next(command for command, _capture in calls if command[:3] == [sys.executable, "-m", "pytest"])
     assert pytest_command[-2:] == [lane.TEST_PATH, lane.DIDCOMM_TEST_PATH]
     assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"
 
@@ -308,9 +329,9 @@ def test_pytest_diagnostic_is_bounded_and_redacts_private_values(
 
 
 def test_public_boundary_workflow_installs_manifest_pinned_didcomm_verifier() -> None:
-    workflow = (
-        Path(__file__).parents[2] / ".github" / "workflows" / "public-tenant-boundary.yml"
-    ).read_text(encoding="utf-8")
+    workflow = (Path(__file__).parents[2] / ".github" / "workflows" / "public-tenant-boundary.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert "Install attested released DIDComm verifier" in workflow
     assert 'select(.name == "marty-core-python")' in workflow
@@ -319,3 +340,17 @@ def test_public_boundary_workflow_installs_manifest_pinned_didcomm_verifier() ->
     assert 'gh attestation verify "$wheel" --repo "$repository"' in workflow
     assert "--no-deps --no-index" in workflow
     assert "callable(_marty_rs.didcomm_decrypt)" in workflow
+
+
+def test_public_boundary_workflow_builds_pinned_independent_didcomm_verifier() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "public-tenant-boundary.yml").read_text(encoding="utf-8")
+    manifest = json.loads((root / "conformance" / "didcomm-interoperability.json").read_text(encoding="utf-8"))
+    implementation = manifest["independent_implementation"]
+
+    assert "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16" in workflow
+    assert "repository: notabene-id/go-didcomm" in workflow
+    assert f"ref: {implementation['commit']}" in workflow
+    assert 'go build -mod=readonly -trimpath -o "$verifier" ./cmd/didcomm' in workflow
+    assert f"notabene-id/go-didcomm@{implementation['release']}#{implementation['commit']}" in workflow
+    assert "DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED=true" in workflow
