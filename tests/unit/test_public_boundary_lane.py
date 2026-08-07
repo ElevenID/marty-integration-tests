@@ -166,7 +166,8 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
         "issuer-entity and trust-profile relationship isolation",
         (
             "normalized issuer relationships drive released verification decisions, "
-            "including immediate under-review denial, trust-threshold denial, and recovery"
+            "including immediate under-review denial, trust-threshold denial, "
+            "multi-accreditation evidence denial, and recovery"
         ),
         "applicant form-data and vetting isolation",
         "application evidence collection, deletion, revocation, and tenant isolation",
@@ -196,6 +197,19 @@ def test_owned_browser_lane_mutates_real_ui_requests_for_adversarial_checks() ->
     assert "organization_id=foreign_organization_id" in source
     assert "substituted_approval.status in {403, 404}" in source
     assert "response.status in {403, 404, 422}" in source
+
+
+def test_owned_tenant_lane_exercises_multiple_accreditation_evidence() -> None:
+    source = (
+        ROOT / "tests" / "integration" / "gateway" / "test_two_organization_isolation.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"accreditations": ["ISO27001", "FIPS140-2"]' in source
+    assert '"required_accreditations": ["iso27001", "FIPS140-2"]' in source
+    assert '"accreditation_body": "FIPS140-2"' in source
+    assert '"accreditations": ["ISO27001"]' in source
+    assert '"accreditations": ["FIPS140-2", "iso27001"]' in source
+    assert '"accreditation requirements"' in source
 
 
 def test_summary_records_only_executed_independent_didcomm_evidence(

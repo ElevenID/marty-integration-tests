@@ -1301,6 +1301,8 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             "issuer_type": "ORGANIZATION",
             "display_name": issuer_entity_b_name,
             "description": "Foreign tenant issuer-registry evidence",
+            "accreditation_body": "National Identity Authority",
+            "accreditations": ["ISO27001", "FIPS140-2"],
             "metadata": {"jurisdiction": "US"},
         }
         issuer_entity_create = await admin.client.post(
@@ -1312,6 +1314,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         issuer_entity_b_id = str(issuer_entity_b["id"])
         assert issuer_entity_b["organization_id"] == organization_b_id
         assert issuer_entity_b["issuer_id"] == issuer_entity_b_did
+        assert issuer_entity_b["accreditations"] == ["ISO27001", "FIPS140-2"]
         _assert_no_private_signing_selectors(issuer_entity_b)
 
         relationship_create = await admin.client.post(
@@ -1349,7 +1352,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "issuer_constraints": {
                     "min_trust_level": 80,
                     "required_compliance_statuses": ["COMPLIANT"],
-                    "required_accreditations": [],
+                    "required_accreditations": ["iso27001", "FIPS140-2"],
                 },
             }
         )
@@ -1499,6 +1502,61 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert restored_decision["result"] == "passed", restored_decision
         assert restored_decision["decision"] == "allow", restored_decision
         _assert_no_private_signing_selectors(restored_decision)
+
+        # Accreditation evidence is independent from the authority that issued
+        # it. Removing one required accreditation must fail immediately even
+        # when accreditation_body is set to the missing identifier.
+        incomplete_accreditation_update = await admin.client.patch(
+            f"/v1/issuer-entities/{issuer_entity_b_id}",
+            json={
+                "organization_id": organization_b_id,
+                "accreditation_body": "FIPS140-2",
+                "accreditations": ["ISO27001"],
+            },
+        )
+        assert incomplete_accreditation_update.status_code == 200, (
+            incomplete_accreditation_update.text
+        )
+        assert incomplete_accreditation_update.json()["accreditations"] == [
+            "ISO27001"
+        ]
+        incomplete_accreditation_decision = await admin.evaluate_presentation(
+            str(trust_decision_policy_b["id"]),
+            raw_credential_b,
+        )
+        assert incomplete_accreditation_decision["result"] == "failed", (
+            incomplete_accreditation_decision
+        )
+        assert incomplete_accreditation_decision["decision"] == "deny", (
+            incomplete_accreditation_decision
+        )
+        assert "accreditation requirements" in str(
+            incomplete_accreditation_decision.get("decision_reason") or ""
+        ).lower()
+        _assert_no_private_signing_selectors(incomplete_accreditation_decision)
+
+        restored_accreditation_update = await admin.client.patch(
+            f"/v1/issuer-entities/{issuer_entity_b_id}",
+            json={
+                "organization_id": organization_b_id,
+                "accreditation_body": "National Identity Authority",
+                "accreditations": ["FIPS140-2", "iso27001"],
+            },
+        )
+        assert restored_accreditation_update.status_code == 200, (
+            restored_accreditation_update.text
+        )
+        restored_accreditation_decision = await admin.evaluate_presentation(
+            str(trust_decision_policy_b["id"]),
+            raw_credential_b,
+        )
+        assert restored_accreditation_decision["result"] == "passed", (
+            restored_accreditation_decision
+        )
+        assert restored_accreditation_decision["decision"] == "allow", (
+            restored_accreditation_decision
+        )
+        _assert_no_private_signing_selectors(restored_accreditation_decision)
 
         # A trust profile and its issuer registry/relationship resources are
         # tenant-owned security policy. Prove the B owner path first, then

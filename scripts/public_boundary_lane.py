@@ -277,7 +277,8 @@ def write_summary(
         "issuer-entity and trust-profile relationship isolation",
         (
             "normalized issuer relationships drive released verification decisions, "
-            "including immediate under-review denial, trust-threshold denial, and recovery"
+            "including immediate under-review denial, trust-threshold denial, "
+            "multi-accreditation evidence denial, and recovery"
         ),
         "applicant form-data and vetting isolation",
         "application evidence collection, deletion, revocation, and tenant isolation",
