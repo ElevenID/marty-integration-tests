@@ -170,7 +170,11 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
         "wallet catalogue and organization-override isolation",
         "notification SSE delivery and subscription isolation",
         "ambiguous compatible issuer-profile rejection and recovery",
+        "encrypted DIDComm v2 delivery with holder-key decryption",
     } <= set(summary["coverage"])
+    assert summary["test_source"]["additional_paths"] == [
+        lane.DIDCOMM_TEST_PATH
+    ]
 
 
 def test_local_summary_cannot_be_mistaken_for_release_evidence(
@@ -212,17 +216,18 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     output = tmp_path / "evidence"
     args = SimpleNamespace(output_dir=output)
     calls: list[tuple[list[str], Path | None]] = []
+    execution_environment = {
+        "MARTY_CONFORMANCE_ADMIN_EMAIL": "admin@example.test",
+        "MARTY_CONFORMANCE_ADMIN_PASSWORD": "admin-secret",
+        "MARTY_CONFORMANCE_REVIEWER_EMAIL": "reviewer@example.test",
+        "MARTY_CONFORMANCE_REVIEWER_PASSWORD": "reviewer-secret",
+    }
 
     monkeypatch.setattr(
         lane,
         "environment",
         lambda _args: (
-            {
-                "MARTY_CONFORMANCE_ADMIN_EMAIL": "admin@example.test",
-                "MARTY_CONFORMANCE_ADMIN_PASSWORD": "admin-secret",
-                "MARTY_CONFORMANCE_REVIEWER_EMAIL": "reviewer@example.test",
-                "MARTY_CONFORMANCE_REVIEWER_PASSWORD": "reviewer-secret",
-            },
+            execution_environment,
             {"marty_commit": "a" * 40},
         ),
     )
@@ -257,3 +262,10 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
         if command[:3] == [sys.executable, "-m", "pytest"]
     ]
     assert pytest_calls == [output / "private" / "pytest.log"]
+    pytest_command = next(
+        command
+        for command, _capture in calls
+        if command[:3] == [sys.executable, "-m", "pytest"]
+    )
+    assert pytest_command[-2:] == [lane.TEST_PATH, lane.DIDCOMM_TEST_PATH]
+    assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"

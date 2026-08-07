@@ -33,6 +33,10 @@ RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 TEST_PATH = (
     "tests/integration/gateway/test_two_organization_isolation.py"
 )
+DIDCOMM_TEST_PATH = (
+    "tests/integration/gateway/test_didcomm_v2_delivery.py::"
+    "TestDidcommDeliveryWithMockAgent::test_deliver_to_mock_agent"
+)
 PUBLIC_LOGIN = ROOT / "scripts" / "oidf_marty_public_login.py"
 
 
@@ -210,6 +214,7 @@ def write_summary(
             "repository": "ElevenID/marty-integration-tests",
             "commit": os.environ.get("GITHUB_SHA", "local"),
             "path": TEST_PATH,
+            "additional_paths": [DIDCOMM_TEST_PATH],
             "owner": "ElevenID",
         },
         "official_suite_boundary": {
@@ -241,6 +246,7 @@ def write_summary(
             "unknown, inactive, and purpose-incompatible DID rejection",
             "idempotent issuer-profile uniqueness",
             "ambiguous compatible issuer-profile rejection and recovery",
+            "encrypted DIDComm v2 delivery with holder-key decryption",
             "public response custody-metadata minimization",
         ],
     }
@@ -259,6 +265,7 @@ def execute(args: argparse.Namespace) -> int:
     lane_environment["MARTY_BROWSER_EVIDENCE_DIR"] = str(
         (private / "browser").resolve()
     )
+    lane_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] = "true"
     started = run(
         boundary_compose_command(args, "up"),
         lane_environment,
@@ -284,6 +291,7 @@ def execute(args: argparse.Namespace) -> int:
                     "pytest",
                     "-q",
                     TEST_PATH,
+                    DIDCOMM_TEST_PATH,
                 ],
                 lane_environment,
                 capture=private / "pytest.log",
