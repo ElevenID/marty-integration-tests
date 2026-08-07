@@ -48,6 +48,7 @@ DIDCOMM_PRIVATE_AGENT_TESTS = os.getenv("DIDCOMM_PRIVATE_AGENT_TESTS", "").lower
     "yes",
 }
 INDEPENDENT_IMPLEMENTATION = "notabene-id/go-didcomm@v0.4.0#5ffd085c2b5088a639c1c0d3910d668887298ce5"
+OPTIONAL_ABSENT_OR_NULL_PLAINTEXT_MEMBERS = frozenset({"expires_time", "pthid"})
 
 
 def _base64url_decode(value: str) -> bytes:
@@ -166,6 +167,37 @@ def _independent_didcomm_decrypt(
     message = output.get("message")
     assert isinstance(message, dict)
     return message
+
+
+def _assert_same_didcomm_plaintext(
+    independent: dict[str, Any],
+    released_marty: dict[str, Any],
+) -> None:
+    """Compare decoded messages without weakening optional-member semantics.
+
+    The released Python binding materializes two absent optional DIDComm fields
+    as ``None`` while the independent Go decoder preserves their absence. Only
+    that representation difference is equivalent; every other key, nested
+    value, attachment, and non-null optional value must match exactly.
+
+    Report only differing top-level member names so a failed public workflow
+    does not copy credential contents into its diagnostic log.
+    """
+    differing_members: list[str] = []
+    for member in sorted(independent.keys() | released_marty.keys()):
+        independent_present = member in independent
+        released_present = member in released_marty
+        independent_value = independent.get(member)
+        released_value = released_marty.get(member)
+        if member in OPTIONAL_ABSENT_OR_NULL_PLAINTEXT_MEMBERS and independent_value is None and released_value is None:
+            continue
+        if not independent_present or not released_present or independent_value != released_value:
+            differing_members.append(member)
+
+    assert not differing_members, (
+        "independent DIDComm plaintext differs from the released Marty decoder "
+        f"at members: {', '.join(differing_members)}"
+    )
 
 
 # =============================================================================
@@ -394,7 +426,7 @@ class TestDidcommDeliveryWithMockAgent:
             holder_private_key,
         )
         if independent_plaintext is not None:
-            assert independent_plaintext == plaintext
+            _assert_same_didcomm_plaintext(independent_plaintext, plaintext)
 
         tx = await gateway_client.get_issuance(issuance["id"])
         assert tx["status"] == "issued"
