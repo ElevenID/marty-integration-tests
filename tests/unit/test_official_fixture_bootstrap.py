@@ -603,6 +603,12 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
             },
             issuer_identity_response()["identity"],
             issuer_identity_response(key_purpose="oid4vp_request_signing"),
+            {
+                "identity": issuer_identity_response(
+                    key_purpose="oid4vp_request_signing"
+                )["identity"],
+                "public_jwk": PUBLIC_SIGNING_JWK,
+            },
             {"id": "compliance-profile"},
             {"id": "revocation-profile"},
             {"id": "revocation-profile"},
@@ -637,6 +643,7 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
         "eudi_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
         "eudi_request_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
+        "eudi_request_issuer_public_jwk": PUBLIC_SIGNING_JWK,
         "eudi_compliance_profile_id": "compliance-profile",
         "eudi_revocation_profile_id": "revocation-profile",
         "eudi_passport_template_id": "passport-template",
@@ -676,7 +683,16 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
     assert request_identity_body["issuer_did"] == result["eudi_request_issuer_did"]
     assert request_identity_body["key_purpose"] == "oid4vp_request_signing"
     assert request_identity_body["algorithm"] == "ES256"
-    for _path, _method, body in calls[7:]:
+    assert calls[4][0] == "/v1/signing-keys/issuer-identities/resolve"
+    assert calls[4][1] == "POST"
+    assert calls[4][2] == {
+        "organization_id": fixtures.DEFAULT_ORGANIZATION,
+        "issuer_did": result["eudi_request_issuer_did"],
+        "key_purpose": "oid4vp_request_signing",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+    }
+    for _path, _method, body in calls[8:]:
         assert body is not None
         assert body["issuer_did"] == result["eudi_issuer_did"]
         assert "issuer_profile_id" not in body

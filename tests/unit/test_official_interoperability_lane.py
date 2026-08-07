@@ -451,6 +451,100 @@ def test_oid4vci_fixture_bootstrap_accepts_public_configuration_fragment(
     assert result["oid4vci_credential_configuration_id"] == "PID#sd-jwt"
 
 
+def test_eudi_fixture_bootstrap_accepts_only_public_request_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str],
+        _environment: dict[str, str],
+        **_kwargs: object,
+    ) -> int:
+        destination = Path(command[command.index("--output") + 1])
+        destination.parent.mkdir(parents=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "organization_id": "org-1",
+                    "eudi_issuer_did": "did:web:marty.test:orgs:org-1",
+                    "eudi_request_issuer_did": "did:web:marty.test:orgs:org-1",
+                    "eudi_request_issuer_public_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                    },
+                    "eudi_passport_template_id": "passport-1",
+                    "eudi_mdl_template_id": "mdl-1",
+                    "eudi_open_badge_template_id": "badge-1",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    result = lane.bootstrap_fixtures(
+        SimpleNamespace(
+            output_dir=tmp_path / "output",
+            run_id="run-1",
+            haip_material=tmp_path / "haip",
+        ),
+        {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+        mode="eudi",
+        oidf_key_attestation_trust_anchor=tmp_path / "attester-root.pem",
+    )
+
+    assert result["eudi_request_issuer_public_jwk"] == {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y",
+    }
+
+
+def test_eudi_fixture_bootstrap_rejects_private_request_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str],
+        _environment: dict[str, str],
+        **_kwargs: object,
+    ) -> int:
+        destination = Path(command[command.index("--output") + 1])
+        destination.parent.mkdir(parents=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "organization_id": "org-1",
+                    "eudi_request_issuer_public_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                        "d": "must-never-cross-custody-boundary",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    with pytest.raises(RuntimeError, match="invalid request-signing public JWK"):
+        lane.bootstrap_fixtures(
+            SimpleNamespace(
+                output_dir=tmp_path / "output",
+                run_id="run-1",
+                haip_material=tmp_path / "haip",
+            ),
+            {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+            mode="eudi",
+            oidf_key_attestation_trust_anchor=tmp_path / "attester-root.pem",
+        )
+
+
 def test_fixture_bootstrap_rejects_control_characters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1178,9 +1272,24 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
             "organization_id": "org-1",
             "eudi_issuer_did": "did:web:marty.test:orgs:org-1",
             "eudi_request_issuer_did": "did:web:marty.test:orgs:org-1",
+            "eudi_request_issuer_public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "public-x",
+                "y": "public-y",
+            },
             "eudi_passport_template_id": "passport-1",
             "eudi_mdl_template_id": "mdl-1",
             "eudi_open_badge_template_id": "badge-1",
+        },
+    )
+    monkeypatch.setattr(
+        lane,
+        "issue_verifier_certificate",
+        lambda _path, public_jwk, **_kwargs: {
+            "certificate_sha256": "sha256:certificate",
+            "dns_names": "marty.test",
+            "public_jwk": public_jwk,
         },
     )
     monkeypatch.setattr(
@@ -1219,6 +1328,11 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
         assert "--haip-material" in command
         assert "--oidf" not in command
     assert len(lifecycle_environments) == 3
+    refresh_commands = [
+        command for command in commands if "conformance_stack.py" in " ".join(command)
+    ]
+    assert len(refresh_commands) == 1
+    assert refresh_commands[0][-3:] == ["--haip", "--resume", "up"]
     legacy_private_key_name = "VERIFIER_" + "SIGNING_KEY_PEM"
     assert all(legacy_private_key_name not in item for item in lifecycle_environments)
     assert all("VERIFIER_X509_CERT_PEM" not in item for item in lifecycle_environments)

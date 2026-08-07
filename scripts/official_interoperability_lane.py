@@ -31,6 +31,7 @@ if str(SCRIPTS) not in sys.path:
 
 from haip_test_certificates import (  # noqa: E402
     OID4VP_TRUST_ANCHOR_FILE_ENV,
+    issue_verifier_certificate,
     load_verifier_environment,
 )
 from official_suite_checkout import verify_checkout  # noqa: E402
@@ -1051,7 +1052,7 @@ def bootstrap_fixtures(
     *,
     mode: str,
     oidf_key_attestation_trust_anchor: Path | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     destination = args.output_dir / "private" / f"{mode}-fixtures.json"
     command = [
         sys.executable,
@@ -1094,10 +1095,78 @@ def bootstrap_fixtures(
     api_key = fixtures.get("w3c_api_key")
     if mode == "w3c" and (not isinstance(api_key, str) or not W3C_API_KEY.fullmatch(api_key)):
         raise RuntimeError("w3c public fixture bootstrap returned an invalid API key")
-    identifiers = {key: value for key, value in fixtures.items() if key != "w3c_api_key"}
+    request_public_jwk = fixtures.get("eudi_request_issuer_public_jwk")
+    if mode == "eudi":
+        if (
+            not isinstance(request_public_jwk, dict)
+            or request_public_jwk.get("kty") != "EC"
+            or request_public_jwk.get("crv") != "P-256"
+            or not isinstance(request_public_jwk.get("x"), str)
+            or not isinstance(request_public_jwk.get("y"), str)
+            or any(name in request_public_jwk for name in ("d", "p", "q", "k"))
+        ):
+            raise RuntimeError(
+                "eudi public fixture bootstrap returned an invalid request-signing public JWK"
+            )
+    identifiers = {
+        key: value
+        for key, value in fixtures.items()
+        if key not in {"w3c_api_key", "eudi_request_issuer_public_jwk"}
+    }
     if any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in identifiers.values()):
         raise RuntimeError(f"{mode} public fixture bootstrap returned invalid identifiers")
     return fixtures
+
+
+def refresh_eudi_request_certificate(
+    args: argparse.Namespace,
+    environment: dict[str, str],
+    public_jwk: dict[str, Any],
+) -> dict[str, str]:
+    """Bind the HAIP leaf to the disposable request-signing DID identity.
+
+    The Marty stack must be running before the public fixture API can provision
+    the organization-scoped identity. Reissue only the public leaf certificate
+    after that identity exists, then recreate the HAIP flow service with the
+    updated public certificate. The private signing key remains in managed
+    custody and never enters the harness.
+    """
+
+    report = issue_verifier_certificate(
+        args.haip_material.resolve(),
+        public_jwk,
+        gateway_url=environment["OIDF_MARTY_GATEWAY_URL"],
+    )
+    certificate_environment = load_verifier_environment(args.haip_material)
+    refresh_environment = {**environment, **certificate_environment}
+    launcher = args.marty_ui.resolve() / "scripts" / "conformance_stack.py"
+    command = [
+        sys.executable,
+        str(launcher),
+        "--project",
+        f"marty-conformance-{args.run_id}",
+        "--haip",
+        "--resume",
+        "up",
+    ]
+    if run(command, refresh_environment):
+        raise RuntimeError(
+            "released Marty stack could not adopt the disposable EUDI request certificate"
+        )
+    wait_for_public_stack(refresh_environment)
+    print(
+        json.dumps(
+            {
+                "eudi_request_certificate": {
+                    "certificate_sha256": report["certificate_sha256"],
+                    "dns_names": report["dns_names"],
+                }
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    return certificate_environment
 
 
 def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, object]]:
@@ -1477,8 +1546,16 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
             mode="eudi",
             oidf_key_attestation_trust_anchor=key_attestation_root,
         )
+        request_public_jwk = fixtures.pop("eudi_request_issuer_public_jwk", None)
+        if not isinstance(request_public_jwk, dict):
+            raise RuntimeError(
+                "EUDI fixture bootstrap returned no request-signing public identity"
+            )
+        certificate_environment = refresh_eudi_request_certificate(
+            args, environment, request_public_jwk
+        )
         suite_environment = dict(environment)
-        suite_environment.update(load_verifier_environment(args.haip_material))
+        suite_environment.update(certificate_environment)
         # The runner selects only organization-scoped templates. Each template
         # is bound to an issuer profile and its DID, which together are the
         # runtime signing interface. KMS custody and backend references remain

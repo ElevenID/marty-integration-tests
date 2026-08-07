@@ -914,7 +914,7 @@ def bootstrap_eudi(
     run_id: str,
     key_attestation_trust_anchor_pem: str,
     request: Callable[..., object],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Create EUDI fixtures while keeping custody details behind the profile.
 
     This function performs profile administration through the public API. Its
@@ -1001,6 +1001,16 @@ def bootstrap_eudi(
         "EUDI OID4VP request",
         "oid4vp_request_signing",
     )
+    request_issuer_public_jwk = resolve_issuer_identity_public_jwk(
+        gateway_url,
+        session_id,
+        organization_id=organization_id,
+        issuer_did=request_issuer_did,
+        key_purpose="oid4vp_request_signing",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+        request=request,
+    )
 
     created_compliance = request(
         gateway_url,
@@ -1036,6 +1046,7 @@ def bootstrap_eudi(
         "organization_id": organization_id,
         "eudi_issuer_did": issuer_did,
         "eudi_request_issuer_did": request_issuer_did,
+        "eudi_request_issuer_public_jwk": request_issuer_public_jwk,
         "eudi_compliance_profile_id": compliance_profile_id,
         "eudi_revocation_profile_id": revocation_profile_id,
     }
@@ -1077,7 +1088,7 @@ def bootstrap(
     oidf_mdoc_trust_anchor_pem: str | None = None,
     oidf_key_attestation_trust_anchor_pem: str | None = None,
     request: Callable[..., object] = authenticated_json_request,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("run id must use lowercase letters, digits, and internal hyphens")
     if not IDENTIFIER.fullmatch(organization_id):
