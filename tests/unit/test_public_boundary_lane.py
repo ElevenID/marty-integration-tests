@@ -305,3 +305,17 @@ def test_pytest_diagnostic_is_bounded_and_redacts_private_values(
     assert "password=<redacted>" in diagnostic
     assert "session_id=<redacted>" in diagnostic
     assert "unrelated-0" not in diagnostic
+
+
+def test_public_boundary_workflow_installs_manifest_pinned_didcomm_verifier() -> None:
+    workflow = (
+        Path(__file__).parents[2] / ".github" / "workflows" / "public-tenant-boundary.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "Install attested released DIDComm verifier" in workflow
+    assert 'select(.name == "marty-core-python")' in workflow
+    assert 'test "$repository" = "ElevenID/marty-core"' in workflow
+    assert 'printf \'%s  %s\\n\' "${digest#sha256:}" "$wheel"' in workflow
+    assert 'gh attestation verify "$wheel" --repo "$repository"' in workflow
+    assert "--no-deps --no-index" in workflow
+    assert "callable(_marty_rs.didcomm_decrypt)" in workflow

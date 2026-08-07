@@ -81,6 +81,36 @@ jobs:
           done < <(jq -r '.images[] | [.repository, .reference] | @tsv' work/stack/stack-metadata.json)
           python scripts/render_stack_env.py --manifest work/stack/stack-manifest.json --output work/stack/.env.stack
 
+      - name: Install attested released DIDComm verifier
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          component="$(jq -cer '
+            [.components[] | select(.name == "marty-core-python")]
+            | if length == 1 then .[0] else error("expected exactly one marty-core-python component") end
+          ' work/stack/stack-manifest.json)"
+          repository="$(jq -er '.repository' <<<"$component")"
+          artifact="$(jq -cer '
+            [.artifacts[] | select(.type == "python")]
+            | if length == 1 then .[0] else error("expected exactly one marty-core-python wheel") end
+          ' <<<"$component")"
+          uri="$(jq -er '.uri' <<<"$artifact")"
+          digest="$(jq -er '.digest' <<<"$artifact")"
+          test "$repository" = "ElevenID/marty-core"
+          case "$uri" in
+            https://github.com/ElevenID/marty-core/releases/download/*.whl) ;;
+            *) echo "The DIDComm verifier is not an immutable marty-core release wheel" >&2; exit 1 ;;
+          esac
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          wheel="$RUNNER_TEMP/$(basename "$uri")"
+          curl --fail --location --retry 3 --silent --show-error "$uri" --output "$wheel"
+          printf '%s  %s\n' "${digest#sha256:}" "$wheel" | sha256sum --check --strict
+          gh attestation verify "$wheel" --repo "$repository"
+          python -m pip install --disable-pip-version-check --no-deps --no-index "$wheel"
+          python -c "from marty_rs import _marty_rs; assert callable(_marty_rs.didcomm_decrypt)"
+
       - name: Checkout released deployment adapter
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
