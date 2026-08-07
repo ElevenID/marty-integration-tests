@@ -228,16 +228,16 @@ EUDI_FAILURE_DIAGNOSTIC_PATTERNS = {
         r"(?i)(?:token_endpoint|nonce_endpoint|credential_issuer|openid-credential-issuer|issuer metadata)"
     ),
     "credential-offer": re.compile(r"(?i)(?:credential[_ -]?offer|resolve[_ -]?offer)"),
-    "issuer-profile-or-did": re.compile(
-        r"(?i)(?:issuer[_ -]?profile|issuer DID|DID resolution|remote sign|signing service)"
+    "issuer-identity-or-did": re.compile(
+        r"(?i)(?:issuer[_ -]?(?:identit(?:y|ies)|profile)|issuer DID|DID resolution|remote sign)"
     ),
     "request-object": re.compile(r"(?i)(?:request_uri|request object|authorization request|x509_hash|direct_post)"),
     "holder-binding": re.compile(r"(?i)(?:holder[_ -]?binding|holder key|key binding)"),
     "sd-jwt": re.compile(r"(?i)(?:sd[-_ ]jwt|selective disclosure)"),
     "mdoc": re.compile(r"(?i)(?:mso_mdoc|mdoc|device response)"),
     "wallet-kit": re.compile(r"(?i)(?:wallet[_ -]?kit|official library)"),
-    "signing-service-resolution": re.compile(r"(?i)/v1/signing-keys/config/resolve\b"),
-    "issuer-profile-provisioning": re.compile(r"(?i)/v1/signing-keys/issuer-profiles\b"),
+    "issuer-identity-resolution": re.compile(r"(?i)/v1/signing-keys/issuer-identities/resolve\b"),
+    "issuer-identity-provisioning": re.compile(r"(?i)/v1/signing-keys/issuer-identities\b"),
     "credential-template-provisioning": re.compile(r"(?i)/v1/credential-templates\b"),
     "verification-flow-start": re.compile(r"(?i)/v1/flows/verify\b"),
     "wallet-offer-resolution": re.compile(r"(?i)/issuance/resolve-offer\b"),

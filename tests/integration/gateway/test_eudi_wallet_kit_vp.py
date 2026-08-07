@@ -179,66 +179,24 @@ def vp_test_org() -> dict[str, str]:
     return {"id": ORG_ID}
 
 
-async def _resolve_signing_service(
+async def _issuer_identity(
     client: GatewayClient,
     organization_id: str,
     *,
-    credential_format: str | None,
+    credential_format: str,
     key_purpose: str,
     algorithm: str,
-) -> dict[str, Any]:
-    """Resolve the production signing service, allowing the configured fallback scope."""
-    service = None
-    resolution_error: Exception | None = None
-    for candidate_organization_id in (organization_id, None):
-        try:
-            resolved = await client.resolve_signing_service(
-                organization_id=candidate_organization_id,
-                credential_format=credential_format,
-                key_purpose=key_purpose,
-                algorithm=algorithm,
-            )
-            candidate = resolved.get("service")
-            if isinstance(candidate, dict) and candidate.get("id"):
-                service = candidate
-                break
-        except Exception as exc:  # API reports an unavailable capability as 4xx.
-            resolution_error = exc
-    if not isinstance(service, dict) or not service.get("id"):
-        raise RuntimeError(f"No signing service for {credential_format}/{key_purpose}: {resolution_error}")
-    return service
-
-
-async def _issuer_profile(
-    client: GatewayClient,
-    organization_id: str,
-    *,
-    credential_format: str | None,
-    key_purpose: str,
-    algorithm: str,
-    name: str,
-    service: dict[str, Any] | None = None,
     key_attestation_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create an issuer profile backed by Marty's configured signing service."""
-    if service is None:
-        service = await _resolve_signing_service(
-            client,
-            organization_id,
-            credential_format=credential_format,
-            key_purpose=key_purpose,
-            algorithm=algorithm,
-        )
+    """Create one DID-first identity while Marty selects managed custody."""
     domain = os.getenv("PUBLIC_DOMAIN", "marty-oidf2.local")
     domain = domain.removeprefix("https://").removeprefix("http://").strip("/")
-    return await client.create_issuer_profile(
+    return await client.create_issuer_identity(
         organization_id=organization_id,
-        name=name,
         issuer_did=f"did:web:{domain.replace('/', ':')}:orgs:{organization_id}",
-        signing_service_id=str(service["id"]),
-        signing_key_reference=str(service.get("key_reference") or "") or None,
         key_purpose=key_purpose,
-        status="active",
+        credential_format=credential_format,
+        algorithm=algorithm,
         key_attestation_policy=key_attestation_policy,
     )
 
@@ -295,47 +253,39 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
             frameworks=["aamva", "iso_18013_5"],
         )
     with eudi_stage("mdoc-issuer-profile"):
-        service = await _resolve_signing_service(
+        issuer = await _issuer_identity(
             authenticated_gateway_client,
             vp_test_org["id"],
-            credential_format="mso_mdoc",
+            credential_format="MDOC",
             key_purpose="mdoc_dsc",
             algorithm="ES256",
-        )
-        issuer = await _issuer_profile(
-            authenticated_gateway_client,
-            vp_test_org["id"],
-            credential_format="mso_mdoc",
-            key_purpose="mdoc_dsc",
-            algorithm="ES256",
-            name="EUDI VP mDoc document signer",
-            service=service,
             key_attestation_policy=required_eudi_key_attestation_policy(),
         )
     with eudi_stage("mdoc-issuer-certificate"):
-        identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
-            issuer_profile_id=issuer["id"],
+        identity = await authenticated_gateway_client.resolve_issuer_identity_public_key(
             organization_id=vp_test_org["id"],
+            issuer_did=issuer["issuer_did"],
+            key_purpose="mdoc_dsc",
+            credential_format="MDOC",
+            algorithm="ES256",
         )
         public_jwk = identity.get("public_jwk")
         if not isinstance(public_jwk, dict):
-            raise RuntimeError("issuer profile public identity is incomplete")
+            raise RuntimeError("issuer identity public key resolution is incomplete")
         certificate = create_disposable_mdoc_certificate_chain(
             public_jwk,
             organization_id=vp_test_org["id"],
         )
-        stored = await authenticated_gateway_client.store_issuer_profile_certificate(
-            issuer_profile_id=issuer["id"],
+        stored = await authenticated_gateway_client.store_issuer_identity_certificate(
             organization_id=vp_test_org["id"],
+            issuer_did=issuer["issuer_did"],
+            key_purpose="mdoc_dsc",
+            credential_format="MDOC",
+            algorithm="ES256",
             cert_pem=certificate.leaf_pem,
             cert_chain_pem=certificate.chain_pem,
         )
-        assert stored.get("ok") is True
-        published_identity = await authenticated_gateway_client.get_issuer_profile_public_identity(
-            issuer_profile_id=issuer["id"],
-            organization_id=vp_test_org["id"],
-        )
-        assert len(published_identity.get("x5c") or []) == 2
+        assert stored.get("issuer_did") == issuer["issuer_did"]
     with eudi_stage("mdoc-trust-profile-create"):
         trust_profile = await authenticated_gateway_client.create_trust_profile(
             organization_id=vp_test_org["id"],
@@ -362,10 +312,10 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
     with eudi_stage("mdoc-revocation-profile-activate"):
         revocation = await authenticated_gateway_client.activate_revocation_profile(revocation["id"])
     logger.info(
-        "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer profile %s; verifier trust profile %s",
+        "[mDoc] Attached disposable DSC %s with test trust anchor %s to issuer DID %s; verifier trust profile %s",
         certificate.leaf_sha256,
         certificate.trust_anchor_sha256,
-        issuer["id"],
+        issuer["issuer_did"],
         trust_profile["id"],
     )
     return {

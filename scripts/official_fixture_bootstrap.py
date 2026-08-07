@@ -87,60 +87,26 @@ def compliance_profile_payload(
     }
 
 
-def signing_service_request_payload(
-    *,
-    w3c: bool,
-    key_purpose: str = "vc_jwt_issuer",
-    data_integrity: bool = False,
-) -> dict[str, str]:
-    """Request the configured production signer for one profile purpose."""
-    payload = {
-        "key_purpose": key_purpose,
-        "algorithm": "EdDSA" if data_integrity else "ES256",
-    }
-    if key_purpose == "vc_jwt_issuer":
-        payload["credential_format"] = "ldp_vc" if data_integrity else "jwt_vc_json" if w3c else "dc+sd-jwt"
-    elif key_purpose == "mdoc_dsc":
-        payload["credential_format"] = "mso_mdoc"
-    return payload
-
-
-def issuer_profile_payload(
+def issuer_identity_payload(
     organization_id: str,
-    signing_service: dict[str, object],
     *,
     gateway_url: str,
     w3c: bool,
-    run_id: str,
     algorithm: str,
-    label: str | None = None,
     key_purpose: str = "vc_jwt_issuer",
+    credential_format: str | None = None,
     key_attestation_trust_anchor_pem: str | None = None,
 ) -> dict[str, Any]:
-    """Provision an issuer profile whose private key remains in managed custody.
-
-    The service and key references are profile-administration inputs only. The
-    conformance runners never receive them: issuance selects the resulting
-    issuer profile, and the profile's DID is the signing identity.
-    """
-    service_id = signing_service.get("id")
-    key_reference = signing_service.get("key_reference")
-    if not isinstance(service_id, str) or not IDENTIFIER.fullmatch(service_id):
-        raise RuntimeError("public signing-service resolution returned an invalid service id")
-    if not isinstance(key_reference, str) or not key_reference:
-        raise RuntimeError("issuer-profile backing service returned no managed key reference")
+    """Request a DID identity while leaving all custody selection to Marty."""
     domain = urlparse(gateway_url).hostname
     if not domain:
         raise ValueError("gateway URL has no hostname for the disposable issuer DID")
-    profile_label = label or ("W3C VC Data Model v2" if w3c else "OID4VP SD-JWT")
     result: dict[str, Any] = {
-        "name": f"Official {profile_label} issuer {run_id}",
+        "organization_id": organization_id,
         "issuer_did": f"did:web:{domain}:orgs:{organization_id}",
-        "signing_service_id": service_id,
-        "signing_key_reference": key_reference,
         "key_purpose": key_purpose,
+        "credential_format": credential_format or ("JSON_LD" if w3c else "SD_JWT_VC"),
         "algorithm": algorithm,
-        "status": "active",
     }
     if key_attestation_trust_anchor_pem is not None:
         result["key_attestation_policy"] = {
@@ -881,77 +847,63 @@ def oid4vci_configuration_id(
     return matches[0]
 
 
-def issuer_profile_response_id(value: object) -> str:
-    """Extract the profile object returned by the public issuer-profile API."""
+def issuer_identity_response(value: object) -> dict[str, object]:
+    """Validate the provider-neutral public issuer-identity response."""
     if not isinstance(value, dict):
-        raise RuntimeError("public API returned a non-object for issuer profile")
-    return response_id(value.get("profile", value), "issuer profile")
+        raise RuntimeError("public API returned a non-object for issuer identity")
+    identity = value.get("identity", value)
+    if not isinstance(identity, dict) or not str(identity.get("issuer_did") or "").startswith("did:"):
+        raise RuntimeError("public API returned an invalid issuer identity")
+    forbidden = {"issuer_profile_id", "signing_service_id", "signing_key_reference", "kms_provider", "key_name"}
+    leaked = forbidden.intersection(identity)
+    if leaked:
+        raise RuntimeError(f"public issuer identity leaked private selectors: {sorted(leaked)}")
+    return identity
 
 
-def resolve_new_profile_public_identity(
+def resolve_issuer_identity_public_jwk(
     gateway_url: str,
     session_id: str,
     *,
     organization_id: str,
-    profile_id: str,
+    issuer_did: str,
+    key_purpose: str,
+    credential_format: str,
+    algorithm: str,
     request: Callable[..., object],
     attempts: int = 10,
-) -> object:
-    """Wait briefly for a newly created profile's public DID key to be visible."""
-    path = (
-        f"/v1/signing-keys/issuer-profiles/{profile_id}/public-identity?"
-        f"{urlencode({'organization_id': organization_id})}"
-    )
-    for attempt in range(attempts):
-        try:
-            return request(gateway_url, session_id, path, method="GET")
-        except RuntimeError as exc:
-            if "HTTP 404" not in str(exc) or attempt + 1 == attempts:
-                raise
-            time.sleep(1)
-    raise AssertionError("issuer-profile visibility retry exhausted unexpectedly")
-
-
-def resolve_signing_service(
-    gateway_url: str,
-    session_id: str,
-    *,
-    organization_id: str,
-    w3c: bool,
-    key_purpose: str = "vc_jwt_issuer",
-    data_integrity: bool = False,
-    request: Callable[..., object],
 ) -> dict[str, object]:
-    """Resolve the managed backend used only to provision an issuer profile.
-
-    The fallback is still a public gateway call.  It supports stacks that
-    register a shared managed service while retaining the issuer profile and
-    DID as the sole runtime signing interface in the disposable organization.
-    """
-    failure: RuntimeError | None = None
-    for candidate_organization in (organization_id, None):
-        query = (
-            f"?{urlencode({'organization_id': candidate_organization})}" if candidate_organization is not None else ""
-        )
+    """Resolve one public DID key from the complete provider-neutral tuple."""
+    path = "/v1/signing-keys/issuer-identities/resolve"
+    body = {
+        "organization_id": organization_id,
+        "issuer_did": issuer_did,
+        "key_purpose": key_purpose,
+        "credential_format": credential_format,
+        "algorithm": algorithm,
+    }
+    for attempt in range(attempts):
         try:
             resolved = request(
                 gateway_url,
                 session_id,
-                f"/v1/signing-keys/config/resolve{query}",
+                path,
                 method="POST",
-                json_body=signing_service_request_payload(
-                    w3c=w3c,
-                    key_purpose=key_purpose,
-                    data_integrity=data_integrity,
-                ),
+                json_body=body,
             )
         except RuntimeError as exc:
-            failure = exc
+            if "HTTP 404" not in str(exc) or attempt + 1 == attempts:
+                raise
+            time.sleep(1)
             continue
-        if isinstance(resolved, dict) and isinstance(resolved.get("service"), dict):
-            return resolved["service"]
-        raise RuntimeError("public signing-service resolution returned no service object")
-    raise RuntimeError(f"no managed issuer-profile backing service is available: {failure}")
+        identity = resolved.get("identity") if isinstance(resolved, dict) else None
+        public_jwk = resolved.get("public_jwk") if isinstance(resolved, dict) else None
+        if not isinstance(identity, dict) or identity.get("issuer_did") != issuer_did:
+            raise RuntimeError("public identity resolution changed the requested issuer DID")
+        if not isinstance(public_jwk, dict) or not public_jwk.get("kty"):
+            raise RuntimeError("public identity resolution returned no usable public JWK")
+        return public_jwk
+    raise AssertionError("issuer identity visibility retry exhausted unexpectedly")
 
 
 def bootstrap_eudi(
@@ -971,30 +923,21 @@ def bootstrap_eudi(
     the issuance request path.
     """
 
-    def provision_profile(
+    def provision_identity(
         label: str,
         key_purpose: str,
         *,
         attach_certificate: bool = False,
         trust_wallet_attester: bool = False,
-    ) -> tuple[str, str]:
-        custody_service = resolve_signing_service(
-            gateway_url,
-            session_id,
-            organization_id=organization_id,
-            w3c=False,
-            key_purpose=key_purpose,
-            request=request,
-        )
-        payload = issuer_profile_payload(
+    ) -> str:
+        credential_format = "SD_JWT_VC"
+        payload = issuer_identity_payload(
             organization_id,
-            custody_service,
             gateway_url=gateway_url,
             w3c=False,
-            run_id=run_id,
             algorithm="ES256",
-            label=label,
             key_purpose=key_purpose,
+            credential_format=credential_format,
             key_attestation_trust_anchor_pem=(
                 key_attestation_trust_anchor_pem if trust_wallet_attester else None
             ),
@@ -1002,22 +945,24 @@ def bootstrap_eudi(
         created = request(
             gateway_url,
             session_id,
-            f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
+            "/v1/signing-keys/issuer-identities",
             method="POST",
             json_body=payload,
         )
-        profile_id = issuer_profile_response_id(created)
+        identity = issuer_identity_response(created)
+        if identity.get("issuer_did") != payload["issuer_did"]:
+            raise RuntimeError("issuer identity response changed the requested DID")
         if attach_certificate:
-            identity = resolve_new_profile_public_identity(
+            public_jwk = resolve_issuer_identity_public_jwk(
                 gateway_url,
                 session_id,
                 organization_id=organization_id,
-                profile_id=profile_id,
+                issuer_did=str(payload["issuer_did"]),
+                key_purpose=key_purpose,
+                credential_format=credential_format,
+                algorithm="ES256",
                 request=request,
             )
-            public_jwk = identity.get("public_jwk") if isinstance(identity, dict) else None
-            if not isinstance(public_jwk, dict):
-                raise RuntimeError("issuer profile public identity returned no public JWK")
             certificate = create_disposable_issuer_certificate_chain(
                 public_jwk,
                 organization_id=organization_id,
@@ -1026,31 +971,33 @@ def bootstrap_eudi(
             attached = request(
                 gateway_url,
                 session_id,
-                (
-                    f"/v1/signing-keys/issuer-profiles/{profile_id}/certificate?"
-                    f"{urlencode({'organization_id': organization_id})}"
-                ),
+                "/v1/signing-keys/issuer-identities/certificate",
                 method="PUT",
                 json_body={
+                    "organization_id": organization_id,
+                    "issuer_did": payload["issuer_did"],
+                    "key_purpose": key_purpose,
+                    "credential_format": credential_format,
+                    "algorithm": "ES256",
                     "cert_pem": certificate.leaf_pem,
                     "cert_chain_pem": certificate.chain_pem,
                 },
             )
             if (
                 not isinstance(attached, dict)
-                or attached.get("issuer_profile_id") != profile_id
-                or attached.get("certificate_chain_length") != 2
+                or attached.get("issuer_did") != payload["issuer_did"]
+                or attached.get("credential_format") != credential_format
             ):
-                raise RuntimeError("issuer profile certificate attachment was not confirmed")
-        return profile_id, payload["issuer_did"]
+                raise RuntimeError("issuer identity certificate attachment was not confirmed")
+        return str(payload["issuer_did"])
 
-    issuer_profile_id, issuer_did = provision_profile(
+    issuer_did = provision_identity(
         "EUDI SD-JWT",
         "vc_jwt_issuer",
         attach_certificate=True,
         trust_wallet_attester=True,
     )
-    request_profile_id, request_issuer_did = provision_profile(
+    request_issuer_did = provision_identity(
         "EUDI OID4VP request",
         "oid4vp_request_signing",
     )
@@ -1156,65 +1103,43 @@ def bootstrap(
         oid4vci = mode == "oid4vci"
         mdoc = mode == "oid4vp-mdoc"
         prefix = "w3c" if w3c else ("oid4vci" if oid4vci else "oid4vp_mdoc" if mdoc else "oid4vp")
-        signing_service = resolve_signing_service(
-            gateway_url,
-            session_id,
-            organization_id=organization_id,
-            w3c=w3c,
-            key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
-            data_integrity=w3c,
-            request=request,
-        )
-        profile_payload = issuer_profile_payload(
+        profile_payload = issuer_identity_payload(
             organization_id,
-            signing_service,
             gateway_url=gateway_url,
             w3c=w3c,
-            run_id=run_id,
             algorithm="EdDSA" if w3c else "ES256",
-            label="W3C VC Data Integrity" if w3c else "OID4VCI SD-JWT" if oid4vci else None,
             key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
+            credential_format="JSON_LD" if w3c else "MDOC" if mdoc else "SD_JWT_VC",
             key_attestation_trust_anchor_pem=(
                 oidf_key_attestation_trust_anchor_pem if oid4vci else None
             ),
         )
-        created_issuer_profile = request(
+        created_issuer_identity = request(
             gateway_url,
             session_id,
-            f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
+            "/v1/signing-keys/issuer-identities",
             method="POST",
             json_body=profile_payload,
         )
-        issuer_profile_response_id(created_issuer_profile)
-        request_profile_payload: dict[str, str] | None = None
-        request_issuer_profile_id: str | None = None
+        issuer_identity_response(created_issuer_identity)
+        request_profile_payload: dict[str, Any] | None = None
         if not w3c and not oid4vci:
-            request_signing_service = resolve_signing_service(
-                gateway_url,
-                session_id,
-                organization_id=organization_id,
-                w3c=False,
-                key_purpose="oid4vp_request_signing",
-                request=request,
-            )
-            request_profile_payload = issuer_profile_payload(
+            request_profile_payload = issuer_identity_payload(
                 organization_id,
-                request_signing_service,
                 gateway_url=gateway_url,
                 w3c=False,
-                run_id=run_id,
                 algorithm="ES256",
-                label="OID4VP Request Object",
                 key_purpose="oid4vp_request_signing",
+                credential_format="MDOC" if mdoc else "SD_JWT_VC",
             )
-            created_request_profile = request(
+            created_request_identity = request(
                 gateway_url,
                 session_id,
-                f"/v1/signing-keys/issuer-profiles?{urlencode({'organization_id': organization_id})}",
+                "/v1/signing-keys/issuer-identities",
                 method="POST",
                 json_body=request_profile_payload,
             )
-            request_issuer_profile_id = issuer_profile_response_id(created_request_profile)
+            issuer_identity_response(created_request_identity)
         created_compliance_profile = request(
             gateway_url,
             session_id,
@@ -1374,7 +1299,6 @@ def bootstrap(
             result["oid4vci_credential_configuration_id"] = credential_configuration_id
         else:
             assert request_profile_payload is not None
-            assert request_issuer_profile_id is not None
             result[f"{prefix}_issuer_did"] = request_profile_payload["issuer_did"]
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c and not oid4vci:

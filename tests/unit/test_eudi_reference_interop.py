@@ -261,7 +261,7 @@ def test_eudi_junit_failure_summary_emits_only_fixed_actionable_categories(
             "categories": [
                 "http-422",
                 "credential-offer",
-                "issuer-profile-or-did",
+                "issuer-identity-or-did",
             ],
         }
     ]
@@ -271,9 +271,16 @@ def test_eudi_junit_failure_summary_emits_only_fixed_actionable_categories(
 
 
 def test_eudi_failure_categories_recognize_gateway_client_status() -> None:
-    categories = eudi.classify_eudi_failure_text("POST /v1/signing-keys/config/resolve failed with 422: private detail")
+    categories = eudi.classify_eudi_failure_text(
+        "POST /v1/signing-keys/issuer-identities/resolve failed with 422: private detail"
+    )
 
-    assert categories == ["http-422", "signing-service-resolution"]
+    assert categories == [
+        "http-422",
+        "issuer-identity-or-did",
+        "issuer-identity-resolution",
+        "issuer-identity-provisioning",
+    ]
 
 
 def test_eudi_failure_categories_identify_verifier_contract_without_values() -> None:
@@ -461,7 +468,7 @@ def test_eudi_junit_failure_summary_classifies_safe_operation_only(
     report = tmp_path / "junit.xml"
     report.write_text(
         '<testsuites><testsuite><testcase classname="suite" name="case">'
-        '<error message="POST /v1/signing-keys/issuer-profiles failed: secret=private"/>'
+        '<error message="POST /v1/signing-keys/issuer-identities failed: secret=private"/>'
         "</testcase></testsuite></testsuites>",
         encoding="utf-8",
     )
@@ -469,8 +476,8 @@ def test_eudi_junit_failure_summary_classifies_safe_operation_only(
     summary = eudi.junit_failure_summary(report)
 
     assert summary[0]["categories"] == [
-        "issuer-profile-or-did",
-        "issuer-profile-provisioning",
+        "issuer-identity-or-did",
+        "issuer-identity-provisioning",
     ]
     assert "private" not in json.dumps(summary)
 
