@@ -275,6 +275,10 @@ def write_summary(
         "issued-credential lifecycle and revocation isolation",
         "trust-profile ownership and mutation isolation",
         "issuer-entity and trust-profile relationship isolation",
+        (
+            "normalized issuer relationships drive released verification decisions, "
+            "including immediate under-review denial, trust-threshold denial, and recovery"
+        ),
         "applicant form-data and vetting isolation",
         "application evidence collection, deletion, revocation, and tenant isolation",
         "deployment-profile, lane, and device-assignment isolation",
