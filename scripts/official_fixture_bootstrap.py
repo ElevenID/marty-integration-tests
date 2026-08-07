@@ -611,11 +611,7 @@ def policy_payload(
         holder_binding.update(
             {
                 "binding_methods": ["DEVICE_KEY"],
-                "proof_profiles": [
-                    "MDOC_DEVICE_AUTHENTICATION"
-                    if mdoc
-                    else "OID4VP_VERIFIABLE_PRESENTATION"
-                ],
+                "proof_profiles": ["MDOC_DEVICE_AUTHENTICATION" if mdoc else "OID4VP_VERIFIABLE_PRESENTATION"],
                 "proof_freshness": {
                     "challenge_required": True,
                     "audience_binding_required": True,
@@ -914,7 +910,7 @@ def bootstrap_eudi(
     run_id: str,
     key_attestation_trust_anchor_pem: str,
     request: Callable[..., object],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Create EUDI fixtures while keeping custody details behind the profile.
 
     This function performs profile administration through the public API. Its
@@ -938,9 +934,7 @@ def bootstrap_eudi(
             algorithm="ES256",
             key_purpose=key_purpose,
             credential_format=credential_format,
-            key_attestation_trust_anchor_pem=(
-                key_attestation_trust_anchor_pem if trust_wallet_attester else None
-            ),
+            key_attestation_trust_anchor_pem=(key_attestation_trust_anchor_pem if trust_wallet_attester else None),
         )
         created = request(
             gateway_url,
@@ -1001,6 +995,16 @@ def bootstrap_eudi(
         "EUDI OID4VP request",
         "oid4vp_request_signing",
     )
+    request_issuer_public_jwk = resolve_issuer_identity_public_jwk(
+        gateway_url,
+        session_id,
+        organization_id=organization_id,
+        issuer_did=request_issuer_did,
+        key_purpose="oid4vp_request_signing",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+        request=request,
+    )
 
     created_compliance = request(
         gateway_url,
@@ -1036,6 +1040,7 @@ def bootstrap_eudi(
         "organization_id": organization_id,
         "eudi_issuer_did": issuer_did,
         "eudi_request_issuer_did": request_issuer_did,
+        "eudi_request_issuer_public_jwk": request_issuer_public_jwk,
         "eudi_compliance_profile_id": compliance_profile_id,
         "eudi_revocation_profile_id": revocation_profile_id,
     }
@@ -1077,7 +1082,7 @@ def bootstrap(
     oidf_mdoc_trust_anchor_pem: str | None = None,
     oidf_key_attestation_trust_anchor_pem: str | None = None,
     request: Callable[..., object] = authenticated_json_request,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     if not RUN_ID.fullmatch(run_id):
         raise ValueError("run id must use lowercase letters, digits, and internal hyphens")
     if not IDENTIFIER.fullmatch(organization_id):
@@ -1110,9 +1115,7 @@ def bootstrap(
             algorithm="EdDSA" if w3c else "ES256",
             key_purpose="mdoc_dsc" if mdoc else "vc_jwt_issuer",
             credential_format="JSON_LD" if w3c else "MDOC" if mdoc else "SD_JWT_VC",
-            key_attestation_trust_anchor_pem=(
-                oidf_key_attestation_trust_anchor_pem if oid4vci else None
-            ),
+            key_attestation_trust_anchor_pem=(oidf_key_attestation_trust_anchor_pem if oid4vci else None),
         )
         created_issuer_identity = request(
             gateway_url,
@@ -1123,6 +1126,7 @@ def bootstrap(
         )
         issuer_identity_response(created_issuer_identity)
         request_profile_payload: dict[str, Any] | None = None
+        request_issuer_public_jwk: dict[str, str] | None = None
         if not w3c and not oid4vci:
             request_profile_payload = issuer_identity_payload(
                 organization_id,
@@ -1140,6 +1144,16 @@ def bootstrap(
                 json_body=request_profile_payload,
             )
             issuer_identity_response(created_request_identity)
+            request_issuer_public_jwk = resolve_issuer_identity_public_jwk(
+                gateway_url,
+                session_id,
+                organization_id=organization_id,
+                issuer_did=request_profile_payload["issuer_did"],
+                key_purpose="oid4vp_request_signing",
+                credential_format="MDOC" if mdoc else "SD_JWT_VC",
+                algorithm="ES256",
+                request=request,
+            )
         created_compliance_profile = request(
             gateway_url,
             session_id,
@@ -1299,7 +1313,9 @@ def bootstrap(
             result["oid4vci_credential_configuration_id"] = credential_configuration_id
         else:
             assert request_profile_payload is not None
+            assert request_issuer_public_jwk is not None
             result[f"{prefix}_issuer_did"] = request_profile_payload["issuer_did"]
+            result[f"{prefix}_request_issuer_public_jwk"] = request_issuer_public_jwk
         result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c and not oid4vci:
             created_trust_profile = request(
@@ -1393,9 +1409,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "oid4vp-mdoc" and args.oidf_runner_source is None:
         raise ValueError("--oidf-runner-source is required for OID4VP mdoc fixture bootstrap")
     if args.mode in {"oid4vci", "eudi"} and args.oidf_key_attestation_trust_anchor is None:
-        raise ValueError(
-            "--oidf-key-attestation-trust-anchor is required for OID4VCI and EUDI fixture bootstrap"
-        )
+        raise ValueError("--oidf-key-attestation-trust-anchor is required for OID4VCI and EUDI fixture bootstrap")
     gateway = https_url(args.gateway_url, "gateway URL")
     signer_public_jwk = (
         official_signer_public_jwk(args.oidf_runner_config)
@@ -1423,8 +1437,8 @@ def main(argv: list[str] | None = None) -> int:
         oidf_key_attestation_trust_anchor_pem=key_attestation_trust_anchor_pem,
     )
     write_private_json(args.output.resolve(), fixtures)
-    # The file contains identifiers only, but keep stdout free of values so it
-    # remains safe if future fixture metadata grows.
+    # The file contains identifiers and public signing material only, but keep
+    # stdout free of values so it remains safe if fixture metadata grows.
     print(f"Created {args.mode} official-suite fixtures through the public gateway.")
     return 0
 

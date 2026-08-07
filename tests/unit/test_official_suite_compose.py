@@ -83,10 +83,7 @@ def test_marty_only_runs_without_an_official_runner(
     monkeypatch.setattr(
         lifecycle,
         "run",
-        lambda command, _environment: calls.append(
-            (component(command), action(command))
-        )
-        or 0,
+        lambda command, _environment: calls.append((component(command), action(command))) or 0,
     )
 
     assert (
@@ -365,11 +362,14 @@ def test_live_issuer_identity_uses_only_the_did_first_public_command(
 
     monkeypatch.setattr(lifecycle.subprocess, "run", run)
 
-    assert lifecycle.resolve_issuer_did_identity(
-        args,
-        {"marty": "marty-conformance-run1"},
-        {},
-    ) == identity
+    assert (
+        lifecycle.resolve_issuer_did_identity(
+            args,
+            {"marty": "marty-conformance-run1"},
+            {},
+        )
+        == identity
+    )
     assert commands[0][-1] == "issuer-did-identity"
     assert "issuer-profile-identity" not in commands[0]
 
@@ -402,6 +402,60 @@ def test_haip_stage_certifies_only_the_live_issuer_profile_public_key(
     leaf = haip.x509.load_pem_x509_certificate(certificate)
     assert leaf.public_key().public_numbers() == profile_key.public_key().public_numbers()
     assert not (material / haip.AUTHORITY_KEY_FILE).exists()
+
+
+def test_eudi_stage_retains_disposable_authority_for_final_did_leaf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    material = tmp_path / "prepared"
+    haip.generate_material(material, gateway_url="https://verifier.example:8443")
+    profile_key = ec.generate_private_key(ec.SECP256R1())
+    numbers = profile_key.public_key().public_numbers()
+    identity = {
+        "issuer_did": "did:web:verifier.example",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": haip._base64url(numbers.x.to_bytes(32, "big")),
+            "y": haip._base64url(numbers.y.to_bytes(32, "big")),
+        },
+    }
+    monkeypatch.setattr(lifecycle, "resolve_issuer_did_identity", lambda *_args: identity)
+    args = type("Args", (), {"haip_material": material, "eudi": True})()
+    environment = {"OIDF_PUBLIC_BASE_URL": "https://verifier.example:8443"}
+
+    lifecycle.stage_haip_profile_certificate(args, {}, environment)
+
+    assert "VERIFIER_X509_CERT_PEM" in environment
+    assert (material / haip.AUTHORITY_KEY_FILE).exists()
+
+
+def test_oidf_stage_retains_disposable_authority_for_final_did_leaf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    material = tmp_path / "prepared"
+    haip.generate_material(material, gateway_url="https://verifier.example:8443")
+    profile_key = ec.generate_private_key(ec.SECP256R1())
+    numbers = profile_key.public_key().public_numbers()
+    identity = {
+        "issuer_did": "did:web:verifier.example",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": haip._base64url(numbers.x.to_bytes(32, "big")),
+            "y": haip._base64url(numbers.y.to_bytes(32, "big")),
+        },
+    }
+    monkeypatch.setattr(lifecycle, "resolve_issuer_did_identity", lambda *_args: identity)
+    args = type("Args", (), {"haip_material": material, "eudi": False, "oidf": True})()
+    environment = {"OIDF_PUBLIC_BASE_URL": "https://verifier.example:8443"}
+
+    lifecycle.stage_haip_profile_certificate(args, {}, environment)
+
+    assert "VERIFIER_X509_CERT_PEM" in environment
+    assert (material / haip.AUTHORITY_KEY_FILE).exists()
 
 
 def test_generated_haip_material_replaces_the_unrelated_tls_root(tmp_path: Path) -> None:
