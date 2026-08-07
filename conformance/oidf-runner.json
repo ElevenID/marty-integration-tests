@@ -2,8 +2,8 @@
   "schema": "elevenid.oidf-conformance-runner/v1",
   "official_runner": {
     "repository": "https://gitlab.com/openid/conformance-suite.git",
-    "release": "release-v5.2.1",
-    "commit": "932b46f1e507871eb0b34621aaef65ff04442e6f",
+    "release": "release-v5.2.2",
+    "commit": "321bc5bc53601b9690b54c023c0cbfac0f0230f2",
     "source_policy": "unmodified",
     "review_cadence": "monthly"
   },
@@ -13,7 +13,7 @@
       "test_plan": "oid4vci-1_0-issuer-test-plan[sender_constrain=dpop][client_auth_type=private_key_jwt][vci_authorization_code_flow_variant=issuer_initiated][credential_format=sd_jwt_vc][authorization_request_type=simple][openid=plain_oauth][fapi_request_method=unsigned][vci_grant_type=pre_authorization_code][vci_credential_encryption=plain][fapi_profile=vci][fapi_response_mode=plain_response]",
       "configuration_example": "conformance/marty-issuer.example.json",
       "target": "Marty's public credential-issuer URL through the gateway",
-      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact OIDF release-v5.2.1 runs validate registered private_key_jwt clients end to end and exercise the issuer's tenant-bound key-attestation policy through Marty's public issuer path. Three optional, unadvertised capabilities remain explicit expiring skips."
+      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact OIDF release-v5.2.2 runs validate registered private_key_jwt clients end to end and exercise the issuer's tenant-bound key-attestation policy through Marty's public issuer path. Three optional, unadvertised capabilities remain explicit expiring skips."
     },
     "oid4vp-verifier": {
       "status": "active",
@@ -27,21 +27,21 @@
       "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=sd_jwt_vc][response_mode=direct_post][request_method=url_query][client_id_prefix=redirect_uri]",
       "configuration_example": "conformance/marty-verifier.example.json",
       "target": "Marty's public verifier URL through the gateway using direct unsigned OID4VP authorization parameters",
-      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact unmodified OIDF release-v5.2.1 evidence is required for the upstream direct unsigned url_query variant with no expected failures or skips. This remains distinct from Marty's signed by-value Request Object transport."
+      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact unmodified OIDF release-v5.2.2 evidence is required for the upstream direct unsigned url_query variant with no expected failures or skips. This remains distinct from Marty's signed by-value Request Object transport."
     },
     "oid4vp-mdoc-verifier": {
       "status": "active",
-      "execution_status": "blocked_upstream",
       "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=iso_mdl][response_mode=direct_post][request_method=request_uri_signed][client_id_prefix=x509_hash]",
       "configuration_example": "conformance/marty-verifier-mdoc.example.json",
       "target": "Marty's public verifier URL through the gateway",
       "qualification": "Interoperability evidence only. This native OIDF verifier plan creates ISO 18013-5 mdoc presentations; it does not certify Marty as an mdoc issuer.",
-      "upstream_constraint": {
+      "upstream_fixture_review": {
         "tracking_issue": "https://github.com/ElevenID/marty-integration-tests/issues/243",
-        "runner_release": "release-v5.2.1",
-        "certificate_not_after": "2026-07-30T07:47:22+00:00",
-        "certificate_sha256": "c74e6bfecdd161452009ce10d9e5c1386d9022b10378a3de5e296605d325d48d",
-        "policy": "Do not replace the runner certificate, alter validation time, bypass certificate validation, modify the imported suite, or exclude the lane. Adopt and rerun the next reviewed official release that rotates the fixture."
+        "runner_release": "release-v5.2.2",
+        "certificate_not_before": "2026-08-03T16:12:01+00:00",
+        "certificate_not_after": "2027-08-03T16:12:01+00:00",
+        "certificate_sha256": "6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53",
+        "policy": "Consume the certificate only from the exact unmodified runner source and fail closed outside its validity interval. Never replace the runner certificate, alter validation time, bypass certificate validation, modify the imported suite, or exclude the lane."
       }
     },
     "oid4vp-haip-verifier": {
