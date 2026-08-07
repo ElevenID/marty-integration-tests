@@ -1190,6 +1190,12 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 f"transaction_status={transaction_status}; {exc}"
             ) from None
         assert accepted["status"] == "accepted"
+        wallet_credentials_b = await wallet.list_credentials()
+        assert len(wallet_credentials_b) == 1, (
+            "Organization-B OID4VCI redemption did not produce exactly one wallet credential"
+        )
+        raw_credential_b = str(wallet_credentials_b[0].get("credential") or "")
+        assert raw_credential_b, "Organization-B OID4VCI redemption produced an empty wallet credential"
         owner_transaction = await admin.client.get(
             f"/v1/issuance/{issuance_b_id}",
         )
@@ -1283,7 +1289,11 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         trust_profile_a_id = str(trust_profile_a["id"])
 
-        issuer_entity_b_did = f"did:web:trust-{uuid.uuid4().hex}.example"
+        # Bind the trust registry to the DID that actually signed the
+        # organization-B credential. A synthetic lookalike would only test
+        # CRUD isolation and could not prove that normalized relationships
+        # participate in a real verification decision.
+        issuer_entity_b_did = issuer_did_b
         issuer_entity_b_name = f"Organization B trust issuer {uuid.uuid4().hex}"
         issuer_entity_payload = {
             "organization_id": organization_b_id,
@@ -1322,6 +1332,44 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert "issuer_did" not in relationship_b
         assert "name" not in relationship_b
         _assert_no_private_signing_selectors(relationship_b)
+
+        activated_trust_profile_b = await admin.activate_trust_profile(trust_profile_b_id)
+        assert activated_trust_profile_b["status"] == "active"
+
+        trust_decision_policy_payload = TestDataBuilder.presentation_policy_employee_access(
+            organization_id=organization_b_id,
+            credential_template_id=str(template_b["id"]),
+            name=f"Organization B normalized trust decision {uuid.uuid4().hex}",
+        )
+        trust_decision_policy_payload["credential_requirements"][0]["credential_payload_format"] = "sd_jwt_vc"
+        trust_decision_policy_payload.update(
+            {
+                "trust_profile_id": trust_profile_b_id,
+                "holder_binding": {"required": False},
+                "issuer_constraints": {
+                    "min_trust_level": 80,
+                    "required_compliance_statuses": ["COMPLIANT"],
+                    "required_accreditations": [],
+                },
+            }
+        )
+        trust_decision_policy_create = await admin.client.post(
+            "/v1/presentation-policies",
+            json=trust_decision_policy_payload,
+        )
+        assert trust_decision_policy_create.status_code in {200, 201}, trust_decision_policy_create.text
+        trust_decision_policy_b = await admin.activate_presentation_policy(
+            str(trust_decision_policy_create.json()["id"])
+        )
+
+        trusted_decision = await admin.evaluate_presentation(
+            str(trust_decision_policy_b["id"]),
+            raw_credential_b,
+        )
+        assert trusted_decision["result"] == "passed", trusted_decision
+        assert trusted_decision["decision"] == "allow", trusted_decision
+        assert trusted_decision["credential_results"][0]["trust_check_passed"] is True
+        _assert_no_private_signing_selectors(trusted_decision)
 
         # Extensible metadata is not a custody escape hatch.  Both selector
         # fields and private JWK parameters must fail before persistence.
@@ -1404,6 +1452,53 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert owner_relationship_update.status_code == 200, owner_relationship_update.text
         assert owner_relationship_update.json()["trust_level"] == 85
+
+        under_review_decision = await admin.evaluate_presentation(
+            str(trust_decision_policy_b["id"]),
+            raw_credential_b,
+        )
+        assert under_review_decision["result"] == "failed", under_review_decision
+        assert under_review_decision["decision"] == "deny", under_review_decision
+        assert under_review_decision["credential_results"][0]["trust_check_passed"] is False
+        assert "not trusted" in str(under_review_decision.get("decision_reason") or "").lower()
+        _assert_no_private_signing_selectors(under_review_decision)
+
+        low_trust_update = await admin.client.patch(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+            json={
+                "trust_level": 79,
+                "relationship_status": "TRUSTED",
+                "cascade_revocation_policy": "MANUAL",
+                "metadata": {"credential_template_ids": []},
+            },
+        )
+        assert low_trust_update.status_code == 200, low_trust_update.text
+        low_trust_decision = await admin.evaluate_presentation(
+            str(trust_decision_policy_b["id"]),
+            raw_credential_b,
+        )
+        assert low_trust_decision["result"] == "failed", low_trust_decision
+        assert low_trust_decision["decision"] == "deny", low_trust_decision
+        assert "minimum trust level" in str(low_trust_decision.get("decision_reason") or "").lower()
+        _assert_no_private_signing_selectors(low_trust_decision)
+
+        restored_relationship = await admin.client.patch(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+            json={
+                "trust_level": 100,
+                "relationship_status": "TRUSTED",
+                "cascade_revocation_policy": "NOTIFY_ONLY",
+                "metadata": {"credential_template_ids": []},
+            },
+        )
+        assert restored_relationship.status_code == 200, restored_relationship.text
+        restored_decision = await admin.evaluate_presentation(
+            str(trust_decision_policy_b["id"]),
+            raw_credential_b,
+        )
+        assert restored_decision["result"] == "passed", restored_decision
+        assert restored_decision["decision"] == "allow", restored_decision
+        _assert_no_private_signing_selectors(restored_decision)
 
         # A trust profile and its issuer registry/relationship resources are
         # tenant-owned security policy. Prove the B owner path first, then
