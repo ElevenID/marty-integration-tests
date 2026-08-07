@@ -240,6 +240,7 @@ def write_summary(
             "public custody-selector rejection",
             "unknown, inactive, and purpose-incompatible DID rejection",
             "idempotent issuer-profile uniqueness",
+            "ambiguous compatible issuer-profile rejection and recovery",
             "public response custody-metadata minimization",
         ],
     }
