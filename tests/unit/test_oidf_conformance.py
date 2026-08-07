@@ -412,6 +412,7 @@ def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
     config.write_text(
         json.dumps(
             {
+                "alias": oidf.OIDF_VERIFIER_ALIAS,
                 "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256"}},
                 "verifier": {
                     "gateway_url": "https://conformance.example.test",
@@ -428,6 +429,7 @@ def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
     config.write_text(
         json.dumps(
             {
+                "alias": oidf.OIDF_VERIFIER_ALIAS,
                 "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},
                 "client": {"request_object_trust_anchor_pem": "test-root"},
                 "verifier": {
@@ -447,6 +449,7 @@ def test_verifier_configuration_profile_must_match_the_official_plan(tmp_path: P
     config.write_text(
         json.dumps(
             {
+                "alias": oidf.OIDF_VERIFIER_ALIAS,
                 "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},
                 "verifier": {
                     "gateway_url": "https://conformance.example.test",
@@ -486,6 +489,7 @@ def test_signed_request_uri_requires_a_runner_trust_anchor(tmp_path: Path) -> No
     config.write_text(
         json.dumps(
             {
+                "alias": oidf.OIDF_VERIFIER_ALIAS,
                 "credential": {"signing_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "d"}},
                 "verifier": {
                     "gateway_url": "https://conformance.example.test",
@@ -506,6 +510,7 @@ def test_direct_url_query_does_not_require_a_request_object_trust_anchor(
     config.write_text(
         json.dumps(
             {
+                "alias": oidf.OIDF_VERIFIER_ALIAS,
                 "credential": {
                     "signing_jwk": {
                         "kty": "EC",
@@ -535,6 +540,7 @@ def test_verifier_configuration_requires_reviewed_screenshot_automation(
     config.write_text(
         json.dumps(
             {
+                "alias": oidf.OIDF_VERIFIER_ALIAS,
                 "credential": {
                     "signing_jwk": {
                         "kty": "EC",
@@ -555,6 +561,35 @@ def test_verifier_configuration_requires_reviewed_screenshot_automation(
     )
 
     with pytest.raises(ValueError, match="reviewed OIDF verification-evidence"):
+        oidf.validate_config(config, "oid4vp-verifier")
+
+
+def test_verifier_configuration_requires_browser_compatible_alias(tmp_path: Path) -> None:
+    config = tmp_path / "verifier.json"
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {
+                    "signing_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "x",
+                        "y": "y",
+                        "d": "d",
+                    }
+                },
+                "client": {"request_object_trust_anchor_pem": "test-root"},
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-1.0-final",
+                },
+                "browser": oidf.VERIFICATION_EVIDENCE_BROWSER_AUTOMATION,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="configuration alias"):
         oidf.validate_config(config, "oid4vp-verifier")
 
 

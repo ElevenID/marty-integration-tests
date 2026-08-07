@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "oidf-runner.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
+OIDF_VERIFIER_ALIAS = "oidf-vp-test-wallet"
 VERIFICATION_EVIDENCE_BROWSER_AUTOMATION = [
     {
         "comment": (
@@ -151,6 +152,12 @@ def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
         "oid4vp-haip-verifier",
     }:
         raise ValueError(f"unknown OIDF configuration profile: {profile_name}")
+    # The official BrowserControl matcher is scoped to /test/a/{alias}/... .
+    # Without an alias the suite serves /test/{id}/..., so its own configured
+    # verification-evidence task is never invoked and positive tests wait
+    # indefinitely for the screenshot placeholder.
+    if data.get("alias") != OIDF_VERIFIER_ALIAS:
+        raise ValueError(f"verifier configuration alias must be {OIDF_VERIFIER_ALIAS!r}")
     signing_jwk = data.get("credential", {}).get("signing_jwk")
     if not isinstance(signing_jwk, dict) or not all(
         isinstance(signing_jwk.get(field), str) and signing_jwk[field] for field in ("kty", "crv", "x", "y", "d")

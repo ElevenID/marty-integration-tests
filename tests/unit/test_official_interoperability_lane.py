@@ -445,6 +445,7 @@ def test_standard_verifier_config_reuses_generated_wallet_key_and_request_trust(
     (tmp_path / "marty-verifier-haip.json").write_text(json.dumps(source), encoding="utf-8")
     destination = lane.standard_verifier_config(tmp_path, "https://marty.test")
     config = json.loads(destination.read_text(encoding="utf-8"))
+    assert config["alias"] == lane.OIDF_VERIFIER_ALIAS
     assert config["verifier"]["profile"] == "oid4vp-1.0-final"
     assert config["client"]["request_object_trust_anchor_pem"] == "test-root"
     assert config["browser"] == lane.VERIFICATION_EVIDENCE_BROWSER_AUTOMATION
