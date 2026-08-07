@@ -7,7 +7,8 @@ Provides fixtures for gateway client, test organizations, and common test data.
 import asyncio
 import logging
 import os
-from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -334,6 +335,87 @@ async def test_organization(gateway_client: GatewayClient) -> Dict[str, Any]:
     return org
 
 
+@pytest.fixture
+async def vc_jwt_issuer_did(
+    gateway_client: GatewayClient,
+    test_organization: Dict[str, Any],
+) -> str:
+    """Provision and discover one managed VC issuer, then expose only its DID."""
+    organization_id = str(test_organization["id"])
+    identities = await gateway_client.list_issuer_identities(
+        organization_id=organization_id,
+        key_purpose="vc_jwt_issuer",
+        algorithm="ES256",
+    )
+    active = identities.get("identities")
+    if not isinstance(active, list):
+        raise AssertionError(f"Malformed issuer-identity response: {identities}")
+
+    if not active:
+        resolved = await gateway_client.resolve_signing_service(
+            organization_id=organization_id,
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+        )
+        service = resolved.get("service")
+        if not isinstance(service, dict) or not service.get("id"):
+            raise AssertionError("No managed ES256 VC signing service is available")
+
+        domain = os.getenv("PUBLIC_DOMAIN", "").strip()
+        if not domain:
+            domain = urlsplit(
+                os.getenv("GATEWAY_URL", "https://marty.test")
+            ).hostname or ""
+        slug = str(
+            test_organization.get("slug") or test_organization.get("name") or ""
+        ).strip().lower()
+        if not domain or not slug:
+            raise AssertionError("The organization has no canonical public DID context")
+        issuer_did = f"did:web:{domain}:orgs:{slug}"
+        await gateway_client.create_issuer_profile(
+            organization_id=organization_id,
+            name=f"{slug} managed VC issuer",
+            issuer_did=issuer_did,
+            signing_service_id=str(service["id"]),
+            signing_key_reference=(
+                str(service["key_reference"])
+                if service.get("key_reference")
+                else None
+            ),
+            key_purpose="vc_jwt_issuer",
+            status="active",
+        )
+        identities = await gateway_client.list_issuer_identities(
+            organization_id=organization_id,
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+        )
+        active = identities.get("identities")
+
+    if not isinstance(active, list) or len(active) != 1:
+        raise AssertionError(
+            "The organization must resolve to exactly one active ES256 VC issuer DID"
+        )
+    identity = active[0]
+    if not isinstance(identity, dict):
+        raise AssertionError(f"Malformed issuer identity: {identity}")
+    forbidden = {
+        "issuer_profile_id",
+        "signing_service_id",
+        "signing_key_reference",
+        "kms_provider",
+        "kms_key_id",
+    }
+    leaked = forbidden.intersection(identity)
+    if leaked:
+        raise AssertionError(f"Public issuer identity leaked custody fields: {sorted(leaked)}")
+    issuer_did = str(identity.get("issuer_did") or "")
+    if not issuer_did.startswith("did:"):
+        raise AssertionError(f"Public issuer identity has no DID: {identity}")
+    return issuer_did
+
+
 # =============================================================================
 # Trust Profile Fixtures
 # =============================================================================
@@ -448,16 +530,17 @@ async def jwt_vc_v2_template(
 async def sd_jwt_mdl_template(
     gateway_client: GatewayClient,
     test_organization: Dict[str, Any],
+    vc_jwt_issuer_did: str,
 ) -> Dict[str, Any]:
     """
     Create an mDL-like credential template using SD-JWT format.
 
-    Uses the same driver's license claims as ``mdl_template`` but with
-    ``dc+sd-jwt`` payload format, avoiding the Rust mDoc signing bug
-    that rejects P-256 holder keys.
+    Uses the same driver's license claims as ``mdl_template`` with the
+    selective-disclosure format used by the headless wallet and DIDComm paths.
     """
     template_data = TestDataBuilder.sd_jwt_mdl_template(
         organization_id=test_organization["id"],
+        issuer_did=vc_jwt_issuer_did,
     )
     template = await gateway_client.create_credential_template(**template_data)
     return template
