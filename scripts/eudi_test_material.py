@@ -37,6 +37,8 @@ SCHEMA = "elevenid.eudi-test-material/v1"
 REPORT_SCHEMA = "elevenid.eudi-test-material-report/v1"
 TLS_KEY_FILE = "tls.key"
 TLS_CERTIFICATE_FILE = "tls.crt"
+OIDF_RUNNER_TLS_KEY_FILE = "oidf-runner-tls.key"
+OIDF_RUNNER_TLS_CERTIFICATE_FILE = "oidf-runner-tls.crt"
 ROOT_CA_FILE = "root-ca.pem"
 TRUSTSTORE_FILE = "truststore.jks"
 EUDI_KEYSTORE_FILE = "keystore.jks"
@@ -46,6 +48,8 @@ REPORT_FILE = "report.json"
 OUTPUT_FILES = (
     TLS_KEY_FILE,
     TLS_CERTIFICATE_FILE,
+    OIDF_RUNNER_TLS_KEY_FILE,
+    OIDF_RUNNER_TLS_CERTIFICATE_FILE,
     ROOT_CA_FILE,
     TRUSTSTORE_FILE,
     EUDI_KEYSTORE_FILE,
@@ -59,6 +63,7 @@ DNS_NAME = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?$"
 )
 DEFAULT_HOSTNAME = "marty-oidf.test"
+OIDF_RUNNER_HOSTNAME = "localhost.emobix.co.uk"
 DEFAULT_PORTS = {
     "marty": 8443,
     "verifier": 28091,
@@ -68,6 +73,18 @@ DEFAULT_ALIAS = "access_certificate"
 TRUSTSTORE_ALIAS = "elevenid-conformance-root"
 MAX_VALIDITY_HOURS = 168
 OID4VP_TRUST_ANCHOR_FILE_ENV = "EUDI_OID4VP_TRUST_ANCHOR_FILE"
+OIDF_RUNNER_TLS_KEY_ENV = "OIDF_RUNNER_TLS_KEY_FILE"
+OIDF_RUNNER_TLS_CERTIFICATE_ENV = "OIDF_RUNNER_TLS_CERT_FILE"
+OIDF_RUNNER_TRUSTSTORE_ENV = "OIDF_RUNNER_TRUSTSTORE_FILE"
+OIDF_RUNNER_TRUSTSTORE_PASSWORD_ENV = "OIDF_RUNNER_TRUSTSTORE_PASSWORD"
+OIDF_RUNNER_TLS_MODE_ENV = "OIDF_RUNNER_TLS_MODE"
+OIDF_RUNNER_ENVIRONMENT = (
+    OIDF_RUNNER_TLS_MODE_ENV,
+    OIDF_RUNNER_TLS_KEY_ENV,
+    OIDF_RUNNER_TLS_CERTIFICATE_ENV,
+    OIDF_RUNNER_TRUSTSTORE_ENV,
+    OIDF_RUNNER_TRUSTSTORE_PASSWORD_ENV,
+)
 MATERIAL_PATH_VARIABLES = (
     "OIDF_TLS_CERT_DIR",
     "EUDI_VERIFIER_KEYSTORE_FILE",
@@ -220,6 +237,48 @@ def _signer_verifies(issuer: x509.Certificate, subject: x509.Certificate) -> Non
 def _require_current(certificate: x509.Certificate, field: str, now: datetime) -> None:
     if not _certificate_not_before(certificate) <= now <= _certificate_not_after(certificate):
         raise ValueError(f"{field} is not currently valid")
+
+
+def _validate_runner_tls_material(
+    key_path: Path,
+    certificate_path: Path,
+    root: x509.Certificate,
+    now: datetime,
+) -> x509.Certificate:
+    """Validate the local OIDF runner's isolated HTTPS identity."""
+    private_key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    if not isinstance(private_key, ec.EllipticCurvePrivateKey) or not isinstance(private_key.curve, ec.SECP256R1):
+        raise ValueError("OIDF runner TLS key must be a P-256 private key")
+    certificates = _parse_certificates(certificate_path.read_bytes(), OIDF_RUNNER_TLS_CERTIFICATE_FILE)
+    leaf = certificates[0]
+    leaf_public_key = leaf.public_key()
+    if not isinstance(leaf_public_key, ec.EllipticCurvePublicKey) or not isinstance(
+        leaf_public_key.curve,
+        ec.SECP256R1,
+    ):
+        raise ValueError("OIDF runner TLS certificate must contain a P-256 public key")
+    if private_key.public_key().public_numbers() != leaf_public_key.public_numbers():
+        raise ValueError("OIDF runner TLS certificate does not match its private key")
+    _require_current(leaf, "OIDF runner TLS certificate", now)
+    try:
+        constraints = leaf.extensions.get_extension_for_class(x509.BasicConstraints).value
+        usage = leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        san = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound as exc:
+        raise ValueError("OIDF runner TLS certificate requires CA, serverAuth, and SAN constraints") from exc
+    if constraints.ca:
+        raise ValueError("OIDF runner TLS certificate cannot be a CA")
+    if ExtendedKeyUsageOID.SERVER_AUTH not in usage:
+        raise ValueError("OIDF runner TLS certificate is not valid for server authentication")
+    if set(san.get_values_for_type(x509.DNSName)) != {OIDF_RUNNER_HOSTNAME}:
+        raise ValueError(f"OIDF runner TLS certificate SAN must be exactly {OIDF_RUNNER_HOSTNAME}")
+    if len(certificates) != 2 or certificates[-1].fingerprint(hashes.SHA256()) != root.fingerprint(hashes.SHA256()):
+        raise ValueError("OIDF runner TLS chain must be leaf-first and end at root-ca.pem")
+    _require_current(certificates[-1], "OIDF runner TLS root", now)
+    if leaf.issuer != root.subject:
+        raise ValueError("OIDF runner TLS certificate issuer does not match root-ca.pem")
+    _signer_verifies(root, leaf)
+    return leaf
 
 
 def _root_certificate(
@@ -594,6 +653,11 @@ def _environment(
         "OIDF_CONFORMANCE_BRIDGE_ALIAS": hostname,
         "OIDF_TLS_CERT_DIR": str(output_dir),
         "OIDF_MARTY_RESOLVE_IP": "127.0.0.1",
+        OIDF_RUNNER_TLS_MODE_ENV: "generated",
+        OIDF_RUNNER_TLS_KEY_ENV: str(output_dir / OIDF_RUNNER_TLS_KEY_FILE),
+        OIDF_RUNNER_TLS_CERTIFICATE_ENV: str(output_dir / OIDF_RUNNER_TLS_CERTIFICATE_FILE),
+        OIDF_RUNNER_TRUSTSTORE_ENV: str(output_dir / TRUSTSTORE_FILE),
+        OIDF_RUNNER_TRUSTSTORE_PASSWORD_ENV: truststore_password,
         "EUDI_VERIFIER_PUBLIC_URL": verifier_origin,
         "EUDI_VERIFIER_TLS_HOST_PORT": str(verifier_port),
         "EUDI_WALLET_KIT_HOST_PORT": str(wallet_kit_port),
@@ -666,6 +730,17 @@ def generate_material(
         dns_names=[hostname, "host.docker.internal"],
         server_auth=True,
     )
+    oidf_runner_tls_key = ec.generate_private_key(ec.SECP256R1())
+    oidf_runner_tls_certificate = _leaf_certificate(
+        oidf_runner_tls_key,
+        root_key,
+        root,
+        current,
+        valid_hours,
+        common_name=OIDF_RUNNER_HOSTNAME,
+        dns_names=[OIDF_RUNNER_HOSTNAME],
+        server_auth=True,
+    )
     eudi_key = ec.generate_private_key(ec.SECP521R1())
     eudi_certificate = _leaf_certificate(
         eudi_key,
@@ -704,6 +779,19 @@ def generate_material(
             output_dir / TLS_CERTIFICATE_FILE,
             tls_certificate.public_bytes(serialization.Encoding.PEM) + root.public_bytes(serialization.Encoding.PEM),
         )
+        _write_private(
+            output_dir / OIDF_RUNNER_TLS_KEY_FILE,
+            oidf_runner_tls_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ),
+        )
+        _write_public(
+            output_dir / OIDF_RUNNER_TLS_CERTIFICATE_FILE,
+            oidf_runner_tls_certificate.public_bytes(serialization.Encoding.PEM)
+            + root.public_bytes(serialization.Encoding.PEM),
+        )
         _write_public(output_dir / ROOT_CA_FILE, root.public_bytes(serialization.Encoding.PEM))
         _write_public(
             output_dir / EUDI_CERTIFICATE_FILE,
@@ -737,12 +825,14 @@ def generate_material(
             },
             "not_after": _certificate_not_after(tls_certificate).isoformat(),
             "tls_certificate_sha256": _fingerprint(tls_certificate),
+            "oidf_runner_tls_certificate_sha256": _fingerprint(oidf_runner_tls_certificate),
             "root_ca_sha256": _fingerprint(root),
             "eudi_access_certificate_sha256": _fingerprint(eudi_certificate),
             "files": {
                 name: _file_sha256(output_dir / name)
                 for name in (
                     TLS_CERTIFICATE_FILE,
+                    OIDF_RUNNER_TLS_CERTIFICATE_FILE,
                     ROOT_CA_FILE,
                     TRUSTSTORE_FILE,
                     EUDI_KEYSTORE_FILE,
@@ -791,7 +881,13 @@ def merged_material_environment(material_dir: Path, external: Mapping[str, str])
     # generated identity so remote-daemon safety cannot be bypassed merely by
     # exporting both generated paths.
     if len(present_paths) == len(MATERIAL_PATH_VARIABLES) and declared_mode != "generated":
+        _generated_mode, generated = load_environment_manifest(material_dir)
         environment = dict(external)
+        # Product and certification material may be externally managed while
+        # the local official runner still needs disposable, hostname-valid TLS.
+        # Keep that runner-only PKI independent from the product certificate.
+        for name in OIDF_RUNNER_ENVIRONMENT:
+            environment.setdefault(name, generated[name])
         environment["EUDI_TEST_MATERIAL_MODE"] = "external"
         return "external", environment
     mode, generated = load_environment_manifest(material_dir)
@@ -878,6 +974,33 @@ def validate_environment(
     keystore_path = Path(environment["EUDI_VERIFIER_KEYSTORE_FILE"]).resolve()
     generated_access_path = certificate_dir / EUDI_CERTIFICATE_FILE
     paths = [key_path, certificate_path, root_path, truststore_path, oid4vp_trust_anchor_path, keystore_path]
+    runner_values = {name: environment.get(name, "").strip() for name in OIDF_RUNNER_ENVIRONMENT}
+    if any(runner_values.values()) and not all(runner_values.values()):
+        missing = [name for name, value in runner_values.items() if not value]
+        raise ValueError("incomplete OIDF runner TLS environment: " + ", ".join(missing))
+    if environment.get("EUDI_TEST_MATERIAL_MODE") == "generated" and not all(runner_values.values()):
+        raise ValueError("generated material requires the complete OIDF runner TLS environment")
+    runner_key_path: Path | None = None
+    runner_certificate_path: Path | None = None
+    if all(runner_values.values()):
+        if runner_values[OIDF_RUNNER_TLS_MODE_ENV] not in {"generated", "external"}:
+            raise ValueError(f"{OIDF_RUNNER_TLS_MODE_ENV} must be generated or external")
+        runner_key_path = Path(runner_values[OIDF_RUNNER_TLS_KEY_ENV])
+        runner_certificate_path = Path(runner_values[OIDF_RUNNER_TLS_CERTIFICATE_ENV])
+        runner_truststore_path = Path(runner_values[OIDF_RUNNER_TRUSTSTORE_ENV])
+        for field, path in (
+            (OIDF_RUNNER_TLS_KEY_ENV, runner_key_path),
+            (OIDF_RUNNER_TLS_CERTIFICATE_ENV, runner_certificate_path),
+            (OIDF_RUNNER_TRUSTSTORE_ENV, runner_truststore_path),
+        ):
+            if not path.is_absolute():
+                raise ValueError(f"{field} must be an absolute path")
+        paths.extend((runner_key_path, runner_certificate_path, runner_truststore_path))
+        if environment.get("EUDI_TEST_MATERIAL_MODE") == "generated" and (
+            runner_truststore_path.resolve() != truststore_path
+            or runner_values[OIDF_RUNNER_TRUSTSTORE_PASSWORD_ENV] != environment["EUDI_TLS_TRUSTSTORE_PASSWORD"]
+        ):
+            raise ValueError("generated OIDF runner must use the validated disposable truststore")
     if environment.get("EUDI_TEST_MATERIAL_MODE") == "generated":
         paths.append(generated_access_path)
     for path in paths:
@@ -909,6 +1032,9 @@ def validate_environment(
     if not required_names <= dns_names:
         raise ValueError("TLS certificate SAN does not cover every public HTTPS hostname")
     root = x509.load_pem_x509_certificate(root_path.read_bytes())
+    runner_leaf: x509.Certificate | None = None
+    if runner_key_path is not None and runner_certificate_path is not None:
+        runner_leaf = _validate_runner_tls_material(runner_key_path, runner_certificate_path, root, now)
     oid4vp_anchors = [
         x509.load_pem_x509_certificate(value)
         for value in PEM_CERTIFICATE.findall(oid4vp_trust_anchor_path.read_bytes())
@@ -999,6 +1125,7 @@ def validate_environment(
             "wallet_kit": environment.get("EUDI_WALLET_KIT_URL", ""),
         },
         "tls_certificate_sha256": _fingerprint(leaf),
+        "oidf_runner_tls_certificate_sha256": (_fingerprint(runner_leaf) if runner_leaf is not None else "not-checked"),
         "root_ca_sha256": _fingerprint(root),
         "eudi_access_certificate_sha256": (
             _fingerprint(access_certificate) if access_certificate is not None else "not-checked"

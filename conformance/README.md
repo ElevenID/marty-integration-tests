@@ -217,6 +217,17 @@ run. Python creates the keys and certificates; JDK 17 or newer supplies
 `keytool` for the two JKS files. The private environment manifest is not an
 evidence artifact and must not be committed or uploaded.
 
+The same in-memory disposable CA also issues a separate server-authentication
+leaf whose only SAN is `localhost.emobix.co.uk`. The local runner overlay mounts
+that chain and key over the upstream nginx self-signed certificate and mounts
+the CA truststore read-only into the unchanged official server JVM. This lets
+OIDF 5.2.2 browser automation fetch its mandatory verification-evidence page
+with normal hostname and chain validation. Do not replace this with an
+insecure-TLS switch, patch the imported browser assertion, or reuse the runner
+leaf for Marty. Externally hosted certification runners with their own valid
+TLS identity do not need the local overlay; adopt the upstream certificate or
+runner changes when a reviewed OIDF release makes the workaround unnecessary.
+
 ```bash
 export OFFICIAL_SUITE_RUN_ID="${GITHUB_RUN_ID:-local1}"
 python scripts/eudi_test_material.py generate \

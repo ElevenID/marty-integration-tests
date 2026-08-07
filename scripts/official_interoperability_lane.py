@@ -283,6 +283,11 @@ MATERIAL_ENV_KEYS = {
     "OIDF_CONFORMANCE_BRIDGE_ALIAS",
     "OIDF_TLS_CERT_DIR",
     "OIDF_MARTY_RESOLVE_IP",
+    "OIDF_RUNNER_TLS_MODE",
+    "OIDF_RUNNER_TLS_KEY_FILE",
+    "OIDF_RUNNER_TLS_CERT_FILE",
+    "OIDF_RUNNER_TRUSTSTORE_FILE",
+    "OIDF_RUNNER_TRUSTSTORE_PASSWORD",
     "EUDI_VERIFIER_PUBLIC_URL",
     "EUDI_VERIFIER_TLS_HOST_PORT",
     "EUDI_WALLET_KIT_HOST_PORT",
@@ -341,7 +346,15 @@ def load_material_environment(material: Path) -> dict[str, str]:
     # The generator contract places all public TLS files at the material root.
     result.setdefault("OIDF_TLS_CERT_DIR", str(material.resolve()))
     result.setdefault("EUDI_VERIFIER_KEYSTORE_FILE", str((material / "keystore.jks").resolve()))
-    for filename in ("tls.crt", "tls.key", "root-ca.pem", "truststore.jks", "keystore.jks"):
+    for filename in (
+        "tls.crt",
+        "tls.key",
+        "oidf-runner-tls.crt",
+        "oidf-runner-tls.key",
+        "root-ca.pem",
+        "truststore.jks",
+        "keystore.jks",
+    ):
         if not (material / filename).is_file():
             raise ValueError(f"official test material is missing {filename}")
     return result
