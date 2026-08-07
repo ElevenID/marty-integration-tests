@@ -61,6 +61,7 @@ async def test_issuer_identity_discovery_uses_did_first_public_contract() -> Non
             "credential_format": "SD_JWT_VC",
             "algorithm": "ES256",
         },
+        headers={"X-Organization-ID": "org-1"},
     )
 
 
@@ -104,6 +105,7 @@ async def test_issuer_identity_creation_cannot_select_private_custody() -> None:
             "credential_format": "SD_JWT_VC",
             "algorithm": "ES256",
         },
+        headers={"X-Organization-ID": "org-1"},
     )
 
     with pytest.raises(TypeError, match="signing_service_id"):

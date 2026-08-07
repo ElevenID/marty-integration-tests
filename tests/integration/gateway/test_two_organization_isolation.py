@@ -694,6 +694,7 @@ async def test_public_signing_is_did_first_and_fails_closed(
     retired = await client.client.request(
         "DELETE",
         "/v1/signing-keys/issuer-identities",
+        headers={"X-Organization-ID": organization_id},
         json={
             "organization_id": organization_id,
             "issuer_did": issuer_did,
@@ -755,9 +756,17 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             f"/v1/organizations/{organization_a_id}"
         )
         assert organization_a_response.status_code == 200, organization_a_response.text
+        organization_a = organization_a_response.json()
+        assert isinstance(organization_a, dict)
+        # Each test provisions the public state it consumes. The released
+        # stack bootstrap is intentionally not a hidden issuer-identity
+        # fixture, and this call is idempotent when an identity already exists.
+        await _provision_issuer_identity(admin, organization_a)
         issuer_identities_a = await admin.list_issuer_identities(
             organization_id=organization_a_id,
             key_purpose="vc_jwt_issuer",
+            credential_format="SD_JWT_VC",
+            algorithm="ES256",
         )
         active_issuer_identities_a = issuer_identities_a.get("identities")
         assert isinstance(active_issuer_identities_a, list)

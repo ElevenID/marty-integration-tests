@@ -1245,3 +1245,42 @@ def test_w3c_lane_cleans_up_a_partial_initial_start(tmp_path: Path, monkeypatch:
 
     assert lane.run_w3c(args, {}) == 1
     assert commands[-1][-1] == "down"
+
+
+def test_w3c_lane_diagnoses_fixture_bootstrap_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostics: list[str] = []
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
+        commands.append(command)
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(
+        lane,
+        "bootstrap_fixtures",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("w3c public fixture bootstrap failed with exit code 2")
+        ),
+    )
+    monkeypatch.setattr(lane, "emit_w3c_issuance_diagnostic", diagnostics.append)
+    args = SimpleNamespace(
+        marty_ui=tmp_path / "marty-ui",
+        run_id="w3c-bootstrap-1",
+        w3c_suite=tmp_path / "w3c-suite",
+        stack_manifest=tmp_path / "stack-manifest.json",
+        output_dir=tmp_path / "evidence",
+    )
+
+    with pytest.raises(RuntimeError, match="fixture bootstrap failed"):
+        lane.run_w3c(
+            args,
+            {"OIDF_MARTY_GATEWAY_URL": "https://marty-oidf.test:18443"},
+        )
+
+    assert diagnostics == ["w3c-bootstrap-1"]
+    assert commands[-1][-1] == "down"

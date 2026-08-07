@@ -1538,6 +1538,7 @@ class GatewayClient:
             "GET",
             "/v1/signing-keys/issuer-identities",
             params=params,
+            headers={"X-Organization-ID": organization_id},
         )
 
     async def get_public_did_document(self, *, issuer_did: str) -> Dict[str, Any]:
@@ -1582,6 +1583,7 @@ class GatewayClient:
                 "credential_format": credential_format,
                 "algorithm": algorithm,
             },
+            headers={"X-Organization-ID": organization_id},
         )
 
     async def store_issuer_identity_certificate(
@@ -1611,6 +1613,7 @@ class GatewayClient:
             "PUT",
             "/v1/signing-keys/issuer-identities/certificate",
             json=body,
+            headers={"X-Organization-ID": organization_id},
         )
 
     async def create_issuer_identity(
@@ -1637,6 +1640,7 @@ class GatewayClient:
             "POST",
             "/v1/signing-keys/issuer-identities",
             json=payload,
+            headers={"X-Organization-ID": organization_id},
         )
         return response.get("identity", response)
 
