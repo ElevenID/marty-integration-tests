@@ -1,0 +1,25 @@
+{
+  "schema": "elevenid.didcomm-interoperability/v1",
+  "independent_implementation": {
+    "name": "go-didcomm",
+    "repository": "https://github.com/notabene-id/go-didcomm.git",
+    "release": "v0.4.0",
+    "commit": "5ffd085c2b5088a639c1c0d3910d668887298ce5",
+    "command_package": "./cmd/didcomm",
+    "license": "MIT"
+  },
+  "tested_profile": {
+    "specification": "DIDComm Messaging 2.1",
+    "message": "https://didcomm.org/issue-credential/3.0/issue-credential",
+    "envelope": "anoncrypt",
+    "serialization": "JWE General JSON",
+    "key_agreement": "ECDH-ES+A256KW",
+    "curve": "X25519",
+    "content_encryption": "A256CBC-HS512",
+    "recipients": 1,
+    "transport": "CA-validated HTTPS",
+    "holder_did_method": "did:peer:2"
+  },
+  "claim": "Cross-implementation evidence for Marty's selected outbound anoncrypt credential-delivery profile; not full DIDComm conformance, certification, inbound-agent support, or sender authentication.",
+  "update_policy": "The monthly interoperability updater reports newer upstream releases. Pins change only after source review and the immutable public-boundary lane passes."
+}

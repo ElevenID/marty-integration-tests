@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detect official interoperability-suite drift without changing test pins.
+"""Detect official-suite and independent interoperability drift without changing pins.
 
 The resulting review record is deliberately separate from the pinned manifests:
 an automated PR makes a new upstream revision visible, while a maintainer must
@@ -72,7 +72,7 @@ def latest_github_release(repository: str) -> str:
     """Return the latest published release tag for an official GitHub repository."""
     parsed = urlparse(repository)
     if parsed.scheme != "https" or parsed.netloc.lower() != "github.com":
-        raise RuntimeError(f"official EUDI repository is not on GitHub: {repository}")
+        raise RuntimeError(f"interoperability repository is not on GitHub: {repository}")
     path = parsed.path.removesuffix(".git").strip("/")
     parts = path.split("/")
     if len(parts) != 2 or not all(parts):
@@ -108,6 +108,7 @@ def observe() -> dict:
     w3c_manifest = load_json("conformance/w3c-vc-data-model-v2.json")
     w3c = w3c_manifest["official_suite"]
     eudi = load_json("conformance/eudi-reference-interop.json")["components"]
+    didcomm = load_json("conformance/didcomm-interoperability.json")["independent_implementation"]
     latest_oidf = latest_oidf_release()
     upstreams = {
         "oidf": {
@@ -120,6 +121,7 @@ def observe() -> dict:
             "pinned_commit": w3c["commit"],
             "latest_commit": git_head(w3c["repository"], "refs/heads/main"),
         },
+        "didcomm_independent_implementation": _released_upstream(didcomm),
         "eudi_verifier_endpoint": _released_upstream(eudi["verifier_endpoint"]),
     }
     for name, library in eudi["wallet_kit"]["libraries"].items():

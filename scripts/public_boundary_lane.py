@@ -31,14 +31,59 @@ from official_interoperability_lane import (
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
-TEST_PATH = (
-    "tests/integration/gateway/test_two_organization_isolation.py"
-)
+TEST_PATH = "tests/integration/gateway/test_two_organization_isolation.py"
 DIDCOMM_TEST_PATH = (
     "tests/integration/gateway/test_didcomm_v2_delivery.py::"
     "TestDidcommDeliveryWithMockAgent::test_deliver_to_mock_agent"
 )
 PUBLIC_LOGIN = ROOT / "scripts" / "oidf_marty_public_login.py"
+DIDCOMM_INTEROP_MANIFEST = ROOT / "conformance" / "didcomm-interoperability.json"
+
+
+def independent_didcomm_record(
+    environment: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Validate and describe the separately maintained DIDComm verifier."""
+    data: object = json.loads(DIDCOMM_INTEROP_MANIFEST.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("schema") != "elevenid.didcomm-interoperability/v1":
+        raise ValueError("independent DIDComm manifest has an unsupported schema")
+    implementation = data.get("independent_implementation")
+    profile = data.get("tested_profile")
+    if not isinstance(implementation, dict) or not isinstance(profile, dict):
+        raise ValueError("independent DIDComm manifest is incomplete")
+    repository = implementation.get("repository")
+    release = implementation.get("release")
+    commit = implementation.get("commit")
+    if repository != "https://github.com/notabene-id/go-didcomm.git":
+        raise ValueError("independent DIDComm repository is not the reviewed implementation")
+    if not isinstance(release, str) or not release.startswith("v"):
+        raise ValueError("independent DIDComm release is invalid")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("independent DIDComm commit is not immutable")
+
+    values = environment or os.environ
+    required = values.get("DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    expected_identity = f"notabene-id/go-didcomm@{release}#{commit}"
+    if required:
+        if values.get("DIDCOMM_INTEROP_IMPLEMENTATION") != expected_identity:
+            raise ValueError("independent DIDComm implementation does not match the reviewed pin")
+        cli = Path(values.get("DIDCOMM_INTEROP_CLI", ""))
+        if not cli.is_file():
+            raise ValueError("independent DIDComm verifier executable is unavailable")
+    return {
+        "implementation": {
+            "repository": repository,
+            "release": release,
+            "commit": commit,
+        },
+        "tested_profile": profile,
+        "required": required,
+        "claim": data.get("claim"),
+    }
 
 
 def local_source_commit(marty_ui: Path) -> str:
@@ -71,9 +116,7 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
         raise ValueError("run id must use lowercase letters, digits, and internal hyphens")
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     if not launcher.is_file():
-        raise ValueError(
-            "released marty-ui checkout has no conformance stack launcher"
-        )
+        raise ValueError("released marty-ui checkout has no conformance stack launcher")
 
     metadata = load_stack_metadata(args.stack_metadata)
     stack_environment = load_stack_environment(args.stack_env)
@@ -99,9 +142,7 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
         "MARTY_CONFORMANCE_REVIEWER_PASSWORD",
     ):
         if not result.get(name, "").strip():
-            raise ValueError(
-                f"{name} is required and must be generated for this disposable run"
-            )
+            raise ValueError(f"{name} is required and must be generated for this disposable run")
 
     result.update(
         {
@@ -216,16 +257,47 @@ def write_summary(
     exit_code: int,
 ) -> None:
     stack = json.loads(args.stack_manifest.read_text(encoding="utf-8"))
+    didcomm_interop = metadata.get("didcomm_interoperability")
+    if not isinstance(didcomm_interop, dict):
+        didcomm_interop = independent_didcomm_record()
+    didcomm_passed = bool(didcomm_interop.get("required")) and exit_code == 0
+    didcomm_interop = dict(didcomm_interop)
+    didcomm_interop["cross_implementation_decryption_passed"] = didcomm_passed
+    coverage = [
+        "two authenticated principals",
+        "organization membership and RBAC",
+        "resource-ID substitution",
+        "API-key organization binding",
+        "SCIM resource isolation",
+        "flow definition, instance, and result isolation",
+        "issuance transaction and revocation-status isolation",
+        "issued-credential lifecycle and revocation isolation",
+        "trust-profile ownership and mutation isolation",
+        "issuer-entity and trust-profile relationship isolation",
+        "applicant form-data and vetting isolation",
+        "application evidence collection, deletion, revocation, and tenant isolation",
+        "deployment-profile, lane, and device-assignment isolation",
+        "webhook ownership and secret leakage prevention",
+        "wallet catalogue and organization-override isolation",
+        "browser-driven issuance and verification through the shipped UI",
+        "notification SSE delivery and subscription isolation",
+        "audit-event isolation",
+        "DID-first issuance and verification",
+        "public custody-selector rejection",
+        "unknown, inactive, and purpose-incompatible DID rejection",
+        "idempotent issuer-profile uniqueness",
+        "ambiguous compatible issuer-profile rejection and recovery",
+        "encrypted DIDComm v2 delivery with holder-key decryption",
+        "public response custody-metadata minimization",
+    ]
+    if didcomm_passed:
+        coverage.append("independent go-didcomm decryption of Marty's released anoncrypt envelope")
     summary = {
         "schema": "elevenid.product-security-evidence/v1",
         "evidence_class": "elevenid-owned-product-security",
         "lane": "two-organization-public-boundary",
         "execution": {
-            "mode": (
-                "local-source-preflight"
-                if getattr(args, "local_build", False)
-                else "immutable-release"
-            ),
+            "mode": ("local-source-preflight" if getattr(args, "local_build", False) else "immutable-release"),
             "release_grade": not getattr(args, "local_build", False),
         },
         "result": {
@@ -250,33 +322,8 @@ def write_summary(
             "official_suite_source_modified": False,
             "claim": "This lane is not an official standards-compliance result.",
         },
-        "coverage": [
-            "two authenticated principals",
-            "organization membership and RBAC",
-            "resource-ID substitution",
-            "API-key organization binding",
-            "SCIM resource isolation",
-            "flow definition, instance, and result isolation",
-            "issuance transaction and revocation-status isolation",
-            "issued-credential lifecycle and revocation isolation",
-            "trust-profile ownership and mutation isolation",
-            "issuer-entity and trust-profile relationship isolation",
-            "applicant form-data and vetting isolation",
-            "application evidence collection, deletion, revocation, and tenant isolation",
-            "deployment-profile, lane, and device-assignment isolation",
-            "webhook ownership and secret leakage prevention",
-            "wallet catalogue and organization-override isolation",
-            "browser-driven issuance and verification through the shipped UI",
-            "notification SSE delivery and subscription isolation",
-            "audit-event isolation",
-            "DID-first issuance and verification",
-            "public custody-selector rejection",
-            "unknown, inactive, and purpose-incompatible DID rejection",
-            "idempotent issuer-profile uniqueness",
-            "ambiguous compatible issuer-profile rejection and recovery",
-            "encrypted DIDComm v2 delivery with holder-key decryption",
-            "public response custody-metadata minimization",
-        ],
+        "didcomm_interoperability": didcomm_interop,
+        "coverage": coverage,
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "summary.json").write_text(
@@ -287,17 +334,20 @@ def write_summary(
 
 def execute(args: argparse.Namespace) -> int:
     lane_environment, metadata = environment(args)
+    metadata = dict(metadata)
+    metadata["didcomm_interoperability"] = independent_didcomm_record(lane_environment)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     private = args.output_dir / "private"
     private.mkdir(parents=True, exist_ok=True)
-    lane_environment["MARTY_BROWSER_EVIDENCE_DIR"] = str(
-        (private / "browser").resolve()
-    )
+    lane_environment["MARTY_BROWSER_EVIDENCE_DIR"] = str((private / "browser").resolve())
     lane_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] = "true"
-    started = run(
-        boundary_compose_command(args, "up"),
-        lane_environment,
-    ) == 0
+    started = (
+        run(
+            boundary_compose_command(args, "up"),
+            lane_environment,
+        )
+        == 0
+    )
     exit_code = 1
     try:
         if started:

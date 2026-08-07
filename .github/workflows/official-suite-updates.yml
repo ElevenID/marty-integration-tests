@@ -43,7 +43,7 @@ jobs:
         run: |
           branch="automation/official-suite-updates"
           title="chore: review official interoperability suite updates"
-          body="Upstream drift was detected. Review the recorded revisions, update immutable pins and image digests intentionally, then run the affected official suites before merging. This bot never changes pins or merges the PR."
+          body="Upstream drift was detected. Review the recorded revisions, update immutable pins and image digests intentionally, then run the affected official suites or independent interoperability lane before merging. This bot never changes pins or merges the PR."
           git config user.name "elevenid-automation[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
