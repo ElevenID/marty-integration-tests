@@ -16,7 +16,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from cryptography import x509
@@ -74,16 +74,10 @@ OID4VCI_RUNTIME_DIAGNOSTIC_CLASSES = {
     "key-attestation-policy-unresolved": re.compile(
         r"(?i)key-attestation-bound proof has no resolved tenant issuer policy"
     ),
-    "key-attestation-missing": re.compile(
-        r"(?i)issuer profile requires a key-attestation-bound proof"
-    ),
+    "key-attestation-missing": re.compile(r"(?i)issuer profile requires a key-attestation-bound proof"),
     "key-attestation-nonce": re.compile(r"(?i)key attestation nonce does not match"),
-    "key-attestation-untrusted-certificate": re.compile(
-        r"(?i)key attestation certificate chain is not trusted"
-    ),
-    "key-attestation-signature": re.compile(
-        r"(?i)key attestation signature verification failed"
-    ),
+    "key-attestation-untrusted-certificate": re.compile(r"(?i)key attestation certificate chain is not trusted"),
+    "key-attestation-signature": re.compile(r"(?i)key attestation signature verification failed"),
     "key-attestation-holder-binding": re.compile(
         r"(?i)(?:attested public key|attested key).{0,100}(?:proof|match|binding)"
     ),
@@ -539,9 +533,7 @@ def oidf_key_attestation_material(
 
     now = datetime.now(UTC)
     root_key = ec.generate_private_key(ec.SECP256R1())
-    root_name = x509.Name(
-        [x509.NameAttribute(NameOID.COMMON_NAME, "ElevenID disposable OIDF attester root")]
-    )
+    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ElevenID disposable OIDF attester root")])
     root_certificate = (
         x509.CertificateBuilder()
         .subject_name(root_name)
@@ -569,9 +561,7 @@ def oidf_key_attestation_material(
     )
 
     attester_key = ec.generate_private_key(ec.SECP256R1())
-    leaf_name = x509.Name(
-        [x509.NameAttribute(NameOID.COMMON_NAME, "OIDF disposable wallet key attester")]
-    )
+    leaf_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "OIDF disposable wallet key attester")])
     leaf_certificate = (
         x509.CertificateBuilder()
         .subject_name(leaf_name)
@@ -869,9 +859,7 @@ def emit_mdoc_runtime_diagnostic(path: Path) -> None:
 
 def classify_oid4vci_runtime_diagnostics(text: str) -> list[str]:
     """Return fixed issuer categories without exposing private Compose logs."""
-    categories = [
-        name for name, pattern in OID4VCI_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)
-    ]
+    categories = [name for name, pattern in OID4VCI_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)]
     return categories or ["unclassified-runtime-failure"]
 
 
@@ -1096,22 +1084,17 @@ def bootstrap_fixtures(
     if mode == "w3c" and (not isinstance(api_key, str) or not W3C_API_KEY.fullmatch(api_key)):
         raise RuntimeError("w3c public fixture bootstrap returned an invalid API key")
     request_public_jwk = fixtures.get("eudi_request_issuer_public_jwk")
-    if mode == "eudi":
-        if (
-            not isinstance(request_public_jwk, dict)
-            or request_public_jwk.get("kty") != "EC"
-            or request_public_jwk.get("crv") != "P-256"
-            or not isinstance(request_public_jwk.get("x"), str)
-            or not isinstance(request_public_jwk.get("y"), str)
-            or any(name in request_public_jwk for name in ("d", "p", "q", "k"))
-        ):
-            raise RuntimeError(
-                "eudi public fixture bootstrap returned an invalid request-signing public JWK"
-            )
+    if mode == "eudi" and (
+        not isinstance(request_public_jwk, dict)
+        or request_public_jwk.get("kty") != "EC"
+        or request_public_jwk.get("crv") != "P-256"
+        or not isinstance(request_public_jwk.get("x"), str)
+        or not isinstance(request_public_jwk.get("y"), str)
+        or any(name in request_public_jwk for name in ("d", "p", "q", "k"))
+    ):
+        raise RuntimeError("eudi public fixture bootstrap returned an invalid request-signing public JWK")
     identifiers = {
-        key: value
-        for key, value in fixtures.items()
-        if key not in {"w3c_api_key", "eudi_request_issuer_public_jwk"}
+        key: value for key, value in fixtures.items() if key not in {"w3c_api_key", "eudi_request_issuer_public_jwk"}
     }
     if any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in identifiers.values()):
         raise RuntimeError(f"{mode} public fixture bootstrap returned invalid identifiers")
@@ -1136,6 +1119,7 @@ def refresh_eudi_request_certificate(
         args.haip_material.resolve(),
         public_jwk,
         gateway_url=environment["OIDF_MARTY_GATEWAY_URL"],
+        replace_existing=True,
     )
     certificate_environment = load_verifier_environment(args.haip_material)
     refresh_environment = {**environment, **certificate_environment}
@@ -1150,9 +1134,7 @@ def refresh_eudi_request_certificate(
         "up",
     ]
     if run(command, refresh_environment):
-        raise RuntimeError(
-            "released Marty stack could not adopt the disposable EUDI request certificate"
-        )
+        raise RuntimeError("released Marty stack could not adopt the disposable EUDI request certificate")
     wait_for_public_stack(refresh_environment)
     print(
         json.dumps(
@@ -1188,9 +1170,7 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         "oid4vp-url-query",
         "oid4vp-mdoc",
         "haip",
-    } and (
-        args.oidf_runner is None or not args.oidf_runner.is_dir()
-    ):
+    } and (args.oidf_runner is None or not args.oidf_runner.is_dir()):
         raise ValueError(f"{args.lane} requires the exact pinned OIDF runner checkout")
     if args.lane == "w3c-v2" and (args.w3c_suite is None or not args.w3c_suite.is_dir()):
         raise ValueError("w3c-v2 requires the exact pinned W3C suite checkout")
@@ -1200,9 +1180,7 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         "oid4vp-mdoc",
         "haip",
         "eudi",
-    } and (
-        args.haip_material is None or not args.haip_material.is_dir()
-    ):
+    } and (args.haip_material is None or not args.haip_material.is_dir()):
         raise ValueError(f"{args.lane} requires generated verifier test material")
 
     metadata = load_stack_metadata(args.stack_metadata)
@@ -1291,9 +1269,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "OIDF_CONFORMANCE_INSECURE_TLS": "1",
                 "OIDF_VERIFIER_COMMAND": str((ROOT / "scripts" / "oidf_marty_start_verification.py").resolve()),
                 "OIDF_MARTY_VERIFIER_PROFILE": "haip" if haip else "standard",
-                "OIDF_VERIFIER_REQUEST_METHOD": (
-                    "url_query" if url_query else "request_uri_signed"
-                ),
+                "OIDF_VERIFIER_REQUEST_METHOD": ("url_query" if url_query else "request_uri_signed"),
             }
         )
         config = (
@@ -1313,22 +1289,22 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 environment,
             )
         official_command = [
-                sys.executable,
-                str(ROOT / "scripts" / "oidf_conformance.py"),
-                "run",
-                "--runner",
-                str(args.oidf_runner),
-                "--profile",
-                profile,
-                "--config",
-                str(config),
-                "--stack-manifest",
-                str(args.stack_manifest),
-                "--output-dir",
-                str(args.output_dir / "raw" / profile),
-                "--interaction-script",
-                str(ROOT / "scripts" / "oidf_marty_verifier.py"),
-            ]
+            sys.executable,
+            str(ROOT / "scripts" / "oidf_conformance.py"),
+            "run",
+            "--runner",
+            str(args.oidf_runner),
+            "--profile",
+            profile,
+            "--config",
+            str(config),
+            "--stack-manifest",
+            str(args.stack_manifest),
+            "--output-dir",
+            str(args.output_dir / "raw" / profile),
+            "--interaction-script",
+            str(ROOT / "scripts" / "oidf_marty_verifier.py"),
+        ]
         official_result = run(
             official_command,
             environment,
@@ -1382,9 +1358,7 @@ def run_oid4vci_issuer(
     result = 1
     try:
         wait_for_public_stack(environment)
-        key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(
-            args.output_dir
-        )
+        key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(args.output_dir)
         fixtures = bootstrap_fixtures(
             args,
             environment,
@@ -1501,7 +1475,9 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
             ],
             suite_environment,
         )
-        return result
+        if result:
+            return result
+        return 0
     except RuntimeError as error:
         if "public TLS endpoint" in str(error):
             emit_public_proxy_diagnostic(project, environment)
@@ -1525,9 +1501,7 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # *after* it merges EUDI material, so EUDI's TLS CA cannot accidentally
     # replace the independent request-object trust anchor.
     environment = dict(environment)
-    key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(
-        args.output_dir
-    )
+    key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(args.output_dir)
     wallet_attester_file = args.output_dir / "private" / "eudi-wallet-attester.jwks.json"
     write_private_json(wallet_attester_file, key_attestation_jwks)
     environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(wallet_attester_file)
@@ -1548,12 +1522,8 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
         )
         request_public_jwk = fixtures.pop("eudi_request_issuer_public_jwk", None)
         if not isinstance(request_public_jwk, dict):
-            raise RuntimeError(
-                "EUDI fixture bootstrap returned no request-signing public identity"
-            )
-        certificate_environment = refresh_eudi_request_certificate(
-            args, environment, request_public_jwk
-        )
+            raise RuntimeError("EUDI fixture bootstrap returned no request-signing public identity")
+        certificate_environment = refresh_eudi_request_certificate(args, environment, request_public_jwk)
         suite_environment = dict(environment)
         suite_environment.update(certificate_environment)
         # The runner selects only organization-scoped templates. Each template

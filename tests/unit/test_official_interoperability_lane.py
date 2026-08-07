@@ -801,20 +801,19 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
         stack_manifest=tmp_path / "stack-manifest.json",
     )
 
-    assert lane.run_oidf(
-        args,
-        {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
-    ) == 0
-    assert official_command[official_command.index("--profile") + 1] == (
-        "oid4vp-url-query-verifier"
+    assert (
+        lane.run_oidf(
+            args,
+            {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
+        )
+        == 0
     )
+    assert official_command[official_command.index("--profile") + 1] == ("oid4vp-url-query-verifier")
     assert "--allow-planned-profile" not in official_command
     assert suite_environment["OIDF_MARTY_VERIFIER_PROFILE"] == "standard"
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "url_query"
     assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
-    assert suite_environment["OIDF_MARTY_ISSUER_DID"] == (
-        "did:web:marty.test:orgs:org-1"
-    )
+    assert suite_environment["OIDF_MARTY_ISSUER_DID"] == ("did:web:marty.test:orgs:org-1")
 
 
 def test_mdoc_fixture_bootstrap_receives_the_exact_runner_source(
@@ -1253,6 +1252,7 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     commands: list[list[str]] = []
     lifecycle_environments: list[dict[str, str]] = []
     suite_environment: dict[str, str] = {}
+    certificate_calls: list[tuple[dict[str, str], dict[str, object]]] = []
 
     def fake_run(command: list[str], environment: dict[str, str], **_kwargs: object) -> int:
         commands.append(command)
@@ -1283,15 +1283,16 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
             "eudi_open_badge_template_id": "badge-1",
         },
     )
-    monkeypatch.setattr(
-        lane,
-        "issue_verifier_certificate",
-        lambda _path, public_jwk, **_kwargs: {
+
+    def issue_certificate(_path: Path, public_jwk: dict[str, str], **kwargs: object) -> dict[str, object]:
+        certificate_calls.append((public_jwk, kwargs))
+        return {
             "certificate_sha256": "sha256:certificate",
             "dns_names": "marty.test",
             "public_jwk": public_jwk,
-        },
-    )
+        }
+
+    monkeypatch.setattr(lane, "issue_verifier_certificate", issue_certificate)
     monkeypatch.setattr(
         lane,
         "load_verifier_environment",
@@ -1328,9 +1329,7 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
         assert "--haip-material" in command
         assert "--oidf" not in command
     assert len(lifecycle_environments) == 3
-    refresh_commands = [
-        command for command in commands if "conformance_stack.py" in " ".join(command)
-    ]
+    refresh_commands = [command for command in commands if "conformance_stack.py" in " ".join(command)]
     assert len(refresh_commands) == 1
     assert refresh_commands[0][-3:] == ["--haip", "--resume", "up"]
     legacy_private_key_name = "VERIFIER_" + "SIGNING_KEY_PEM"
@@ -1345,6 +1344,20 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     assert "EUDI_TEST_REQUEST_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["EUDI_TEST_REQUEST_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
     assert not any("KMS" in name or "KEY_REFERENCE" in name for name in suite_environment)
+    assert certificate_calls == [
+        (
+            {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "public-x",
+                "y": "public-y",
+            },
+            {
+                "gateway_url": "https://marty.test",
+                "replace_existing": True,
+            },
+        )
+    ]
 
 
 def test_w3c_lane_cleans_up_a_partial_initial_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -105,6 +105,35 @@ def test_certificate_is_short_lived_and_refuses_overwrite(tmp_path: Path) -> Non
         certificates.issue_verifier_certificate(output, jwk)
 
 
+def test_eudi_bootstrap_replaces_leaf_once_then_destroys_authority(tmp_path: Path) -> None:
+    output = tmp_path / "material"
+    certificates.generate_material(output, gateway_url="https://verifier.example:8443")
+    bootstrap_key = ec.generate_private_key(ec.SECP256R1())
+    request_key = ec.generate_private_key(ec.SECP256R1())
+
+    certificates.issue_verifier_certificate(
+        output,
+        public_jwk(bootstrap_key),
+        gateway_url="https://verifier.example:8443",
+        retain_authority=True,
+    )
+    assert (output / certificates.AUTHORITY_KEY_FILE).exists()
+    assert parsed_bundle(output / certificates.CERTIFICATE_FILE)[0].public_key().public_numbers() == (
+        bootstrap_key.public_key().public_numbers()
+    )
+
+    certificates.issue_verifier_certificate(
+        output,
+        public_jwk(request_key),
+        gateway_url="https://verifier.example:8443",
+        replace_existing=True,
+    )
+    assert parsed_bundle(output / certificates.CERTIFICATE_FILE)[0].public_key().public_numbers() == (
+        request_key.public_key().public_numbers()
+    )
+    assert not (output / certificates.AUTHORITY_KEY_FILE).exists()
+
+
 def test_validation_rejects_a_certificate_for_another_profile_key(tmp_path: Path) -> None:
     output = tmp_path / "material"
     certificates.generate_material(output, gateway_url="https://verifier.example:8443")

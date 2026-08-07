@@ -481,6 +481,7 @@ def stage_haip_profile_certificate(
         args.haip_material.resolve(),
         identity["public_jwk"],
         gateway_url=environment["OIDF_PUBLIC_BASE_URL"],
+        retain_authority=args.eudi,
     )
     print(
         json.dumps(
