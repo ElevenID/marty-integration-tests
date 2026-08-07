@@ -210,6 +210,7 @@ class TestDataBuilder:
         organization_id: str,
         issuer_did: str,
         compliance_profile_id: str,
+        revocation_profile_id: str,
         name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create an mDL-like credential template using SD-JWT format.
@@ -228,6 +229,7 @@ class TestDataBuilder:
             "supported_formats": ["sd_jwt_vc"],
             "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
             "compliance_profile_id": compliance_profile_id,
+            "revocation_profile_id": revocation_profile_id,
             "schema": {
                 "type": "object",
                 "properties": {

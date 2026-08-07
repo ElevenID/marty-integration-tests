@@ -545,10 +545,19 @@ async def sd_jwt_mdl_template(
         credential_format="sd_jwt_vc",
         frameworks=["aamva"],
     )
+    revocation_profile = await gateway_client.create_revocation_profile(
+        organization_id=str(test_organization["id"]),
+        name="DIDComm SD-JWT status list",
+        revocation_mechanism=["STATUS_LIST_2021"],
+    )
+    revocation_profile = await gateway_client.activate_revocation_profile(
+        str(revocation_profile["id"])
+    )
     template_data = TestDataBuilder.sd_jwt_mdl_template(
         organization_id=test_organization["id"],
         issuer_did=vc_jwt_issuer_did,
         compliance_profile_id=str(compliance_profile["id"]),
+        revocation_profile_id=str(revocation_profile["id"]),
     )
     template = await gateway_client.create_credential_template(**template_data)
     return template

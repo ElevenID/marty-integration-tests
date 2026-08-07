@@ -15,10 +15,12 @@ def test_sd_jwt_template_builder_uses_current_profile_reference_contract() -> No
         organization_id="org-1",
         issuer_did="did:web:issuer.example",
         compliance_profile_id="compliance-1",
+        revocation_profile_id="revocation-1",
     )
 
     assert payload["issuer_did"] == "did:web:issuer.example"
     assert payload["compliance_profile_id"] == "compliance-1"
+    assert payload["revocation_profile_id"] == "revocation-1"
     assert "compliance_profile" not in payload
 
 
