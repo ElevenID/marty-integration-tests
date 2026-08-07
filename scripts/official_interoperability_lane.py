@@ -30,6 +30,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from haip_test_certificates import (  # noqa: E402
+    AUTHORITY_KEY_FILE,
     OID4VP_TRUST_ANCHOR_FILE_ENV,
     issue_verifier_certificate,
     load_verifier_environment,
@@ -1083,25 +1084,29 @@ def bootstrap_fixtures(
     api_key = fixtures.get("w3c_api_key")
     if mode == "w3c" and (not isinstance(api_key, str) or not W3C_API_KEY.fullmatch(api_key)):
         raise RuntimeError("w3c public fixture bootstrap returned an invalid API key")
-    request_public_jwk = fixtures.get("eudi_request_issuer_public_jwk")
-    if mode == "eudi" and (
-        not isinstance(request_public_jwk, dict)
-        or request_public_jwk.get("kty") != "EC"
-        or request_public_jwk.get("crv") != "P-256"
-        or not isinstance(request_public_jwk.get("x"), str)
-        or not isinstance(request_public_jwk.get("y"), str)
-        or any(name in request_public_jwk for name in ("d", "p", "q", "k"))
-    ):
-        raise RuntimeError("eudi public fixture bootstrap returned an invalid request-signing public JWK")
+    public_jwk_fields = {key for key in fixtures if key.endswith("_request_issuer_public_jwk")}
+    if mode in {"oid4vp", "oid4vp-mdoc", "eudi"} and len(public_jwk_fields) != 1:
+        raise RuntimeError(f"{mode} public fixture bootstrap returned no request-signing public identity")
+    for field in public_jwk_fields:
+        public_jwk = fixtures[field]
+        if (
+            not isinstance(public_jwk, dict)
+            or public_jwk.get("kty") != "EC"
+            or public_jwk.get("crv") != "P-256"
+            or not isinstance(public_jwk.get("x"), str)
+            or not isinstance(public_jwk.get("y"), str)
+            or any(name in public_jwk for name in ("d", "p", "q", "k"))
+        ):
+            raise RuntimeError(f"{mode} public fixture bootstrap returned an invalid request-signing public JWK")
     identifiers = {
-        key: value for key, value in fixtures.items() if key not in {"w3c_api_key", "eudi_request_issuer_public_jwk"}
+        key: value for key, value in fixtures.items() if key != "w3c_api_key" and key not in public_jwk_fields
     }
     if any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in identifiers.values()):
         raise RuntimeError(f"{mode} public fixture bootstrap returned invalid identifiers")
     return fixtures
 
 
-def refresh_eudi_request_certificate(
+def refresh_request_signing_certificate(
     args: argparse.Namespace,
     environment: dict[str, str],
     public_jwk: dict[str, Any],
@@ -1134,12 +1139,12 @@ def refresh_eudi_request_certificate(
         "up",
     ]
     if run(command, refresh_environment):
-        raise RuntimeError("released Marty stack could not adopt the disposable EUDI request certificate")
+        raise RuntimeError("released Marty stack could not adopt the disposable request-signing certificate")
     wait_for_public_stack(refresh_environment)
     print(
         json.dumps(
             {
-                "eudi_request_certificate": {
+                "request_signing_certificate": {
                     "certificate_sha256": report["certificate_sha256"],
                     "dns_names": report["dns_names"],
                 }
@@ -1149,6 +1154,18 @@ def refresh_eudi_request_certificate(
         flush=True,
     )
     return certificate_environment
+
+
+def discard_disposable_certificate_authority(material_dir: Path) -> None:
+    """Destroy a retained test CA when an unsigned verifier lane needs no final leaf."""
+    authority = material_dir.resolve() / AUTHORITY_KEY_FILE
+    try:
+        mode = authority.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise RuntimeError("disposable HAIP certificate authority was not retained") from exc
+    if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+        raise RuntimeError("disposable HAIP certificate authority must be a regular file")
+    authority.unlink()
 
 
 def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, object]]:
@@ -1253,6 +1270,14 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         wait_for_public_stack(environment)
         fixture_prefix = "oid4vp_mdoc" if mdoc else "oid4vp"
         fixtures = bootstrap_fixtures(args, environment, mode="oid4vp-mdoc" if mdoc else "oid4vp")
+        public_jwk_field = f"{fixture_prefix}_request_issuer_public_jwk"
+        request_public_jwk = fixtures.pop(public_jwk_field, None)
+        if not isinstance(request_public_jwk, dict):
+            raise RuntimeError("OID4VP fixture bootstrap returned no request-signing public identity")
+        if url_query:
+            discard_disposable_certificate_authority(args.haip_material)
+        else:
+            environment.update(refresh_request_signing_certificate(args, environment, request_public_jwk))
         environment["OIDF_MARTY_ORGANIZATION_ID"] = fixtures["organization_id"]
         environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures[f"{fixture_prefix}_policy_id"]
         environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures[f"{fixture_prefix}_trust_profile_id"]
@@ -1523,7 +1548,7 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
         request_public_jwk = fixtures.pop("eudi_request_issuer_public_jwk", None)
         if not isinstance(request_public_jwk, dict):
             raise RuntimeError("EUDI fixture bootstrap returned no request-signing public identity")
-        certificate_environment = refresh_eudi_request_certificate(args, environment, request_public_jwk)
+        certificate_environment = refresh_request_signing_certificate(args, environment, request_public_jwk)
         suite_environment = dict(environment)
         suite_environment.update(certificate_environment)
         # The runner selects only organization-scoped templates. Each template

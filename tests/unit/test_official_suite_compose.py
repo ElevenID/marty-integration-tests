@@ -431,6 +431,33 @@ def test_eudi_stage_retains_disposable_authority_for_final_did_leaf(
     assert (material / haip.AUTHORITY_KEY_FILE).exists()
 
 
+def test_oidf_stage_retains_disposable_authority_for_final_did_leaf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    material = tmp_path / "prepared"
+    haip.generate_material(material, gateway_url="https://verifier.example:8443")
+    profile_key = ec.generate_private_key(ec.SECP256R1())
+    numbers = profile_key.public_key().public_numbers()
+    identity = {
+        "issuer_did": "did:web:verifier.example",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": haip._base64url(numbers.x.to_bytes(32, "big")),
+            "y": haip._base64url(numbers.y.to_bytes(32, "big")),
+        },
+    }
+    monkeypatch.setattr(lifecycle, "resolve_issuer_did_identity", lambda *_args: identity)
+    args = type("Args", (), {"haip_material": material, "eudi": False, "oidf": True})()
+    environment = {"OIDF_PUBLIC_BASE_URL": "https://verifier.example:8443"}
+
+    lifecycle.stage_haip_profile_certificate(args, {}, environment)
+
+    assert "VERIFIER_X509_CERT_PEM" in environment
+    assert (material / haip.AUTHORITY_KEY_FILE).exists()
+
+
 def test_generated_haip_material_replaces_the_unrelated_tls_root(tmp_path: Path) -> None:
     material = haip_material(tmp_path, "generated-separate-root")
     tls_root = tmp_path / "tls-root.pem"

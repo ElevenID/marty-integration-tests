@@ -387,6 +387,12 @@ def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(
                     "oid4vp_template_id": "template-1",
                     "oid4vp_policy_id": "policy-1",
                     "oid4vp_trust_profile_id": "trust-1",
+                    "oid4vp_request_issuer_public_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                    },
                 }
             ),
             encoding="utf-8",
@@ -711,6 +717,11 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
     monkeypatch.setattr(
         lane,
+        "refresh_request_signing_certificate",
+        lambda *_args: {"VERIFIER_X509_CERT_PEM": "request-certificate"},
+    )
+    monkeypatch.setattr(
+        lane,
         "bootstrap_fixtures",
         lambda *_args, **_kwargs: {
             "organization_id": "org-1",
@@ -718,6 +729,12 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
             "oid4vp_policy_id": "policy-1",
             "oid4vp_trust_profile_id": "trust-1",
             "oid4vp_issuer_did": "did:web:marty.test:orgs:org-1",
+            "oid4vp_request_issuer_public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "public-x",
+                "y": "public-y",
+            },
             "browser_credential_template_id": "browser-credential-1",
             "browser_application_template_id": "browser-application-1",
             "browser_flow_id": "browser-flow-1",
@@ -747,6 +764,7 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert suite_environment["OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID"] == "browser-credential-1"
     assert suite_environment["OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID"] == "browser-application-1"
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "request_uri_signed"
+    assert suite_environment["VERIFIER_X509_CERT_PEM"] == "request-certificate"
     browser_command = next(
         command for command in executed_commands if "oidf_marty_browser_smoke.py" in " ".join(command)
     )
@@ -776,6 +794,8 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
 
     monkeypatch.setattr(lane, "run", fake_run)
     monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    discarded: list[Path] = []
+    monkeypatch.setattr(lane, "discard_disposable_certificate_authority", discarded.append)
     monkeypatch.setattr(
         lane,
         "bootstrap_fixtures",
@@ -784,6 +804,12 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
             "oid4vp_policy_id": "policy-1",
             "oid4vp_trust_profile_id": "trust-1",
             "oid4vp_issuer_did": "did:web:marty.test:orgs:org-1",
+            "oid4vp_request_issuer_public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "public-x",
+                "y": "public-y",
+            },
         },
     )
     monkeypatch.setattr(
@@ -814,6 +840,7 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "url_query"
     assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == ("did:web:marty.test:orgs:org-1")
+    assert discarded == [tmp_path / "haip"]
 
 
 def test_mdoc_fixture_bootstrap_receives_the_exact_runner_source(
@@ -835,6 +862,12 @@ def test_mdoc_fixture_bootstrap_receives_the_exact_runner_source(
                     "oid4vp_mdoc_policy_id": "policy-1",
                     "oid4vp_mdoc_trust_profile_id": "trust-1",
                     "oid4vp_mdoc_issuer_did": "did:web:marty.test:orgs:org-1",
+                    "oid4vp_mdoc_request_issuer_public_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                    },
                 }
             ),
             encoding="utf-8",
@@ -878,6 +911,7 @@ def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
     monkeypatch.setattr(lane, "run", fake_run)
     monkeypatch.setattr(lane, "emit_mdoc_runtime_diagnostic", diagnostics.append)
     monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(lane, "refresh_request_signing_certificate", lambda *_args: {})
     monkeypatch.setattr(
         lane,
         "bootstrap_fixtures",
@@ -886,6 +920,12 @@ def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
             "oid4vp_mdoc_policy_id": "mdoc-policy-1",
             "oid4vp_mdoc_trust_profile_id": "trust-1",
             "oid4vp_mdoc_issuer_did": "did:web:marty.test:orgs:org-1",
+            "oid4vp_mdoc_request_issuer_public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "public-x",
+                "y": "public-y",
+            },
         },
     )
     monkeypatch.setattr(
