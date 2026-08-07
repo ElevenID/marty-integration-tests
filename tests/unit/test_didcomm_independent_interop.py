@@ -144,6 +144,78 @@ def test_independent_verifier_rejects_false_sender_authentication(
         didcomm._independent_didcomm_decrypt(envelope(holder_did), holder_did, b"k" * 32)
 
 
+def test_independent_verifier_must_reject_tampered_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder_did = "did:peer:2.test"
+    cli = tmp_path / "didcomm-verifier"
+    cli.touch()
+    monkeypatch.setenv("DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED", "true")
+    monkeypatch.setenv("DIDCOMM_INTEROP_CLI", str(cli))
+    monkeypatch.setenv("DIDCOMM_INTEROP_IMPLEMENTATION", didcomm.INDEPENDENT_IMPLEMENTATION)
+    monkeypatch.setattr(
+        didcomm.subprocess,
+        "run",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(args[0], 1, "", "decrypt failed"),
+    )
+
+    assert (
+        didcomm._assert_independent_didcomm_rejects(
+            envelope(holder_did),
+            holder_did,
+            b"k" * 32,
+            "ciphertext",
+        )
+        is True
+    )
+
+
+def test_independent_verifier_accepting_tampering_fails_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder_did = "did:peer:2.test"
+    cli = tmp_path / "didcomm-verifier"
+    cli.touch()
+    monkeypatch.setenv("DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED", "true")
+    monkeypatch.setenv("DIDCOMM_INTEROP_CLI", str(cli))
+    monkeypatch.setenv("DIDCOMM_INTEROP_IMPLEMENTATION", didcomm.INDEPENDENT_IMPLEMENTATION)
+    monkeypatch.setattr(
+        didcomm.subprocess,
+        "run",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(args[0], 0, "{}", ""),
+    )
+
+    with pytest.raises(AssertionError, match="accepted a tampered envelope"):
+        didcomm._assert_independent_didcomm_rejects(
+            envelope(holder_did),
+            holder_did,
+            b"k" * 32,
+            "ciphertext",
+        )
+
+
+def test_tamper_matrix_changes_each_integrity_protected_value() -> None:
+    original = envelope("did:peer:2.test")
+    cases = didcomm._tampered_envelopes(original)
+
+    assert set(cases) == {
+        "ciphertext",
+        "authentication-tag",
+        "protected-header",
+        "wrapped-content-key",
+    }
+    assert cases["ciphertext"]["ciphertext"] != original["ciphertext"]
+    assert cases["authentication-tag"]["tag"] != original["tag"]
+    assert cases["protected-header"]["protected"] != original["protected"]
+    assert (
+        cases["wrapped-content-key"]["recipients"][0]["encrypted_key"]
+        != original["recipients"][0]["encrypted_key"]
+    )
+    assert original == envelope("did:peer:2.test"), "the source envelope must not be mutated"
+
+
 def test_plaintext_comparison_accepts_only_known_optional_absent_null_members() -> None:
     independent = {
         "id": "message-1",

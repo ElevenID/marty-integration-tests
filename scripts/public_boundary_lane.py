@@ -263,6 +263,7 @@ def write_summary(
     didcomm_passed = bool(didcomm_interop.get("required")) and exit_code == 0
     didcomm_interop = dict(didcomm_interop)
     didcomm_interop["cross_implementation_decryption_passed"] = didcomm_passed
+    didcomm_interop["cross_implementation_tamper_rejection_passed"] = didcomm_passed
     coverage = [
         "two authenticated principals",
         "organization membership and RBAC",
@@ -295,6 +296,10 @@ def write_summary(
     ]
     if didcomm_passed:
         coverage.append("independent go-didcomm decryption of Marty's released anoncrypt envelope")
+        coverage.append(
+            "released Marty and independent go-didcomm rejection of ciphertext, "
+            "authentication-tag, protected-header, and wrapped-key tampering"
+        )
     summary = {
         "schema": "elevenid.product-security-evidence/v1",
         "evidence_class": "elevenid-owned-product-security",
