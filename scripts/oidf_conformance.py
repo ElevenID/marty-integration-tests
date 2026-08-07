@@ -362,6 +362,83 @@ def write_failure_diagnostics(output: Path) -> list[dict[str, object]]:
     return diagnostics
 
 
+BROWSER_AUTOMATION_MESSAGES = {
+    "Scripted browser HTTP request": "request-started",
+    "Scripted browser HTTP response": "response-received",
+    "Waiting": "wait-started",
+    "Updated placeholder from scripted browser": "placeholder-updated",
+    "All placeholders filled by scripted browser": "all-placeholders-filled",
+    "Completed processing of webpage": "task-completed",
+    "Unexpected URL for non-optional task": "task-url-mismatch",
+}
+BROWSER_AUTOMATION_SOURCES = {"BROWSER", "WebRunner"}
+SAFE_MODULE = re.compile(r"^[A-Za-z0-9_.:-]{1,180}$")
+SAFE_MODULE_STATES = {"CONFIGURED", "RUNNING", "WAITING", "FINISHED", "INTERRUPTED"}
+SAFE_MODULE_RESULTS = {"UNKNOWN", "PASSED", "WARNING", "REVIEW", "SKIPPED", "FAILED"}
+
+
+def write_browser_automation_diagnostics(output: Path) -> list[dict[str, object]]:
+    """Record only fixed BrowserControl lifecycle facts from official exports.
+
+    The exported logs can contain request objects, credentials, URLs, and test
+    instance IDs. This diagnostic copies none of those values. It reports only
+    the public test name, allowlisted state/result enums, and fixed categories
+    derived from exact upstream BrowserControl messages.
+    """
+
+    diagnostics: list[dict[str, object]] = []
+    for archive in sorted(output.glob("*.zip")):
+        with zipfile.ZipFile(archive) as result_zip:
+            for name in sorted(result_zip.namelist()):
+                if not name.endswith(".json"):
+                    continue
+                raw: object = json.loads(result_zip.read(name))
+                if not isinstance(raw, dict):
+                    continue
+                test_info = raw.get("testInfo")
+                results = raw.get("results")
+                if not isinstance(test_info, dict) or not isinstance(results, list):
+                    continue
+                module = test_info.get("testName")
+                if not isinstance(module, str) or not SAFE_MODULE.fullmatch(module):
+                    continue
+
+                browser_entries = [
+                    entry
+                    for entry in results
+                    if isinstance(entry, dict) and entry.get("src") in BROWSER_AUTOMATION_SOURCES
+                ]
+                status = test_info.get("status")
+                if not browser_entries and status != "WAITING":
+                    continue
+
+                categories: set[str] = set()
+                for entry in browser_entries:
+                    message = entry.get("msg")
+                    if isinstance(message, str) and message in BROWSER_AUTOMATION_MESSAGES:
+                        categories.add(BROWSER_AUTOMATION_MESSAGES[message])
+                    if entry.get("result") == "FAILURE":
+                        categories.add("browser-runner-failure")
+                if not categories:
+                    categories.add("automation-not-observed" if not browser_entries else "unclassified-browser-event")
+
+                diagnostic: dict[str, object] = {
+                    "module": module,
+                    "events": sorted(categories),
+                }
+                if status in SAFE_MODULE_STATES:
+                    diagnostic["status"] = status
+                result = test_info.get("result")
+                if result in SAFE_MODULE_RESULTS:
+                    diagnostic["result"] = result
+                diagnostics.append(diagnostic)
+
+    destination = output / "browser-automation-diagnostics.json"
+    destination.write_text(json.dumps(diagnostics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print("OIDF public-safe browser diagnostics:", json.dumps(diagnostics, sort_keys=True), flush=True)
+    return diagnostics
+
+
 def write_evidence(
     output: Path,
     manifest: dict,
@@ -517,6 +594,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         result = subprocess.run(command, cwd=runner, check=False).returncode
         validate_runner(runner, manifest)
         write_failure_diagnostics(output)
+        write_browser_automation_diagnostics(output)
         write_evidence(
             output,
             manifest,
@@ -602,6 +680,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     result = runner_result or hook_result
     validate_runner(runner, manifest)
     write_failure_diagnostics(output)
+    write_browser_automation_diagnostics(output)
     write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
     return result
 
