@@ -189,6 +189,43 @@ def test_keycloak_startup_diagnostic_includes_service_logs_and_redacts(
     assert any(command[-1].endswith("=keycloak") for command in calls if command[1] == "ps")
 
 
+def test_oidf_startup_failure_is_diagnosed_before_retained_projects_are_removed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+    events: list[str] = []
+
+    def fake_run(command: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
+        calls.append(command)
+        rendered = " ".join(command)
+        if "official_suite_compose.py" in rendered and " up " in f" {rendered} ":
+            return 17
+        if "official_suite_compose.py" in rendered and " down " in f" {rendered} ":
+            events.append("down")
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(
+        lane,
+        "emit_keycloak_initializer_diagnostic",
+        lambda run_id: events.append(f"diagnostic:{run_id}"),
+    )
+    args = SimpleNamespace(
+        lane="oid4vp-final",
+        marty_ui=tmp_path / "marty-ui",
+        run_id="run-1",
+        oidf_runner=tmp_path / "runner",
+        haip_material=tmp_path / "haip",
+        output_dir=tmp_path / "output",
+        stack_manifest=tmp_path / "stack-manifest.json",
+    )
+
+    assert lane.run_oidf(args, {}) == 1
+    assert events == ["diagnostic:run-1", "down"]
+    up = calls[0]
+    assert "--retain-on-up-failure" in up
+
+
 def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1081,6 +1118,44 @@ def test_base_environment_binds_eudi_vct_to_verified_gateway_origin(
     environment, _ = lane.base_environment(args)
 
     assert environment["EUDI_TEST_VCT_ORIGIN"] == environment["OIDF_MARTY_GATEWAY_URL"]
+
+
+def test_base_environment_rejects_loopback_request_uri_hostname(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, metadata, stack_environment = stack_binding_fixture(tmp_path)
+    marty_ui = tmp_path / "marty-ui"
+    (marty_ui / "scripts").mkdir(parents=True)
+    (marty_ui / "scripts" / "conformance_stack.py").write_text(
+        "# released launcher\n",
+        encoding="utf-8",
+    )
+    haip_material = tmp_path / "haip-material"
+    haip_material.mkdir()
+    oidf_runner = tmp_path / "oidf-runner"
+    oidf_runner.mkdir()
+    monkeypatch.setattr(lane, "load_stack_metadata", lambda _path: metadata)
+    monkeypatch.setattr(lane, "load_stack_environment", lambda _path: stack_environment)
+    monkeypatch.setattr(
+        lane,
+        "load_material_environment",
+        lambda _path: {"OIDF_PUBLIC_BASE_URL": "https://localhost:18443"},
+    )
+    args = SimpleNamespace(
+        lane="oid4vp-final",
+        run_id="run-1",
+        marty_ui=marty_ui,
+        stack_manifest=manifest,
+        stack_metadata=tmp_path / "stack-metadata.json",
+        stack_env=tmp_path / ".env.stack",
+        material=tmp_path / "material",
+        oidf_runner=oidf_runner,
+        w3c_suite=None,
+        haip_material=haip_material,
+    )
+
+    with pytest.raises(ValueError, match="non-loopback bridge hostname"):
+        lane.base_environment(args)
 
 
 def test_public_readiness_uses_generated_ca_and_exact_origin(monkeypatch: pytest.MonkeyPatch) -> None:
