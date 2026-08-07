@@ -142,3 +142,45 @@ def test_independent_verifier_rejects_false_sender_authentication(
 
     with pytest.raises(AssertionError, match="anoncrypt must remain anonymous"):
         didcomm._independent_didcomm_decrypt(envelope(holder_did), holder_did, b"k" * 32)
+
+
+def test_plaintext_comparison_accepts_only_known_optional_absent_null_members() -> None:
+    independent = {
+        "id": "message-1",
+        "type": "https://didcomm.org/issue-credential/3.0/issue-credential",
+        "body": {"goal_code": "issue-vc"},
+    }
+    released_marty = {
+        **independent,
+        "expires_time": None,
+        "pthid": None,
+    }
+
+    didcomm._assert_same_didcomm_plaintext(independent, released_marty)
+
+
+@pytest.mark.parametrize("member", ["id", "from", "to", "thid", "attachments"])
+def test_plaintext_comparison_rejects_other_absent_null_members(member: str) -> None:
+    independent = {"id": "message-1", member: None}
+    released_marty = {"id": "message-1"}
+
+    with pytest.raises(AssertionError, match=rf"members: {member}"):
+        didcomm._assert_same_didcomm_plaintext(independent, released_marty)
+
+
+def test_plaintext_comparison_rejects_non_null_optional_difference() -> None:
+    independent = {"id": "message-1", "pthid": "parent-1"}
+    released_marty = {"id": "message-1", "pthid": "parent-2"}
+
+    with pytest.raises(AssertionError, match=r"members: pthid"):
+        didcomm._assert_same_didcomm_plaintext(independent, released_marty)
+
+
+def test_plaintext_comparison_rejects_nested_credential_difference_without_logging_values() -> None:
+    independent = {"id": "message-1", "attachments": [{"data": {"json": {"credential": "secret-a"}}}]}
+    released_marty = {"id": "message-1", "attachments": [{"data": {"json": {"credential": "secret-b"}}}]}
+
+    with pytest.raises(AssertionError, match=r"members: attachments") as failure:
+        didcomm._assert_same_didcomm_plaintext(independent, released_marty)
+    assert "secret-a" not in str(failure.value)
+    assert "secret-b" not in str(failure.value)
