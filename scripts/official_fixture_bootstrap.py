@@ -737,7 +737,10 @@ def trust_profile_payload(
         return {
             "organization_id": organization_id,
             "name": f"Official OIDF mdoc signer {run_id}",
-            "description": ("Disposable root certificate pinned from the exact official OIDF runner revision"),
+            "description": (
+                "Exact OIDF fixture certificate pinned so the unchanged suite reaches "
+                "Marty's production certificate-profile validation"
+            ),
             "profile_type": "CUSTOM",
             "supported_formats": ["MDOC"],
             "allowed_algorithms": ["ES256"],
@@ -747,7 +750,8 @@ def trust_profile_payload(
                     "source_type": "PINNED_ISSUER",
                     "certificate_pem": mdoc_trust_anchor_pem,
                     "description": (
-                        "Public test certificate extracted from the exact commit-pinned OIDF conformance runner"
+                        "Public test certificate extracted from the exact commit-pinned OIDF conformance runner; "
+                        "pinning does not bypass ISO document-signer certificate validation"
                     ),
                     "enabled": True,
                 }

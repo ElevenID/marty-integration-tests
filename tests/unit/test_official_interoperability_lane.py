@@ -431,6 +431,7 @@ def test_standard_verifier_config_reuses_generated_wallet_key_and_request_trust(
     config = json.loads(destination.read_text(encoding="utf-8"))
     assert config["verifier"]["profile"] == "oid4vp-1.0-final"
     assert config["client"]["request_object_trust_anchor_pem"] == "test-root"
+    assert config["browser"] == lane.VERIFICATION_EVIDENCE_BROWSER_AUTOMATION
 
 
 def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(

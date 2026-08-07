@@ -32,6 +32,7 @@ if str(SCRIPTS) not in sys.path:
 from haip_test_certificates import (  # noqa: E402
     AUTHORITY_KEY_FILE,
     OID4VP_TRUST_ANCHOR_FILE_ENV,
+    VERIFICATION_EVIDENCE_BROWSER_AUTOMATION,
     issue_verifier_certificate,
     load_verifier_environment,
 )
@@ -496,6 +497,7 @@ def standard_verifier_config(haip_material: Path, gateway_url: str) -> Path:
             "credential": {"signing_jwk": signing_jwk},
             "client": {"request_object_trust_anchor_pem": trust_anchor},
             "verifier": {"gateway_url": gateway_url, "profile": "oid4vp-1.0-final"},
+            "browser": VERIFICATION_EVIDENCE_BROWSER_AUTOMATION,
         },
     )
     return destination

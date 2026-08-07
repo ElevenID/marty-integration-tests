@@ -36,6 +36,31 @@ DEFAULT_GATEWAY_URL = "https://marty-oidf.test:8443"
 MAX_VALIDITY_HOURS = 168
 PEM_CERTIFICATE = re.compile(rb"-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----")
 OID4VP_TRUST_ANCHOR_FILE_ENV = "EUDI_OID4VP_TRUST_ANCHOR_FILE"
+VERIFICATION_EVIDENCE_BROWSER_AUTOMATION = [
+    {
+        "comment": (
+            "Capture the suite-served verification-evidence page so an automated "
+            "official run can satisfy OIDF's required review screenshot"
+        ),
+        "match": "https://*/test/a/*/verification-evidence",
+        "tasks": [
+            {
+                "task": "Capture verification evidence",
+                "match": "https://*/test/a/*/verification-evidence",
+                "commands": [
+                    [
+                        "wait",
+                        "xpath",
+                        "//*",
+                        10,
+                        ".*Deferred verification evidence.*",
+                        "update-image-placeholder",
+                    ]
+                ],
+            }
+        ],
+    }
+]
 
 
 def _base64url(value: bytes) -> str:
@@ -226,6 +251,7 @@ def generate_material(
         "credential": {"signing_jwk": _private_jwk(credential_key)},
         "client": {"request_object_trust_anchor_pem": root_pem.decode("ascii")},
         "verifier": {"gateway_url": gateway_url, "profile": "oid4vp-haip-1.0"},
+        "browser": VERIFICATION_EVIDENCE_BROWSER_AUTOMATION,
     }
     config_bytes = (json.dumps(runner_config, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
