@@ -650,6 +650,95 @@ async def test_public_signing_is_did_first_and_fails_closed(
     )
     _assert_no_private_signing_selectors(verification)
 
+    # Exercise the resolver's corruption-state boundary through real managed
+    # custody. A second KMS key and profile with the same organization, DID,
+    # purpose, format, and algorithm are valid administration records by
+    # themselves, but together they are not a deterministic signing identity.
+    # Public DID-first discovery and issuance must fail closed instead of
+    # choosing either private profile or key by storage order.
+    ambiguous_key_response = await client.client.post(
+        "/v1/signing-keys",
+        params={"organization_id": organization_id},
+        json={
+            "name": f"Ambiguous DID boundary {uuid.uuid4().hex}",
+            "algorithm": "ES256",
+            "key_purpose": "vc_jwt_issuer",
+            "service_id": issuance_profile["signing_service_id"],
+        },
+    )
+    assert ambiguous_key_response.status_code == 200, ambiguous_key_response.text
+    ambiguous_key_reference = str(
+        ambiguous_key_response.json().get("provider_key_name") or ""
+    )
+    assert ambiguous_key_reference
+    ambiguous_profile = await client.create_issuer_profile(
+        organization_id=organization_id,
+        name="Ambiguous DID boundary profile",
+        issuer_did=issuer_did,
+        signing_service_id=str(issuance_profile["signing_service_id"]),
+        signing_key_reference=ambiguous_key_reference,
+        key_purpose="vc_jwt_issuer",
+        status="active",
+    )
+    assert ambiguous_profile["id"] != issuance_profile["id"]
+
+    ambiguous_identities = await client.client.get(
+        "/v1/signing-keys/issuer-identities",
+        params={
+            "organization_id": organization_id,
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
+        },
+    )
+    assert ambiguous_identities.status_code == 409, ambiguous_identities.text
+    _assert_no_private_signing_selectors(ambiguous_identities.json())
+    for private_value in (
+        str(issuance_profile["id"]),
+        str(ambiguous_profile["id"]),
+        str(issuance_profile["signing_service_id"]),
+        ambiguous_key_reference,
+    ):
+        assert private_value not in ambiguous_identities.text
+
+    with pytest.raises(GatewayClientError) as ambiguous_issuance_error:
+        await client.issue_credential(
+            organization_id=organization_id,
+            credential_template_id=template["id"],
+            claims=TestDataBuilder.employee_badge_claims(),
+            subject_did=f"did:key:z6Mk{uuid.uuid4().hex}",
+        )
+    assert ambiguous_issuance_error.value.status_code == 409
+    _assert_did_resolution_denied(ambiguous_issuance_error.value)
+    for private_value in (
+        str(issuance_profile["id"]),
+        str(ambiguous_profile["id"]),
+        str(issuance_profile["signing_service_id"]),
+        ambiguous_key_reference,
+    ):
+        assert private_value not in str(ambiguous_issuance_error.value)
+
+    duplicate_delete = await client.client.delete(
+        f"/v1/signing-keys/issuer-profiles/{ambiguous_profile['id']}",
+        params={"organization_id": organization_id},
+    )
+    assert duplicate_delete.status_code == 200, duplicate_delete.text
+    recovered_identities = await client.list_issuer_identities(
+        organization_id=organization_id,
+        key_purpose="vc_jwt_issuer",
+        algorithm="ES256",
+    )
+    assert recovered_identities == {
+        "identities": [
+            {
+                "issuer_did": issuer_did,
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
+                "status": "active",
+            }
+        ]
+    }
+    _assert_no_private_signing_selectors(recovered_identities)
+
     # Unknown DIDs and DIDs with no compatible issuance-purpose profile must
     # fail before a signing service is invoked.
     unknown_did = f"did:example:unknown-{uuid.uuid4().hex}"
