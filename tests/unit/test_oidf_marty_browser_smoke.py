@@ -16,6 +16,22 @@ browser_smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(browser_smoke)
 
 
+def test_browser_resolver_maps_only_the_disposable_public_hostname() -> None:
+    assert browser_smoke.browser_resolver_args(
+        "https://marty-oidf.test:18443",
+        "127.0.0.1",
+    ) == ["--host-resolver-rules=MAP marty-oidf.test 127.0.0.1"]
+    assert browser_smoke.browser_resolver_args("https://marty-oidf.test:18443", "") == []
+
+
+def test_browser_resolver_rejects_argument_injection() -> None:
+    with pytest.raises(ValueError, match="does not appear to be an IPv4 or IPv6 address"):
+        browser_smoke.browser_resolver_args(
+            "https://marty-oidf.test:18443",
+            "127.0.0.1,MAP outside.test 127.0.0.1",
+        )
+
+
 def test_public_selector_guard_accepts_did_first_payload() -> None:
     browser_smoke.assert_no_private_selectors(
         {
@@ -72,6 +88,43 @@ def test_browser_issuance_binding_requires_one_public_did_bound_template() -> No
         },
         binding,
     )
+
+
+def test_browser_policy_binding_requires_exact_active_organization_policy() -> None:
+    assert browser_smoke.presentation_policy_binding(
+        [
+            {
+                "id": "policy-1",
+                "organization_id": "org-1",
+                "name": "Official OID4VP policy",
+                "status": "ACTIVE",
+            },
+            {
+                "id": "policy-other",
+                "organization_id": "org-2",
+                "name": "Other policy",
+                "status": "ACTIVE",
+            },
+        ],
+        expected_policy_id="policy-1",
+        expected_organization_id="org-1",
+    ) == {"id": "policy-1", "name": "Official OID4VP policy"}
+
+
+def test_browser_policy_binding_rejects_cross_tenant_policy() -> None:
+    with pytest.raises(AssertionError, match="exactly one expected active policy"):
+        browser_smoke.presentation_policy_binding(
+            [
+                {
+                    "id": "policy-1",
+                    "organization_id": "org-2",
+                    "name": "Foreign policy",
+                    "status": "ACTIVE",
+                }
+            ],
+            expected_policy_id="policy-1",
+            expected_organization_id="org-1",
+        )
 
 
 @pytest.mark.parametrize(
@@ -143,6 +196,43 @@ def test_browser_issuance_application_request_cannot_change_binding(
 
     with pytest.raises(AssertionError):
         browser_smoke.assert_application_request(body, binding)
+
+
+def test_browser_verification_request_requires_exact_public_identity() -> None:
+    assert browser_smoke.assert_verification_request(
+        {
+            "organization_id": "org-1",
+            "issuer_did": "did:web:marty-oidf.test:orgs:org-1",
+        },
+        expected_organization_id="org-1",
+        expected_issuer_did="did:web:marty-oidf.test:orgs:org-1",
+    ) == {
+        "organization_id": "org-1",
+        "issuer_did": "did:web:marty-oidf.test:orgs:org-1",
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"organization_id": "org-2", "issuer_did": "did:web:marty-oidf.test:orgs:org-1"},
+        {"organization_id": "org-1", "issuer_did": "did:web:marty-oidf.test:orgs:org-2"},
+        {
+            "organization_id": "org-1",
+            "issuer_did": "did:web:marty-oidf.test:orgs:org-1",
+            "issuer_profile_id": "private-selector",
+        },
+    ],
+)
+def test_browser_verification_request_rejects_substitution_and_private_selectors(
+    body: dict[str, str],
+) -> None:
+    with pytest.raises(AssertionError):
+        browser_smoke.assert_verification_request(
+            body,
+            expected_organization_id="org-1",
+            expected_issuer_did="did:web:marty-oidf.test:orgs:org-1",
+        )
 
 
 class _Button:

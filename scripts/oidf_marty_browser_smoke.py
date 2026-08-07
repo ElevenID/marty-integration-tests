@@ -10,13 +10,15 @@ from the exact released UI artifact through the public HTTPS gateway.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
+import os
 import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page, Request, Response
@@ -39,6 +41,18 @@ FORBIDDEN_PUBLIC_SELECTORS = {
     "providerSelector",
 }
 VERIFICATION_PURPOSE = "Released-stack browser DID-first smoke"
+
+
+def browser_resolver_args(base_url: str, address: str) -> list[str]:
+    """Map only the disposable public hostname when a local runner needs it."""
+    address = address.strip()
+    if not address:
+        return []
+    hostname = urlsplit(base_url).hostname
+    if not hostname:
+        raise ValueError("browser gateway URL has no hostname")
+    ipaddress.ip_address(address)
+    return [f"--host-resolver-rules=MAP {hostname} {address}"]
 
 
 def wait_for_verification_identity(page: Page, button: Locator, *, timeout_ms: int = 30_000) -> None:
@@ -161,6 +175,30 @@ def issuance_binding(
         "organization_id": organization_id,
         "issuer_did": issuer_did,
     }
+
+
+def presentation_policy_binding(
+    policies: object,
+    *,
+    expected_policy_id: str,
+    expected_organization_id: str,
+) -> dict[str, str]:
+    """Resolve exactly one active public policy in the disposable organization."""
+    assert_no_private_selectors(policies, location="presentation policies")
+    items = collection_items(policies, location="presentation policies")
+    matches = [
+        item
+        for item in items
+        if str(item.get("id") or "").strip() == expected_policy_id
+        and str(item.get("organization_id") or "").strip() == expected_organization_id
+        and str(item.get("status") or "").strip().upper() == "ACTIVE"
+    ]
+    if len(matches) != 1:
+        raise AssertionError("browser policy discovery did not resolve exactly one expected active policy")
+    name = str(matches[0].get("name") or "").strip()
+    if not name:
+        raise AssertionError("browser policy discovery returned an unnamed policy")
+    return {"id": expected_policy_id, "name": name}
 
 
 def assert_application_request(body: object, binding: Mapping[str, str]) -> None:
@@ -295,8 +333,48 @@ def exercise_issuance(
     }
 
 
-def exercise_verification(page: Page, base_url: str) -> dict[str, object]:
+def assert_verification_request(
+    body: object,
+    *,
+    expected_organization_id: str,
+    expected_issuer_did: str,
+) -> dict[str, str]:
+    """Require the UI to preserve the exact disposable public identity boundary."""
+    assert_no_private_selectors(body, location="verification")
+    if not isinstance(body, dict):
+        raise AssertionError("verification request body is not a JSON object")
+    organization_id = str(body.get("organization_id") or "").strip()
+    issuer_did = str(body.get("issuer_did") or "").strip()
+    if organization_id != expected_organization_id:
+        raise AssertionError("verification request changed organization_id")
+    if issuer_did != expected_issuer_did:
+        raise AssertionError("verification request changed issuer_did")
+    return {"organization_id": organization_id, "issuer_did": issuer_did}
+
+
+def exercise_verification(
+    page: Page,
+    base_url: str,
+    *,
+    expected_policy_id: str,
+    expected_organization_id: str,
+    expected_issuer_did: str,
+) -> dict[str, object]:
     open_org_console(page, base_url)
+    policy_response = page.evaluate(
+        """async (url) => {
+          const response = await fetch(url, {credentials: 'include'});
+          return {status: response.status, body: await response.json()};
+        }""",
+        f"{base_url}/v1/presentation-policies?{urlencode({'organization_id': expected_organization_id})}",
+    )
+    if not isinstance(policy_response, dict) or not 200 <= int(policy_response.get("status") or 0) < 300:
+        raise AssertionError("browser presentation-policy discovery failed")
+    expected_policy = presentation_policy_binding(
+        policy_response.get("body"),
+        expected_policy_id=expected_policy_id,
+        expected_organization_id=expected_organization_id,
+    )
     create = page.get_by_role("button", name="New Verification")
     create.wait_for(timeout=30_000)
     wait_for_verification_identity(page, create)
@@ -305,19 +383,19 @@ def exercise_verification(page: Page, base_url: str) -> dict[str, object]:
     policy = page.get_by_label("Presentation Policy")
     policy.wait_for(timeout=15_000)
     policy.click()
-    options = page.get_by_role("option")
-    if options.count() < 1:
-        raise AssertionError("released stack exposes no presentation policy to the UI")
-    options.first.click()
+    policy_options = page.get_by_role("option").filter(has_text=expected_policy["name"])
+    if policy_options.count() != 1:
+        raise AssertionError("released stack did not expose exactly one expected presentation policy to the UI")
+    policy_options.first.click()
     page.get_by_role("button", name="Next").click()
     page.get_by_label("Verification Purpose").fill(VERIFICATION_PURPOSE)
     issuer_did = page.get_by_label("Issuer DID")
     if issuer_did.count() > 0:
         issuer_did.click()
-        public_dids = page.get_by_role("option").filter(has_text="did:")
-        if public_dids.count() < 1:
-            raise AssertionError("released stack exposes no public issuer DID choice")
-        public_dids.first.click()
+        expected_dids = page.get_by_role("option").filter(has_text=expected_issuer_did)
+        if expected_dids.count() != 1:
+            raise AssertionError("released stack did not expose exactly one expected public issuer DID choice")
+        expected_dids.first.click()
 
     with page.expect_response(
         lambda response: response.request.method == "POST" and public_path(response.url) == "/v1/flows/verify",
@@ -327,20 +405,15 @@ def exercise_verification(page: Page, base_url: str) -> dict[str, object]:
     response = verification_info.value
     require_success(response, operation="browser verification start")
     body = request_json(response.request)
-    assert_no_private_selectors(body, location="verification")
-    if not isinstance(body, dict):
-        raise AssertionError("verification request body is not a JSON object")
-    organization_id = str(body.get("organization_id") or "").strip()
-    issuer_did = str(body.get("issuer_did") or "").strip()
-    if not organization_id:
-        raise AssertionError("verification request has no organization_id")
-    if not issuer_did.startswith("did:"):
-        raise AssertionError("verification request has no public issuer_did")
+    binding = assert_verification_request(
+        body,
+        expected_organization_id=expected_organization_id,
+        expected_issuer_did=expected_issuer_did,
+    )
     page.get_by_text("Scan & Verify").wait_for(timeout=15_000)
 
     return {
-        "organization_id": organization_id,
-        "issuer_did": issuer_did,
+        **binding,
         "status": response.status,
     }
 
@@ -364,6 +437,9 @@ def main(argv: list[str] | None = None) -> int:
     password = required_env("OIDF_MARTY_OPERATOR_PASSWORD")
     credential_template_id = required_env("OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID")
     application_template_id = required_env("OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID")
+    presentation_policy_id = required_env("OIDF_MARTY_BROWSER_PRESENTATION_POLICY_ID")
+    expected_issuer_did = required_env("OIDF_MARTY_BROWSER_ISSUER_DID")
+    expected_organization_id = required_env("OIDF_MARTY_BROWSER_ORGANIZATION_ID")
     session_id = login(base_url, email, password)
 
     request_records: list[dict[str, object]] = []
@@ -371,7 +447,13 @@ def main(argv: list[str] | None = None) -> int:
     browser_errors: list[str] = []
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(
+            headless=True,
+            args=browser_resolver_args(
+                base_url,
+                os.environ.get("OIDF_MARTY_RESOLVE_IP", ""),
+            ),
+        )
         context = browser.new_context(ignore_https_errors=True)
         context.add_cookies(
             [
@@ -415,7 +497,13 @@ def main(argv: list[str] | None = None) -> int:
                 credential_template_id=credential_template_id,
                 application_template_id=application_template_id,
             )
-            verification = exercise_verification(page, base_url)
+            verification = exercise_verification(
+                page,
+                base_url,
+                expected_policy_id=presentation_policy_id,
+                expected_organization_id=expected_organization_id,
+                expected_issuer_did=expected_issuer_did,
+            )
         finally:
             context.close()
             browser.close()

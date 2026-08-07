@@ -108,6 +108,14 @@ def parser() -> argparse.ArgumentParser:
         help="prepared HAIP authority material; Marty issuer-profile public key is certified after startup",
     )
     result.add_argument("--local-build", action="store_true", help="build Marty locally; never release-grade")
+    result.add_argument(
+        "--retain-on-up-failure",
+        action="store_true",
+        help=(
+            "leave partially started projects available when an up command fails; "
+            "the caller must collect diagnostics and run down"
+        ),
+    )
     return result
 
 
@@ -446,26 +454,36 @@ def resolve_issuer_did_identity(
     args: argparse.Namespace,
     projects: dict[str, str],
     environment: dict[str, str],
+    *,
+    timeout_seconds: float = 30,
+    poll_seconds: float = 1,
 ) -> dict[str, object]:
-    """Read only public DID identity from the running Marty gateway container."""
+    """Read the public DID identity after its startup registry entry is visible."""
     command = marty_command(args, projects, "issuer-did-identity", include_haip=False)
-    print("+", subprocess.list2cmdline(command), flush=True)
-    completed = subprocess.run(command, capture_output=True, text=True, check=False, env=environment)
-    if completed.returncode:
-        detail = completed.stderr.strip() or "issuer DID identity command failed"
-        raise ValueError(f"could not resolve Marty issuer DID: {detail}")
-    try:
-        identity = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Marty issuer DID identity command returned invalid JSON") from exc
-    if (
-        not isinstance(identity, dict)
-        or not isinstance(identity.get("issuer_did"), str)
-        or not identity.get("issuer_did")
-        or not isinstance(identity.get("public_jwk"), dict)
-    ):
-        raise ValueError("Marty issuer DID identity command returned no public JWK")
-    return identity
+    deadline = time.monotonic() + timeout_seconds
+    last_detail = "issuer DID identity command failed"
+    while True:
+        print("+", subprocess.list2cmdline(command), flush=True)
+        completed = subprocess.run(command, capture_output=True, text=True, check=False, env=environment)
+        if not completed.returncode:
+            try:
+                identity = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                last_detail = "Marty issuer DID identity command returned invalid JSON"
+            else:
+                if (
+                    isinstance(identity, dict)
+                    and isinstance(identity.get("issuer_did"), str)
+                    and identity.get("issuer_did")
+                    and isinstance(identity.get("public_jwk"), dict)
+                ):
+                    return identity
+                last_detail = "Marty issuer DID identity command returned no public JWK"
+        else:
+            last_detail = completed.stderr.strip() or last_detail
+        if time.monotonic() >= deadline:
+            raise ValueError(f"could not resolve Marty issuer DID: {last_detail}")
+        time.sleep(poll_seconds)
 
 
 def stage_haip_profile_certificate(
@@ -586,6 +604,8 @@ def execute(args: argparse.Namespace) -> int:
         raise ValueError("--haip-material requires --haip")
     if args.eudi_material is not None and not args.eudi:
         raise ValueError("--eudi-material requires --eudi")
+    if args.retain_on_up_failure and args.command != "up":
+        raise ValueError("--retain-on-up-failure is valid only for up")
     if not any((args.marty_only, args.oidf, args.eudi)):
         raise ValueError("select --marty-only or at least one of --oidf or --eudi")
 
@@ -633,31 +653,34 @@ def execute(args: argparse.Namespace) -> int:
         started.append("marty")
         result = run(marty_command(args, projects, "up", include_haip=False), environment)
         if result:
-            stop_started(
-                started,
-                args,
-                projects,
-                environment,
-                marty_include_haip=False,
-            )
+            if not args.retain_on_up_failure:
+                stop_started(
+                    started,
+                    args,
+                    projects,
+                    environment,
+                    marty_include_haip=False,
+                )
             return result
         try:
             stage_haip_profile_certificate(args, projects, environment)
         except (OSError, ValueError):
-            stop_started(
-                started,
-                args,
-                projects,
-                environment,
-                marty_include_haip=False,
-            )
+            if not args.retain_on_up_failure:
+                stop_started(
+                    started,
+                    args,
+                    projects,
+                    environment,
+                    marty_include_haip=False,
+                )
             raise
         result = run(
             marty_command(args, projects, "up", include_haip=True, resume=True),
             environment,
         )
         if result:
-            stop_started(started, args, projects, environment)
+            if not args.retain_on_up_failure:
+                stop_started(started, args, projects, environment)
             return result
         up_entries = selected[1:]
 
@@ -668,13 +691,15 @@ def execute(args: argparse.Namespace) -> int:
         if result:
             if name == "eudi":
                 emit_eudi_startup_diagnostic(projects["eudi"], environment)
-            stop_started(started, args, projects, environment)
+            if not args.retain_on_up_failure:
+                stop_started(started, args, projects, environment)
             return result
         if name == "eudi":
             try:
                 wait_for_eudi_readiness(environment)
             except ValueError:
-                stop_started(started, args, projects, environment)
+                if not args.retain_on_up_failure:
+                    stop_started(started, args, projects, environment)
                 raise
     return 0
 

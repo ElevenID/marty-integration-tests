@@ -1050,6 +1050,7 @@ def compose_command(
     oidf: bool = False,
     eudi: bool = False,
     haip: bool = False,
+    retain_on_up_failure: bool = False,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -1068,6 +1069,10 @@ def compose_command(
         command.append("--eudi")
     if haip:
         command.extend(["--haip", "--haip-material", str(args.haip_material)])
+    if retain_on_up_failure:
+        if action != "up":
+            raise ValueError("retaining a failed official suite is valid only for up")
+        command.append("--retain-on-up-failure")
     return command
 
 
@@ -1246,6 +1251,11 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
     gateway = urlsplit(gateway_url)
     if gateway.scheme != "https" or not gateway.hostname or gateway.path:
         raise ValueError("generated OIDF_PUBLIC_BASE_URL must be an HTTPS origin")
+    if gateway.hostname.lower() in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError(
+            "generated OIDF_PUBLIC_BASE_URL must use a non-loopback bridge hostname "
+            "so the unmodified official runner can fetch Marty request_uri values"
+        )
     gateway_port = gateway.port or 443
     environment.update(
         {
@@ -1296,10 +1306,19 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # Request signing still happens only through the issuer profile and managed
     # custody. The url_query plan is deliberately unsigned and instead uses the
     # upstream plan's redirect_uri client identifier.
-    up = compose_command(args, "up", oidf=True, haip=True)
+    up = compose_command(
+        args,
+        "up",
+        oidf=True,
+        haip=True,
+        retain_on_up_failure=True,
+    )
     started = run(up, environment) == 0
     if not started:
-        emit_keycloak_initializer_diagnostic(args.run_id)
+        try:
+            emit_keycloak_initializer_diagnostic(args.run_id)
+        finally:
+            run(compose_command(args, "down", oidf=True, haip=True), environment)
         return 1
     result = 1
     browser_result = 0
@@ -1322,6 +1341,9 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         if args.lane == "oid4vp-final":
             environment["OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID"] = fixtures["browser_credential_template_id"]
             environment["OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID"] = fixtures["browser_application_template_id"]
+            environment["OIDF_MARTY_BROWSER_PRESENTATION_POLICY_ID"] = fixtures["oid4vp_policy_id"]
+            environment["OIDF_MARTY_BROWSER_ISSUER_DID"] = fixtures["oid4vp_issuer_did"]
+            environment["OIDF_MARTY_BROWSER_ORGANIZATION_ID"] = fixtures["organization_id"]
         environment.update(
             {
                 "CONFORMANCE_SERVER": "https://localhost.emobix.co.uk:8443/",

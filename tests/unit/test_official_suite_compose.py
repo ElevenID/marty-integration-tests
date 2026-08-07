@@ -374,6 +374,61 @@ def test_live_issuer_identity_uses_only_the_did_first_public_command(
     assert "issuer-profile-identity" not in commands[0]
 
 
+def test_live_issuer_identity_retries_startup_visibility(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = type(
+        "Args",
+        (),
+        {
+            "marty_ui": marty_checkout(tmp_path),
+            "haip": True,
+            "local_build": False,
+        },
+    )()
+    identity = {
+        "issuer_did": "did:web:verifier.example",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "public-x",
+            "y": "public-y",
+        },
+    }
+    attempts = iter(
+        (
+            subprocess.CompletedProcess(
+                [],
+                1,
+                stdout="",
+                stderr="identity not visible yet",
+            ),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=lifecycle.json.dumps(identity),
+                stderr="",
+            ),
+        )
+    )
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return next(attempts)
+
+    monkeypatch.setattr(lifecycle.subprocess, "run", run)
+    assert (
+        lifecycle.resolve_issuer_did_identity(
+            args,
+            {"marty": "marty-conformance-run1"},
+            {},
+            timeout_seconds=1,
+            poll_seconds=0,
+        )
+        == identity
+    )
+    assert len(calls) == 2
+
+
 def test_haip_stage_certifies_only_the_live_issuer_profile_public_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -640,6 +695,50 @@ def test_failed_up_unwinds_only_started_projects_in_reverse(tmp_path: Path, monk
         ("oidf", "down"),
         ("marty", "down"),
     ]
+
+
+def test_failed_up_can_be_retained_for_caller_diagnostics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(lifecycle, "child_environment", dict)
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+
+    def fake_run(command: list[str], _environment: dict[str, str]) -> int:
+        call = (component(command), action(command))
+        calls.append(call)
+        return 17 if call == ("oidf", "up") else 0
+
+    monkeypatch.setattr(lifecycle, "run", fake_run)
+    result = lifecycle.main(
+        [
+            "up",
+            "--run-id",
+            "run1",
+            "--marty-ui",
+            str(marty_checkout(tmp_path)),
+            "--oidf-runner",
+            str(tmp_path / "oidf"),
+            "--oidf",
+            "--retain-on-up-failure",
+        ]
+    )
+
+    assert result == 17
+    assert calls == [("marty", "up"), ("oidf", "up")]
+
+
+def test_retain_on_failure_is_rejected_for_non_start_commands(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="valid only for up"):
+        lifecycle.main(
+            [
+                "down",
+                "--run-id",
+                "run1",
+                "--marty-ui",
+                str(marty_checkout(tmp_path)),
+                "--marty-only",
+                "--retain-on-up-failure",
+            ]
+        )
 
 
 def test_eudi_failure_is_classified_before_teardown(
