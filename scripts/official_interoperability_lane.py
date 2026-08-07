@@ -85,6 +85,23 @@ OID4VCI_RUNTIME_DIAGNOSTIC_CLASSES = {
     "proof-signature": re.compile(r"(?i)proof (?:jwt )?signature.{0,80}(?:invalid|failed)"),
     "invalid-nonce": re.compile(r"(?i)(?:invalid_nonce|proof nonce is missing, expired, or already used)"),
 }
+OID4VP_BROWSER_RUNTIME_DIAGNOSTIC_CLASSES = {
+    "issuer-did-ambiguous": re.compile(r"(?i)(?:multiple active issuer profiles|issuer DID resolves to multiple)"),
+    "issuer-did-not-active": re.compile(r"(?i)Issuer DID is not an active issuer identity"),
+    "issuer-profile-binding-incomplete": re.compile(
+        r"(?i)issuer (?:DID )?profile has an incomplete (?:signing identity|KMS purpose) binding"
+    ),
+    "issuer-profile-did-mismatch": re.compile(r"(?i)issuer profile DID binding resolved to a different identity"),
+    "signing-service-format-mismatch": re.compile(r"(?i)signing service.{0,160}not configured for credential_format"),
+    "signing-algorithm-mismatch": re.compile(
+        r"(?i)signing algorithm must match the DID-resolved issuer profile binding"
+    ),
+    "invalid-signing-identity": re.compile(r"(?i)OID4VP issuer DID returned an invalid signing identity"),
+    "request-signing-failed": re.compile(r"(?i)(?:Issuer DID request signing failed|Failed to sign Request Object)"),
+    "issuer-resolver-unavailable": re.compile(r"(?i)(?:OID4VP )?issuer DID resolver is unavailable"),
+    "public-flow-http-500": re.compile(r"(?i)(?:POST\s+)?/v1/flows/verify.{0,120}\b500\b"),
+    "flow-runtime-exception": re.compile(r"(?i)(?:Exception in ASGI application|Traceback \(most recent call last\))"),
+}
 
 
 def w3c_related_resource_allowlist() -> str:
@@ -877,6 +894,25 @@ def emit_oid4vci_runtime_diagnostic(path: Path) -> None:
     print("--- end OID4VCI issuer runtime diagnostic ---", file=sys.stderr)
 
 
+def classify_oid4vp_browser_runtime_diagnostics(text: str) -> list[str]:
+    """Return fixed browser-flow categories without exposing private logs."""
+    categories = [name for name, pattern in OID4VP_BROWSER_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)]
+    return categories or ["unclassified-runtime-failure"]
+
+
+def emit_oid4vp_browser_runtime_diagnostic(path: Path) -> None:
+    """Print only allowlisted OID4VP browser-flow classes from the private log."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        categories = ["runtime-log-unavailable"]
+    else:
+        categories = classify_oid4vp_browser_runtime_diagnostics(text)
+    print("--- OID4VP browser runtime diagnostic (redacted) ---", file=sys.stderr)
+    print(f"categories={','.join(categories)}", file=sys.stderr)
+    print("--- end OID4VP browser runtime diagnostic ---", file=sys.stderr)
+
+
 def emit_public_proxy_diagnostic(project: str, environment: dict[str, str]) -> None:
     """Classify proxy failures before Compose teardown without publishing logs."""
     containers = subprocess.run(
@@ -1266,6 +1302,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         emit_keycloak_initializer_diagnostic(args.run_id)
         return 1
     result = 1
+    browser_result = 0
     try:
         wait_for_public_stack(environment)
         fixture_prefix = "oid4vp_mdoc" if mdoc else "oid4vp"
@@ -1302,7 +1339,6 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             if haip
             else standard_verifier_config(args.haip_material, environment["OIDF_MARTY_GATEWAY_URL"])
         )
-        browser_result = 0
         if args.lane == "oid4vp-final":
             browser_result = run(
                 [
@@ -1342,6 +1378,8 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             environment,
             capture=compose_log,
         )
+        if args.lane == "oid4vp-final" and browser_result:
+            emit_oid4vp_browser_runtime_diagnostic(compose_log)
         if mdoc and result:
             emit_mdoc_runtime_diagnostic(compose_log)
         if mdoc:
