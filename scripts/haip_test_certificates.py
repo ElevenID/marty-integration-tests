@@ -16,6 +16,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -122,6 +123,28 @@ def _write_private(path: Path, data: bytes) -> None:
 def _write_public(path: Path, data: bytes) -> None:
     with path.open("xb") as output:
         output.write(data)
+
+
+def _replace_public(path: Path, data: bytes) -> None:
+    """Atomically replace a regular public fixture file in its own directory."""
+    try:
+        current = path.lstat()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"HAIP certificate selected for replacement does not exist: {path}") from exc
+    if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode):
+        raise ValueError(f"HAIP certificate selected for replacement must be a regular file: {path}")
+
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _fingerprint(certificate: x509.Certificate) -> str:
@@ -239,14 +262,23 @@ def issue_verifier_certificate(
     dns_names: list[str] | None = None,
     valid_hours: int = 24,
     now: datetime | None = None,
+    replace_existing: bool = False,
+    retain_authority: bool = False,
 ) -> dict[str, str]:
-    """Issue a leaf for an issuer profile public key, then destroy the test CA key."""
+    """Issue a leaf for an issuer-profile public key.
+
+    Replacement and temporary CA retention are explicit opt-ins used only by
+    the two-phase EUDI bootstrap: the released stack first needs a disposable
+    certificate to start, then the public fixture API creates the final
+    organization-scoped request-signing DID. The second call atomically
+    replaces the bootstrap leaf and destroys the disposable CA key.
+    """
     if not 1 <= valid_hours <= MAX_VALIDITY_HOURS:
         raise ValueError(f"validity must be between 1 and {MAX_VALIDITY_HOURS} hours")
     hostname = _gateway_hostname(gateway_url)
     names = _validate_dns_names(dns_names or [hostname])
     certificate_path = material_dir / CERTIFICATE_FILE
-    if certificate_path.exists():
+    if certificate_path.exists() and not replace_existing:
         raise FileExistsError(f"refusing to overwrite HAIP certificate: {certificate_path}")
     authority_key_path = material_dir / AUTHORITY_KEY_FILE
     trust_anchor_path = material_dir / TRUST_ANCHOR_FILE
@@ -300,8 +332,12 @@ def issue_verifier_certificate(
         .sign(authority_key, hashes.SHA256())
     )
     bundle = leaf_certificate.public_bytes(serialization.Encoding.PEM) + trust_anchor_path.read_bytes()
-    _write_public(certificate_path, bundle)
-    authority_key_path.unlink()
+    if replace_existing:
+        _replace_public(certificate_path, bundle)
+    else:
+        _write_public(certificate_path, bundle)
+    if not retain_authority:
+        authority_key_path.unlink()
     return {
         "certificate_sha256": _fingerprint(leaf_certificate),
         "dns_names": ",".join(names),
