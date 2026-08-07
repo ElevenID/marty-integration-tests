@@ -538,9 +538,17 @@ async def sd_jwt_mdl_template(
     Uses the same driver's license claims as ``mdl_template`` with the
     selective-disclosure format used by the headless wallet and DIDComm paths.
     """
+    compliance_profile = await gateway_client.create_compliance_profile(
+        organization_id=str(test_organization["id"]),
+        name="DIDComm SD-JWT VC compliance",
+        compliance_code="MDL_SD_JWT",
+        credential_format="sd_jwt_vc",
+        frameworks=["aamva"],
+    )
     template_data = TestDataBuilder.sd_jwt_mdl_template(
         organization_id=test_organization["id"],
         issuer_did=vc_jwt_issuer_did,
+        compliance_profile_id=str(compliance_profile["id"]),
     )
     template = await gateway_client.create_credential_template(**template_data)
     return template

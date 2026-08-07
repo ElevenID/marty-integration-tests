@@ -209,6 +209,7 @@ class TestDataBuilder:
     def sd_jwt_mdl_template(
         organization_id: str,
         issuer_did: str,
+        compliance_profile_id: str,
         name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create an mDL-like credential template using SD-JWT format.
@@ -226,12 +227,7 @@ class TestDataBuilder:
             "vct": "https://credentials.marty.dev/DriversLicense",
             "supported_formats": ["sd_jwt_vc"],
             "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
-            "compliance_profile": {
-                "name": "MDL SD-JWT Compliance",
-                "compliance_code": "MDL_SD_JWT",
-                "credential_format": "sd_jwt_vc",
-                "frameworks": ["aamva"],
-            },
+            "compliance_profile_id": compliance_profile_id,
             "schema": {
                 "type": "object",
                 "properties": {
