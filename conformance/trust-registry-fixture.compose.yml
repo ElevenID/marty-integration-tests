@@ -1,0 +1,49 @@
+services:
+  trust-registry-fixture:
+    image: ${MARTY_SERVICES_IMAGE:?MARTY_SERVICES_IMAGE must pin the released services image}
+    pull_policy: always
+    entrypoint: ["python"]
+    command: ["/fixture/trust_registry_fixture.py"]
+    # Generated private material remains mode 0600. Run this disposable
+    # read-only process as root solely to read that mount and bind HTTPS/443,
+    # then retain only the bind-service capability.
+    user: "0:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      TRUST_REGISTRY_FIXTURE_TOKEN: ${TRUST_REGISTRY_FIXTURE_TOKEN:?generate a disposable control token}
+    volumes:
+      - ${TRUST_REGISTRY_FIXTURE_SCRIPT:?set the absolute fixture script path}:/fixture/trust_registry_fixture.py:ro
+      - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to generated conformance material}:/material:ro
+    ports:
+      - "127.0.0.1::8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import socket;
+          connection = socket.create_connection(('127.0.0.1', 8080), timeout=2);
+          connection.close()
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s
+    networks:
+      marty-network:
+        aliases:
+          - trust-registry-fixture
+    restart: "no"
+
+networks:
+  marty-network:
+    external: true
+    name: ${MARTY_CONFORMANCE_PROJECT:?set the exact Marty conformance project}_marty-network

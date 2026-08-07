@@ -335,6 +335,14 @@ class GatewayClient:
         """Activate a trust profile."""
         return await self._request("POST", f"/v1/trust-profiles/{profile_id}/activate")
 
+    async def synchronize_trust_profile_registry(
+        self, profile_id: str
+    ) -> Dict[str, Any]:
+        """Synchronize configured external registries through the public API."""
+        return await self._request(
+            "POST", f"/v1/trust-profiles/{profile_id}/registry-sync"
+        )
+
     # =============================================================================
     # Credential Templates
     # =============================================================================

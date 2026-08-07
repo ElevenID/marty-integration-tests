@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,53 @@ DIDCOMM_TEST_PATH = (
 )
 PUBLIC_LOGIN = ROOT / "scripts" / "oidf_marty_public_login.py"
 DIDCOMM_INTEROP_MANIFEST = ROOT / "conformance" / "didcomm-interoperability.json"
+TRUST_REGISTRY_FIXTURE_COMPOSE = (
+    ROOT / "conformance" / "trust-registry-fixture.compose.yml"
+)
+TRUST_REGISTRY_FIXTURE_SCRIPT = ROOT / "scripts" / "trust_registry_fixture.py"
+
+
+def trust_registry_fixture_command(
+    args: argparse.Namespace,
+    action: str,
+) -> list[str]:
+    """Build an isolated Compose command for the owned registry adapter."""
+    command = [
+        "docker",
+        "compose",
+        "--project-name",
+        f"marty-conformance-{args.run_id}-trust-registry",
+        "--file",
+        str(TRUST_REGISTRY_FIXTURE_COMPOSE),
+        action,
+    ]
+    if action == "up":
+        command.extend(["--detach", "--wait"])
+    elif action == "down":
+        command.extend(["--volumes", "--remove-orphans"])
+    return command
+
+
+def trust_registry_control_url(
+    args: argparse.Namespace,
+    lane_environment: dict[str, str],
+) -> str:
+    """Return the runner-loopback control origin selected by Docker."""
+    command = trust_registry_fixture_command(args, "port")
+    command.extend(["trust-registry-fixture", "8080"])
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=lane_environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    value = completed.stdout.strip()
+    match = re.fullmatch(r"127\.0\.0\.1:(\d{1,5})", value)
+    if completed.returncode or match is None or not 1 <= int(match.group(1)) <= 65535:
+        raise RuntimeError("trust-registry fixture did not publish an exact loopback control port")
+    return f"http://{value}"
 
 
 def independent_didcomm_record(
@@ -274,6 +322,10 @@ def write_summary(
         "issuance transaction and revocation-status isolation",
         "issued-credential lifecycle and revocation isolation",
         "trust-profile ownership and mutation isolation",
+        (
+            "atomic external trust-registry synchronization, stale and rollback "
+            "failure, and cross-tenant sync isolation"
+        ),
         "issuer-entity and trust-profile relationship isolation",
         (
             "normalized issuer relationships drive released verification decisions, "
@@ -354,6 +406,12 @@ def execute(args: argparse.Namespace) -> int:
     private.mkdir(parents=True, exist_ok=True)
     lane_environment["MARTY_BROWSER_EVIDENCE_DIR"] = str((private / "browser").resolve())
     lane_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] = "true"
+    lane_environment["MARTY_CONFORMANCE_PROJECT"] = f"marty-conformance-{args.run_id}"
+    lane_environment["TRUST_REGISTRY_FIXTURE_SCRIPT"] = str(
+        TRUST_REGISTRY_FIXTURE_SCRIPT.resolve()
+    )
+    lane_environment["TRUST_REGISTRY_FIXTURE_TOKEN"] = secrets.token_urlsafe(32)
+    lane_environment["TRUST_REGISTRY_FIXTURE_REQUIRED"] = "true"
     started = (
         run(
             boundary_compose_command(args, "up"),
@@ -361,10 +419,23 @@ def execute(args: argparse.Namespace) -> int:
         )
         == 0
     )
+    registry_started = False
     exit_code = 1
     try:
         if started:
             wait_for_public_stack(lane_environment)
+            registry_started = (
+                run(
+                    trust_registry_fixture_command(args, "up"),
+                    lane_environment,
+                )
+                == 0
+            )
+            if not registry_started:
+                raise RuntimeError("disposable trust-registry fixture failed to start")
+            lane_environment["TRUST_REGISTRY_FIXTURE_CONTROL_URL"] = (
+                trust_registry_control_url(args, lane_environment)
+            )
             lane_environment["MARTY_TEST_SESSION_ID"] = public_session(
                 lane_environment,
                 email=lane_environment["MARTY_CONFORMANCE_ADMIN_EMAIL"],
@@ -391,6 +462,16 @@ def execute(args: argparse.Namespace) -> int:
                 emit_pytest_diagnostic(private / "pytest.log", lane_environment)
     finally:
         write_summary(args, metadata, exit_code)
+        if registry_started:
+            run(
+                trust_registry_fixture_command(args, "logs"),
+                lane_environment,
+                capture=private / "trust-registry-fixture.log",
+            )
+            run(
+                trust_registry_fixture_command(args, "down"),
+                lane_environment,
+            )
         run(
             boundary_compose_command(args, "logs"),
             lane_environment,
