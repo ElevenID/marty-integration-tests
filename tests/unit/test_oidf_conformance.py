@@ -39,20 +39,22 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert url_query["status"] == "active"
     assert "[request_method=url_query]" in url_query["test_plan"]
     assert "[client_id_prefix=redirect_uri]" in url_query["test_plan"]
-    assert "Exact unmodified OIDF release-v5.2.1 evidence" in url_query["qualification"]
+    assert "Exact unmodified OIDF release-v5.2.2 evidence" in url_query["qualification"]
     assert "distinct from Marty's signed by-value Request Object" in url_query["qualification"]
     mdoc = manifest["profiles"]["oid4vp-mdoc-verifier"]
     assert mdoc["status"] == "active"
     assert "[credential_format=iso_mdl]" in mdoc["test_plan"]
     assert "[response_mode=direct_post]" in mdoc["test_plan"]
     assert "does not certify Marty as an mdoc issuer" in mdoc["qualification"]
-    assert mdoc["execution_status"] == "blocked_upstream"
-    constraint = mdoc["upstream_constraint"]
-    assert constraint["tracking_issue"].endswith("/issues/243")
-    assert constraint["runner_release"] == manifest["official_runner"]["release"]
-    assert constraint["certificate_not_after"] == "2026-07-30T07:47:22+00:00"
-    assert len(constraint["certificate_sha256"]) == 64
-    assert "Do not replace" in constraint["policy"]
+    assert "execution_status" not in mdoc
+    fixture = mdoc["upstream_fixture_review"]
+    assert fixture["tracking_issue"].endswith("/issues/243")
+    assert fixture["runner_release"] == manifest["official_runner"]["release"]
+    assert fixture["certificate_not_before"] == "2026-08-03T16:12:01+00:00"
+    assert fixture["certificate_not_after"] == "2027-08-03T16:12:01+00:00"
+    assert fixture["certificate_sha256"] == "6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53"
+    assert "exact unmodified runner source" in fixture["policy"]
+    assert "Never replace" in fixture["policy"]
     haip = manifest["profiles"]["oid4vp-haip-verifier"]
     assert haip["status"] == "active"
     assert "oid4vp-1final-verifier-haip-test-plan" in haip["test_plan"]
@@ -129,9 +131,7 @@ def test_optional_encryption_skip_is_documented_narrowly() -> None:
 def test_invalid_key_attestation_signature_is_not_expected_to_skip() -> None:
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
     key_attestation = [
-        item
-        for item in skips
-        if item["test-name"] == "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature"
+        item for item in skips if item["test-name"] == "oid4vci-1_0-issuer-fail-invalid-key-attestation-signature"
     ]
     assert key_attestation == []
 

@@ -67,7 +67,7 @@ Marty's public-wallet flow supports `client_auth_type=none`, while the active
 official interoperability profile deliberately exercises registered
 `private_key_jwt` clients. The disposable organization owns the two official
 wallet public keys; Marty rejects missing, invalid, expired, replayed,
-wrong-audience, and cross-client assertions. OIDF release-v5.2.1 drives that
+wrong-audience, and cross-client assertions. OIDF release-v5.2.2 drives that
 normal public issuer path. Three optional capabilities Marty does not advertise
 remain explicit, owned, expiring skips. The disposable issuer profile requires
 key attestation, trusts only the lane's short-lived attester CA, and advertises
@@ -437,16 +437,16 @@ verification behavior. It is not an OIDF mdoc issuer certification and must
 not be presented as one. Marty mdoc issuance remains covered separately by
 the EUDI reference-library lane until upstream provides a suitable issuer plan.
 
-The exact OIDF `release-v5.2.1` source still embeds an mdoc
-`documentSignerCert` whose validity ended at `2026-07-30T07:47:22Z`
-(SHA-256 `c74e6bfecdd161452009ce10d9e5c1386d9022b10378a3de5e296605d325d48d`).
-The lane now checks that upstream certificate before provisioning trust and
-fails explicitly while it is expired. Do not replace the certificate in the
-imported checkout, disable Marty certificate-time validation, or record an
-expected failure to manufacture a pass. Retain the last pre-expiry official
-evidence and rerun the exact reviewed upstream release or commit once OIDF
-publishes renewed material. Track that upstream dependency in
-[marty-integration-tests#217](https://github.com/ElevenID/marty-integration-tests/issues/217).
+The exact OIDF `release-v5.2.2` source rotates its mdoc
+`documentSignerCert`. The reviewed certificate is valid from
+`2026-08-03T16:12:01Z` through `2027-08-03T16:12:01Z` and has SHA-256
+`6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53`.
+The lane reads that certificate from the unchanged, commit-pinned source,
+checks its validity before provisioning trust, and fails closed if it is not
+currently valid. Do not replace the certificate in the imported checkout,
+disable Marty certificate-time validation, or record an expected failure to
+manufacture a pass. Track release adoption evidence in
+[marty-integration-tests#243](https://github.com/ElevenID/marty-integration-tests/issues/243).
 
 The HAIP profile uses the same command contract but is enabled only after
 Marty produces signed `request_uri` requests with `x509_hash`, a fresh
@@ -601,7 +601,7 @@ complete suite from a new detached worktree.
 
 ## Certification later
 
-At the pinned OIDF `release-v5.2.1`, the official source labels both the
+At the pinned OIDF `release-v5.2.2`, the official source labels both the
 OID4VP Final verifier plan and the HAIP verifier plan as alpha tests that are
 not currently part of the certification program. Passing them is valuable
 official-runner interoperability evidence, but it is not an OIDF certificate.
