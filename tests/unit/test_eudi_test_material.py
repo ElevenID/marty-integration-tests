@@ -53,19 +53,32 @@ def certificates(path: Path) -> list[x509.Certificate]:
 def test_generate_writes_short_lived_tls_chain_eudi_access_cert_and_private_environment(tmp_path: Path) -> None:
     output = generated(tmp_path, now=datetime.now(UTC))
     tls_leaf, root = certificates(output / material.TLS_CERTIFICATE_FILE)
+    runner_leaf, runner_root = certificates(output / material.OIDF_RUNNER_TLS_CERTIFICATE_FILE)
     eudi_leaf, eudi_root = certificates(output / material.EUDI_CERTIFICATE_FILE)
     tls_key = serialization.load_pem_private_key((output / material.TLS_KEY_FILE).read_bytes(), password=None)
+    runner_key = serialization.load_pem_private_key(
+        (output / material.OIDF_RUNNER_TLS_KEY_FILE).read_bytes(),
+        password=None,
+    )
 
     assert isinstance(tls_key, ec.EllipticCurvePrivateKey)
     assert isinstance(tls_key.curve, ec.SECP256R1)
     assert tls_key.public_key().public_numbers() == tls_leaf.public_key().public_numbers()
+    assert isinstance(runner_key, ec.EllipticCurvePrivateKey)
+    assert isinstance(runner_key.curve, ec.SECP256R1)
+    assert runner_key.public_key().public_numbers() == runner_leaf.public_key().public_numbers()
     assert isinstance(eudi_leaf.public_key(), ec.EllipticCurvePublicKey)
     assert isinstance(eudi_leaf.public_key().curve, ec.SECP521R1)
-    assert root == eudi_root
+    assert root == runner_root == eudi_root
     root.public_key().verify(
         tls_leaf.signature,
         tls_leaf.tbs_certificate_bytes,
         ec.ECDSA(tls_leaf.signature_hash_algorithm),
+    )
+    root.public_key().verify(
+        runner_leaf.signature,
+        runner_leaf.tbs_certificate_bytes,
+        ec.ECDSA(runner_leaf.signature_hash_algorithm),
     )
     root.public_key().verify(
         eudi_leaf.signature,
@@ -81,6 +94,12 @@ def test_generate_writes_short_lived_tls_chain_eudi_access_cert_and_private_envi
     assert tls_leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
         x509.DNSName
     ) == [material.DEFAULT_HOSTNAME, "host.docker.internal"]
+    assert (
+        ExtendedKeyUsageOID.SERVER_AUTH in runner_leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    )
+    assert runner_leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
+        x509.DNSName
+    ) == [material.OIDF_RUNNER_HOSTNAME]
 
     document = json.loads((output / material.ENVIRONMENT_FILE).read_text(encoding="utf-8"))
     environment = document["environment"]
@@ -95,18 +114,27 @@ def test_generate_writes_short_lived_tls_chain_eudi_access_cert_and_private_envi
     assert environment["EUDI_VERIFIER_CLIENT_ID_PREFIX"] == "x509_san_dns"
     assert environment["EUDI_VERIFIER_ORIGINAL_CLIENT_ID"] == material.DEFAULT_HOSTNAME
     assert environment["EUDI_TEST_MATERIAL_MODE"] == "generated"
+    assert environment[material.OIDF_RUNNER_TLS_MODE_ENV] == "generated"
+    assert environment[material.OIDF_RUNNER_TLS_KEY_ENV] == str(output / material.OIDF_RUNNER_TLS_KEY_FILE)
+    assert environment[material.OIDF_RUNNER_TLS_CERTIFICATE_ENV] == str(
+        output / material.OIDF_RUNNER_TLS_CERTIFICATE_FILE
+    )
+    assert environment[material.OIDF_RUNNER_TRUSTSTORE_ENV] == str(output / material.TRUSTSTORE_FILE)
+    assert environment[material.OIDF_RUNNER_TRUSTSTORE_PASSWORD_ENV] == environment["EUDI_TLS_TRUSTSTORE_PASSWORD"]
 
     report_text = (output / material.REPORT_FILE).read_text(encoding="utf-8")
     for secret_name in (
         "EUDI_VERIFIER_KEYSTORE_PASSWORD",
         "EUDI_VERIFIER_KEY_PASSWORD",
         "EUDI_TLS_TRUSTSTORE_PASSWORD",
+        material.OIDF_RUNNER_TRUSTSTORE_PASSWORD_ENV,
     ):
         assert environment[secret_name] not in report_text
     assert not any(path.suffix == ".p12" for path in output.rglob("*"))
     assert not any("root" in path.name and "key" in path.name for path in output.iterdir())
     if os.name != "nt":
         assert stat.S_IMODE((output / material.TLS_KEY_FILE).stat().st_mode) == 0o600
+        assert stat.S_IMODE((output / material.OIDF_RUNNER_TLS_KEY_FILE).stat().st_mode) == 0o600
         assert stat.S_IMODE((output / material.ENVIRONMENT_FILE).stat().st_mode) == 0o600
 
 
@@ -118,6 +146,7 @@ def test_generated_environment_passes_tls_validation_without_keytool(tmp_path: P
     assert mode == "generated"
     assert report["mode"] == "generated"
     assert report["eudi_access_certificate_sha256"].startswith("sha256:")
+    assert report["oidf_runner_tls_certificate_sha256"].startswith("sha256:")
 
 
 def test_external_contract_requires_a_docker_host_reachable_wallet_kit_url(tmp_path: Path) -> None:
@@ -178,6 +207,10 @@ def test_complete_external_material_paths_take_precedence_but_partial_pair_fails
     assert mode == "external"
     assert environment["EUDI_TEST_MATERIAL_MODE"] == "external"
     assert environment["OIDF_TLS_CERT_DIR"] == external["OIDF_TLS_CERT_DIR"]
+    assert environment[material.OIDF_RUNNER_TLS_MODE_ENV] == "generated"
+    assert environment[material.OIDF_RUNNER_TLS_CERTIFICATE_ENV] == str(
+        output / material.OIDF_RUNNER_TLS_CERTIFICATE_FILE
+    )
 
     with pytest.raises(ValueError, match="OIDF_TLS_CERT_DIR"):
         material.merged_material_environment(output, {"OIDF_TLS_CERT_DIR": external["OIDF_TLS_CERT_DIR"]})
@@ -205,6 +238,19 @@ def test_exported_generated_values_remain_authoritative(tmp_path: Path) -> None:
     assert environment["EUDI_TLS_TRUSTSTORE_PASSWORD"] == generated_environment["EUDI_TLS_TRUSTSTORE_PASSWORD"]
     assert environment["SSL_CERT_FILE"] == generated_environment["SSL_CERT_FILE"]
     assert environment["PATH"] == "preserved-process-path"
+
+
+def test_runner_tls_contract_rejects_partial_or_relative_material(tmp_path: Path) -> None:
+    output = generated(tmp_path)
+    _mode, environment = material.load_environment_manifest(output)
+    environment.pop(material.OIDF_RUNNER_TLS_CERTIFICATE_ENV)
+    with pytest.raises(ValueError, match="incomplete OIDF runner TLS environment"):
+        material.validate_environment(environment, validate_java=False)
+
+    _mode, environment = material.load_environment_manifest(output)
+    environment[material.OIDF_RUNNER_TLS_KEY_ENV] = "relative-runner.key"
+    with pytest.raises(ValueError, match="must be an absolute path"):
+        material.validate_environment(environment, validate_java=False)
 
 
 def test_stable_cli_uses_output_and_material_options() -> None:

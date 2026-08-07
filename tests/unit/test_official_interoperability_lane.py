@@ -329,7 +329,15 @@ def test_mdoc_runtime_diagnostic_reports_unavailable_log(
 
 
 def test_material_environment_uses_private_generator_envelope(tmp_path: Path) -> None:
-    for filename in ("tls.crt", "tls.key", "root-ca.pem", "truststore.jks", "keystore.jks"):
+    for filename in (
+        "tls.crt",
+        "tls.key",
+        "oidf-runner-tls.crt",
+        "oidf-runner-tls.key",
+        "root-ca.pem",
+        "truststore.jks",
+        "keystore.jks",
+    ):
         (tmp_path / filename).write_text("fixture", encoding="utf-8")
     (tmp_path / "environment.json").write_text(
         json.dumps(
@@ -355,7 +363,15 @@ def test_material_environment_uses_private_generator_envelope(tmp_path: Path) ->
 
 
 def test_material_environment_accepts_the_complete_generated_contract(tmp_path: Path) -> None:
-    for filename in ("tls.crt", "tls.key", "root-ca.pem", "truststore.jks", "keystore.jks"):
+    for filename in (
+        "tls.crt",
+        "tls.key",
+        "oidf-runner-tls.crt",
+        "oidf-runner-tls.key",
+        "root-ca.pem",
+        "truststore.jks",
+        "keystore.jks",
+    ):
         (tmp_path / filename).write_text("fixture", encoding="utf-8")
     environment = eudi_material._environment(
         tmp_path,

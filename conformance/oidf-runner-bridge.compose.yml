@@ -11,7 +11,27 @@
 # runner-internal services.  Only its HTTP server joins Marty's narrow bridge,
 # where it can reach the public TLS proxy by its public hostname.
 services:
+  nginx:
+    volumes:
+      - type: bind
+        source: ${OIDF_RUNNER_TLS_CERT_FILE:?set to the hostname-valid OIDF runner certificate chain}
+        target: /etc/ssl/certs/nginx-selfsigned.crt
+        read_only: true
+      - type: bind
+        source: ${OIDF_RUNNER_TLS_KEY_FILE:?set to the OIDF runner TLS private key}
+        target: /etc/ssl/private/nginx-selfsigned.key
+        read_only: true
   server:
+    environment:
+      JAVA_TOOL_OPTIONS: >-
+        -Djavax.net.ssl.trustStore=/tmp/oidf-runner-truststore.jks
+        -Djavax.net.ssl.trustStoreType=JKS
+        -Djavax.net.ssl.trustStorePassword=${OIDF_RUNNER_TRUSTSTORE_PASSWORD:?set the OIDF runner truststore password}
+    volumes:
+      - type: bind
+        source: ${OIDF_RUNNER_TRUSTSTORE_FILE:?set to the OIDF runner truststore}
+        target: /tmp/oidf-runner-truststore.jks
+        read_only: true
     networks:
       default: {}
       marty_oidf_bridge: {}
