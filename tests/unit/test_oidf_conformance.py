@@ -45,15 +45,22 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert mdoc["status"] == "active"
     assert "[credential_format=iso_mdl]" in mdoc["test_plan"]
     assert "[response_mode=direct_post]" in mdoc["test_plan"]
-    assert "does not certify Marty as an mdoc issuer" in mdoc["qualification"]
-    assert "execution_status" not in mdoc
+    assert "not certification" in mdoc["qualification"]
+    assert "strict Marty releases correctly reject" in mdoc["qualification"]
     fixture = mdoc["upstream_fixture_review"]
     assert fixture["tracking_issue"].endswith("/issues/243")
+    assert fixture["upstream_profile_issue"].endswith("/work_items/1891")
     assert fixture["runner_release"] == manifest["official_runner"]["release"]
     assert fixture["certificate_not_before"] == "2026-08-03T16:12:01+00:00"
     assert fixture["certificate_not_after"] == "2027-08-03T16:12:01+00:00"
     assert fixture["certificate_sha256"] == "6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53"
-    assert "exact unmodified runner source" in fixture["policy"]
+    assert fixture["iso_18013_5_document_signer_profile"] == "nonconformant"
+    assert fixture["observed_basic_constraints_ca"] is True
+    assert fixture["observed_key_usage"] == ["keyCertSign", "cRLSign"]
+    assert fixture["required_key_usage"] == ["digitalSignature"]
+    assert fixture["expected_marty_behavior"] == "reject"
+    assert fixture["latest_execution"].endswith("/31193237615")
+    assert "exact unmodified runner" in fixture["policy"]
     assert "Never replace" in fixture["policy"]
     haip = manifest["profiles"]["oid4vp-haip-verifier"]
     assert haip["status"] == "active"
@@ -323,6 +330,7 @@ def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
                     "gateway_url": "https://conformance.example.test",
                     "profile": "oid4vp-1.0-final",
                 },
+                "browser": oidf.VERIFICATION_EVIDENCE_BROWSER_AUTOMATION,
             }
         ),
         encoding="utf-8",
@@ -339,6 +347,7 @@ def test_real_verifier_configuration_is_accepted(tmp_path: Path) -> None:
                     "gateway_url": "https://conformance.example.test",
                     "profile": "oid4vp-1.0-final",
                 },
+                "browser": oidf.VERIFICATION_EVIDENCE_BROWSER_AUTOMATION,
             }
         ),
         encoding="utf-8",
@@ -423,12 +432,43 @@ def test_direct_url_query_does_not_require_a_request_object_trust_anchor(
                     "gateway_url": "https://conformance.example.test",
                     "profile": "oid4vp-1.0-final",
                 },
+                "browser": oidf.VERIFICATION_EVIDENCE_BROWSER_AUTOMATION,
             }
         ),
         encoding="utf-8",
     )
 
     oidf.validate_config(config, "oid4vp-url-query-verifier")
+
+
+def test_verifier_configuration_requires_reviewed_screenshot_automation(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "verifier.json"
+    config.write_text(
+        json.dumps(
+            {
+                "credential": {
+                    "signing_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "x",
+                        "y": "y",
+                        "d": "d",
+                    }
+                },
+                "client": {"request_object_trust_anchor_pem": "test-root"},
+                "verifier": {
+                    "gateway_url": "https://conformance.example.test",
+                    "profile": "oid4vp-1.0-final",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="reviewed OIDF verification-evidence"):
+        oidf.validate_config(config, "oid4vp-verifier")
 
 
 def test_planned_verifier_requires_explicit_attested_pre_activation_run(tmp_path: Path) -> None:

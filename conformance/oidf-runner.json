@@ -34,14 +34,26 @@
       "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=iso_mdl][response_mode=direct_post][request_method=request_uri_signed][client_id_prefix=x509_hash]",
       "configuration_example": "conformance/marty-verifier-mdoc.example.json",
       "target": "Marty's public verifier URL through the gateway",
-      "qualification": "Interoperability evidence only. This native OIDF verifier plan creates ISO 18013-5 mdoc presentations; it does not certify Marty as an mdoc issuer.",
+      "qualification": "Native OIDF verifier execution, not certification. The current upstream fixture is not a passing ISO 18013-5 result: its documentSignerCert is a CA certificate with certificate-signing usages, so strict Marty releases correctly reject the positive presentations while the invalid-session-transcript negative still passes.",
       "upstream_fixture_review": {
         "tracking_issue": "https://github.com/ElevenID/marty-integration-tests/issues/243",
+        "upstream_profile_issue": "https://gitlab.com/openid/conformance-suite/-/work_items/1891",
         "runner_release": "release-v5.2.2",
         "certificate_not_before": "2026-08-03T16:12:01+00:00",
         "certificate_not_after": "2027-08-03T16:12:01+00:00",
         "certificate_sha256": "6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53",
-        "policy": "Consume the certificate only from the exact unmodified runner source and fail closed outside its validity interval. Never replace the runner certificate, alter validation time, bypass certificate validation, modify the imported suite, or exclude the lane."
+        "iso_18013_5_document_signer_profile": "nonconformant",
+        "observed_basic_constraints_ca": true,
+        "observed_key_usage": [
+          "keyCertSign",
+          "cRLSign"
+        ],
+        "required_key_usage": [
+          "digitalSignature"
+        ],
+        "expected_marty_behavior": "reject",
+        "latest_execution": "https://github.com/ElevenID/marty-integration-tests/actions/runs/31193237615",
+        "policy": "Keep executing the exact unmodified runner and retain the failure as visible upstream evidence. Never replace the runner certificate, alter validation time, bypass certificate-profile validation, add an expected failure, modify the imported suite, or exclude the lane. Adopt and rerun the first reviewed upstream release that fixes work item 1891."
       }
     },
     "oid4vp-haip-verifier": {

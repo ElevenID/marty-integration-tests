@@ -83,6 +83,8 @@ def test_prepare_then_certify_uses_only_issuer_profile_public_key(tmp_path: Path
         encoding="ascii"
     )
     assert set(config["credential"]["signing_jwk"]) == {"kty", "crv", "x", "y", "d"}
+    assert config["browser"] == certificates.VERIFICATION_EVIDENCE_BROWSER_AUTOMATION
+    assert config["browser"] == oidf.VERIFICATION_EVIDENCE_BROWSER_AUTOMATION
     oidf.validate_config(config_path, "oid4vp-haip-verifier")
     if os.name != "nt":
         assert stat.S_IMODE(config_path.stat().st_mode) == 0o600

@@ -441,11 +441,22 @@ The exact OIDF `release-v5.2.2` source rotates its mdoc
 `documentSignerCert`. The reviewed certificate is valid from
 `2026-08-03T16:12:01Z` through `2027-08-03T16:12:01Z` and has SHA-256
 `6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53`.
-The lane reads that certificate from the unchanged, commit-pinned source,
-checks its validity before provisioning trust, and fails closed if it is not
-currently valid. Do not replace the certificate in the imported checkout,
-disable Marty certificate-time validation, or record an expected failure to
-manufacture a pass. Track release adoption evidence in
+The rotation fixes time validity but not the certificate profile: the fixture
+still has critical `BasicConstraints CA:true` and critical
+`KeyUsage keyCertSign,cRLSign`. ISO 18013-5 Table B.3 requires the document
+signer usage to be `digitalSignature`; OIDF tracks this in
+[conformance-suite#1891](https://gitlab.com/openid/conformance-suite/-/work_items/1891).
+A strict verifier must therefore reject the current positive presentations.
+
+The lane reads the certificate from the unchanged, commit-pinned source,
+checks its validity, provisions it as an exact issuer pin, and still applies
+Marty's document-signer profile validation. Pinning establishes which issuer
+the operator trusts; it does not authorize a CA key to act as a document
+signer. The lane remains enabled and red so the first reviewed upstream fix is
+detected without changing an imported assertion. Do not replace the
+certificate, disable time or profile validation, add an expected failure, or
+modify/exclude the imported suite to manufacture a pass. Track the fixture and
+release-adoption evidence in
 [marty-integration-tests#243](https://github.com/ElevenID/marty-integration-tests/issues/243).
 
 The HAIP profile uses the same command contract but is enabled only after

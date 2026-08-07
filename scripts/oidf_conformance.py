@@ -23,6 +23,31 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "conformance" / "oidf-runner.json"
 SHA = re.compile(r"^[0-9a-f]{40}$")
+VERIFICATION_EVIDENCE_BROWSER_AUTOMATION = [
+    {
+        "comment": (
+            "Capture the suite-served verification-evidence page so an automated "
+            "official run can satisfy OIDF's required review screenshot"
+        ),
+        "match": "https://*/test/a/*/verification-evidence",
+        "tasks": [
+            {
+                "task": "Capture verification evidence",
+                "match": "https://*/test/a/*/verification-evidence",
+                "commands": [
+                    [
+                        "wait",
+                        "xpath",
+                        "//*",
+                        10,
+                        ".*Deferred verification evidence.*",
+                        "update-image-placeholder",
+                    ]
+                ],
+            }
+        ],
+    }
+]
 
 
 def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
@@ -87,9 +112,7 @@ def validate_runner(path: Path, manifest: dict) -> None:
     ).splitlines()
     if changed:
         paths = ", ".join(line[3:] for line in changed)
-        raise ValueError(
-            f"OIDF runner source is not byte-for-byte clean: {paths}"
-        )
+        raise ValueError(f"OIDF runner source is not byte-for-byte clean: {paths}")
 
 
 def _validate_absolute_url(value: object, field: str) -> None:
@@ -154,9 +177,12 @@ def validate_config(path: Path, profile_name: str = "oid4vci-issuer") -> None:
         anchor = data.get("client", {}).get("request_object_trust_anchor_pem")
         if not isinstance(anchor, str) or not anchor.strip() or "REPLACE_" in anchor:
             raise ValueError(
-                "client.request_object_trust_anchor_pem is required by the "
-                "signed request_uri verifier plan"
+                "client.request_object_trust_anchor_pem is required by the signed request_uri verifier plan"
             )
+    if data.get("browser") != VERIFICATION_EVIDENCE_BROWSER_AUTOMATION:
+        raise ValueError(
+            "verifier configuration must use only the reviewed OIDF verification-evidence screenshot automation"
+        )
 
 
 def runner_relative_path(path: Path, runner: Path) -> str:

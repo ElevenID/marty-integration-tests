@@ -14,5 +14,20 @@
   "verifier": {
     "gateway_url": "https://REPLACE_WITH_MARTY_GATEWAY",
     "profile": "oid4vp-haip-1.0"
-  }
+  },
+  "browser": [
+    {
+      "comment": "Capture the suite-served verification-evidence page for automated official runs",
+      "match": "https://*/test/a/*/verification-evidence",
+      "tasks": [
+        {
+          "task": "Capture verification evidence",
+          "match": "https://*/test/a/*/verification-evidence",
+          "commands": [
+            ["wait", "xpath", "//*", 10, ".*Deferred verification evidence.*", "update-image-placeholder"]
+          ]
+        }
+      ]
+    }
+  ]
 }
