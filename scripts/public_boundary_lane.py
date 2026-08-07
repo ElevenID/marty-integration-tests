@@ -36,6 +36,31 @@ TEST_PATH = (
 PUBLIC_LOGIN = ROOT / "scripts" / "oidf_marty_public_login.py"
 
 
+def local_source_commit(marty_ui: Path) -> str:
+    """Return the exact checked-out source commit for a local-build preflight."""
+    completed = subprocess.run(
+        ["git", "-C", str(marty_ui), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    commit = completed.stdout.strip().lower()
+    if completed.returncode or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("local marty-ui checkout must resolve to an exact Git commit")
+    return commit
+
+
+def boundary_compose_command(
+    args: argparse.Namespace,
+    action: str,
+) -> list[str]:
+    """Select released images by default and source builds only when explicit."""
+    command = compose_command(args, action, marty_only=True)
+    if getattr(args, "local_build", False):
+        command.append("--local-build")
+    return command
+
+
 def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, object]]:
     if not RUN_ID.fullmatch(args.run_id):
         raise ValueError("run id must use lowercase letters, digits, and internal hyphens")
@@ -48,6 +73,10 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
     metadata = load_stack_metadata(args.stack_metadata)
     stack_environment = load_stack_environment(args.stack_env)
     validate_stack_binding(args.stack_manifest, metadata, stack_environment)
+    if getattr(args, "local_build", False):
+        metadata = dict(metadata)
+        metadata["bootstrap_marty_commit"] = metadata.get("marty_commit")
+        metadata["marty_commit"] = local_source_commit(args.marty_ui)
 
     result = os.environ.copy()
     result.update(stack_environment)
@@ -159,6 +188,14 @@ def write_summary(
         "schema": "elevenid.product-security-evidence/v1",
         "evidence_class": "elevenid-owned-product-security",
         "lane": "two-organization-public-boundary",
+        "execution": {
+            "mode": (
+                "local-source-preflight"
+                if getattr(args, "local_build", False)
+                else "immutable-release"
+            ),
+            "release_grade": not getattr(args, "local_build", False),
+        },
         "result": {
             "exit_code": exit_code,
             "passed": exit_code == 0,
@@ -167,6 +204,7 @@ def write_summary(
             "release": stack.get("release"),
             "manifest_sha256": file_sha256(args.stack_manifest),
             "marty_commit": metadata.get("marty_commit"),
+            "bootstrap_marty_commit": metadata.get("bootstrap_marty_commit"),
         },
         "test_source": {
             "repository": "ElevenID/marty-integration-tests",
@@ -189,9 +227,14 @@ def write_summary(
             "issuance transaction and revocation-status isolation",
             "issued-credential lifecycle and revocation isolation",
             "trust-profile ownership and mutation isolation",
+            "issuer-entity and trust-profile relationship isolation",
             "applicant form-data and vetting isolation",
+            "application evidence collection, deletion, revocation, and tenant isolation",
             "deployment-profile, lane, and device-assignment isolation",
             "webhook ownership and secret leakage prevention",
+            "wallet catalogue and organization-override isolation",
+            "browser-driven issuance and verification through the shipped UI",
+            "notification SSE delivery and subscription isolation",
             "audit-event isolation",
             "DID-first issuance and verification",
             "public custody-selector rejection",
@@ -210,8 +253,13 @@ def write_summary(
 def execute(args: argparse.Namespace) -> int:
     lane_environment, metadata = environment(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    private = args.output_dir / "private"
+    private.mkdir(parents=True, exist_ok=True)
+    lane_environment["MARTY_BROWSER_EVIDENCE_DIR"] = str(
+        (private / "browser").resolve()
+    )
     started = run(
-        compose_command(args, "up", marty_only=True),
+        boundary_compose_command(args, "up"),
         lane_environment,
     ) == 0
     exit_code = 1
@@ -237,18 +285,17 @@ def execute(args: argparse.Namespace) -> int:
                     TEST_PATH,
                 ],
                 lane_environment,
+                capture=private / "pytest.log",
             )
     finally:
         write_summary(args, metadata, exit_code)
-        private = args.output_dir / "private"
-        private.mkdir(parents=True, exist_ok=True)
         run(
-            compose_command(args, "logs", marty_only=True),
+            boundary_compose_command(args, "logs"),
             lane_environment,
             capture=private / "compose.log",
         )
         run(
-            compose_command(args, "down", marty_only=True),
+            boundary_compose_command(args, "down"),
             lane_environment,
         )
     return exit_code
@@ -263,6 +310,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--stack-env", type=Path, required=True)
     result.add_argument("--material", type=Path, required=True)
     result.add_argument("--output-dir", type=Path, required=True)
+    result.add_argument(
+        "--local-build",
+        action="store_true",
+        help="build the checked-out Marty source as a non-release-grade preflight",
+    )
     return result
 
 

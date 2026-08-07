@@ -9,8 +9,13 @@ adapter, or KMS endpoint is involved.
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
+import hashlib
+import json
 import os
 import uuid
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -76,6 +81,26 @@ def _assert_no_private_signing_selectors(value: Any, *, path: str = "$") -> None
             _assert_no_private_signing_selectors(child, path=f"{path}[{index}]")
 
 
+async def _next_sse_frame(lines: Any, *, timeout: float = 10.0) -> tuple[str, Any]:
+    """Read one complete SSE frame from an already-open public stream."""
+
+    async def read() -> tuple[str, Any]:
+        event_type = "message"
+        data_lines: list[str] = []
+        while True:
+            line = await anext(lines)
+            if not line:
+                if data_lines:
+                    return event_type, json.loads("\n".join(data_lines))
+                continue
+            if line.startswith("event:"):
+                event_type = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.removeprefix("data:").lstrip())
+
+    return await asyncio.wait_for(read(), timeout=timeout)
+
+
 async def _reviewer_session() -> str:
     public_session = os.getenv("MARTY_REVIEWER_TEST_SESSION_ID", "").strip()
     if public_session:
@@ -91,6 +116,141 @@ async def _reviewer_session() -> str:
             "two-principal public-boundary matrix"
         )
     return await AuthHelper().get_session_id(email, password)
+
+
+async def _exercise_browser_issuance_and_verification(
+    *,
+    base_url: str,
+    session_id: str,
+    organization_id: str,
+    application_reference: str,
+    presentation_policy_name: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Drive real issuance and verification actions through the shipped UI."""
+    from playwright.async_api import async_playwright, expect
+
+    assert session_id, "A real public OIDC session is required for browser evidence"
+    evidence_dir_value = os.getenv("MARTY_BROWSER_EVIDENCE_DIR", "").strip()
+    evidence_dir = Path(evidence_dir_value) if evidence_dir_value else None
+    if evidence_dir:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        context = await browser.new_context(ignore_https_errors=True)
+        await context.add_cookies(
+            [{"name": "sessionId", "value": session_id, "url": base_url}]
+        )
+        page = await context.new_page()
+        await page.add_init_script(
+            "localStorage.setItem('activeOrgId', "
+            f"{json.dumps(organization_id)});"
+        )
+        try:
+            await page.goto(
+                f"{base_url}/console/org/operate/applications",
+                wait_until="domcontentloaded",
+            )
+            await expect(
+                page.get_by_role("heading", name="Applications", exact=True)
+            ).to_be_visible(timeout=30_000)
+            application_row = page.get_by_role("row").filter(
+                has_text=application_reference
+            )
+            await expect(application_row).to_have_count(1, timeout=30_000)
+
+            approve_button = application_row.get_by_role(
+                "button", name="Approve"
+            )
+            await expect(approve_button).to_be_enabled(timeout=30_000)
+            async with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url.endswith("/approve"),
+                timeout=30_000,
+            ) as approval_info:
+                await approve_button.click()
+            approval_response = await approval_info.value
+            assert approval_response.status == 200, await approval_response.text()
+            approval = await approval_response.json()
+            _assert_no_private_signing_selectors(approval)
+
+            await expect(application_row).to_contain_text(
+                "approved", ignore_case=True, timeout=30_000
+            )
+            row_buttons = application_row.get_by_role("button")
+            # The details affordance is an accessible link; the sole button on
+            # an approved row is the real "issue" action.
+            await expect(row_buttons).to_have_count(1, timeout=30_000)
+            async with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url.endswith("/issue"),
+                timeout=30_000,
+            ) as issuance_info:
+                await row_buttons.last.click()
+            issuance_response = await issuance_info.value
+            assert issuance_response.status == 200, await issuance_response.text()
+            issuance = await issuance_response.json()
+            _assert_no_private_signing_selectors(issuance)
+            assert issuance.get("offer_url") or issuance.get("credential_offer_uri"), (
+                "The browser issuance action did not produce a wallet offer"
+            )
+
+            await page.goto(
+                f"{base_url}/console/org/operate/verify",
+                wait_until="domcontentloaded",
+            )
+            new_verification = page.get_by_role(
+                "button", name="New Verification"
+            )
+            await expect(new_verification).to_be_enabled(timeout=30_000)
+            await new_verification.click()
+
+            policy_select = page.get_by_role(
+                "combobox", name="Presentation Policy"
+            )
+            await expect(policy_select).to_be_visible(timeout=30_000)
+            await policy_select.click()
+            await page.get_by_role(
+                "option", name=presentation_policy_name, exact=True
+            ).click()
+            await page.get_by_role("button", name="Next").click()
+            await page.get_by_label("Verification Purpose").fill(
+                "Released-stack browser boundary verification"
+            )
+
+            async with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url.endswith("/v1/flows/verify"),
+                timeout=30_000,
+            ) as verification_info:
+                await page.get_by_role("button", name="Start Session").click()
+            verification_response = await verification_info.value
+            assert verification_response.status == 200, (
+                await verification_response.text()
+            )
+            verification = await verification_response.json()
+            _assert_no_private_signing_selectors(verification)
+            await expect(page.get_by_text("Scan & Verify", exact=True)).to_be_visible(
+                timeout=30_000
+            )
+
+            if evidence_dir:
+                await page.screenshot(
+                    path=evidence_dir / "issuance-and-verification.png",
+                    full_page=True,
+                )
+            return approval, issuance, verification
+        except Exception:
+            if evidence_dir:
+                with contextlib.suppress(Exception):
+                    await page.screenshot(
+                        path=evidence_dir / "failure.png",
+                        full_page=True,
+                    )
+            raise
+        finally:
+            await context.close()
+            await browser.close()
 
 
 async def _grant_reviewer_boundary_roles(
@@ -589,6 +749,21 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             f"/v1/organizations/{organization_a_id}"
         )
         assert organization_a_response.status_code == 200, organization_a_response.text
+        issuer_identities_a = await admin.list_issuer_identities(
+            organization_id=organization_a_id,
+            key_purpose="vc_jwt_issuer",
+        )
+        active_issuer_identities_a = issuer_identities_a.get("identities")
+        assert isinstance(active_issuer_identities_a, list)
+        assert len(active_issuer_identities_a) == 1, (
+            "The default organization must expose exactly one active VC issuer "
+            f"identity, got {active_issuer_identities_a}"
+        )
+        issuer_identity_a = active_issuer_identities_a[0]
+        assert isinstance(issuer_identity_a, dict)
+        _assert_no_private_signing_selectors(issuer_identity_a)
+        issuer_did_a = str(issuer_identity_a.get("issuer_did") or "")
+        assert issuer_did_a.startswith("did:")
         permissions_response = await reviewer.client.get(
             f"/v1/organizations/{organization_a_id}/members/me/permissions"
         )
@@ -696,6 +871,114 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert api_key_create.status_code == 200, api_key_create.text
         foreign_api_key = str(api_key_create.json()["key"])
         api_headers = {"X-API-Key": foreign_api_key}
+
+        # Wallet catalogue entries may be global or organization-owned. Create
+        # a real B override through the public administration API, prove B's
+        # organization-bound machine principal can use it, and then attempt
+        # enumeration, dereference, open-link, mutation, and deletion from A.
+        wallet_name_b = f"Organization B wallet override {uuid.uuid4().hex}"
+        wallet_create = await admin.client.post(
+            "/v1/wallet-registry",
+            json={
+                "organization_id": organization_b_id,
+                "name": wallet_name_b,
+                "wallet_apps": [wallet_name_b],
+                "deep_link_pattern": (
+                    "tenant-b-wallet://open?inner={inner_uri_encoded}"
+                ),
+                "supported_platforms": ["web"],
+                "supports_deeplink": True,
+            },
+        )
+        assert wallet_create.status_code == 201, wallet_create.text
+        wallet_b = wallet_create.json()
+        wallet_b_id = str(wallet_b["id"])
+
+        wallets_b = await api_key_client.client.get(
+            "/v1/wallet-registry",
+            params={"organization_id": organization_b_id},
+            headers=api_headers,
+        )
+        assert wallets_b.status_code == 200, wallets_b.text
+        assert wallet_b_id in {
+            str(wallet.get("id"))
+            for wallet in wallets_b.json()
+            if isinstance(wallet, dict)
+        }
+        wallet_b_owner = await api_key_client.client.get(
+            f"/v1/wallet-registry/{wallet_b_id}",
+            headers=api_headers,
+        )
+        assert wallet_b_owner.status_code == 200, wallet_b_owner.text
+
+        global_wallets_a = await reviewer.client.get("/v1/wallet-registry")
+        assert global_wallets_a.status_code == 200, global_wallets_a.text
+        assert wallet_b_id not in {
+            str(wallet.get("id"))
+            for wallet in global_wallets_a.json()
+            if isinstance(wallet, dict)
+        }
+        wallets_a = await reviewer.client.get(
+            "/v1/wallet-registry",
+            params={"organization_id": organization_a_id},
+        )
+        assert wallets_a.status_code == 200, wallets_a.text
+        assert wallet_b_id not in {
+            str(wallet.get("id"))
+            for wallet in wallets_a.json()
+            if isinstance(wallet, dict)
+        }
+
+        foreign_wallet_list = await reviewer.client.get(
+            "/v1/wallet-registry",
+            params={"organization_id": organization_b_id},
+        )
+        _assert_public_denial(
+            foreign_wallet_list,
+            foreign_values=(wallet_b_id, wallet_name_b, organization_b_name),
+        )
+        foreign_wallet_requests = (
+            (
+                "GET",
+                f"/v1/wallet-registry/{wallet_b_id}",
+                None,
+                None,
+            ),
+            (
+                "GET",
+                f"/v1/wallet-registry/{wallet_b_id}/open-link",
+                None,
+                {
+                    "inner_uri": (
+                        "openid-credential-offer://?credential_offer_uri="
+                        "https%3A%2F%2Fissuer.example%2Foffers%2Fboundary"
+                    )
+                },
+            ),
+            (
+                "PATCH",
+                f"/v1/wallet-registry/{wallet_b_id}",
+                {"name": "foreign wallet mutation"},
+                None,
+            ),
+            (
+                "DELETE",
+                f"/v1/wallet-registry/{wallet_b_id}",
+                None,
+                None,
+            ),
+        )
+        for method, path, body, params in foreign_wallet_requests:
+            response = await reviewer.client.request(
+                method,
+                path,
+                json=body,
+                params=params,
+            )
+            _assert_public_denial(
+                response,
+                foreign_values=(wallet_b_id, wallet_name_b, organization_b_name),
+            )
 
         key_b_response = await api_key_client.client.get(
             "/v1/credential-templates",
@@ -851,22 +1134,155 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 ),
             )
 
-        # A trust profile is also tenant-owned security policy.  Prove the
-        # normal B owner path first, then ensure an A-only principal cannot
-        # enumerate, read, activate, or mutate the foreign profile by ID.
+        # Trust configuration uses the same public resource sequence as the
+        # UI: create an organization-scoped IssuerEntity, then link its UUID
+        # to a TrustProfile.  It must not fall back to a denormalized pinned-DID
+        # object or expose any signing/custody selector.
         trust_profile_b = await admin.create_trust_profile(
             organization_id=organization_b_id,
             name=f"Organization B trust policy {uuid.uuid4().hex}",
-            trust_sources=[
-                {
-                    "source_type": "PINNED_ISSUER",
-                    "issuer_did": issuer_did_b,
-                    "organization_id": organization_b_id,
-                }
-            ],
         )
         trust_profile_b_id = str(trust_profile_b["id"])
         trust_profile_b_name = str(trust_profile_b["name"])
+        trust_profile_a = await admin.create_trust_profile(
+            organization_id=organization_a_id,
+            name=f"Organization A substitution target {uuid.uuid4().hex}",
+        )
+        trust_profile_a_id = str(trust_profile_a["id"])
+
+        issuer_entity_b_did = f"did:web:trust-{uuid.uuid4().hex}.example"
+        issuer_entity_b_name = f"Organization B trust issuer {uuid.uuid4().hex}"
+        issuer_entity_payload = {
+            "organization_id": organization_b_id,
+            "issuer_id": issuer_entity_b_did,
+            "issuer_type": "ORGANIZATION",
+            "display_name": issuer_entity_b_name,
+            "description": "Foreign tenant issuer-registry evidence",
+            "metadata": {"jurisdiction": "US"},
+        }
+        issuer_entity_create = await admin.client.post(
+            "/v1/issuer-entities",
+            json=issuer_entity_payload,
+        )
+        assert issuer_entity_create.status_code in {200, 201}, issuer_entity_create.text
+        issuer_entity_b = issuer_entity_create.json()
+        issuer_entity_b_id = str(issuer_entity_b["id"])
+        assert issuer_entity_b["organization_id"] == organization_b_id
+        assert issuer_entity_b["issuer_id"] == issuer_entity_b_did
+        _assert_no_private_signing_selectors(issuer_entity_b)
+
+        relationship_create = await admin.client.post(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers",
+            json={
+                "issuer_id": issuer_entity_b_id,
+                "trust_level": 100,
+                "relationship_status": "TRUSTED",
+                "cascade_revocation_policy": "NOTIFY_ONLY",
+                "metadata": {"credential_template_ids": []},
+            },
+        )
+        assert relationship_create.status_code in {200, 201}, relationship_create.text
+        relationship_b = relationship_create.json()
+        relationship_b_id = str(relationship_b["id"])
+        assert relationship_b["trust_profile_id"] == trust_profile_b_id
+        assert relationship_b["issuer_id"] == issuer_entity_b_id
+        assert "issuer_did" not in relationship_b
+        assert "name" not in relationship_b
+        _assert_no_private_signing_selectors(relationship_b)
+
+        # Extensible metadata is not a custody escape hatch.  Both selector
+        # fields and private JWK parameters must fail before persistence.
+        for selector in FORBIDDEN_PUBLIC_SIGNING_SELECTORS:
+            rejected_entity = await admin.client.post(
+                "/v1/issuer-entities",
+                json={
+                    **issuer_entity_payload,
+                    "issuer_id": f"did:example:rejected-{selector}-{uuid.uuid4().hex}",
+                    "metadata": {"nested": {selector: "untrusted-custody-route"}},
+                },
+            )
+            assert rejected_entity.status_code == 422, rejected_entity.text
+
+            rejected_relationship = await admin.client.post(
+                f"/v1/trust-profiles/{trust_profile_b_id}/issuers",
+                json={
+                    "issuer_id": issuer_entity_b_id,
+                    "metadata": {"nested": {selector: "untrusted-custody-route"}},
+                },
+            )
+            assert rejected_relationship.status_code == 422, rejected_relationship.text
+
+        rejected_private_jwk = await admin.client.post(
+            "/v1/issuer-entities",
+            json={
+                **issuer_entity_payload,
+                "issuer_id": f"did:example:private-jwk-{uuid.uuid4().hex}",
+                "metadata": {
+                    "verification_keys": [
+                        {
+                            "kty": "EC",
+                            "crv": "P-256",
+                            "x": "public-x",
+                            "y": "public-y",
+                            "d": "must-remain-in-managed-custody",
+                        }
+                    ]
+                },
+            },
+        )
+        assert rejected_private_jwk.status_code == 422, rejected_private_jwk.text
+
+        owner_entity_list = await admin.client.get(
+            "/v1/issuer-entities",
+            params={"organization_id": organization_b_id},
+        )
+        assert owner_entity_list.status_code == 200, owner_entity_list.text
+        assert issuer_entity_b_id in {
+            str(entity.get("id"))
+            for entity in owner_entity_list.json()
+            if isinstance(entity, dict)
+        }
+        owner_entity = await admin.client.get(
+            f"/v1/issuer-entities/{issuer_entity_b_id}"
+        )
+        assert owner_entity.status_code == 200, owner_entity.text
+        owner_entity_update = await admin.client.patch(
+            f"/v1/issuer-entities/{issuer_entity_b_id}",
+            json={
+                "organization_id": organization_b_id,
+                "display_name": f"{issuer_entity_b_name} updated",
+            },
+        )
+        assert owner_entity_update.status_code == 200, owner_entity_update.text
+
+        owner_relationships = await admin.client.get(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers"
+        )
+        assert owner_relationships.status_code == 200, owner_relationships.text
+        assert relationship_b_id in {
+            str(relationship.get("id"))
+            for relationship in owner_relationships.json()
+            if isinstance(relationship, dict)
+        }
+        owner_relationship = await admin.client.get(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}"
+        )
+        assert owner_relationship.status_code == 200, owner_relationship.text
+        owner_relationship_update = await admin.client.patch(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+            json={
+                "trust_level": 85,
+                "relationship_status": "UNDER_REVIEW",
+                "cascade_revocation_policy": "MANUAL",
+                "metadata": {"credential_template_ids": []},
+            },
+        )
+        assert owner_relationship_update.status_code == 200, owner_relationship_update.text
+        assert owner_relationship_update.json()["trust_level"] == 85
+
+        # A trust profile and its issuer registry/relationship resources are
+        # tenant-owned security policy. Prove the B owner path first, then
+        # ensure an A-only principal cannot enumerate or substitute their IDs.
         owner_trust_profile = await admin.client.get(
             f"/v1/trust-profiles/{trust_profile_b_id}",
         )
@@ -882,6 +1298,66 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             for profile in trust_profiles_a.json()
             if isinstance(profile, dict)
         }
+
+        issuer_entities_a = await reviewer.client.get(
+            "/v1/issuer-entities",
+            params={"organization_id": organization_a_id},
+        )
+        assert issuer_entities_a.status_code == 200, issuer_entities_a.text
+        assert issuer_entity_b_id not in {
+            str(entity.get("id"))
+            for entity in issuer_entities_a.json()
+            if isinstance(entity, dict)
+        }
+        assert issuer_entity_b_did not in {
+            str(entity.get("issuer_id"))
+            for entity in issuer_entities_a.json()
+            if isinstance(entity, dict)
+        }
+
+        for method, path, body in (
+            ("GET", f"/v1/issuer-entities/{issuer_entity_b_id}", None),
+            (
+                "PATCH",
+                f"/v1/issuer-entities/{issuer_entity_b_id}",
+                {
+                    "organization_id": organization_a_id,
+                    "display_name": "foreign issuer-entity substitution",
+                },
+            ),
+            ("DELETE", f"/v1/issuer-entities/{issuer_entity_b_id}", None),
+            (
+                "GET",
+                f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+                None,
+            ),
+            (
+                "PATCH",
+                f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+                {"trust_level": 1},
+            ),
+            (
+                "DELETE",
+                f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}",
+                None,
+            ),
+            (
+                "GET",
+                f"/v1/trust-profiles/{trust_profile_a_id}/issuers/{relationship_b_id}",
+                None,
+            ),
+        ):
+            response = await reviewer.client.request(method, path, json=body)
+            _assert_public_denial(
+                response,
+                foreign_values=(
+                    organization_b_name,
+                    issuer_entity_b_name,
+                    issuer_entity_b_did,
+                    issuer_entity_b_id,
+                    relationship_b_id,
+                ),
+            )
 
         for method, path, body in (
             ("GET", f"/v1/trust-profiles/{trust_profile_b_id}", None),
@@ -906,6 +1382,24 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                     issuer_did_b,
                 ),
             )
+
+        owner_relationship_delete = await admin.client.delete(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}"
+        )
+        assert owner_relationship_delete.status_code == 200, owner_relationship_delete.text
+        deleted_relationship = await admin.client.get(
+            f"/v1/trust-profiles/{trust_profile_b_id}/issuers/{relationship_b_id}"
+        )
+        assert deleted_relationship.status_code == 404, deleted_relationship.text
+
+        owner_entity_delete = await admin.client.delete(
+            f"/v1/issuer-entities/{issuer_entity_b_id}"
+        )
+        assert owner_entity_delete.status_code == 200, owner_entity_delete.text
+        deleted_entity = await admin.client.get(
+            f"/v1/issuer-entities/{issuer_entity_b_id}"
+        )
+        assert deleted_entity.status_code == 404, deleted_entity.text
 
         policy_b_data = TestDataBuilder.presentation_policy_age_verification(
             organization_id=organization_b_id,
@@ -970,6 +1464,17 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             "Default organization has no active credential template for the "
             "current applicant journey"
         )
+        browser_policy_name = f"Browser boundary policy {uuid.uuid4().hex}"
+        browser_policy = await admin.create_presentation_policy(
+            **TestDataBuilder.presentation_policy_employee_access(
+                organization_id=organization_a_id,
+                credential_template_id=active_template_a["id"],
+                name=browser_policy_name,
+            )
+        )
+        browser_policy = await admin.activate_presentation_policy(
+            browser_policy["id"]
+        )
         application_template_a = await admin.create_application_template(
             organization_id=organization_a_id,
             name=f"Organization A applicant workflow {uuid.uuid4().hex}",
@@ -980,6 +1485,16 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                     "field_type": "EMAIL",
                     "label": "Email",
                     "required": True,
+                }
+            ],
+            evidence_requirements=[
+                {
+                    "evidence_id": "identity_scan",
+                    "evidence_type": "DOCUMENT_SCAN",
+                    "description": "Current government identity scan",
+                    "required": True,
+                    "accepted_formats": ["image/png"],
+                    "max_file_size_bytes": 4096,
                 }
             ],
             approval_strategy="MANUAL",
@@ -1015,6 +1530,80 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert application_create.status_code in {200, 201}, application_create.text
         application_a = application_create.json()
         application_a_id = str(application_a["id"])
+
+        # Submission must fail closed until the holder supplies the exact
+        # application-bound evidence required by the active template.
+        missing_evidence = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/submit"
+        )
+        assert missing_evidence.status_code == 422, missing_evidence.text
+
+        evidence_bytes = b"released-stack tenant-boundary identity scan"
+        evidence_payload = {
+            "evidence_requirement_id": "identity_scan",
+            "media_type": "image/png",
+            "filename": "identity-scan.png",
+            "content_base64": base64.b64encode(evidence_bytes).decode("ascii"),
+        }
+        first_upload = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/evidence",
+            json=evidence_payload,
+        )
+        assert first_upload.status_code == 200, first_upload.text
+        first_evidence_id = str(first_upload.json()["id"])
+
+        # Deletion removes the bytes from the current public path and restores
+        # the required-evidence submission failure before a replacement upload.
+        evidence_delete = await reviewer.client.delete(
+            f"/v1/me/applications/{application_a_id}/evidence/{first_evidence_id}"
+        )
+        assert evidence_delete.status_code == 200, evidence_delete.text
+        deleted_download = await reviewer.client.get(
+            f"/v1/me/applications/{application_a_id}/evidence/{first_evidence_id}/content"
+        )
+        assert deleted_download.status_code == 404, deleted_download.text
+        missing_after_delete = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/submit"
+        )
+        assert missing_after_delete.status_code == 422, missing_after_delete.text
+
+        evidence_upload = await reviewer.client.post(
+            f"/v1/me/applications/{application_a_id}/evidence",
+            json=evidence_payload,
+        )
+        assert evidence_upload.status_code == 200, evidence_upload.text
+        evidence = evidence_upload.json()
+        evidence_id = str(evidence["id"])
+        assert evidence["organization_id"] == organization_a_id
+        assert evidence["application_id"] == application_a_id
+        assert evidence["sha256"] == hashlib.sha256(evidence_bytes).hexdigest()
+        assert evidence["status"] == "ACTIVE"
+        assert evidence["content_url"].startswith("/v1/me/applications/")
+        _assert_no_private_signing_selectors(evidence)
+        for forbidden_field in (
+            "storage_key",
+            "storage_path",
+            "bucket",
+            "service_id",
+            "provider_id",
+            "kms_id",
+        ):
+            assert forbidden_field not in evidence
+
+        owner_evidence_list = await reviewer.client.get(
+            f"/v1/me/applications/{application_a_id}/evidence"
+        )
+        assert owner_evidence_list.status_code == 200, owner_evidence_list.text
+        assert evidence_id in {
+            str(item.get("id"))
+            for item in owner_evidence_list.json()
+            if isinstance(item, dict)
+        }
+        owner_evidence_download = await reviewer.client.get(evidence["content_url"])
+        assert owner_evidence_download.status_code == 200, owner_evidence_download.text
+        assert owner_evidence_download.content == evidence_bytes
+        assert owner_evidence_download.headers["cache-control"] == "private, no-store"
+
         application_submit = await reviewer.client.post(
             f"/v1/me/applications/{application_a_id}/submit"
         )
@@ -1050,6 +1639,192 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert isinstance(owner_checks_body, list)
         assert owner_checks_body, "Submitted manual-review application created no vetting checks"
 
+        owner_reviewer_evidence = await admin.client.get(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/evidence"
+        )
+        assert owner_reviewer_evidence.status_code == 200, owner_reviewer_evidence.text
+        assert evidence_id in {
+            str(item.get("id"))
+            for item in owner_reviewer_evidence.json()
+            if isinstance(item, dict)
+        }
+        reviewer_download = await admin.client.get(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/evidence/{evidence_id}/content"
+        )
+        assert reviewer_download.status_code == 200, reviewer_download.text
+        assert reviewer_download.content == evidence_bytes
+
+        # Use a second manual-review application for the notification test so
+        # approval does not weaken the original application's revoked-evidence
+        # fail-closed assertion below. Applications intentionally reject a
+        # second active application for the same applicant and credential
+        # template, so provision this independent journey through the current
+        # public authoring API and the DID resolved above. Do not pick an
+        # arbitrary seeded catalogue entry: an ACTIVE status alone does not
+        # prove that its current issuer identity can satisfy this operation.
+        notification_template_data = await _employee_badge_template_data(
+            admin,
+            organization_id=organization_a_id,
+            name=f"Browser notification credential {uuid.uuid4().hex}",
+            issuer_did=issuer_did_a,
+        )
+        notification_credential_template = await admin.create_credential_template(
+            **notification_template_data
+        )
+        notification_credential_template = await admin.activate_credential_template(
+            notification_credential_template["id"]
+        )
+        sse_application_template = await admin.create_application_template(
+            organization_id=organization_a_id,
+            name=f"Organization A notification workflow {uuid.uuid4().hex}",
+            credential_template_id=notification_credential_template["id"],
+            form_fields=[
+                {
+                    "field_id": "email",
+                    "field_type": "EMAIL",
+                    "label": "Email",
+                    "required": True,
+                }
+            ],
+            approval_strategy="MANUAL",
+        )
+        sse_application_template = await admin.activate_application_template(
+            sse_application_template["id"]
+        )
+        browser_issuance_flow = await admin.create_flow_definition(
+            organization_id=organization_a_id,
+            name=f"Browser issuance flow {uuid.uuid4().hex}",
+            flow_type="custom",
+            approval_strategy="MANUAL",
+            credential_template_id=notification_credential_template["id"],
+            trigger={
+                "trigger_type": "WEBHOOK",
+                "config": {"event_type": "APPLICATION_APPROVED"},
+            },
+            extension={
+                "extension_uri": "urn:elevenid:flow:application-approved-issuance",
+                "extension_version": "1.0.0",
+                "extends_flow_type": "oid4vci_pre_authorized",
+                "entry_step_id": "create_offer",
+                "steps": [
+                    {
+                        "step_id": "create_offer",
+                        "action": "create_offer",
+                        "config": {},
+                    }
+                ],
+                "transitions": [],
+                "config": {},
+            },
+        )
+        browser_issuance_flow = await admin.activate_flow_definition(
+            browser_issuance_flow["id"]
+        )
+        sse_application_create = await reviewer.client.post(
+            "/v1/me/applications",
+            json={
+                "organization_id": organization_a_id,
+                "application_template_id": sse_application_template["id"],
+                "form_data": {"email": applicant_secret},
+            },
+        )
+        assert sse_application_create.status_code in {200, 201}, (
+            sse_application_create.text
+        )
+        sse_application = sse_application_create.json()
+        sse_application_id = str(sse_application["id"])
+        sse_submit = await reviewer.client.post(
+            f"/v1/me/applications/{sse_application_id}/submit"
+        )
+        assert sse_submit.status_code == 200, sse_submit.text
+
+        # Open two real public SSE connections before approving the A-owned
+        # notification application. The A browser session must receive the originating
+        # event, while the independent B-scoped API key must receive nothing.
+        async with (
+            reviewer.client.stream(
+                "GET",
+                "/v1/notifications/events/push",
+                params={
+                    "organization_id": organization_a_id,
+                    "subscriptions": "application.approved",
+                },
+            ) as organization_a_events,
+            api_key_client.client.stream(
+                "GET",
+                "/v1/notifications/events/push",
+                params={
+                    "organization_id": organization_b_id,
+                    "subscriptions": "application.approved",
+                },
+                headers=api_headers,
+            ) as organization_b_events,
+        ):
+            assert organization_a_events.status_code == 200, (
+                await organization_a_events.aread()
+            ).decode(errors="replace")
+            assert organization_b_events.status_code == 200, (
+                await organization_b_events.aread()
+            ).decode(errors="replace")
+            lines_a = organization_a_events.aiter_lines()
+            lines_b = organization_b_events.aiter_lines()
+            assert await _next_sse_frame(lines_a) == (
+                "message",
+                {"type": "connected"},
+            )
+            assert await _next_sse_frame(lines_b) == (
+                "message",
+                {"type": "connected"},
+            )
+
+            event_a_task = asyncio.create_task(_next_sse_frame(lines_a))
+            event_b_task = asyncio.create_task(_next_sse_frame(lines_b, timeout=30))
+            try:
+                browser_session_id = str(
+                    admin.client.cookies.get("sessionId") or ""
+                )
+                approval, browser_issuance, browser_verification = (
+                    await _exercise_browser_issuance_and_verification(
+                        base_url=admin.base_url,
+                        session_id=browser_session_id,
+                        organization_id=organization_a_id,
+                        application_reference=str(
+                            sse_application.get("reference_number") or ""
+                        ),
+                        presentation_policy_name=browser_policy_name,
+                    )
+                )
+            except BaseException:
+                for pending_event in (event_a_task, event_b_task):
+                    pending_event.cancel()
+                await asyncio.gather(
+                    event_a_task,
+                    event_b_task,
+                    return_exceptions=True,
+                )
+                raise
+            assert str(approval.get("status") or "").upper() == "APPROVED"
+            assert str(browser_issuance.get("status") or "").upper() in {
+                "OFFERED",
+                "WALLET_INVITE_READY",
+            }
+            assert browser_verification.get("session_id") or browser_verification.get(
+                "instance_id"
+            )
+
+            event_type_a, event_a = await event_a_task
+            assert event_type_a == "application.approved"
+            assert event_a["organization_id"] == organization_a_id
+            assert event_a["aggregate_id"] == sse_application_id
+            assert event_a["data"]["application_id"] == sse_application_id
+            assert event_a["data"]["applicant_id"] == sse_application["applicant_id"]
+
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(event_b_task), timeout=1.0)
+            event_b_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await event_b_task
+
         applicants_b = await api_key_client.client.get(
             f"/v1/organizations/{organization_b_id}/applicants",
             headers=api_headers,
@@ -1067,6 +1842,9 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}",
             f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}",
             f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/checks",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/evidence",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/evidence/{evidence_id}",
+            f"/v1/organizations/{organization_b_id}/applicants/{application_a_id}/evidence/{evidence_id}/content",
         ):
             response = await api_key_client.client.get(path, headers=api_headers)
             _assert_public_denial(
@@ -1088,6 +1866,43 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 application_a_id,
                 applicant_secret,
             ),
+        )
+
+        # A reviewer can bind only same-application evidence to a check. The
+        # canonical response records the evidence ID without exposing custody.
+        reviewer_lock = await admin.client.post(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/lock",
+            json={},
+        )
+        assert reviewer_lock.status_code == 200, reviewer_lock.text
+        check_id = str(owner_checks_body[0]["id"])
+        completed_check = await admin.client.post(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/checks/{check_id}/complete",
+            json={
+                "passed": True,
+                "notes": "Released-stack evidence binding control",
+                "evidence_submission_ids": [evidence_id],
+            },
+        )
+        assert completed_check.status_code == 200, completed_check.text
+        assert completed_check.json().get("evidence_refs") == [evidence_id]
+
+        revoked_evidence = await admin.client.post(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/evidence/{evidence_id}/revoke",
+            json={"reason": "Released-stack revocation control"},
+        )
+        assert revoked_evidence.status_code == 200, revoked_evidence.text
+        assert revoked_evidence.json()["status"] == "REVOKED"
+        revoked_download = await admin.client.get(
+            revoked_evidence.json()["content_url"]
+        )
+        assert revoked_download.status_code == 410, revoked_download.text
+        approval_with_revoked_evidence = await admin.client.post(
+            f"/v1/organizations/{organization_a_id}/applicants/{application_a_id}/approve",
+            json={"notes": "must fail after evidence revocation"},
+        )
+        assert approval_with_revoked_evidence.status_code == 422, (
+            approval_with_revoked_evidence.text
         )
 
         # Deployment profiles bind trust, presentation, credential, flow, API
