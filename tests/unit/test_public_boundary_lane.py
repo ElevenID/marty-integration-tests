@@ -280,7 +280,7 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output = tmp_path / "evidence"
-    args = SimpleNamespace(output_dir=output)
+    args = SimpleNamespace(output_dir=output, run_id="unit-boundary")
     calls: list[tuple[list[str], Path | None]] = []
     execution_environment = {
         "MARTY_CONFORMANCE_ADMIN_EMAIL": "admin@example.test",
@@ -301,6 +301,16 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
         lane,
         "boundary_compose_command",
         lambda _args, action: ["compose", action],
+    )
+    monkeypatch.setattr(
+        lane,
+        "trust_registry_fixture_command",
+        lambda _args, action: ["registry-compose", action],
+    )
+    monkeypatch.setattr(
+        lane,
+        "trust_registry_control_url",
+        lambda _args, _environment: "http://127.0.0.1:32100",
     )
     monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
     monkeypatch.setattr(
@@ -327,6 +337,38 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     pytest_command = next(command for command, _capture in calls if command[:3] == [sys.executable, "-m", "pytest"])
     assert pytest_command[-2:] == [lane.TEST_PATH, lane.DIDCOMM_TEST_PATH]
     assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"
+    assert execution_environment["TRUST_REGISTRY_FIXTURE_REQUIRED"] == "true"
+    assert execution_environment["TRUST_REGISTRY_FIXTURE_CONTROL_URL"] == (
+        "http://127.0.0.1:32100"
+    )
+
+
+def test_registry_fixture_compose_is_project_scoped_and_immutable() -> None:
+    args = SimpleNamespace(run_id="product-boundary")
+
+    command = lane.trust_registry_fixture_command(args, "up")
+
+    assert command == [
+        "docker",
+        "compose",
+        "--project-name",
+        "marty-conformance-product-boundary-trust-registry",
+        "--file",
+        str(lane.TRUST_REGISTRY_FIXTURE_COMPOSE),
+        "up",
+        "--detach",
+        "--wait",
+    ]
+    compose = lane.TRUST_REGISTRY_FIXTURE_COMPOSE.read_text(encoding="utf-8")
+    assert "${MARTY_SERVICES_IMAGE:" in compose
+    assert "build:" not in compose
+    assert '"127.0.0.1::8080"' in compose
+    assert "external: true" in compose
+    assert 'user: "0:0"' in compose
+    assert "read_only: true" in compose
+    assert "no-new-privileges:true" in compose
+    assert "- ALL" in compose
+    assert "NET_BIND_SERVICE" in compose
 
 
 def test_pytest_diagnostic_is_bounded_and_redacts_private_values(

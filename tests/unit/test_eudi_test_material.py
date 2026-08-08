@@ -93,7 +93,11 @@ def test_generate_writes_short_lived_tls_chain_eudi_access_cert_and_private_envi
     assert ExtendedKeyUsageOID.SERVER_AUTH in tls_leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     assert tls_leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
         x509.DNSName
-    ) == [material.DEFAULT_HOSTNAME, "host.docker.internal"]
+    ) == [
+        material.DEFAULT_HOSTNAME,
+        "host.docker.internal",
+        material.TRUST_REGISTRY_FIXTURE_HOSTNAME,
+    ]
     assert (
         ExtendedKeyUsageOID.SERVER_AUTH in runner_leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     )

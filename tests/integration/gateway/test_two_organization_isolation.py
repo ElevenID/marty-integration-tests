@@ -15,11 +15,17 @@ import hashlib
 import json
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 from .helpers.auth_helper import AuthHelper
 from .helpers.didcomm import make_did_peer_2_with_service
@@ -35,6 +41,8 @@ FORBIDDEN_PUBLIC_SIGNING_SELECTORS = (
     "key_reference",
     "kms_provider",
 )
+TRUST_REGISTRY_URL = "https://trust-registry-fixture/marty-sync/v1"
+TRUST_REGISTRY_ENTRY_ID = "05ed925c-c01e-4f79-841e-09e5afec11c4"
 
 
 def _assert_cross_tenant_denied(error: GatewayClientError) -> None:
@@ -78,6 +86,93 @@ def _assert_no_private_signing_selectors(value: Any, *, path: str = "$") -> None
     elif isinstance(value, list):
         for index, child in enumerate(value):
             _assert_no_private_signing_selectors(child, path=f"{path}[{index}]")
+
+
+def _disposable_registry_ca() -> str:
+    """Create a public test anchor; its unused private key never leaves memory."""
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.now(UTC)
+    name = x509.Name(
+        [
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "ElevenID disposable registry"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "Owned registry test CA"),
+        ]
+    )
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(hours=6))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            critical=True,
+        )
+        .sign(private_key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+def _registry_feed(
+    *,
+    token: str,
+    sequence: int,
+    entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "sync_token": token,
+        "sequence": sequence,
+        "entries": entries,
+        "has_more": False,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+
+
+async def _configure_registry_fixture(feed: dict[str, Any]) -> dict[str, Any]:
+    control_url = os.getenv("TRUST_REGISTRY_FIXTURE_CONTROL_URL", "").strip()
+    token = os.getenv("TRUST_REGISTRY_FIXTURE_TOKEN", "").strip()
+    required = os.getenv("TRUST_REGISTRY_FIXTURE_REQUIRED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if not control_url or not token:
+        if required:
+            raise AssertionError("required trust-registry fixture is unavailable")
+        pytest.skip("owned trust-registry fixture is not enabled")
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(base_url=control_url, timeout=10.0) as client:
+        response = await client.post(
+            "/control/feed", json={"feed": feed}, headers=headers
+        )
+        assert response.status_code == 200, response.text
+        state = await client.get("/control/state", headers=headers)
+        assert state.status_code == 200, state.text
+        return state.json()
+
+
+async def _registry_fixture_state() -> dict[str, Any]:
+    control_url = os.environ["TRUST_REGISTRY_FIXTURE_CONTROL_URL"]
+    token = os.environ["TRUST_REGISTRY_FIXTURE_TOKEN"]
+    async with httpx.AsyncClient(base_url=control_url, timeout=10.0) as client:
+        response = await client.get(
+            "/control/state", headers={"Authorization": f"Bearer {token}"}
+        )
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 async def _next_sse_frame(lines: Any, *, timeout: float = 10.0) -> tuple[str, Any]:
@@ -855,6 +950,155 @@ async def test_public_signing_is_did_first_and_fails_closed(
         422,
     }, incompatible_response.text
     _assert_no_private_signing_selectors(incompatible_response.json())
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_external_trust_registry_sync_is_atomic_and_tenant_scoped(
+    authenticated_gateway_client: GatewayClient,
+) -> None:
+    """Exercise the released public sync route against an external HTTPS adapter.
+
+    This is ElevenID-owned product-security evidence, not an imported standards
+    assertion. The adapter certificate authority and registry anchor are
+    disposable test-agent material; Marty performs no signing with either key.
+    """
+    admin = authenticated_gateway_client
+    organization_b = await admin.create_organization(**TestDataBuilder.organization())
+    organization_b_id = str(organization_b["id"])
+    anchor_pem = _disposable_registry_ca()
+    initial_feed = _registry_feed(
+        token="registry-1",
+        sequence=1,
+        entries=[
+            {
+                "entry_id": TRUST_REGISTRY_ENTRY_ID,
+                "anchor_type": "CSCA",
+                "operation": "ADD",
+                "country_code": "US",
+                "certificate_pem": anchor_pem,
+                "source": "MANUAL",
+            }
+        ],
+    )
+    initial_state = await _configure_registry_fixture(initial_feed)
+    assert initial_state["request_count"] == 0
+
+    profile = await admin.create_trust_profile(
+        organization_id=organization_b_id,
+        name=f"External registry {uuid.uuid4().hex[:8]}",
+        trust_sources=[
+            {
+                "name": "Disposable Marty Sync registry",
+                "source_type": "TRUST_LIST",
+                "url": TRUST_REGISTRY_URL,
+                "registry_sync": {
+                    "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                    "refresh_interval_hours": 1,
+                },
+                "enabled": True,
+            }
+        ],
+        revocation_check_enabled=False,
+    )
+    profile_id = str(profile["id"])
+
+    # A URL-based registry cannot become effective trust before its first
+    # validated synchronization.
+    with pytest.raises(GatewayClientError) as unsynchronized_activation:
+        await admin.activate_trust_profile(profile_id)
+    assert unsynchronized_activation.value.status_code == 409
+
+    reviewer = GatewayClient()
+    reviewer.set_session(await _reviewer_session())
+    try:
+        before_foreign_attempt = await _registry_fixture_state()
+        foreign_sync = await reviewer.client.post(
+            f"/v1/trust-profiles/{profile_id}/registry-sync"
+        )
+        _assert_public_denial(
+            foreign_sync,
+            foreign_values=(organization_b_id, str(profile.get("name") or "")),
+        )
+        after_foreign_attempt = await _registry_fixture_state()
+        assert after_foreign_attempt["request_count"] == before_foreign_attempt["request_count"], (
+            "Cross-tenant registry synchronization reached the external adapter"
+        )
+    finally:
+        await reviewer.close()
+
+    synchronized = await admin.synchronize_trust_profile_registry(profile_id)
+    assert synchronized["trust_profile_id"] == profile_id
+    assert synchronized["sources"] == [
+        {
+            "url": TRUST_REGISTRY_URL,
+            "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+            "sequence": 1,
+            "csca_entries": 1,
+            "dsc_entries": 0,
+            "synchronized_at": synchronized["synchronized_at"],
+        }
+    ]
+    observed_initial = await _registry_fixture_state()
+    assert observed_initial["request_count"] == 1
+    assert observed_initial["last_since"] is None
+    assert observed_initial["last_host"] == "trust-registry-fixture"
+
+    activated = await admin.activate_trust_profile(profile_id)
+    assert activated["status"] == "ACTIVE"
+    serialized = json.dumps(activated, sort_keys=True)
+    for internal_field in (
+        "registry_entries",
+        "registry_sequence",
+        "registry_sync_token",
+    ):
+        assert internal_field not in serialized
+
+    # A malformed delta must leave token, sequence, and effective anchor
+    # unchanged. The next valid request therefore still carries registry-1.
+    await _configure_registry_fixture(
+        _registry_feed(
+            token="registry-invalid",
+            sequence=2,
+            entries=[
+                {
+                    "entry_id": str(uuid.uuid4()),
+                    "anchor_type": "CSCA",
+                    "operation": "ADD",
+                    "country_code": "US",
+                    "certificate_pem": "not a certificate",
+                    "source": "MANUAL",
+                }
+            ],
+        )
+    )
+    with pytest.raises(GatewayClientError) as invalid_delta:
+        await admin.synchronize_trust_profile_registry(profile_id)
+    assert invalid_delta.value.status_code == 502
+
+    await _configure_registry_fixture(
+        _registry_feed(token="registry-2", sequence=2, entries=[])
+    )
+    recovered = await admin.synchronize_trust_profile_registry(profile_id)
+    assert recovered["sources"][0]["sequence"] == 2
+    assert recovered["sources"][0]["csca_entries"] == 1
+    assert (await _registry_fixture_state())["last_since"] == "registry-1"
+
+    # Sequence rollback also fails closed and retains the last good cursor.
+    await _configure_registry_fixture(
+        _registry_feed(token="registry-rollback", sequence=1, entries=[])
+    )
+    with pytest.raises(GatewayClientError) as rollback:
+        await admin.synchronize_trust_profile_registry(profile_id)
+    assert rollback.value.status_code == 502
+
+    await _configure_registry_fixture(
+        _registry_feed(token="registry-3", sequence=3, entries=[])
+    )
+    final = await admin.synchronize_trust_profile_registry(profile_id)
+    assert final["sources"][0]["sequence"] == 3
+    assert final["sources"][0]["csca_entries"] == 1
+    assert (await _registry_fixture_state())["last_since"] == "registry-2"
 
 
 @pytest.mark.asyncio

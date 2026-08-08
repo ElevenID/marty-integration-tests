@@ -64,6 +64,7 @@ DNS_NAME = re.compile(
 )
 DEFAULT_HOSTNAME = "marty-oidf.test"
 OIDF_RUNNER_HOSTNAME = "localhost.emobix.co.uk"
+TRUST_REGISTRY_FIXTURE_HOSTNAME = "trust-registry-fixture"
 DEFAULT_PORTS = {
     "marty": 8443,
     "verifier": 28091,
@@ -727,7 +728,11 @@ def generate_material(
         # The same disposable certificate terminates the owned DIDComm holder
         # callback on the CI host. The issuance container reaches it through
         # Docker's explicit conformance-only host-gateway mapping.
-        dns_names=[hostname, "host.docker.internal"],
+        dns_names=[
+            hostname,
+            "host.docker.internal",
+            TRUST_REGISTRY_FIXTURE_HOSTNAME,
+        ],
         server_auth=True,
     )
     oidf_runner_tls_key = ec.generate_private_key(ec.SECP256R1())
