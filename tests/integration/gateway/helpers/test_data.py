@@ -12,11 +12,11 @@ from uuid import uuid4
 
 class TestDataBuilder:
     """Factory for creating test data"""
-    
+
     # =============================================================================
     # Organization Data
     # =============================================================================
-    
+
     @staticmethod
     def organization(
         name: Optional[str] = None,
@@ -29,43 +29,37 @@ class TestDataBuilder:
             "name": org_name,
             "display_name": display_name or f"Test Organization {unique_suffix}",
         }
-        
+
     # =============================================================================
     # Trust Profile Data
     # =============================================================================
-    
+
     @staticmethod
     def trust_profile(
         organization_id: str,
         name: Optional[str] = None,
-        trusted_issuers: Optional[List[Dict]] = None,
+        issuer_did: str = "did:example:issuer123",
     ) -> Dict[str, Any]:
-        """Create trust profile data"""
+        """Create current Marty Protocol trust-profile data."""
         return {
             "organization_id": organization_id,
             "name": name or f"test-trust-profile-{str(uuid4())[:8]}",
-            "trusted_issuers": trusted_issuers or [
-                {
-                    "issuer_id": "did:example:issuer123",
-                    "name": "Test Issuer",
-                    "trust_level": "high",
-                }
-            ],
+            "profile_type": "CUSTOM",
             "trust_sources": [
                 {
-                    "source_type": "did_registry",
-                    "url": "https://example.com/trust-list",
-                    "name": "Test Trust Source",
+                    "source_type": "PINNED_ISSUER",
+                    "issuer_did": issuer_did,
+                    "description": "Disposable issuer used by ElevenID-owned integration tests",
                 }
             ],
-            "trust_frameworks": ["eidas", "nist_800_63"],
-            "revocation_check_enabled": True,
+            "allowed_issuers": [issuer_did],
+            "supported_formats": ["SD_JWT_VC", "MDOC"],
         }
-    
+
     # =============================================================================
     # Compliance Profile Data
     # =============================================================================
-    
+
     @staticmethod
     def compliance_profile(
         organization_id: str,
@@ -114,11 +108,11 @@ class TestDataBuilder:
         if check_mode == "OFFLINE_GRACE":
             data["offline_grace_seconds"] = 900
         return data
-        
+
     # =============================================================================
     # Credential Template Data
     # =============================================================================
-    
+
     @staticmethod
     def mdl_template(
         organization_id: str,
@@ -130,7 +124,7 @@ class TestDataBuilder:
         """
         Create mobile driver's license (mDL) credential template.
         Follows org.iso.18013.5.1.mDL standard.
-        
+
         Args:
             organization_id: Organization ID
             name: Template name
@@ -188,7 +182,7 @@ class TestDataBuilder:
                 {"name": "driving_privileges", "display_name": "Driving Privileges", "required": True},
             ],
         }
-        
+
         # Include compliance profile if not provided via ID
         if not compliance_profile_id:
             data["compliance_profile"] = {
@@ -199,10 +193,10 @@ class TestDataBuilder:
             }
         else:
             data["compliance_profile_id"] = compliance_profile_id
-        
+
         if application_template_id:
             data["application_template_id"] = application_template_id
-        
+
         return data
 
     @staticmethod
@@ -275,8 +269,14 @@ class TestDataBuilder:
             "vct": "https://credentials.marty.dev/EmployeeBadge",
             "supported_formats": ["sd_jwt_vc"],
             "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
-            "wallet_configs": wallet_configs if wallet_configs is not None else [
-                {"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://", "format_variant": "spruce-vc+sd-jwt"}
+            "wallet_configs": wallet_configs
+            if wallet_configs is not None
+            else [
+                {
+                    "wallet_id": "marty",
+                    "deep_link_scheme": "openid-credential-offer://",
+                    "format_variant": "spruce-vc+sd-jwt",
+                }
             ],
             "compliance_profile": {
                 "name": "Enterprise VC Compliance",
@@ -304,16 +304,16 @@ class TestDataBuilder:
                 {"name": "department", "display_name": "Department", "required": True},
             ],
         }
-        
+
         if application_template_id:
             data["application_template_id"] = application_template_id
-        
+
         return data
-    
+
     # =============================================================================
     # Application Template Data
     # =============================================================================
-    
+
     @staticmethod
     def jwt_vc_template(
         organization_id: str,
@@ -342,8 +342,14 @@ class TestDataBuilder:
             # Explicit VCDM v1 format so the test is unambiguous even if the
             # server default changes in future.
             "credential_payload_format": "w3c_vcdm_v2_sd_jwt",  # falls into VCDM v1 branch
-            "wallet_configs": wallet_configs if wallet_configs is not None else [
-                {"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://", "format_variant": "spruce-vc+sd-jwt"}
+            "wallet_configs": wallet_configs
+            if wallet_configs is not None
+            else [
+                {
+                    "wallet_id": "marty",
+                    "deep_link_scheme": "openid-credential-offer://",
+                    "format_variant": "spruce-vc+sd-jwt",
+                }
             ],
             "compliance_profile": {
                 "name": "W3C VC Compliance",
@@ -401,8 +407,14 @@ class TestDataBuilder:
             "vct": "https://credentials.marty.dev/VerifiableId",
             "supported_formats": ["jwt_vc"],
             "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
-            "wallet_configs": wallet_configs if wallet_configs is not None else [
-                {"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://", "format_variant": "spruce-vc+sd-jwt"}
+            "wallet_configs": wallet_configs
+            if wallet_configs is not None
+            else [
+                {
+                    "wallet_id": "marty",
+                    "deep_link_scheme": "openid-credential-offer://",
+                    "format_variant": "spruce-vc+sd-jwt",
+                }
             ],
             "compliance_profile": {
                 "name": "W3C VC Compliance",
@@ -473,7 +485,8 @@ class TestDataBuilder:
             "credential_type": "org.iso.18013.5.1.mDL",
             "vct": "org.iso.18013.5.1.mDL",
             "supported_formats": ["zk_mdoc"],
-            "zk_predicate_claims": zk_predicate_claims or [
+            "zk_predicate_claims": zk_predicate_claims
+            or [
                 "birth_date",
                 "age_over_18",
                 "age_over_21",
@@ -617,11 +630,11 @@ class TestDataBuilder:
             "approval_strategy": "AUTO",
             "application_validity_days": 30,
         }
-        
+
     # =============================================================================
     # Application Data
     # =============================================================================
-    
+
     @staticmethod
     def mdl_application_data(
         given_name: str = "Alice",
@@ -645,7 +658,7 @@ class TestDataBuilder:
             "resident_country": "USA",
             "nationality": "USA",
         }
-        
+
     @staticmethod
     def mdl_claims(
         given_name: str = "Alice",
@@ -656,7 +669,7 @@ class TestDataBuilder:
         """Create mDL credential claims"""
         issue_date = datetime.now()
         expiry_date = issue_date + timedelta(days=365 * 5)  # 5 years
-        
+
         return {
             "family_name": family_name,
             "given_name": given_name,
@@ -681,7 +694,7 @@ class TestDataBuilder:
             "age_over_18": True,
             "age_over_21": True,
         }
-        
+
     @staticmethod
     def employee_badge_claims(
         employee_id: Optional[str] = None,
@@ -697,11 +710,11 @@ class TestDataBuilder:
             "department": "Engineering",
             "email": f"{given_name.lower()}.{family_name.lower()}@example.com",
         }
-        
+
     # =============================================================================
     # Presentation Policy Data
     # =============================================================================
-    
+
     @staticmethod
     def presentation_policy_age_verification(
         organization_id: str,
@@ -731,7 +744,7 @@ class TestDataBuilder:
                 }
             ],
         }
-        
+
     @staticmethod
     def presentation_policy_identity_verification(
         organization_id: str,
@@ -775,7 +788,7 @@ class TestDataBuilder:
                 }
             ],
         }
-        
+
     @staticmethod
     def presentation_policy_employee_access(
         organization_id: str,
@@ -804,18 +817,16 @@ class TestDataBuilder:
                 }
             ],
         }
-        
+
         if required_department:
-            policy["credential_requirements"][0]["claim_constraints"] = {
-                "department": {"equals": required_department}
-            }
-            
+            policy["credential_requirements"][0]["claim_constraints"] = {"department": {"equals": required_department}}
+
         return policy
-        
+
     # =============================================================================
     # Evidence Data
     # =============================================================================
-    
+
     @staticmethod
     def portrait_evidence() -> Dict[str, Any]:
         """Create portrait evidence (base64 placeholder)"""
@@ -824,9 +835,9 @@ class TestDataBuilder:
             "evidence_type": "portrait",
             "evidence_data": {
                 "portrait": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-            }
+            },
         }
-        
+
     @staticmethod
     def identity_document_evidence() -> Dict[str, Any]:
         """Create identity document evidence"""
@@ -835,13 +846,13 @@ class TestDataBuilder:
             "evidence_data": {
                 "identity_document_front": "base64_encoded_front_image",
                 "identity_document_back": "base64_encoded_back_image",
-            }
+            },
         }
-    
+
     # =============================================================================
     # Deployment Profile Data
     # =============================================================================
-    
+
     @staticmethod
     def deployment_profile(
         organization_id: str,
@@ -875,7 +886,7 @@ class TestDataBuilder:
         if trust_profile_id:
             data["trust_profile_id"] = trust_profile_id
         return data
-    
+
     @staticmethod
     def lane(
         deployment_profile_id: str,
@@ -896,11 +907,11 @@ class TestDataBuilder:
                 "operator_info": "Security Staff",
             },
         }
-    
+
     # =============================================================================
     # ZK Predicate Presentation Policy Data
     # =============================================================================
-    
+
     @staticmethod
     def presentation_policy_zk_age_verification(
         organization_id: str,
@@ -910,7 +921,7 @@ class TestDataBuilder:
         fallback_policy: str = "accept_raw",
     ) -> Dict[str, Any]:
         """Create presentation policy with ZK predicate for age verification.
-        
+
         Requests a zero-knowledge range proof for age instead of raw birth_date.
         Follows the predicate_spec configuration from Digital_Identity_model.md.
         """
@@ -958,27 +969,29 @@ class TestDataBuilder:
         return {
             "organization_id": organization_id,
             "name": name or f"icao-trust-profile-{str(uuid4())[:8]}",
-            "trusted_issuers": [
-                {
-                    "issuer_id": "csca:test:001",
-                    "name": "Test Country Signing CA",
-                    "trust_level": "high",
-                }
-            ],
+            "profile_type": "ICAO",
             "trust_sources": [
                 {
                     "source_type": "PKD_URL",
                     "url": "https://pkd.example.com/csca",
-                    "name": "ICAO PKD (Test)",
+                    "description": "Disposable ICAO PKD integration endpoint",
+                    "registry_sync": {
+                        "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                        "refresh_interval_hours": 24,
+                    },
                 },
                 {
                     "source_type": "TRUST_LIST",
                     "url": "https://trust.example.com/icao",
-                    "name": "ICAO Trust List (Test)",
+                    "description": "Disposable ICAO trust-list integration endpoint",
+                    "registry_sync": {
+                        "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                        "refresh_interval_hours": 24,
+                    },
                 },
             ],
-            "trust_frameworks": ["icao"],
-            "revocation_check_enabled": True,
+            "supported_formats": ["MDOC"],
+            "compatible_compliance_codes": ["ICAO_DTC", "ICAO_MRZ"],
         }
 
     @staticmethod
@@ -1162,13 +1175,9 @@ class TestDataBuilder:
                 "expiry_date": expiry_date.strftime("%Y-%m-%d"),
             },
             "data_group_2": (
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
-                "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
             ),
-            "sod": (
-                "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Z3VS5JJcds3xfn/"
-                "placeholder_sod_for_test_only"
-            ),
+            "sod": ("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Z3VS5JJcds3xfn/placeholder_sod_for_test_only"),
             "document_number": doc_number,
             "issuing_authority": issuing_authority,
             "expiry_date": expiry_date.strftime("%Y-%m-%d"),
@@ -1276,8 +1285,7 @@ class TestDataBuilder:
         # MRZ service will compute/validate them).
         line1 = f"P<{issuing_state}{surname}<<{given_names}".ljust(44, "<")
         line2 = (
-            f"{passport_number}{'<' * (9 - len(passport_number))}"
-            f"0{nationality}{birth_date}0{sex}{expiry_date}0"
+            f"{passport_number}{'<' * (9 - len(passport_number))}0{nationality}{birth_date}0{sex}{expiry_date}0"
         ).ljust(44, "<")
         return {
             "mrz_line_1": line1[:44],

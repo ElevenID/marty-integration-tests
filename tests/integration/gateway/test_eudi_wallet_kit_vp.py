@@ -292,14 +292,12 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
             name=f"EUDI VP mDoc trust ({uuid.uuid4().hex[:6]})",
             trust_sources=[
                 {
-                    "name": "Disposable EUDI test IACA",
                     "source_type": "ROOT_CA",
                     "certificate_pem": certificate.trust_anchor_pem,
                     "description": ("Ephemeral trust anchor for the production-path EUDI interoperability lane"),
-                    "enabled": True,
                 }
             ],
-            revocation_check_enabled=False,
+            revocation_policy={"check_mode": "SKIP"},
         )
     with eudi_stage("mdoc-trust-profile-activate"):
         trust_profile = await authenticated_gateway_client.activate_trust_profile(trust_profile["id"])
@@ -787,9 +785,7 @@ class TestOID4VPSdJwtPresentation:
             organization_id=vp_age_policy["organization_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            flow["instance_id"]
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
         vp_token = await wallet_kit.build_vp_token(
             credential=issued_sd_jwt_credential["credential"],
             audience=auth_req["client_id"],
@@ -810,9 +806,7 @@ class TestOID4VPSdJwtPresentation:
         callback = _verifier_response_body(first)
         assert "decision" not in callback
         assert "verified_claims" not in callback
-        accepted = await authenticated_gateway_client.get_verification_decision(
-            flow["instance_id"]
-        )
+        accepted = await authenticated_gateway_client.get_verification_decision(flow["instance_id"])
         assert accepted["status"] == "COMPLETED"
         assert accepted["result"] == "passed"
         assert accepted["decision"] == "allow"
@@ -846,18 +840,14 @@ class TestOID4VPSdJwtPresentation:
             organization_id=vp_age_policy["organization_id"],
             issuer_did=vp_age_policy["_request_object_issuer_did"],
         )
-        auth_req = await authenticated_gateway_client.get_verification_request(
-            flow["instance_id"]
-        )
+        auth_req = await authenticated_gateway_client.get_verification_request(flow["instance_id"])
         valid_token = await wallet_kit.build_vp_token(
             credential=issued_sd_jwt_credential["credential"],
             audience=auth_req["client_id"],
             nonce=auth_req["nonce"],
         )
         tampered_token = _tamper_key_binding_signature(valid_token)
-        assert (
-            tampered_token != valid_token
-        ), "eudi-invariant-tamper-mutated-token"
+        assert tampered_token != valid_token, "eudi-invariant-tamper-mutated-token"
 
         result = await wallet_kit.direct_post_presentation(
             response_uri=auth_req["response_uri"],
@@ -876,40 +866,26 @@ class TestOID4VPSdJwtPresentation:
         # decision. A protocol-safe callback may therefore be either 2xx with
         # a stored deny or 4xx with a retryable flow.
         callback_status = result.get("responseStatus")
-        assert (
-            isinstance(callback_status, int) and 200 <= callback_status < 500
-        ), "eudi-invariant-tamper-callback-status"
+        assert isinstance(callback_status, int) and 200 <= callback_status < 500, (
+            "eudi-invariant-tamper-callback-status"
+        )
         response_body = result.get("responseBody")
         if isinstance(response_body, str) and response_body:
             # Error callbacks are allowed to be empty or non-JSON, but they
             # must never disclose the verifier's internal decision/claims.
-            assert (
-                '"decision"' not in response_body
-            ), "eudi-invariant-tamper-public-decision-leak"
-            assert (
-                '"verified_claims"' not in response_body
-            ), "eudi-invariant-tamper-public-claims-leak"
+            assert '"decision"' not in response_body, "eudi-invariant-tamper-public-decision-leak"
+            assert '"verified_claims"' not in response_body, "eudi-invariant-tamper-public-claims-leak"
 
         try:
-            decision = await authenticated_gateway_client.get_verification_decision(
-                flow["instance_id"]
-            )
+            decision = await authenticated_gateway_client.get_verification_decision(flow["instance_id"])
         except GatewayClientError as exc:
             # Rejecting an invalid wallet response before finalization leaves
             # the flow retryable and therefore has no final result resource.
             # Only that explicit not-finalized response is acceptable here.
             if exc.status_code not in {404, 409}:
-                raise AssertionError(
-                    "eudi-invariant-tamper-result-lookup"
-                ) from exc
-            assert (
-                400 <= callback_status < 500
-            ), "eudi-invariant-tamper-pending-callback-status"
-            flow_state = (
-                await authenticated_gateway_client.get_verification_result(
-                    flow["instance_id"]
-                )
-            )
+                raise AssertionError("eudi-invariant-tamper-result-lookup") from exc
+            assert 400 <= callback_status < 500, "eudi-invariant-tamper-pending-callback-status"
+            flow_state = await authenticated_gateway_client.get_verification_result(flow["instance_id"])
             assert flow_state["status"] in {
                 "pending",
                 "waiting",
@@ -920,24 +896,15 @@ class TestOID4VPSdJwtPresentation:
         else:
             # Implementations that finalize a cryptographic rejection must
             # expose a deny—not an allow—through the authenticated RP API.
-            assert (
-                decision["status"] == "COMPLETED"
-            ), "eudi-invariant-tamper-final-status"
-            final_decision = str(
-                decision.get("decision", "")
-            ).strip().lower()
+            assert decision["status"] == "COMPLETED", "eudi-invariant-tamper-final-status"
+            final_decision = str(decision.get("decision", "")).strip().lower()
             decision_category = (
                 final_decision.replace("_", "-")
-                if final_decision
-                in {"allow", "deny", "manual_review", "reject", "rejected"}
+                if final_decision in {"allow", "deny", "manual_review", "reject", "rejected"}
                 else "unknown"
             )
-            assert final_decision == "deny", (
-                f"eudi-invariant-tamper-final-decision-{decision_category}"
-            )
-            assert (
-                decision["verified_claims"] == {}
-            ), "eudi-invariant-tamper-final-claims"
+            assert final_decision == "deny", f"eudi-invariant-tamper-final-decision-{decision_category}"
+            assert decision["verified_claims"] == {}, "eudi-invariant-tamper-final-claims"
 
     @pytest.mark.asyncio
     async def test_expired_request_is_rejected_during_official_resolution(
@@ -1240,23 +1207,14 @@ class TestMDocPresentation:
         verification = None
         if result.get("success") is not True:
             with eudi_stage("mdoc-presentation-verification-result"):
-                verification = (
-                    await authenticated_gateway_client.get_verification_decision(
-                        flow["instance_id"]
-                    )
-                )
+                verification = await authenticated_gateway_client.get_verification_decision(flow["instance_id"])
         require_presentation_accepted(
             result,
             stage="mdoc-presentation",
             expected_mode="direct_post",
             verification_result=verification,
         )
-        verification = (
-            verification
-            or await authenticated_gateway_client.get_verification_decision(
-                flow["instance_id"]
-            )
-        )
+        verification = verification or await authenticated_gateway_client.get_verification_decision(flow["instance_id"])
         assert verification["status"] == "COMPLETED", verification
         assert verification["result"] == "passed", verification
         assert verification["decision"] == "allow", verification

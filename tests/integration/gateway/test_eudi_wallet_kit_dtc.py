@@ -175,14 +175,12 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
             name=f"EUDI DTC trust ({uuid.uuid4().hex[:6]})",
             trust_sources=[
                 {
-                    "name": "Disposable DTC test CSCA",
                     "source_type": "ROOT_CA",
                     "certificate_pem": certificate.trust_anchor_pem,
                     "description": ("Ephemeral trust anchor for the production-path EUDI DTC interoperability lane"),
-                    "enabled": True,
                 }
             ],
-            revocation_check_enabled=False,
+            revocation_policy={"check_mode": "SKIP"},
         )
     with eudi_stage("dtc-trust-profile-activate"):
         trust_profile = await authenticated_gateway_client.activate_trust_profile(trust_profile["id"])
@@ -502,11 +500,7 @@ class TestDtcWalletPresentation:
         verification = None
         if result.get("success") is not True:
             with eudi_stage("dtc-presentation-verification-result"):
-                verification = (
-                    await authenticated_gateway_client.get_verification_decision(
-                        flow["instance_id"]
-                    )
-                )
+                verification = await authenticated_gateway_client.get_verification_decision(flow["instance_id"])
         require_presentation_accepted(
             result,
             stage="dtc-presentation",
@@ -542,11 +536,7 @@ class TestDtcWalletPresentation:
         verification = None
         if result.get("success") is not True:
             with eudi_stage("dtc-identity-presentation-verification-result"):
-                verification = (
-                    await authenticated_gateway_client.get_verification_decision(
-                        flow["instance_id"]
-                    )
-                )
+                verification = await authenticated_gateway_client.get_verification_decision(flow["instance_id"])
         require_presentation_accepted(
             result,
             stage="dtc-identity-presentation",
@@ -656,11 +646,7 @@ class TestDtcWalletEndToEnd:
         verification = None
         if post_result.get("success") is not True:
             with eudi_stage("dtc-lifecycle-presentation-verification-result"):
-                verification = (
-                    await authenticated_gateway_client.get_verification_decision(
-                        instance_id
-                    )
-                )
+                verification = await authenticated_gateway_client.get_verification_decision(instance_id)
         require_presentation_accepted(
             post_result,
             stage="dtc-lifecycle-presentation",
@@ -669,12 +655,7 @@ class TestDtcWalletEndToEnd:
         logger.info("[DTC E2E] VP token accepted by verifier")
 
         # 7. Check verification result
-        result = (
-            verification
-            or await authenticated_gateway_client.get_verification_decision(
-                instance_id
-            )
-        )
+        result = verification or await authenticated_gateway_client.get_verification_decision(instance_id)
         logger.info("[DTC E2E] Verification result: status=%s", result.get("status"))
 
         status = result.get("status", "").upper()

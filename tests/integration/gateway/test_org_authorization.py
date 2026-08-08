@@ -27,6 +27,7 @@ from .helpers.gateway_client import GatewayClient
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _foreign_org_id() -> str:
     """Return a random org UUID the authenticated test user is definitely not in."""
     return str(uuid.uuid4())
@@ -43,13 +44,11 @@ def _assert_attack_blocked(response, foreign_org_id: str, *, resource_name: str 
     if response.status_code == 200:
         data = response.json()
         assert data.get("organization_id") != foreign_org_id, (
-            f"{resource_name} was created in foreign org {foreign_org_id} — "
-            f"BOLA not blocked! Response: {response.text}"
+            f"{resource_name} was created in foreign org {foreign_org_id} — BOLA not blocked! Response: {response.text}"
         )
     else:
         assert response.status_code in (403, 404, 422), (
-            f"Expected 403/404/422 for {resource_name} cross-org attack, "
-            f"got {response.status_code}: {response.text}"
+            f"Expected 403/404/422 for {resource_name} cross-org attack, got {response.status_code}: {response.text}"
         )
 
 
@@ -75,14 +74,13 @@ def _assert_cross_org_denied(response, *, action_name: str) -> None:
 # Membership access enforcement
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.usefixtures("all_services_ready")
 class TestOrganizationMembershipEnforcement:
     """Test that OrgAuthMiddleware enforces membership on org-scoped routes."""
 
     @pytest.mark.asyncio
-    async def test_non_member_cannot_access_org_details(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_non_member_cannot_access_org_details(self, gateway_client: GatewayClient):
         """Authenticated user accessing an org they are NOT a member of gets 403."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.get(f"/v1/organizations/{org_b_id}")
@@ -109,14 +107,13 @@ class TestOrganizationMembershipEnforcement:
 # Cross-organization attack prevention (CREATE)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.usefixtures("all_services_ready")
 class TestCrossOrganizationAttacks:
     """Users cannot perform actions across organization boundaries."""
 
     @pytest.mark.asyncio
-    async def test_cannot_invite_to_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_invite_to_other_org(self, gateway_client: GatewayClient):
         """Admin in Org A cannot invite members to a foreign Org B."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -127,9 +124,7 @@ class TestCrossOrganizationAttacks:
         assert "Not a member" in response.json().get("detail", "")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_api_keys_for_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_api_keys_for_other_org(self, gateway_client: GatewayClient):
         """Admin in Org A cannot create API keys for a foreign Org B."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -140,20 +135,14 @@ class TestCrossOrganizationAttacks:
         assert "Not a member" in response.json().get("detail", "")
 
     @pytest.mark.asyncio
-    async def test_cannot_access_other_org_members(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_access_other_org_members(self, gateway_client: GatewayClient):
         """Authenticated user cannot list members of a foreign organization."""
         org_b_id = _foreign_org_id()
-        response = await gateway_client.client.get(
-            f"/v1/organizations/{org_b_id}/members"
-        )
+        response = await gateway_client.client.get(f"/v1/organizations/{org_b_id}/members")
         assert response.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_cannot_create_credential_template_in_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_credential_template_in_other_org(self, gateway_client: GatewayClient):
         """User cannot create credential templates for a foreign organization."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -175,9 +164,7 @@ class TestCrossOrganizationAttacks:
         _assert_attack_blocked(response, org_b_id, resource_name="Credential template")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_compliance_profile_in_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_compliance_profile_in_other_org(self, gateway_client: GatewayClient):
         """User cannot create compliance profiles for a foreign organization."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -192,9 +179,7 @@ class TestCrossOrganizationAttacks:
         _assert_attack_blocked(response, org_b_id, resource_name="Compliance profile")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_revocation_profile_in_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_revocation_profile_in_other_org(self, gateway_client: GatewayClient):
         """User cannot create revocation profiles for a foreign organization."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -211,9 +196,7 @@ class TestCrossOrganizationAttacks:
         _assert_attack_blocked(response, org_b_id, resource_name="Revocation profile")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_trust_profile_in_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_trust_profile_in_other_org(self, gateway_client: GatewayClient):
         """User cannot create trust profiles for a foreign organization."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -221,17 +204,19 @@ class TestCrossOrganizationAttacks:
             json={
                 "organization_id": org_b_id,
                 "name": "Foreign Trust Profile",
-                "trusted_issuers": [],
-                "trust_frameworks": ["eidas"],
-                "revocation_check_enabled": True,
+                "profile_type": "CUSTOM",
+                "trust_sources": [
+                    {
+                        "source_type": "PINNED_ISSUER",
+                        "issuer_did": "did:example:foreign-issuer",
+                    }
+                ],
             },
         )
         _assert_attack_blocked(response, org_b_id, resource_name="Trust profile")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_deployment_profile_in_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_deployment_profile_in_other_org(self, gateway_client: GatewayClient):
         """User cannot create deployment profiles for a foreign organization."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -246,9 +231,7 @@ class TestCrossOrganizationAttacks:
         _assert_attack_blocked(response, org_b_id, resource_name="Deployment profile")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_flow_definition_in_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_flow_definition_in_other_org(self, gateway_client: GatewayClient):
         """User cannot create flow definitions for a foreign organization."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -263,9 +246,7 @@ class TestCrossOrganizationAttacks:
         _assert_attack_blocked(response, org_b_id, resource_name="Flow definition")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_application_template_in_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_application_template_in_other_org(self, gateway_client: GatewayClient):
         """User cannot create application templates for a foreign organization."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -280,9 +261,7 @@ class TestCrossOrganizationAttacks:
         _assert_attack_blocked(response, org_b_id, resource_name="Application template")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_presentation_policy_in_other_org(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_presentation_policy_in_other_org(self, gateway_client: GatewayClient):
         """User cannot create presentation policies for a foreign organization."""
         org_b_id = _foreign_org_id()
         response = await gateway_client.client.post(
@@ -303,9 +282,7 @@ class TestCrossOrganizationAttacks:
         _assert_attack_blocked(response, org_b_id, resource_name="Presentation policy")
 
     @pytest.mark.asyncio
-    async def test_cannot_create_lane_under_foreign_deployment_profile(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_create_lane_under_foreign_deployment_profile(self, gateway_client: GatewayClient):
         """User cannot create a lane under another org's deployment profile."""
         foreign_profile_id = str(uuid.uuid4())
         response = await gateway_client.client.post(
@@ -323,14 +300,10 @@ class TestCrossOrganizationAttacks:
         )
 
     @pytest.mark.asyncio
-    async def test_cannot_generate_api_key_for_foreign_deployment_profile(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_generate_api_key_for_foreign_deployment_profile(self, gateway_client: GatewayClient):
         """User cannot generate an API key for another org's deployment profile."""
         foreign_profile_id = str(uuid.uuid4())
-        response = await gateway_client.client.post(
-            f"/v1/deployment-profiles/{foreign_profile_id}/generate-api-key"
-        )
+        response = await gateway_client.client.post(f"/v1/deployment-profiles/{foreign_profile_id}/generate-api-key")
         _assert_proxy_attack_blocked(
             response,
             action_name="Deployment API key generation for foreign profile",
@@ -340,6 +313,7 @@ class TestCrossOrganizationAttacks:
 # ---------------------------------------------------------------------------
 # Cross-organization attack prevention (READ / UPDATE / DELETE)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.usefixtures("all_services_ready")
 class TestCrossOrgReadUpdateDelete:
@@ -414,9 +388,7 @@ class TestCrossOrgReadUpdateDelete:
         _assert_cross_org_denied(resp, action_name="DELETE foreign deployment profile")
 
     @pytest.mark.asyncio
-    async def test_cannot_list_resources_with_foreign_org_filter(
-        self, gateway_client: GatewayClient
-    ):
+    async def test_cannot_list_resources_with_foreign_org_filter(self, gateway_client: GatewayClient):
         """Listing resources filtered to a foreign org returns empty or 403."""
         foreign = _foreign_org_id()
         for resource in [
@@ -426,20 +398,16 @@ class TestCrossOrgReadUpdateDelete:
             "revocation-profiles",
             "presentation-policies",
         ]:
-            resp = await gateway_client.client.get(
-                f"/v1/{resource}", params={"organization_id": foreign}
-            )
+            resp = await gateway_client.client.get(f"/v1/{resource}", params={"organization_id": foreign})
             if resp.status_code == 200:
                 data = resp.json()
                 items = data if isinstance(data, list) else data.get("items", data.get("results", []))
                 assert len(items) == 0, (
-                    f"GET /v1/{resource}?organization_id={foreign} leaked data: "
-                    f"{len(items)} items returned"
+                    f"GET /v1/{resource}?organization_id={foreign} leaked data: {len(items)} items returned"
                 )
             else:
                 assert resp.status_code in (403, 404), (
-                    f"GET /v1/{resource}?organization_id={foreign} returned "
-                    f"{resp.status_code}: {resp.text}"
+                    f"GET /v1/{resource}?organization_id={foreign} returned {resp.status_code}: {resp.text}"
                 )
 
 
@@ -447,22 +415,26 @@ class TestCrossOrgReadUpdateDelete:
 # Own-org positive CRUD paths
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.usefixtures("all_services_ready")
 class TestOwnOrgResourceCRUD:
     """Admin can create, read, list, update, and delete resources in own org."""
 
     @pytest.mark.asyncio
-    async def test_trust_profile_lifecycle(
-        self, gateway_client: GatewayClient, test_organization: dict
-    ):
+    async def test_trust_profile_lifecycle(self, gateway_client: GatewayClient, test_organization: dict):
         org_id = test_organization["id"]
 
         # Create
         profile = await gateway_client.create_trust_profile(
             organization_id=org_id,
             name=f"test-tp-{uuid.uuid4().hex[:8]}",
-            trust_frameworks=["eidas"],
-            trust_sources=[{"type": "did_web", "url": "https://example.com"}],
+            profile_type="EUDI",
+            trust_sources=[
+                {
+                    "source_type": "PINNED_ISSUER",
+                    "issuer_did": "did:web:example.com",
+                }
+            ],
         )
         profile_id = profile["id"]
         assert profile["organization_id"] == org_id
@@ -481,9 +453,7 @@ class TestOwnOrgResourceCRUD:
         await gateway_client.delete_trust_profile(profile_id)
 
     @pytest.mark.asyncio
-    async def test_compliance_profile_lifecycle(
-        self, gateway_client: GatewayClient, test_organization: dict
-    ):
+    async def test_compliance_profile_lifecycle(self, gateway_client: GatewayClient, test_organization: dict):
         org_id = test_organization["id"]
 
         profile = await gateway_client.create_compliance_profile(
@@ -505,9 +475,7 @@ class TestOwnOrgResourceCRUD:
         await gateway_client.delete_compliance_profile(profile_id)
 
     @pytest.mark.asyncio
-    async def test_revocation_profile_lifecycle(
-        self, gateway_client: GatewayClient, test_organization: dict
-    ):
+    async def test_revocation_profile_lifecycle(self, gateway_client: GatewayClient, test_organization: dict):
         org_id = test_organization["id"]
 
         profile = await gateway_client.create_revocation_profile(
@@ -532,9 +500,7 @@ class TestOwnOrgResourceCRUD:
         reason="Deployment profiles require Enterprise plan; test org is on free tier",
         raises=Exception,
     )
-    async def test_deployment_profile_and_lane_lifecycle(
-        self, gateway_client: GatewayClient, test_organization: dict
-    ):
+    async def test_deployment_profile_and_lane_lifecycle(self, gateway_client: GatewayClient, test_organization: dict):
         org_id = test_organization["id"]
 
         # Create deployment profile
@@ -566,10 +532,7 @@ class TestOwnOrgResourceCRUD:
         assert fetched_lane["id"] == lane_id
 
         lanes = await gateway_client.list_lanes(profile_id)
-        lane_ids = [
-            item["id"]
-            for item in (lanes if isinstance(lanes, list) else lanes.get("items", []))
-        ]
+        lane_ids = [item["id"] for item in (lanes if isinstance(lanes, list) else lanes.get("items", []))]
         assert lane_id in lane_ids
 
         # Delete lane, then profile
@@ -577,9 +540,7 @@ class TestOwnOrgResourceCRUD:
         await gateway_client.delete_deployment_profile(profile_id)
 
     @pytest.mark.asyncio
-    async def test_presentation_policy_lifecycle(
-        self, gateway_client: GatewayClient, test_organization: dict
-    ):
+    async def test_presentation_policy_lifecycle(self, gateway_client: GatewayClient, test_organization: dict):
         org_id = test_organization["id"]
 
         # Presentation policies require a real credential template
@@ -631,9 +592,7 @@ class TestOwnOrgResourceCRUD:
             await gateway_client.delete_credential_template(template_id)
 
     @pytest.mark.asyncio
-    async def test_application_template_lifecycle(
-        self, gateway_client: GatewayClient, test_organization: dict
-    ):
+    async def test_application_template_lifecycle(self, gateway_client: GatewayClient, test_organization: dict):
         org_id = test_organization["id"]
 
         template = await gateway_client.create_application_template(
