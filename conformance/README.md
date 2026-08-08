@@ -636,7 +636,8 @@ when that status changes.
 ## Manual production-path interoperability workflow
 
 Run **Official interoperability** from the Actions tab to execute one lane or
-all four lanes. The workflow downloads the reviewed `marty-ui` release
+all seven lanes: OID4VCI issuer, OID4VP Final, native OID4VP URL-query,
+OID4VP mdoc, HAIP, W3C VC Data Model v2, and EUDI. The workflow downloads the reviewed `marty-ui` release
 manifest named in `stack-under-test.json`, checks its independent SHA-256 and
 GitHub attestation, verifies each OCI attestation, and checks out the exact
 Marty commit recorded by that release. A tag override is accepted only when
@@ -688,11 +689,12 @@ sentinel, and a passing `evidence.json` cannot be written unless all required
 assertions appear exactly once and pass. This prevents a suite refactor from
 silently deleting the tests behind a published claim.
 
-The stack pin records immutable `marty-ui` release `v1.1.34` as `ready`, with
-the independently downloaded `stack-manifest.json` SHA-256 recorded in
-`stack-under-test.json`. Execution hard-fails if the released asset, its
+The stack pin records immutable `marty-ui` release `v1.1.122` as `ready`, with
+`stack-manifest.json` SHA-256
+`sha256:5b1e51c1992e9cbb0e59c9e16bbb2be8f0a40e1860659943d923dd97f6d1e79b`
+recorded in `stack-under-test.json`. Execution hard-fails if the released asset, its
 attestation, or any digest-pinned component differs from that reviewed pin.
-The official interoperability workflow runs all four lanes monthly on the
+The official interoperability workflow runs all seven lanes monthly on the
 eighth day and remains manually dispatchable by lane. The separate monthly
 `official-suite-updates.yml` workflow checks upstreams on the first day and
 creates or refreshes one draft review PR when any official suite or the
