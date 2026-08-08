@@ -4,10 +4,10 @@ services:
     pull_policy: always
     entrypoint: ["python"]
     command: ["/fixture/trust_registry_fixture.py"]
-    # Generated private material remains mode 0600. Run this disposable
-    # read-only process as root solely to read that mount and bind HTTPS/443,
-    # then retain only the bind-service capability.
-    user: "0:0"
+    # Generated private material remains mode 0600. Run as the owning host
+    # identity so Linux bind mounts stay readable without DAC_OVERRIDE. The
+    # process receives only the capability needed to bind HTTPS/443.
+    user: "${TRUST_REGISTRY_FIXTURE_UID:?set the fixture file-owner UID}:${TRUST_REGISTRY_FIXTURE_GID:?set the fixture file-owner GID}"
     read_only: true
     cap_drop:
       - ALL
