@@ -1031,7 +1031,7 @@ async def test_external_trust_registry_sync_is_atomic_and_tenant_scoped(
     assert observed_initial["last_host"] == "trust-registry-fixture"
 
     activated = await admin.activate_trust_profile(profile_id)
-    assert activated["status"] == "ACTIVE"
+    assert activated["status"] == "active"
     serialized = json.dumps(activated, sort_keys=True)
     for internal_field in (
         "registry_entries",
