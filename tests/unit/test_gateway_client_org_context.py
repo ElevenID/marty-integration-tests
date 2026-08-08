@@ -10,6 +10,73 @@ from tests.integration.gateway.helpers.gateway_client import GatewayClient
 from tests.integration.gateway.helpers.test_data import TestDataBuilder
 
 
+def test_trust_profile_builder_uses_current_marty_protocol_contract() -> None:
+    payload = TestDataBuilder.trust_profile(
+        organization_id="org-1",
+        issuer_did="did:web:issuer.example",
+    )
+
+    assert payload["profile_type"] == "CUSTOM"
+    assert payload["allowed_issuers"] == ["did:web:issuer.example"]
+    assert payload["trust_sources"] == [
+        {
+            "source_type": "PINNED_ISSUER",
+            "issuer_did": "did:web:issuer.example",
+            "description": "Disposable issuer used by ElevenID-owned integration tests",
+        }
+    ]
+    assert not {
+        "trusted_issuers",
+        "trust_frameworks",
+        "revocation_check_enabled",
+    }.intersection(payload)
+
+
+@pytest.mark.asyncio
+async def test_trust_profile_client_posts_only_current_marty_protocol_fields() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(return_value={"id": "trust-1"})
+    client._request = request
+
+    try:
+        result = await client.create_trust_profile(
+            organization_id="org-1",
+            name="Current trust policy",
+            profile_type="EUDI",
+            trust_sources=[
+                {
+                    "source_type": "PINNED_ISSUER",
+                    "issuer_did": "did:web:issuer.example",
+                }
+            ],
+            revocation_policy={"check_mode": "SKIP"},
+            allowed_issuers=[],
+            supported_formats=["SD_JWT_VC"],
+        )
+    finally:
+        await client.close()
+
+    assert result == {"id": "trust-1"}
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/trust-profiles",
+        json={
+            "organization_id": "org-1",
+            "name": "Current trust policy",
+            "profile_type": "EUDI",
+            "trust_sources": [
+                {
+                    "source_type": "PINNED_ISSUER",
+                    "issuer_did": "did:web:issuer.example",
+                }
+            ],
+            "revocation_policy": {"check_mode": "SKIP"},
+            "supported_formats": ["SD_JWT_VC"],
+            "allowed_issuers": [],
+        },
+    )
+
+
 def test_sd_jwt_template_builder_uses_current_profile_reference_contract() -> None:
     payload = TestDataBuilder.sd_jwt_mdl_template(
         organization_id="org-1",
@@ -403,15 +470,11 @@ async def test_application_template_helper_uses_only_current_mip_contract() -> N
 @pytest.mark.asyncio
 async def test_activate_application_template_uses_public_lifecycle_route() -> None:
     client = GatewayClient("https://gateway.example")
-    request = AsyncMock(
-        return_value={"id": "application-template-1", "status": "ACTIVE"}
-    )
+    request = AsyncMock(return_value={"id": "application-template-1", "status": "ACTIVE"})
     client._request = request
 
     try:
-        result = await client.activate_application_template(
-            "application-template-1"
-        )
+        result = await client.activate_application_template("application-template-1")
     finally:
         await client.close()
 

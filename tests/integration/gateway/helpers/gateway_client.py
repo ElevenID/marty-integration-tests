@@ -269,34 +269,44 @@ class GatewayClient:
         self,
         organization_id: str,
         name: str,
-        trusted_issuers: Optional[List[Dict]] = None,
+        *,
+        description: Optional[str] = None,
+        profile_type: Optional[str] = None,
         trust_sources: Optional[List[Dict]] = None,
-        trust_frameworks: Optional[List[str]] = None,
-        revocation_check_enabled: bool = True,
+        allowed_algorithms: Optional[List[str]] = None,
+        revocation_policy: Optional[Dict[str, Any]] = None,
+        revocation_profile_id: Optional[str] = None,
+        time_policy: Optional[Dict[str, Any]] = None,
+        supported_formats: Optional[List[str]] = None,
+        allowed_issuers: Optional[List[str]] = None,
+        denied_issuers: Optional[List[str]] = None,
+        system_issuer_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        compatible_compliance_codes: Optional[List[str]] = None,
+        verification_policy_set_id: Optional[str] = None,
+        auto_generated: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """
-        Create a trust profile.
-
-        Args:
-            organization_id: Organization ID
-            name: Trust profile name
-            trusted_issuers: List of trusted issuer configurations
-            trust_sources: List of trust source configurations
-            trust_frameworks: List of trust framework identifiers
-            revocation_check_enabled: Whether to check revocation status
-
-        Returns:
-            Trust profile object
-        """
+        """Create a trust profile using the current Marty Protocol fields."""
         payload = {
             "organization_id": organization_id,
             "name": name,
-            "trusted_issuers": trusted_issuers or [],
-            "trust_frameworks": trust_frameworks or [],
-            "revocation_check_enabled": revocation_check_enabled,
         }
-        if trust_sources is not None:
-            payload["trust_sources"] = trust_sources
+        optional_fields = {
+            "description": description,
+            "profile_type": profile_type,
+            "trust_sources": trust_sources,
+            "allowed_algorithms": allowed_algorithms,
+            "revocation_policy": revocation_policy,
+            "revocation_profile_id": revocation_profile_id,
+            "time_policy": time_policy,
+            "supported_formats": supported_formats,
+            "allowed_issuers": allowed_issuers,
+            "denied_issuers": denied_issuers,
+            "system_issuer_overrides": system_issuer_overrides,
+            "compatible_compliance_codes": compatible_compliance_codes,
+            "verification_policy_set_id": verification_policy_set_id,
+            "auto_generated": auto_generated,
+        }
+        payload.update({field: value for field, value in optional_fields.items() if value is not None})
         return await self._request(
             "POST",
             "/v1/trust-profiles",
@@ -335,13 +345,9 @@ class GatewayClient:
         """Activate a trust profile."""
         return await self._request("POST", f"/v1/trust-profiles/{profile_id}/activate")
 
-    async def synchronize_trust_profile_registry(
-        self, profile_id: str
-    ) -> Dict[str, Any]:
+    async def synchronize_trust_profile_registry(self, profile_id: str) -> Dict[str, Any]:
         """Synchronize configured external registries through the public API."""
-        return await self._request(
-            "POST", f"/v1/trust-profiles/{profile_id}/registry-sync"
-        )
+        return await self._request("POST", f"/v1/trust-profiles/{profile_id}/registry-sync")
 
     # =============================================================================
     # Credential Templates
@@ -715,14 +721,10 @@ class GatewayClient:
         required_checks = required_checks or []
 
         if approval_strategy not in _APPLICATION_APPROVAL_STRATEGIES:
-            raise ValueError(
-                "approval_strategy must use the current uppercase MIP value"
-            )
+            raise ValueError("approval_strategy must use the current uppercase MIP value")
         for requirement in evidence_requirements:
             if not isinstance(requirement, dict):
-                raise ValueError(
-                    "evidence_requirements must contain current MIP objects, not legacy string IDs"
-                )
+                raise ValueError("evidence_requirements must contain current MIP objects, not legacy string IDs")
             required_fields = {"evidence_id", "evidence_type", "description", "required"}
             if not required_fields <= requirement.keys():
                 raise ValueError(
@@ -768,9 +770,7 @@ class GatewayClient:
         """Get application template by ID"""
         return await self._request("GET", f"/v1/application-templates/{template_id}")
 
-    async def activate_application_template(
-        self, template_id: str
-    ) -> Dict[str, Any]:
+    async def activate_application_template(self, template_id: str) -> Dict[str, Any]:
         """Activate an application template through the public lifecycle API."""
         return await self._request(
             "POST",
@@ -1053,9 +1053,7 @@ class GatewayClient:
             "expiry_minutes": expiry_minutes,
         }
         if not organization_id or not issuer_did:
-            raise ValueError(
-                "organization_id and issuer_did are required for signed verification"
-            )
+            raise ValueError("organization_id and issuer_did are required for signed verification")
         # Cedar resolves the authorization tenant from trusted route/query/body
         # inputs before the request is proxied. The DID is the only public
         # signing identity; profile and KMS selectors remain internal.
@@ -1156,9 +1154,7 @@ class GatewayClient:
         name: str,
         flow_type: Optional[str] = None,
         description: Optional[str] = None,
-        approval_strategy: Literal[
-            "AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"
-        ] = "AUTO",
+        approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "AUTO",
         hooks: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         trigger: Optional[Dict[str, Any]] = None,
         extension: Optional[Dict[str, Any]] = None,
@@ -1190,9 +1186,7 @@ class GatewayClient:
             "presentation_policy_id": presentation_policy_id,
             "delivery_destination_profile_id": delivery_destination_profile_id,
         }
-        payload.update(
-            {field: value for field, value in optional_fields.items() if value is not None}
-        )
+        payload.update({field: value for field, value in optional_fields.items() if value is not None})
         return await self._request(
             "POST",
             "/v1/flows/definitions",

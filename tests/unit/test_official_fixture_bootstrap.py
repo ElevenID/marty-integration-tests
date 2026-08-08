@@ -586,14 +586,12 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
     assert trust_profile["supported_formats"] == ["MDOC"]
     assert trust_profile["trust_sources"] == [
         {
-            "name": "Official OIDF mdoc document signer",
             "source_type": "PINNED_ISSUER",
             "certificate_pem": MDOC_TRUST_ANCHOR_PEM,
             "description": (
                 "Public test certificate extracted from the exact commit-pinned OIDF conformance runner; "
                 "pinning does not bypass ISO document-signer certificate validation"
             ),
-            "enabled": True,
         }
     ]
     assert "allowed_issuers" not in trust_profile

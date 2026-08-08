@@ -746,14 +746,12 @@ def trust_profile_payload(
             "allowed_algorithms": ["ES256"],
             "trust_sources": [
                 {
-                    "name": "Official OIDF mdoc document signer",
                     "source_type": "PINNED_ISSUER",
                     "certificate_pem": mdoc_trust_anchor_pem,
                     "description": (
                         "Public test certificate extracted from the exact commit-pinned OIDF conformance runner; "
                         "pinning does not bypass ISO document-signer certificate validation"
                     ),
-                    "enabled": True,
                 }
             ],
             "auto_generated": True,

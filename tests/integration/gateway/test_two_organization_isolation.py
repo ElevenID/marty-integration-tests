@@ -155,9 +155,7 @@ async def _configure_registry_fixture(feed: dict[str, Any]) -> dict[str, Any]:
         pytest.skip("owned trust-registry fixture is not enabled")
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=control_url, timeout=10.0) as client:
-        response = await client.post(
-            "/control/feed", json={"feed": feed}, headers=headers
-        )
+        response = await client.post("/control/feed", json={"feed": feed}, headers=headers)
         assert response.status_code == 200, response.text
         state = await client.get("/control/state", headers=headers)
         assert state.status_code == 200, state.text
@@ -168,9 +166,7 @@ async def _registry_fixture_state() -> dict[str, Any]:
     control_url = os.environ["TRUST_REGISTRY_FIXTURE_CONTROL_URL"]
     token = os.environ["TRUST_REGISTRY_FIXTURE_TOKEN"]
     async with httpx.AsyncClient(base_url=control_url, timeout=10.0) as client:
-        response = await client.get(
-            "/control/state", headers={"Authorization": f"Bearer {token}"}
-        )
+        response = await client.get("/control/state", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -281,8 +277,7 @@ async def _exercise_browser_issuance_and_verification(
             await page.route("**/approve", substitute_approval_organization, times=1)
             try:
                 async with page.expect_response(
-                    lambda response: response.request.method == "POST"
-                    and response.url.endswith("/approve"),
+                    lambda response: response.request.method == "POST" and response.url.endswith("/approve"),
                     timeout=30_000,
                 ) as substituted_approval_info:
                     await approve_button.click()
@@ -298,8 +293,7 @@ async def _exercise_browser_issuance_and_verification(
             for foreign_value in foreign_values:
                 if foreign_value:
                     assert foreign_value.lower() not in normalized_approval_denial, (
-                        "Browser issuance organization substitution exposed "
-                        f"foreign tenant data: {foreign_value!r}"
+                        f"Browser issuance organization substitution exposed foreign tenant data: {foreign_value!r}"
                     )
 
             # Reload after the intentionally rejected mutation so the normal
@@ -349,13 +343,9 @@ async def _exercise_browser_issuance_and_verification(
                 policy_select = page.get_by_role("combobox", name="Presentation Policy")
                 await expect(policy_select).to_be_visible(timeout=30_000)
                 await policy_select.click()
-                await page.get_by_role(
-                    "option", name=presentation_policy_name, exact=True
-                ).click()
+                await page.get_by_role("option", name=presentation_policy_name, exact=True).click()
                 await page.get_by_role("button", name="Next").click()
-                await page.get_by_label("Verification Purpose").fill(
-                    "Released-stack browser boundary verification"
-                )
+                await page.get_by_label("Verification Purpose").fill("Released-stack browser boundary verification")
 
             async def attempt_verification_substitution(
                 **overrides: str,
@@ -369,16 +359,15 @@ async def _exercise_browser_issuance_and_verification(
                     _assert_no_private_signing_selectors(payload)
                     assert payload.get("organization_id") == organization_id, payload
                     observed.update(payload)
-                    await route.continue_(
-                        post_data=json.dumps({**payload, **overrides})
-                    )
+                    await route.continue_(post_data=json.dumps({**payload, **overrides}))
 
                 pattern = "**/v1/flows/verify"
                 await page.route(pattern, mutate_verification_request, times=1)
                 try:
                     async with page.expect_response(
-                        lambda response: response.request.method == "POST"
-                        and response.url.endswith("/v1/flows/verify"),
+                        lambda response: (
+                            response.request.method == "POST" and response.url.endswith("/v1/flows/verify")
+                        ),
                         timeout=30_000,
                     ) as response_info:
                         await page.get_by_role("button", name="Start Session").click()
@@ -391,22 +380,17 @@ async def _exercise_browser_issuance_and_verification(
                 for foreign_value in foreign_values:
                     if foreign_value:
                         assert foreign_value.lower() not in normalized_denial, (
-                            "Browser verification substitution exposed foreign "
-                            f"tenant data: {foreign_value!r}"
+                            f"Browser verification substitution exposed foreign tenant data: {foreign_value!r}"
                         )
                 return response.status, body, observed
 
-            policy_substitution_status, _, policy_original = (
-                await attempt_verification_substitution(
-                    presentation_policy_id=foreign_presentation_policy_id,
-                )
+            policy_substitution_status, _, policy_original = await attempt_verification_substitution(
+                presentation_policy_id=foreign_presentation_policy_id,
             )
             assert policy_original.get("presentation_policy_id") != foreign_presentation_policy_id
 
-            organization_substitution_status, _, organization_original = (
-                await attempt_verification_substitution(
-                    organization_id=foreign_organization_id,
-                )
+            organization_substitution_status, _, organization_original = await attempt_verification_substitution(
+                organization_id=foreign_organization_id,
             )
             assert organization_original.get("organization_id") == organization_id
 
@@ -428,11 +412,16 @@ async def _exercise_browser_issuance_and_verification(
                     path=evidence_dir / "issuance-and-verification.png",
                     full_page=True,
                 )
-            return approval, issuance, verification, {
-                "issuance_organization_substitution": substituted_approval.status,
-                "verification_policy_substitution": policy_substitution_status,
-                "verification_organization_substitution": organization_substitution_status,
-            }
+            return (
+                approval,
+                issuance,
+                verification,
+                {
+                    "issuance_organization_substitution": substituted_approval.status,
+                    "verification_policy_substitution": policy_substitution_status,
+                    "verification_organization_substitution": organization_substitution_status,
+                },
+            )
         except Exception:
             if evidence_dir:
                 with contextlib.suppress(Exception):
@@ -989,17 +978,16 @@ async def test_external_trust_registry_sync_is_atomic_and_tenant_scoped(
         name=f"External registry {uuid.uuid4().hex[:8]}",
         trust_sources=[
             {
-                "name": "Disposable Marty Sync registry",
                 "source_type": "TRUST_LIST",
                 "url": TRUST_REGISTRY_URL,
+                "description": "Disposable Marty Sync registry",
                 "registry_sync": {
                     "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
                     "refresh_interval_hours": 1,
                 },
-                "enabled": True,
             }
         ],
-        revocation_check_enabled=False,
+        revocation_policy={"check_mode": "SKIP"},
     )
     profile_id = str(profile["id"])
 
@@ -1013,9 +1001,7 @@ async def test_external_trust_registry_sync_is_atomic_and_tenant_scoped(
     reviewer.set_session(await _reviewer_session())
     try:
         before_foreign_attempt = await _registry_fixture_state()
-        foreign_sync = await reviewer.client.post(
-            f"/v1/trust-profiles/{profile_id}/registry-sync"
-        )
+        foreign_sync = await reviewer.client.post(f"/v1/trust-profiles/{profile_id}/registry-sync")
         _assert_public_denial(
             foreign_sync,
             foreign_values=(organization_b_id, str(profile.get("name") or "")),
@@ -1076,25 +1062,19 @@ async def test_external_trust_registry_sync_is_atomic_and_tenant_scoped(
         await admin.synchronize_trust_profile_registry(profile_id)
     assert invalid_delta.value.status_code == 502
 
-    await _configure_registry_fixture(
-        _registry_feed(token="registry-2", sequence=2, entries=[])
-    )
+    await _configure_registry_fixture(_registry_feed(token="registry-2", sequence=2, entries=[]))
     recovered = await admin.synchronize_trust_profile_registry(profile_id)
     assert recovered["sources"][0]["sequence"] == 2
     assert recovered["sources"][0]["csca_entries"] == 1
     assert (await _registry_fixture_state())["last_since"] == "registry-1"
 
     # Sequence rollback also fails closed and retains the last good cursor.
-    await _configure_registry_fixture(
-        _registry_feed(token="registry-rollback", sequence=1, entries=[])
-    )
+    await _configure_registry_fixture(_registry_feed(token="registry-rollback", sequence=1, entries=[]))
     with pytest.raises(GatewayClientError) as rollback:
         await admin.synchronize_trust_profile_registry(profile_id)
     assert rollback.value.status_code == 502
 
-    await _configure_registry_fixture(
-        _registry_feed(token="registry-3", sequence=3, entries=[])
-    )
+    await _configure_registry_fixture(_registry_feed(token="registry-3", sequence=3, entries=[]))
     final = await admin.synchronize_trust_profile_registry(profile_id)
     assert final["sources"][0]["sequence"] == 3
     assert final["sources"][0]["csca_entries"] == 1
@@ -1758,25 +1738,17 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "accreditations": ["ISO27001"],
             },
         )
-        assert incomplete_accreditation_update.status_code == 200, (
-            incomplete_accreditation_update.text
-        )
-        assert incomplete_accreditation_update.json()["accreditations"] == [
-            "ISO27001"
-        ]
+        assert incomplete_accreditation_update.status_code == 200, incomplete_accreditation_update.text
+        assert incomplete_accreditation_update.json()["accreditations"] == ["ISO27001"]
         incomplete_accreditation_decision = await admin.evaluate_presentation(
             str(trust_decision_policy_b["id"]),
             raw_credential_b,
         )
-        assert incomplete_accreditation_decision["result"] == "failed", (
-            incomplete_accreditation_decision
+        assert incomplete_accreditation_decision["result"] == "failed", incomplete_accreditation_decision
+        assert incomplete_accreditation_decision["decision"] == "deny", incomplete_accreditation_decision
+        assert (
+            "accreditation requirements" in str(incomplete_accreditation_decision.get("decision_reason") or "").lower()
         )
-        assert incomplete_accreditation_decision["decision"] == "deny", (
-            incomplete_accreditation_decision
-        )
-        assert "accreditation requirements" in str(
-            incomplete_accreditation_decision.get("decision_reason") or ""
-        ).lower()
         _assert_no_private_signing_selectors(incomplete_accreditation_decision)
 
         restored_accreditation_update = await admin.client.patch(
@@ -1787,19 +1759,13 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "accreditations": ["FIPS140-2", "iso27001"],
             },
         )
-        assert restored_accreditation_update.status_code == 200, (
-            restored_accreditation_update.text
-        )
+        assert restored_accreditation_update.status_code == 200, restored_accreditation_update.text
         restored_accreditation_decision = await admin.evaluate_presentation(
             str(trust_decision_policy_b["id"]),
             raw_credential_b,
         )
-        assert restored_accreditation_decision["result"] == "passed", (
-            restored_accreditation_decision
-        )
-        assert restored_accreditation_decision["decision"] == "allow", (
-            restored_accreditation_decision
-        )
+        assert restored_accreditation_decision["result"] == "passed", restored_accreditation_decision
+        assert restored_accreditation_decision["decision"] == "allow", restored_accreditation_decision
         _assert_no_private_signing_selectors(restored_accreditation_decision)
 
         # A trust profile and its issuer registry/relationship resources are
@@ -2297,10 +2263,7 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 "verification_policy_substitution",
                 "verification_organization_substitution",
             }
-            assert all(
-                status in {403, 404, 422}
-                for status in browser_boundary_denials.values()
-            )
+            assert all(status in {403, 404, 422} for status in browser_boundary_denials.values())
 
             event_type_a, event_a = await event_a_task
             assert event_type_a == "application.approved"
