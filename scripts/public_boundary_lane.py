@@ -299,6 +299,31 @@ def emit_pytest_diagnostic(
     print("--- end public-boundary pytest diagnostic ---", file=sys.stderr)
 
 
+def emit_fixture_startup_diagnostic(
+    path: Path,
+    environment: dict[str, str],
+) -> None:
+    """Print bounded fixture startup logs without publishing test credentials."""
+    print("--- trust-registry fixture startup diagnostic (redacted) ---", file=sys.stderr)
+    if not path.is_file():
+        print("No fixture startup diagnostic was captured.", file=sys.stderr)
+        print("--- end trust-registry fixture startup diagnostic ---", file=sys.stderr)
+        return
+
+    diagnostic = path.read_text(encoding="utf-8")
+    for name in (
+        "TRUST_REGISTRY_FIXTURE_TOKEN",
+        "MARTY_CONFORMANCE_ADMIN_PASSWORD",
+        "MARTY_CONFORMANCE_REVIEWER_PASSWORD",
+    ):
+        secret = environment.get(name, "")
+        if secret:
+            diagnostic = diagnostic.replace(secret, "<redacted>")
+    for line in diagnostic.splitlines()[-80:]:
+        print(line[:500], file=sys.stderr)
+    print("--- end trust-registry fixture startup diagnostic ---", file=sys.stderr)
+
+
 def write_summary(
     args: argparse.Namespace,
     metadata: dict[str, object],
@@ -412,6 +437,12 @@ def execute(args: argparse.Namespace) -> int:
     )
     lane_environment["TRUST_REGISTRY_FIXTURE_TOKEN"] = secrets.token_urlsafe(32)
     lane_environment["TRUST_REGISTRY_FIXTURE_REQUIRED"] = "true"
+    lane_environment["TRUST_REGISTRY_FIXTURE_UID"] = str(
+        getattr(os, "getuid", lambda: 0)()
+    )
+    lane_environment["TRUST_REGISTRY_FIXTURE_GID"] = str(
+        getattr(os, "getgid", lambda: 0)()
+    )
     started = (
         run(
             boundary_compose_command(args, "up"),
@@ -420,10 +451,12 @@ def execute(args: argparse.Namespace) -> int:
         == 0
     )
     registry_started = False
+    registry_attempted = False
     exit_code = 1
     try:
         if started:
             wait_for_public_stack(lane_environment)
+            registry_attempted = True
             registry_started = (
                 run(
                     trust_registry_fixture_command(args, "up"),
@@ -462,12 +495,15 @@ def execute(args: argparse.Namespace) -> int:
                 emit_pytest_diagnostic(private / "pytest.log", lane_environment)
     finally:
         write_summary(args, metadata, exit_code)
-        if registry_started:
+        if registry_attempted:
+            fixture_log = private / "trust-registry-fixture.log"
             run(
                 trust_registry_fixture_command(args, "logs"),
                 lane_environment,
-                capture=private / "trust-registry-fixture.log",
+                capture=fixture_log,
             )
+            if not registry_started:
+                emit_fixture_startup_diagnostic(fixture_log, lane_environment)
             run(
                 trust_registry_fixture_command(args, "down"),
                 lane_environment,

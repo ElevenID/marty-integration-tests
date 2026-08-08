@@ -338,6 +338,8 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     assert pytest_command[-2:] == [lane.TEST_PATH, lane.DIDCOMM_TEST_PATH]
     assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"
     assert execution_environment["TRUST_REGISTRY_FIXTURE_REQUIRED"] == "true"
+    assert execution_environment["TRUST_REGISTRY_FIXTURE_UID"].isdigit()
+    assert execution_environment["TRUST_REGISTRY_FIXTURE_GID"].isdigit()
     assert execution_environment["TRUST_REGISTRY_FIXTURE_CONTROL_URL"] == (
         "http://127.0.0.1:32100"
     )
@@ -364,11 +366,68 @@ def test_registry_fixture_compose_is_project_scoped_and_immutable() -> None:
     assert "build:" not in compose
     assert '"127.0.0.1::8080"' in compose
     assert "external: true" in compose
-    assert 'user: "0:0"' in compose
+    assert "TRUST_REGISTRY_FIXTURE_UID" in compose
+    assert "TRUST_REGISTRY_FIXTURE_GID" in compose
+    capabilities = compose.split("cap_add:", 1)[1].split("security_opt:", 1)[0]
+    assert "DAC_OVERRIDE" not in capabilities
     assert "read_only: true" in compose
     assert "no-new-privileges:true" in compose
     assert "- ALL" in compose
     assert "NET_BIND_SERVICE" in compose
+
+
+def test_failed_registry_start_is_diagnosed_and_cleaned_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "evidence"
+    args = SimpleNamespace(output_dir=output, run_id="unit-boundary")
+    calls: list[tuple[list[str], Path | None]] = []
+    execution_environment = {
+        "MARTY_CONFORMANCE_ADMIN_PASSWORD": "admin-secret",
+        "MARTY_CONFORMANCE_REVIEWER_PASSWORD": "reviewer-secret",
+    }
+    monkeypatch.setattr(
+        lane,
+        "environment",
+        lambda _args: (execution_environment, {"marty_commit": "a" * 40}),
+    )
+    monkeypatch.setattr(
+        lane, "boundary_compose_command", lambda _args, action: ["compose", action]
+    )
+    monkeypatch.setattr(
+        lane,
+        "trust_registry_fixture_command",
+        lambda _args, action: ["registry-compose", action],
+    )
+    monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
+    monkeypatch.setattr(lane, "write_summary", lambda *_args: None)
+
+    def fake_run(
+        command: list[str],
+        _environment: dict[str, str],
+        *,
+        capture: Path | None = None,
+    ) -> int:
+        calls.append((command, capture))
+        if command == ["registry-compose", "up"]:
+            return 1
+        if command == ["registry-compose", "logs"] and capture is not None:
+            capture.write_text("permission denied: admin-secret\n", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="fixture failed to start"):
+        lane.execute(args)
+
+    assert (["registry-compose", "logs"], output / "private" / "trust-registry-fixture.log") in calls
+    assert (["registry-compose", "down"], None) in calls
+    diagnostic = capsys.readouterr().err
+    assert "permission denied" in diagnostic
+    assert "admin-secret" not in diagnostic
+    assert "<redacted>" in diagnostic
 
 
 def test_pytest_diagnostic_is_bounded_and_redacts_private_values(
