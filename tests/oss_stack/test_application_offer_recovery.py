@@ -109,7 +109,7 @@ def _install_disposable_application_flow(flow_id: str) -> None:
 
 
 def _send_without_reading_response(application_id: str) -> None:
-    """Send one complete signed request, then close before reading its response."""
+    """Send one signed request, wait for an unread response, then close it."""
     probe = textwrap.dedent(
         f"""
         import json
@@ -148,6 +148,9 @@ def _send_without_reading_response(application_id: str) -> None:
         ]
         with socket.create_connection(("flow-service", 8011), timeout=10) as connection:
             connection.sendall(b"\\r\\n".join(lines) + body)
+            connection.settimeout(30)
+            if not connection.recv(1, socket.MSG_PEEK):
+                raise RuntimeError("application-offer connection closed before a response")
         """
     )
     _compose(
