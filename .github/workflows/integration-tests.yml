@@ -37,4 +37,6 @@ jobs:
           pytest \
             tests/integration/test_oid4vci_issuer_conformance.py \
             tests/integration/gateway/test_deployment_profile_flow.py \
+            tests/integration/gateway/test_two_organization_isolation.py \
+            tests/oss_stack/test_application_approval_boundary.py \
             --collect-only -q

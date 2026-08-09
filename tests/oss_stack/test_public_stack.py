@@ -27,6 +27,7 @@ def test_required_public_services_are_healthy() -> None:
     services = get_json("/health/services")["services"]
     required = {
         "auth",
+        "applicant",
         "organizations",
         "credential-templates",
         "trust-profiles",
