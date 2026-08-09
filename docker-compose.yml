@@ -200,6 +200,7 @@ services:
       FLOW_GRPC_PORT: "9011"
       ISSUANCE_SERVICE_URL: http://issuance-service:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
+      CT_GRPC_TARGET: credential-template-service:9003
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-oss-ci-application-event-hmac-key-32-bytes}
 
   revocation-profile-service:
