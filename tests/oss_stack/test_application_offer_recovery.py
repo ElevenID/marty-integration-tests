@@ -109,10 +109,11 @@ def _install_disposable_application_flow(flow_id: str) -> None:
 
 
 def _send_without_reading_response(application_id: str) -> None:
-    """Send one complete signed request, then close before reading its response."""
+    """Send one signed request, wait for an unread response, then close it."""
     probe = textwrap.dedent(
         f"""
         import json
+        import select
         import socket
         from datetime import UTC, datetime
         from pathlib import Path
@@ -148,6 +149,11 @@ def _send_without_reading_response(application_id: str) -> None:
         ]
         with socket.create_connection(("flow-service", 8011), timeout=10) as connection:
             connection.sendall(b"\\r\\n".join(lines) + body)
+            readable, _, exceptional = select.select([connection], [], [connection], 30)
+            if exceptional:
+                raise RuntimeError("application-offer connection failed before a response")
+            if not readable:
+                raise TimeoutError("application-offer response did not become available")
         """
     )
     _compose(
