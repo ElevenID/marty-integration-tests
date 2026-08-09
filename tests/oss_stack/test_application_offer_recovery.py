@@ -17,11 +17,16 @@ _ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001"
 _CREDENTIAL_TEMPLATE_ID = "50000000-0000-0000-0000-000000000040"
 
 
-def _compose(*args: str, timeout: int = 45) -> subprocess.CompletedProcess[str]:
+def _compose(
+    *args: str,
+    timeout: int = 45,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [*_COMPOSE, *args],
         check=True,
         capture_output=True,
+        input=input_text,
         text=True,
         timeout=timeout,
     )
@@ -43,8 +48,10 @@ def _psql(sql: str, *, variables: dict[str, str] | None = None) -> str:
     ]
     for name, value in (variables or {}).items():
         arguments.extend(("--set", f"{name}={value}"))
-    arguments.extend(("-c", sql))
-    completed = _compose(*arguments)
+    # psql performs variable interpolation while reading input, but ``-c``
+    # sends its argument directly to the server and leaves :'name' literals.
+    arguments.extend(("-f", "-"))
+    completed = _compose(*arguments, input_text=sql)
     return completed.stdout.strip()
 
 
@@ -102,7 +109,7 @@ def _install_disposable_application_flow(flow_id: str) -> None:
 
 
 def _send_without_reading_response(application_id: str) -> None:
-    """Send one complete signed request, then close before reading its response."""
+    """Send one signed request, wait for an unread response, then close it."""
     probe = textwrap.dedent(
         f"""
         import json
@@ -141,6 +148,9 @@ def _send_without_reading_response(application_id: str) -> None:
         ]
         with socket.create_connection(("flow-service", 8011), timeout=10) as connection:
             connection.sendall(b"\\r\\n".join(lines) + body)
+            connection.settimeout(30)
+            if not connection.recv(1, socket.MSG_PEEK):
+                raise RuntimeError("application-offer connection closed before a response")
         """
     )
     _compose(

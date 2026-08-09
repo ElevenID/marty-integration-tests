@@ -24,6 +24,8 @@ def test_application_event_key_is_scoped_to_applicant_and_flow() -> None:
     assert "FLOW_APPLICATION_EVENT_HMAC_KEY:" in flow
     assert "FLOW_GRPC_TARGET: flow-service:9011" in applicant
     assert "FLOW_GRPC_PORT: \"9011\"" in flow
+    assert "CT_GRPC_TARGET: credential-template-service:9003" in flow
+    assert "CT_GRPC_TARGET: credential-template:9003" not in flow
 
 
 def test_migrations_never_seed_an_internal_public_origin() -> None:
