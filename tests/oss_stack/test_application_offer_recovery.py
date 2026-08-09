@@ -169,21 +169,30 @@ def _durable_state(application_id: str) -> dict[str, object] | None:
             """
             SELECT json_build_object(
                 'receipt_count', COUNT(DISTINCT receipt.event_id_sha256),
-                'instance_count', COUNT(DISTINCT instance.id),
-                'artifact_count', COUNT(DISTINCT artifact.id),
-                'transaction_count', COUNT(DISTINCT issuance_tx.id),
-                'instance_id', MIN(instance.id),
-                'artifact_id', MIN(artifact.id),
-                'transaction_id', MIN(issuance_tx.id),
-                'offer_sha256', MIN(encode(sha256(convert_to(
-                    artifact.credential_offer_uri, 'UTF8')), 'hex')),
-                'pre_auth_sha256', MIN(encode(sha256(convert_to(
-                    issuance_tx.pre_auth_code, 'UTF8')), 'hex')),
-                'planned_flows', MAX(json_array_length(receipt.flow_plan))
+                'planned_flows', COALESCE(MAX(json_array_length(receipt.flow_plan)), 0),
+                'flows', COALESCE(
+                    json_agg(
+                        json_build_object(
+                            'flow_definition_id', plan.entry->>'flow_definition_id',
+                            'instance_id', instance.id,
+                            'artifact_id', artifact.id,
+                            'transaction_id', issuance_tx.id,
+                            'offer_sha256', encode(sha256(convert_to(
+                                artifact.credential_offer_uri, 'UTF8')), 'hex'),
+                            'pre_auth_sha256', encode(sha256(convert_to(
+                                issuance_tx.pre_auth_code, 'UTF8')), 'hex')
+                        ) ORDER BY plan.position
+                    ) FILTER (WHERE plan.entry IS NOT NULL),
+                    '[]'::json
+                )
             )
             FROM flow_service.flow_application_event_receipts AS receipt
+            LEFT JOIN LATERAL json_array_elements(receipt.flow_plan)
+              WITH ORDINALITY AS plan(entry, position) ON TRUE
             LEFT JOIN flow_service.flow_instances AS instance
-              ON instance.organization_id = receipt.organization_id
+              ON instance.id = plan.entry->>'instance_id'
+             AND instance.flow_definition_id = plan.entry->>'flow_definition_id'
+             AND instance.organization_id = receipt.organization_id
              AND instance.context->>'application_id' = receipt.application_id
             LEFT JOIN flow_service.flow_instance_artifacts AS artifact
               ON artifact.flow_instance_id = instance.id
@@ -201,10 +210,32 @@ def _durable_state(application_id: str) -> dict[str, object] | None:
     if not result:
         return None
     state = json.loads(result)
-    required_counts = ("receipt_count", "instance_count", "artifact_count", "transaction_count")
-    if all(state.get(name) == 1 for name in required_counts) and state.get("planned_flows") == 1:
-        return state
-    return None
+    planned_flows = state.get("planned_flows")
+    flows = state.get("flows")
+    if state.get("receipt_count") != 1 or not isinstance(planned_flows, int):
+        return None
+    if planned_flows < 1 or not isinstance(flows, list) or len(flows) != planned_flows:
+        return None
+
+    required_fields = (
+        "flow_definition_id",
+        "instance_id",
+        "artifact_id",
+        "transaction_id",
+        "offer_sha256",
+        "pre_auth_sha256",
+    )
+    if any(not all(flow.get(field) for field in required_fields) for flow in flows):
+        return None
+    for identity_field in (
+        "flow_definition_id",
+        "instance_id",
+        "artifact_id",
+        "transaction_id",
+    ):
+        if len({flow[identity_field] for flow in flows}) != planned_flows:
+            return None
+    return state
 
 
 def _wait_for_durable_state(application_id: str, timeout: float = 60.0) -> dict[str, object]:
@@ -220,9 +251,7 @@ def _wait_for_durable_state(application_id: str, timeout: float = 60.0) -> dict[
 
 def _wait_for_flow_service(timeout: float = 60.0) -> None:
     probe = (
-        "import httpx; "
-        "response=httpx.get('http://flow-service:8011/health', timeout=2); "
-        "response.raise_for_status()"
+        "import httpx; response=httpx.get('http://flow-service:8011/health', timeout=2); response.raise_for_status()"
     )
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -266,18 +295,23 @@ def _retry_saved_event(*, mutate_claims: bool = False) -> dict[str, object]:
         )
         body = response.json()
         if response.status_code == 200:
-            offer = body["offers"][0]
             body = {{
                 "flows_triggered": body["flows_triggered"],
-                "instance_id": body["instance_ids"][0],
-                "artifact_id": offer["artifact_id"],
-                "transaction_id": offer["credential_offer_transaction_id"],
-                "offer_sha256": hashlib.sha256(
-                    offer["credential_offer_uri"].encode()
-                ).hexdigest(),
-                "pre_auth_sha256": hashlib.sha256(
-                    offer["pre_authorized_code"].encode()
-                ).hexdigest(),
+                "flows": [
+                    {{
+                        "flow_definition_id": offer["flow_definition_id"],
+                        "instance_id": offer["flow_instance_id"],
+                        "artifact_id": offer["artifact_id"],
+                        "transaction_id": offer["credential_offer_transaction_id"],
+                        "offer_sha256": hashlib.sha256(
+                            offer["credential_offer_uri"].encode()
+                        ).hexdigest(),
+                        "pre_auth_sha256": hashlib.sha256(
+                            offer["pre_authorized_code"].encode()
+                        ).hexdigest(),
+                    }}
+                    for offer in body["offers"]
+                ],
             }}
         else:
             body = {{"detail": body.get("detail")}}
@@ -309,12 +343,8 @@ def test_uncertain_application_offer_response_recovers_after_flow_restart() -> N
     recovered = _retry_saved_event()
     assert recovered["status"] == 200, recovered
     assert recovered["body"] == {
-        "flows_triggered": 1,
-        "instance_id": before_restart["instance_id"],
-        "artifact_id": before_restart["artifact_id"],
-        "transaction_id": before_restart["transaction_id"],
-        "offer_sha256": before_restart["offer_sha256"],
-        "pre_auth_sha256": before_restart["pre_auth_sha256"],
+        "flows_triggered": before_restart["planned_flows"],
+        "flows": before_restart["flows"],
     }
     assert _wait_for_durable_state(application_id) == before_restart
 
