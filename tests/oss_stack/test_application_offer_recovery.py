@@ -27,8 +27,8 @@ def _compose(*args: str, timeout: int = 45) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _psql(sql: str) -> str:
-    completed = _compose(
+def _psql(sql: str, *, variables: dict[str, str] | None = None) -> str:
+    arguments = [
         "exec",
         "-T",
         "postgres",
@@ -40,9 +40,11 @@ def _psql(sql: str) -> str:
         "-v",
         "ON_ERROR_STOP=1",
         "-At",
-        "-c",
-        sql,
-    )
+    ]
+    for name, value in (variables or {}).items():
+        arguments.extend(("--set", f"{name}={value}"))
+    arguments.extend(("-c", sql))
+    completed = _compose(*arguments)
     return completed.stdout.strip()
 
 
@@ -68,7 +70,7 @@ def _install_disposable_application_flow(flow_id: str) -> None:
     )
     _psql(
         textwrap.dedent(
-            f"""
+            """
             INSERT INTO flow_service.flow_definitions (
                 id, organization_id, name, description, status, flow_type,
                 steps, transitions, start_step_id, credential_template_id,
@@ -79,16 +81,23 @@ def _install_disposable_application_flow(flow_id: str) -> None:
                 default_timeout_seconds, max_retries, enable_resume, version,
                 created_at, updated_at
             ) VALUES (
-                '{flow_id}', '{_ORGANIZATION_ID}',
+                :'flow_id', :'organization_id',
                 'Released-stack application offer recovery',
                 'Disposable integration-test flow', 'ACTIVE', 'custom',
-                '[]'::json, '[]'::json, NULL, '{_CREDENTIAL_TEMPLATE_ID}',
+                '[]'::json, '[]'::json, NULL, :'credential_template_id',
                 NULL, NULL, NULL, NULL, '[]'::json, NULL, 'MANUAL',
-                '{{}}'::json, '{trigger}'::json, '{extension}'::json, '[]'::json,
+                '{}'::json, :'trigger'::json, :'extension'::json, '[]'::json,
                 3600, 3, TRUE, 1, NOW(), NOW()
             );
             """
-        )
+        ),
+        variables={
+            "flow_id": flow_id,
+            "organization_id": _ORGANIZATION_ID,
+            "credential_template_id": _CREDENTIAL_TEMPLATE_ID,
+            "trigger": trigger,
+            "extension": extension,
+        },
     )
 
 
@@ -147,7 +156,7 @@ def _send_without_reading_response(application_id: str) -> None:
 def _durable_state(application_id: str) -> dict[str, object] | None:
     result = _psql(
         textwrap.dedent(
-            f"""
+            """
             SELECT json_build_object(
                 'receipt_count', COUNT(DISTINCT receipt.event_id_sha256),
                 'instance_count', COUNT(DISTINCT instance.id),
@@ -170,10 +179,14 @@ def _durable_state(application_id: str) -> dict[str, object] | None:
               ON artifact.flow_instance_id = instance.id
             LEFT JOIN issuance_service.issuance_transactions AS issuance_tx
               ON issuance_tx.id = artifact.issuance_transaction_id
-            WHERE receipt.application_id = '{application_id}'
-              AND receipt.organization_id = '{_ORGANIZATION_ID}';
+            WHERE receipt.application_id = :'application_id'
+              AND receipt.organization_id = :'organization_id';
             """
-        )
+        ),
+        variables={
+            "application_id": application_id,
+            "organization_id": _ORGANIZATION_ID,
+        },
     )
     if not result:
         return None
