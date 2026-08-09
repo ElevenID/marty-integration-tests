@@ -155,6 +155,21 @@ services:
         condition: service_completed_successfully
     networks: [marty-oss]
 
+  applicant-service:
+    <<: *service
+    environment:
+      <<: *service-env
+      SERVICE_NAME: applicant
+      SERVICE_PORT: "8006"
+      FLOW_SERVICE_URL: http://flow-service:8011
+      FLOW_GRPC_TARGET: flow-service:9011
+      ISSUANCE_SERVICE_URL: http://issuance-service:8005
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
+      ORG_GRPC_TARGET: organization-service:9002
+      # Disposable artifact-test identity. Production deployments inject a
+      # random secret; this value is scoped only to Applicant and Flow here.
+      FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-oss-ci-application-event-hmac-key-32-bytes}
+
   compliance-profile-service:
     <<: *service
     environment:
@@ -182,6 +197,10 @@ services:
       <<: *service-env
       SERVICE_NAME: flow
       SERVICE_PORT: "8011"
+      FLOW_GRPC_PORT: "9011"
+      ISSUANCE_SERVICE_URL: http://issuance-service:8005
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
+      FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-oss-ci-application-event-hmac-key-32-bytes}
 
   revocation-profile-service:
     <<: *service
@@ -201,6 +220,7 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile-service:8004
       ISSUANCE_SERVICE_URL: http://issuance-service:8005
+      APPLICANT_SERVICE_URL: http://applicant-service:8006
       # OAuth Authorization Server metadata and Credential Issuer metadata
       # must advertise the same externally reachable HTTPS identifier.
       ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}

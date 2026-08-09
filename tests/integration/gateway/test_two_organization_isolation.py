@@ -2163,6 +2163,88 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             },
         )
         browser_issuance_flow = await admin.activate_flow_definition(browser_issuance_flow["id"])
+
+        # APPLICATION_APPROVED is an issuance-authority boundary. Exercise it
+        # only through Marty's public API: neither this owned integration test
+        # nor a browser-equivalent caller receives the Applicant -> Flow key.
+        # The trigger itself must imply the server-owned approval precondition,
+        # even though an administrator did not repeat it in extension config.
+        instances_before_response = await admin.client.get(
+            "/v1/flows/instances",
+            params={
+                "organization_id": organization_a_id,
+                "flow_definition_id": browser_issuance_flow["id"],
+            },
+        )
+        assert instances_before_response.status_code == 200, instances_before_response.text
+        instances_before = instances_before_response.json()
+        assert isinstance(instances_before, list), instances_before
+
+        unsigned_approval = await admin.client.post(
+            "/v1/flows/webhooks/application-approved",
+            json={
+                "event_type": "application.approved",
+                "aggregate_id": f"forged-application-{uuid.uuid4()}",
+                "aggregate_type": "application",
+                "organization_id": organization_a_id,
+                "data": {
+                    "applicant_id": f"forged-applicant-{uuid.uuid4()}",
+                    "credential_template_id": notification_credential_template["id"],
+                    "claims": {"email": applicant_secret},
+                },
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+        )
+        assert unsigned_approval.status_code == 401, unsigned_approval.text
+
+        caller_approved_start = await admin.client.post(
+            "/v1/flows/instances",
+            json={
+                "organization_id": organization_a_id,
+                "flow_definition_id": browser_issuance_flow["id"],
+                "subject_id": f"forged-applicant-{uuid.uuid4()}",
+                "initial_context": {
+                    "application_status": "approved",
+                    "application_approved": True,
+                    "claims": {"email": applicant_secret},
+                },
+            },
+        )
+        assert caller_approved_start.status_code == 409, caller_approved_start.text
+        caller_approved_error = caller_approved_start.json().get("detail", {})
+        assert caller_approved_error.get("error") == "ISSUANCE_PRECONDITIONS_NOT_MET"
+        assert caller_approved_error.get("unmet_preconditions") == ["application_approved"]
+
+        private_evidence_start = await admin.client.post(
+            "/v1/flows/instances",
+            json={
+                "organization_id": organization_a_id,
+                "flow_definition_id": browser_issuance_flow["id"],
+                "initial_context": {
+                    "_marty_precondition_evidence_v1": {
+                        "application_approved": {
+                            "producer": "marty-applicant-service",
+                        }
+                    }
+                },
+            },
+        )
+        assert private_evidence_start.status_code == 422, private_evidence_start.text
+
+        instances_after_response = await admin.client.get(
+            "/v1/flows/instances",
+            params={
+                "organization_id": organization_a_id,
+                "flow_definition_id": browser_issuance_flow["id"],
+            },
+        )
+        assert instances_after_response.status_code == 200, instances_after_response.text
+        instances_after = instances_after_response.json()
+        assert isinstance(instances_after, list), instances_after
+        assert {str(instance["id"]) for instance in instances_after} == {
+            str(instance["id"]) for instance in instances_before
+        }, "Rejected approval forgeries must not persist a flow instance or offer"
+
         sse_application_create = await reviewer.client.post(
             "/v1/me/applications",
             json={
