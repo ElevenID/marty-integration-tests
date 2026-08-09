@@ -541,6 +541,8 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             {"id": "policy-1"},
             {"id": "policy-1"},
             {"id": "trust-1"},
+            {"id": "issuer-entity-1"},
+            {"id": "relationship-1"},
             {"id": "trust-1"},
         ]
     )
@@ -568,6 +570,11 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
 
     assert result["oid4vp_mdoc_policy_id"] == "policy-1"
     assert result["oid4vp_mdoc_trust_profile_id"] == "trust-1"
+    certificate = x509.load_pem_x509_certificate(MDOC_TRUST_ANCHOR_PEM.encode("ascii"))
+    certificate_sha256 = certificate.fingerprint(hashes.SHA256()).hex()
+    assert result["oid4vp_mdoc_status_issuer_id"] == (
+        f"x509-sha256:{certificate_sha256}"
+    )
     assert result["oid4vp_mdoc_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
     assert result["oid4vp_mdoc_request_issuer_public_jwk"] == PUBLIC_SIGNING_JWK
     assert calls[0][2] == {
@@ -594,6 +601,38 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             ),
         }
     ]
+    assert calls[10][0:2] == ("/v1/issuer-entities", "POST")
+    assert calls[10][2] == {
+        "organization_id": fixtures.DEFAULT_ORGANIZATION,
+        "issuer_id": f"x509-sha256:{certificate_sha256}",
+        "issuer_type": "GOVERNMENT",
+        "display_name": "Official OIDF mdoc signer run-1",
+        "description": (
+            "Disposable lifecycle record for the exact document signer in the "
+            "commit-pinned unmodified OIDF runner"
+        ),
+        "compliance_status": "COMPLIANT",
+        "valid_from": certificate.not_valid_before_utc.isoformat(),
+        "valid_until": certificate.not_valid_after_utc.isoformat(),
+        "metadata": {
+            "source": "official-oidf-commit-pinned-document-signer",
+            "certificate_sha256": certificate_sha256,
+        },
+    }
+    assert calls[11] == (
+        "/v1/trust-profiles/trust-1/issuers",
+        "POST",
+        {
+            "issuer_id": "issuer-entity-1",
+            "trust_level": 100,
+            "relationship_status": "TRUSTED",
+            "cascade_revocation_policy": "AUTO_CASCADE",
+            "metadata": {
+                "source": "official-oidf-commit-pinned-document-signer"
+            },
+        },
+    )
+    assert calls[12][0:2] == ("/v1/trust-profiles/trust-1/activate", "POST")
     assert "allowed_issuers" not in trust_profile
     assert "system_issuer_overrides" not in trust_profile
     assert all("issuer_profile_id" not in (body or {}) for _path, _method, body in calls)

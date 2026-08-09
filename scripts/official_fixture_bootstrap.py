@@ -773,6 +773,34 @@ def trust_profile_payload(
     }
 
 
+def mdoc_issuer_entity_payload(
+    organization_id: str,
+    certificate_pem: str,
+    *,
+    run_id: str,
+) -> dict[str, object]:
+    """Build the governed lifecycle record for the exact pinned mdoc signer."""
+    certificate = x509.load_pem_x509_certificate(certificate_pem.encode("ascii"))
+    certificate_sha256 = certificate.fingerprint(hashes.SHA256()).hex()
+    return {
+        "organization_id": organization_id,
+        "issuer_id": f"x509-sha256:{certificate_sha256}",
+        "issuer_type": "GOVERNMENT",
+        "display_name": f"Official OIDF mdoc signer {run_id}",
+        "description": (
+            "Disposable lifecycle record for the exact document signer in the "
+            "commit-pinned unmodified OIDF runner"
+        ),
+        "compliance_status": "COMPLIANT",
+        "valid_from": certificate.not_valid_before_utc.isoformat(),
+        "valid_until": certificate.not_valid_after_utc.isoformat(),
+        "metadata": {
+            "source": "official-oidf-commit-pinned-document-signer",
+            "certificate_sha256": certificate_sha256,
+        },
+    }
+
+
 def response_id(value: object, resource: str) -> str:
     if not isinstance(value, dict):
         raise RuntimeError(f"public API returned a non-object for {resource}")
@@ -1333,6 +1361,41 @@ def bootstrap(
                 ),
             )
             trust_profile_id = response_id(created_trust_profile, "OID4VP trust profile")
+            if mdoc:
+                assert oidf_mdoc_trust_anchor_pem is not None
+                issuer_payload = mdoc_issuer_entity_payload(
+                    organization_id,
+                    oidf_mdoc_trust_anchor_pem,
+                    run_id=run_id,
+                )
+                created_issuer = request(
+                    gateway_url,
+                    session_id,
+                    "/v1/issuer-entities",
+                    method="POST",
+                    json_body=issuer_payload,
+                )
+                issuer_entity_id = response_id(
+                    created_issuer,
+                    "OID4VP mdoc issuer entity",
+                )
+                linked_issuer = request(
+                    gateway_url,
+                    session_id,
+                    f"/v1/trust-profiles/{trust_profile_id}/issuers",
+                    method="POST",
+                    json_body={
+                        "issuer_id": issuer_entity_id,
+                        "trust_level": 100,
+                        "relationship_status": "TRUSTED",
+                        "cascade_revocation_policy": "AUTO_CASCADE",
+                        "metadata": {
+                            "source": "official-oidf-commit-pinned-document-signer"
+                        },
+                    },
+                )
+                response_id(linked_issuer, "OID4VP mdoc issuer relationship")
+                result[f"{prefix}_status_issuer_id"] = issuer_payload["issuer_id"]
             activated_trust_profile = request(
                 gateway_url,
                 session_id,
