@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -142,6 +143,36 @@ def test_start_flow_sends_authenticated_gateway_request(monkeypatch: pytest.Monk
         "method": "POST",
         "json_body": {"presentation_policy_id": "policy-1"},
     }
+
+
+def test_private_flow_audit_records_only_module_to_flow_correlation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "private-audit"
+    monkeypatch.setenv("OIDF_MARTY_FLOW_AUDIT_DIR", str(destination))
+    payload = {
+        "test_id": "private-runner-id",
+        "test_name": "oid4vp-1final-verifier-happy-flow",
+        "credential": "must-not-leak",
+    }
+    result = {
+        "instance_id": "12345678-1234-1234-1234-123456789abc",
+        "authorization_request": "openid4vp://must-not-leak",
+    }
+
+    oidf_start.write_private_flow_audit(payload, result)
+
+    records = list(destination.glob("*.json"))
+    assert len(records) == 1
+    assert json.loads(records[0].read_text(encoding="utf-8")) == {
+        "schema": "elevenid.oidf-flow-correlation/private-v1",
+        "test_name": "oid4vp-1final-verifier-happy-flow",
+        "flow_instance_id": "12345678-1234-1234-1234-123456789abc",
+    }
+    serialized = records[0].read_text(encoding="utf-8")
+    assert "private-runner-id" not in serialized
+    assert "must-not-leak" not in serialized
 
 
 def test_gateway_must_be_https() -> None:

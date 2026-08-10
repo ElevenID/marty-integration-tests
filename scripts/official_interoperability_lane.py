@@ -39,6 +39,7 @@ from haip_test_certificates import (  # noqa: E402
 )
 from official_suite_checkout import verify_checkout  # noqa: E402
 from oidf_mdoc_binding_audit import audit as audit_oidf_mdoc_binding  # noqa: E402
+from oidf_sd_jwt_diagnostic_audit import audit as audit_oidf_sd_jwt_diagnostics  # noqa: E402
 
 LANES = {
     "oid4vci-issuer",
@@ -1373,6 +1374,10 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 "OIDF_VERIFIER_REQUEST_METHOD": ("url_query" if url_query else "request_uri_signed"),
             }
         )
+        if not mdoc:
+            environment["OIDF_MARTY_FLOW_AUDIT_DIR"] = str(
+                args.output_dir / "private" / "oidf-flow-audit"
+            )
         config = (
             args.haip_material / "marty-verifier-haip.json"
             if haip
@@ -1421,6 +1426,37 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             emit_oid4vp_browser_runtime_diagnostic(compose_log)
         if mdoc and result:
             emit_mdoc_runtime_diagnostic(compose_log)
+        if not mdoc and result:
+            try:
+                diagnostic_audit = audit_oidf_sd_jwt_diagnostics(
+                    args.output_dir / "private" / "oidf-flow-audit",
+                    compose_log,
+                )
+                diagnostic_path = (
+                    args.output_dir
+                    / "raw"
+                    / profile
+                    / "oidf-sd-jwt-diagnostic-audit.json"
+                )
+                diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
+                diagnostic_path.write_text(
+                    json.dumps(diagnostic_audit, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                print("--- OIDF SD-JWT verifier audit (redacted) ---")
+                for module in diagnostic_audit["modules"]:
+                    print(
+                        f"{module['test_name']}: result={module['result']} "
+                        f"decision={module['decision']} category={module['category']}"
+                    )
+                print("--- end OIDF SD-JWT verifier audit ---")
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                print(
+                    "--- OIDF SD-JWT verifier audit (redacted) ---\n"
+                    f"diagnostic-unavailable={type(exc).__name__}\n"
+                    "--- end OIDF SD-JWT verifier audit ---",
+                    file=sys.stderr,
+                )
         if mdoc:
             try:
                 binding_audit = audit_oidf_mdoc_binding(

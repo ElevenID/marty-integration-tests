@@ -163,3 +163,114 @@ def test_summary_rejects_nonpassing_or_misplaced_browser_evidence(tmp_path: Path
             harness_commit="e" * 40,
             exit_code=1,
         )
+
+
+def test_summary_preserves_only_validated_sd_jwt_diagnostic_categories(tmp_path: Path) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    report = {
+        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+        "source_policy": "unmodified",
+        "modules": [
+            {
+                "test_name": "oid4vp-1final-verifier-happy-flow",
+                "result": "failed",
+                "decision": "deny",
+                "category": "issuer-audience-invalid",
+            }
+        ],
+    }
+    (raw / "oidf-sd-jwt-diagnostic-audit.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+
+    summary = sanitizer.build_summary(
+        raw,
+        lane="oid4vp-final",
+        harness_commit="f" * 40,
+        exit_code=1,
+    )
+
+    assert summary["verifier_diagnostics"] == report
+
+
+def test_summary_rejects_unvalidated_or_misplaced_sd_jwt_diagnostics(tmp_path: Path) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    report = {
+        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+        "source_policy": "unmodified",
+        "modules": [
+            {
+                "test_name": "oid4vp-1final-verifier-happy-flow",
+                "result": "failed",
+                "decision": "deny",
+                "category": "raw error: must-not-leak",
+            }
+        ],
+    }
+    path = raw / "oidf-sd-jwt-diagnostic-audit.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="category is unsafe"):
+        sanitizer.build_summary(
+            raw,
+            lane="oid4vp-final",
+            harness_commit="f" * 40,
+            exit_code=1,
+        )
+
+    report["modules"][0]["category"] = "issuer-audience-invalid"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError, match="not permitted"):
+        sanitizer.build_summary(
+            raw,
+            lane="w3c-v2",
+            harness_commit="f" * 40,
+            exit_code=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("result", "decision", "category"),
+    [
+        ("failed", "deny", "made-up-safe-category"),
+        ("passed", "allow", "issuer-audience-invalid"),
+        ("failed", "allow", "issuer-audience-invalid"),
+        ("unavailable", "unavailable", "issuer-audience-invalid"),
+    ],
+)
+def test_summary_rejects_unallowlisted_or_inconsistent_sd_jwt_outcomes(
+    tmp_path: Path,
+    result: str,
+    decision: str,
+    category: str,
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "oidf-sd-jwt-diagnostic-audit.json").write_text(
+        json.dumps(
+            {
+                "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+                "source_policy": "unmodified",
+                "modules": [
+                    {
+                        "test_name": "oid4vp-1final-verifier-happy-flow",
+                        "result": result,
+                        "decision": decision,
+                        "category": category,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="inconsistent or not allowlisted"):
+        sanitizer.build_summary(
+            raw,
+            lane="oid4vp-final",
+            harness_commit="f" * 40,
+            exit_code=1,
+        )

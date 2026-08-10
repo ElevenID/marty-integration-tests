@@ -13,6 +13,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 SCHEMA = "elevenid.sanitized-official-interop/v1"
 BROWSER_SCHEMA = "elevenid.released-browser-smoke/v1"
+SD_JWT_DIAGNOSTIC_SCHEMA = "elevenid.oidf-sd-jwt-diagnostic-audit/v1"
+SD_JWT_DIAGNOSTIC_LANES = {"oid4vp-final", "oid4vp-url-query", "haip"}
 LANES = {
     "oid4vci-issuer",
     "oid4vp-final",
@@ -23,6 +25,31 @@ LANES = {
     "eudi",
 }
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
+SAFE_DIAGNOSTIC_MODULE = re.compile(r"^oid4vp-[A-Za-z0-9_.:\[\]=,+/-]{1,292}$")
+SAFE_DIAGNOSTIC_CATEGORY = re.compile(r"^[a-z0-9-]{1,100}$")
+SD_JWT_FAILURE_CATEGORIES = {
+    "did-resolution-failed",
+    "disclosure-invalid",
+    "holder-key-missing-or-invalid",
+    "issuer-audience-invalid",
+    "issuer-key-invalid",
+    "issuer-required-claim-missing",
+    "issuer-signature-invalid",
+    "issuer-token-expired",
+    "issuer-token-invalid",
+    "issuer-trust-material-missing",
+    "key-binding-audience-invalid",
+    "key-binding-hash-invalid",
+    "key-binding-nonce-invalid",
+    "key-binding-required",
+    "key-binding-signature-invalid",
+    "key-binding-time-invalid",
+    "key-binding-type-invalid",
+    "native-verifier-unavailable",
+    "sd-jwt-verification-unclassified",
+    "unsupported-format",
+    "verification-denied-unclassified",
+}
 SENSITIVE_KEY = re.compile(
     r"(?:^|_)(?:authorization|cookie|password|secret|session|signing_jwk|private_key|access_token|refresh_token)(?:$|_)",
     re.IGNORECASE,
@@ -81,6 +108,56 @@ def load_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def sd_jwt_diagnostic_report(value: object) -> dict[str, object]:
+    """Validate the fixed-field public-safe SD-JWT diagnostic contract."""
+    if not isinstance(value, dict) or set(value) != {"schema", "source_policy", "modules"}:
+        raise ValueError("SD-JWT diagnostic report has an invalid shape")
+    if value.get("schema") != SD_JWT_DIAGNOSTIC_SCHEMA:
+        raise ValueError("SD-JWT diagnostic report has an unsupported schema")
+    if value.get("source_policy") != "unmodified":
+        raise ValueError("SD-JWT diagnostic report does not preserve the upstream source policy")
+    modules = value.get("modules")
+    if not isinstance(modules, list) or not modules:
+        raise ValueError("SD-JWT diagnostic report must contain at least one module")
+    allowed_results = {"passed", "failed", "partial", "unavailable"}
+    allowed_decisions = {"allow", "deny", "manual_review", "unavailable"}
+    for module in modules:
+        if not isinstance(module, dict) or set(module) != {
+            "test_name",
+            "result",
+            "decision",
+            "category",
+        }:
+            raise ValueError("SD-JWT diagnostic module has an invalid shape")
+        if (
+            not isinstance(module["test_name"], str)
+            or SAFE_DIAGNOSTIC_MODULE.fullmatch(module["test_name"]) is None
+        ):
+            raise ValueError("SD-JWT diagnostic module name is unsafe")
+        if module["result"] not in allowed_results:
+            raise ValueError("SD-JWT diagnostic result is not allowlisted")
+        if module["decision"] not in allowed_decisions:
+            raise ValueError("SD-JWT diagnostic decision is not allowlisted")
+        if (
+            not isinstance(module["category"], str)
+            or SAFE_DIAGNOSTIC_CATEGORY.fullmatch(module["category"]) is None
+        ):
+            raise ValueError("SD-JWT diagnostic category is unsafe")
+        outcome = (module["result"], module["decision"], module["category"])
+        if outcome == ("passed", "allow", "accepted"):
+            continue
+        if outcome == ("unavailable", "unavailable", "runtime-outcome-unavailable"):
+            continue
+        if (
+            module["result"] in {"failed", "partial"}
+            and module["decision"] in {"deny", "manual_review"}
+            and module["category"] in SD_JWT_FAILURE_CATEGORIES
+        ):
+            continue
+        raise ValueError("SD-JWT diagnostic outcome is inconsistent or not allowlisted")
+    return value
+
+
 def build_summary(
     input_dir: Path,
     *,
@@ -113,6 +190,7 @@ def build_summary(
     evidence: list[dict[str, object]] = []
     junit: list[dict[str, object]] = []
     browser_evidence: object | None = None
+    verifier_diagnostics: object | None = None
     if input_dir.is_dir():
         browser_paths = sorted(input_dir.rglob("browser-evidence.json"))
         if len(browser_paths) > 1:
@@ -130,6 +208,16 @@ def build_summary(
             if browser_raw.get("private_selectors_observed") is not False:
                 raise ValueError("browser evidence does not prove private-selector absence")
             browser_evidence, count = sanitize(browser_raw)
+            redactions += count
+        diagnostic_paths = sorted(input_dir.rglob("oidf-sd-jwt-diagnostic-audit.json"))
+        if len(diagnostic_paths) > 1:
+            raise ValueError("official evidence contains multiple SD-JWT diagnostic reports")
+        if diagnostic_paths:
+            if lane not in SD_JWT_DIAGNOSTIC_LANES:
+                raise ValueError("SD-JWT diagnostic evidence is not permitted for this lane")
+            verifier_diagnostics, count = sanitize(
+                sd_jwt_diagnostic_report(load_json(diagnostic_paths[0]))
+            )
             redactions += count
         for path in sorted(input_dir.rglob("evidence.json")):
             clean, count = sanitize(load_json(path))
@@ -151,6 +239,7 @@ def build_summary(
         "material": material,
         "eudi_harness_image": harness_image,
         "browser_evidence": browser_evidence,
+        "verifier_diagnostics": verifier_diagnostics,
         "official_evidence": evidence,
         "junit": junit,
         "redactions": redactions,

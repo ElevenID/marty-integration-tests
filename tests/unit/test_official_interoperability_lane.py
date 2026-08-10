@@ -848,6 +848,7 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert suite_environment["OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID"] == "browser-credential-1"
     assert suite_environment["OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID"] == "browser-application-1"
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "request_uri_signed"
+    assert suite_environment["OIDF_MARTY_FLOW_AUDIT_DIR"] == str(args.output_dir / "private" / "oidf-flow-audit")
     assert suite_environment["VERIFIER_X509_CERT_PEM"] == "request-certificate"
     browser_command = next(
         command for command in executed_commands if "oidf_marty_browser_smoke.py" in " ".join(command)
@@ -864,6 +865,7 @@ def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     diagnostics: list[Path] = []
+    sd_jwt_audits: list[tuple[Path, Path]] = []
 
     def fake_run(command: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
         if "oidf_marty_browser_smoke.py" in " ".join(command):
@@ -873,6 +875,18 @@ def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
     monkeypatch.setattr(lane, "run", fake_run)
     monkeypatch.setattr(lane, "wait_for_public_stack", lambda _environment: None)
     monkeypatch.setattr(lane, "emit_oid4vp_browser_runtime_diagnostic", diagnostics.append)
+    monkeypatch.setattr(
+        lane,
+        "audit_oidf_sd_jwt_diagnostics",
+        lambda mapping, log: (
+            sd_jwt_audits.append((mapping, log))
+            or {
+                "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+                "source_policy": "unmodified",
+                "modules": [],
+            }
+        ),
+    )
     monkeypatch.setattr(lane, "refresh_request_signing_certificate", lambda *_args: {})
     monkeypatch.setattr(
         lane,
@@ -909,6 +923,21 @@ def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
 
     assert lane.run_oidf(args, {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"}) == 2
     assert diagnostics == [tmp_path / "output" / "private" / "compose.log"]
+    assert sd_jwt_audits == [
+        (
+            tmp_path / "output" / "private" / "oidf-flow-audit",
+            tmp_path / "output" / "private" / "compose.log",
+        )
+    ]
+    diagnostic_report = (
+        tmp_path
+        / "output"
+        / "raw"
+        / "oid4vp-verifier"
+        / "oidf-sd-jwt-diagnostic-audit.json"
+    )
+    assert diagnostic_report.is_file()
+    assert json.loads(diagnostic_report.read_text(encoding="utf-8"))["source_policy"] == "unmodified"
 
 
 def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
@@ -1084,6 +1113,7 @@ def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
     assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
     assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "mdoc-policy-1"
     assert suite_environment["OIDF_MARTY_VERIFIER_PROFILE"] == "standard"
+    assert "OIDF_MARTY_FLOW_AUDIT_DIR" not in suite_environment
     assert diagnostics == [tmp_path / "output" / "private" / "compose.log"]
 
 
@@ -1576,16 +1606,30 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
 
 def test_w3c_lane_cleans_up_a_partial_initial_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[list[str]] = []
+    keycloak_diagnostics: list[str] = []
+    issuance_diagnostics: list[str] = []
 
     def fake_run(command: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
         commands.append(command)
         return 1 if command[-1] == "up" else 0
 
     monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(
+        lane,
+        "emit_keycloak_initializer_diagnostic",
+        keycloak_diagnostics.append,
+    )
+    monkeypatch.setattr(
+        lane,
+        "emit_w3c_issuance_diagnostic",
+        issuance_diagnostics.append,
+    )
     args = SimpleNamespace(marty_ui=tmp_path / "marty-ui", run_id="run-1")
 
     assert lane.run_w3c(args, {}) == 1
     assert commands[-1][-1] == "down"
+    assert keycloak_diagnostics == ["run-1"]
+    assert issuance_diagnostics == ["run-1"]
 
 
 def test_w3c_lane_diagnoses_fixture_bootstrap_failure(
