@@ -1448,6 +1448,13 @@ def bootstrap(
                 result[f"{prefix}_status_issuer_id"] = issuer_payload["issuer_id"]
             else:
                 result[f"{prefix}_trusted_issuer_id"] = issuer_payload["issuer_id"]
+                # The per-module interaction adapter uses the same public key
+                # to create an exact governed IssuerEntity for the runner's
+                # dynamic test-instance issuer URL. Private key material was
+                # already removed by ``official_signer_public_jwk``.
+                result[f"{prefix}_credential_issuer_public_jwk"] = dict(
+                    oidf_signer_public_jwk
+                )
             activated_trust_profile = request(
                 gateway_url,
                 session_id,

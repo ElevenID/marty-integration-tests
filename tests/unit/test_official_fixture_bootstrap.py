@@ -245,6 +245,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert "oid4vp_issuer_profile_id" not in result
     assert result["oid4vp_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
     assert result["oid4vp_request_issuer_public_jwk"] == PUBLIC_SIGNING_JWK
+    assert result["oid4vp_credential_issuer_public_jwk"] == PUBLIC_SIGNING_JWK
     assert result["oid4vp_compliance_profile_id"] == "compliance-1"
     assert result["oid4vp_revocation_profile_id"] == "revocation-1"
     assert result["oid4vp_trust_profile_id"] == "trust-1"
@@ -399,6 +400,7 @@ def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() 
     assert result["browser_application_template_id"] == "browser-application-1"
     assert result["browser_flow_id"] == "browser-flow-1"
     assert result["oid4vp_request_issuer_public_jwk"] == PUBLIC_SIGNING_JWK
+    assert result["oid4vp_credential_issuer_public_jwk"] == PUBLIC_SIGNING_JWK
     assert result["oid4vp_trusted_issuer_id"] == fixtures.OFFICIAL_OIDF_ISSUER_ID
     browser_calls = calls[13:]
     assert [path for path, _method, _body in browser_calls] == [

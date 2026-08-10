@@ -477,6 +477,12 @@ def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(
                         "x": "public-x",
                         "y": "public-y",
                     },
+                    "oid4vp_credential_issuer_public_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "credential-public-x",
+                        "y": "credential-public-y",
+                    },
                 }
             ),
             encoding="utf-8",
@@ -497,6 +503,12 @@ def test_oidf_fixture_bootstrap_receives_the_private_runner_config_by_path(
     )
 
     assert result["oid4vp_trust_profile_id"] == "trust-1"
+    assert result["oid4vp_credential_issuer_public_jwk"] == {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "credential-public-x",
+        "y": "credential-public-y",
+    }
     assert captured[captured.index("--oidf-runner-config") + 1] == str(haip_material / "marty-verifier-haip.json")
 
 
@@ -819,6 +831,12 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
                 "x": "public-x",
                 "y": "public-y",
             },
+            "oid4vp_credential_issuer_public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "credential-public-x",
+                "y": "credential-public-y",
+            },
             "browser_credential_template_id": "browser-credential-1",
             "browser_application_template_id": "browser-application-1",
             "browser_flow_id": "browser-flow-1",
@@ -845,6 +863,13 @@ def test_oidf_lane_binds_the_disposable_trust_profile_to_the_real_flow(
     assert suite_environment["OIDF_MARTY_TRUST_PROFILE_ID"] == "trust-1"
     assert "OIDF_MARTY_ISSUER_PROFILE_ID" not in suite_environment
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == "did:web:marty.test:orgs:org-1"
+    assert suite_environment["OIDF_MARTY_DYNAMIC_ISSUER_GOVERNANCE"] == "1"
+    assert json.loads(suite_environment["OIDF_MARTY_OFFICIAL_SIGNER_PUBLIC_JWK"]) == {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "credential-public-x",
+        "y": "credential-public-y",
+    }
     assert suite_environment["OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID"] == "browser-credential-1"
     assert suite_environment["OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID"] == "browser-application-1"
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "request_uri_signed"
@@ -901,6 +926,12 @@ def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
                 "crv": "P-256",
                 "x": "public-x",
                 "y": "public-y",
+            },
+            "oid4vp_credential_issuer_public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "credential-public-x",
+                "y": "credential-public-y",
             },
             "browser_credential_template_id": "browser-credential-1",
             "browser_application_template_id": "browser-application-1",
@@ -980,6 +1011,12 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
                 "x": "public-x",
                 "y": "public-y",
             },
+            "oid4vp_credential_issuer_public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "credential-public-x",
+                "y": "credential-public-y",
+            },
         },
     )
     monkeypatch.setattr(
@@ -1010,6 +1047,10 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
     assert suite_environment["OIDF_VERIFIER_REQUEST_METHOD"] == "url_query"
     assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
     assert suite_environment["OIDF_MARTY_ISSUER_DID"] == ("did:web:marty.test:orgs:org-1")
+    assert suite_environment["OIDF_MARTY_DYNAMIC_ISSUER_GOVERNANCE"] == "1"
+    assert json.loads(suite_environment["OIDF_MARTY_OFFICIAL_SIGNER_PUBLIC_JWK"])["x"] == (
+        "credential-public-x"
+    )
     assert discarded == [tmp_path / "haip"]
 
 
