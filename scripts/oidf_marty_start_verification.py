@@ -9,6 +9,7 @@ not create a test-only flow, a bypass, or a synthetic VP.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -26,6 +27,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from oidf_marty_public_login import authenticated_json_request  # noqa: E402 -- import follows standalone path setup
 
 REQUEST_URI_METHOD_POST_TEST = "oid4vp-1final-verifier-request-uri-method-post"
+PRIVATE_FLOW_AUDIT_SCHEMA = "elevenid.oidf-flow-correlation/private-v1"
 
 
 def required_env(name: str) -> str:
@@ -104,6 +106,36 @@ def start_flow(gateway_url: str, session_id: str, body: dict[str, Any]) -> dict[
     return data
 
 
+def write_private_flow_audit(payload: dict[str, Any], result: dict[str, Any]) -> None:
+    """Record only the private correlation needed for safe failure diagnosis."""
+    configured = os.environ.get("OIDF_MARTY_FLOW_AUDIT_DIR", "").strip()
+    if not configured:
+        return
+    test_id = payload.get("test_id")
+    test_name = payload.get("test_name")
+    flow_instance_id = result.get("instance_id")
+    if not all(isinstance(value, str) and value for value in (test_id, test_name, flow_instance_id)):
+        raise RuntimeError("OIDF flow audit requires module and flow identifiers")
+    record = {
+        "schema": PRIVATE_FLOW_AUDIT_SCHEMA,
+        "test_name": test_name,
+        "flow_instance_id": flow_instance_id,
+    }
+    serialized = json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
+    digest = hashlib.sha256(f"{test_id}\0{flow_instance_id}".encode()).hexdigest()
+    directory = Path(configured)
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / f"{digest}.json"
+    try:
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        if destination.read_text(encoding="utf-8") != serialized:
+            raise RuntimeError("OIDF flow audit correlation conflicts with an existing record") from exc
+        return
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+        output.write(serialized)
+
+
 def gateway_session_id() -> str:
     """Use an existing session only when an operator deliberately supplies one.
 
@@ -138,6 +170,7 @@ def main() -> int:
         gateway_session_id(),
         flow_body(payload),
     )
+    write_private_flow_audit(payload, result)
     value = result.get("authorization_request") or result.get("request_uri")
     if not isinstance(value, str) or not value:
         raise RuntimeError("Marty flow response has no authorization_request or request_uri")
