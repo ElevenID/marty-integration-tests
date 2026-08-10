@@ -34,6 +34,7 @@ RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 CREDENTIAL_CONFIGURATION_ID = re.compile(r"^[A-Za-z0-9_.:#-]{1,192}$")
 OFFICIAL_OIDF_ISSUER_DOMAIN = "localhost.emobix.co.uk"
+OFFICIAL_OIDF_ISSUER_ID = f"https://{OFFICIAL_OIDF_ISSUER_DOMAIN}:8443"
 OFFICIAL_MDOC_SIGNER_CERTIFICATE = re.compile(
     r"val\s+documentSignerCert\s*=\s*X509Cert\.fromPem\(\s*"
     r'"""(?P<certificate>-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)"""',
@@ -773,6 +774,40 @@ def trust_profile_payload(
     }
 
 
+def sd_jwt_issuer_entity_payload(
+    organization_id: str,
+    public_jwk: dict[str, str],
+    *,
+    run_id: str,
+) -> dict[str, object]:
+    """Build the governed record for the exact official SD-JWT issuer."""
+    if public_jwk.get("kty") != "EC" or public_jwk.get("crv") != "P-256":
+        raise ValueError("official OIDF issuer public JWK must use EC P-256")
+    if any(
+        not isinstance(public_jwk.get(name), str) or not public_jwk[name]
+        for name in ("x", "y")
+    ):
+        raise ValueError("official OIDF issuer public JWK has no complete public key")
+    private_parameters = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+    if private_parameters.intersection(public_jwk):
+        raise ValueError("official OIDF issuer metadata must not contain private JWK material")
+    return {
+        "organization_id": organization_id,
+        "issuer_id": OFFICIAL_OIDF_ISSUER_ID,
+        "issuer_type": "ORGANIZATION",
+        "display_name": f"Official OIDF SD-JWT issuer {run_id}",
+        "description": (
+            "Disposable lifecycle record for the exact credential issuer in the "
+            "commit-pinned unmodified OIDF runner"
+        ),
+        "compliance_status": "COMPLIANT",
+        "metadata": {
+            "source": "official-oidf-commit-pinned-sd-jwt-signer",
+            "verification_keys": [dict(public_jwk)],
+        },
+    }
+
+
 def mdoc_issuer_entity_payload(
     organization_id: str,
     certificate_pem: str,
@@ -1361,6 +1396,10 @@ def bootstrap(
                 ),
             )
             trust_profile_id = response_id(created_trust_profile, "OID4VP trust profile")
+            # A pinned key proves a signature but cannot authorize its issuer.
+            # Materialize the exact commit-pinned signer as a governed entity
+            # and relationship before activation, so verification cannot fall
+            # back to an allowlist or infer trust from JWK possession.
             if mdoc:
                 assert oidf_mdoc_trust_anchor_pem is not None
                 issuer_payload = mdoc_issuer_entity_payload(
@@ -1368,34 +1407,47 @@ def bootstrap(
                     oidf_mdoc_trust_anchor_pem,
                     run_id=run_id,
                 )
-                created_issuer = request(
-                    gateway_url,
-                    session_id,
-                    "/v1/issuer-entities",
-                    method="POST",
-                    json_body=issuer_payload,
+                issuer_resource = "OID4VP mdoc issuer entity"
+                relationship_resource = "OID4VP mdoc issuer relationship"
+                relationship_source = "official-oidf-commit-pinned-document-signer"
+            else:
+                assert oidf_signer_public_jwk is not None
+                issuer_payload = sd_jwt_issuer_entity_payload(
+                    organization_id,
+                    oidf_signer_public_jwk,
+                    run_id=run_id,
                 )
-                issuer_entity_id = response_id(
-                    created_issuer,
-                    "OID4VP mdoc issuer entity",
-                )
-                linked_issuer = request(
-                    gateway_url,
-                    session_id,
-                    f"/v1/trust-profiles/{trust_profile_id}/issuers",
-                    method="POST",
-                    json_body={
-                        "issuer_id": issuer_entity_id,
-                        "trust_level": 100,
-                        "relationship_status": "TRUSTED",
-                        "cascade_revocation_policy": "AUTO_CASCADE",
-                        "metadata": {
-                            "source": "official-oidf-commit-pinned-document-signer"
-                        },
+                issuer_resource = "OID4VP SD-JWT issuer entity"
+                relationship_resource = "OID4VP SD-JWT issuer relationship"
+                relationship_source = "official-oidf-commit-pinned-sd-jwt-signer"
+            created_issuer = request(
+                gateway_url,
+                session_id,
+                "/v1/issuer-entities",
+                method="POST",
+                json_body=issuer_payload,
+            )
+            issuer_entity_id = response_id(created_issuer, issuer_resource)
+            linked_issuer = request(
+                gateway_url,
+                session_id,
+                f"/v1/trust-profiles/{trust_profile_id}/issuers",
+                method="POST",
+                json_body={
+                    "issuer_id": issuer_entity_id,
+                    "trust_level": 100,
+                    "relationship_status": "TRUSTED",
+                    "cascade_revocation_policy": "AUTO_CASCADE",
+                    "metadata": {
+                        "source": relationship_source,
                     },
-                )
-                response_id(linked_issuer, "OID4VP mdoc issuer relationship")
+                },
+            )
+            response_id(linked_issuer, relationship_resource)
+            if mdoc:
                 result[f"{prefix}_status_issuer_id"] = issuer_payload["issuer_id"]
+            else:
+                result[f"{prefix}_trusted_issuer_id"] = issuer_payload["issuer_id"]
             activated_trust_profile = request(
                 gateway_url,
                 session_id,

@@ -199,6 +199,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "policy-1"},
             {"id": "policy-1"},
             {"id": "trust-1"},
+            {"id": "issuer-entity-1"},
+            {"id": "relationship-1"},
             {"id": "trust-1"},
             issuer_identity_response(credential_format="JSON_LD", algorithm="EdDSA"),
             {"id": "compliance-2"},
@@ -246,6 +248,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert result["oid4vp_compliance_profile_id"] == "compliance-1"
     assert result["oid4vp_revocation_profile_id"] == "revocation-1"
     assert result["oid4vp_trust_profile_id"] == "trust-1"
+    assert result["oid4vp_trusted_issuer_id"] == fixtures.OFFICIAL_OIDF_ISSUER_ID
     assert result["w3c_compliance_profile_id"] == "compliance-2"
     assert result["w3c_revocation_profile_id"] == "revocation-2"
     assert "w3c_issuer_profile_id" not in result
@@ -280,31 +283,53 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[7][0] == "/v1/presentation-policies"
     assert calls[8][0] == "/v1/presentation-policies/policy-1/activate"
     assert calls[9][0] == "/v1/trust-profiles"
-    assert calls[10][0] == "/v1/trust-profiles/trust-1/activate"
+    assert calls[10] == (
+        "/v1/issuer-entities",
+        "POST",
+        fixtures.sd_jwt_issuer_entity_payload(
+            fixtures.DEFAULT_ORGANIZATION,
+            PUBLIC_SIGNING_JWK,
+            run_id="run-1",
+        ),
+    )
+    assert calls[11] == (
+        "/v1/trust-profiles/trust-1/issuers",
+        "POST",
+        {
+            "issuer_id": "issuer-entity-1",
+            "trust_level": 100,
+            "relationship_status": "TRUSTED",
+            "cascade_revocation_policy": "AUTO_CASCADE",
+            "metadata": {
+                "source": "official-oidf-commit-pinned-sd-jwt-signer"
+            },
+        },
+    )
+    assert calls[12][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
-    assert calls[11][0] == "/v1/signing-keys/issuer-identities"
-    assert calls[11][2] == {
+    assert calls[13][0] == "/v1/signing-keys/issuer-identities"
+    assert calls[13][2] == {
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
         "issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
         "key_purpose": "vc_jwt_issuer",
         "credential_format": "JSON_LD",
         "algorithm": "EdDSA",
     }
-    assert calls[15][2]["credential_payload_format"] == "ldp_vc"
-    assert calls[16][2]["credential_payload_format"] == "ldp_vc"
-    assert calls[17][2]["holder_binding"] == {"required": False}
-    assert calls[21][0].startswith("/v1/api-keys?organization_id=")
-    assert calls[21][2] == {
+    assert calls[17][2]["credential_payload_format"] == "ldp_vc"
+    assert calls[18][2]["credential_payload_format"] == "ldp_vc"
+    assert calls[19][2]["holder_binding"] == {"required": False}
+    assert calls[23][0].startswith("/v1/api-keys?organization_id=")
+    assert calls[23][2] == {
         "name": "Official W3C VC API run-1",
         "description": "Disposable key for one official VCDM v2 suite run",
         "scopes": ["credentials:issue", "credentials:read"],
         "is_test": True,
     }
-    requirement = calls[17][2]["credential_requirements"][0]
+    requirement = calls[19][2]["credential_requirements"][0]
     assert requirement["credential_template_id"] == "template-2"
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[19][2]["holder_binding"] == {
+    assert calls[21][2]["holder_binding"] == {
         "required": True,
         "binding_methods": ["DEVICE_KEY"],
         "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
@@ -314,7 +339,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             "replay_detection_required": True,
         },
     }
-    presentation_requirement = calls[19][2]["credential_requirements"][0]
+    presentation_requirement = calls[21][2]["credential_requirements"][0]
     assert presentation_requirement["credential_template_id"] == "template-3"
     assert presentation_requirement["credential_payload_format"] == ("w3c_vcdm_v2_di")
 
@@ -336,6 +361,8 @@ def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() 
             {"id": "policy-1"},
             {"id": "policy-1"},
             {"id": "trust-1"},
+            {"id": "issuer-entity-1"},
+            {"id": "relationship-1"},
             {"id": "trust-1"},
             {"id": "browser-compliance-1"},
             {"id": "browser-credential-1"},
@@ -372,7 +399,8 @@ def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() 
     assert result["browser_application_template_id"] == "browser-application-1"
     assert result["browser_flow_id"] == "browser-flow-1"
     assert result["oid4vp_request_issuer_public_jwk"] == PUBLIC_SIGNING_JWK
-    browser_calls = calls[11:]
+    assert result["oid4vp_trusted_issuer_id"] == fixtures.OFFICIAL_OIDF_ISSUER_ID
+    browser_calls = calls[13:]
     assert [path for path, _method, _body in browser_calls] == [
         "/v1/compliance-profiles",
         "/v1/credential-templates",
@@ -934,6 +962,37 @@ def test_runner_private_jwk_is_reduced_to_public_members_before_gateway_use(tmp_
     assert pinned == public_jwk
     assert set(pinned) == {"kty", "crv", "x", "y"}
     assert payload["allowed_issuers"] == [fixtures.OFFICIAL_OIDF_ISSUER_DOMAIN]
+
+
+def test_sd_jwt_issuer_entity_owns_only_public_runner_key_material() -> None:
+    payload = fixtures.sd_jwt_issuer_entity_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        PUBLIC_SIGNING_JWK,
+        run_id="run-1",
+    )
+
+    assert payload == {
+        "organization_id": fixtures.DEFAULT_ORGANIZATION,
+        "issuer_id": "https://localhost.emobix.co.uk:8443",
+        "issuer_type": "ORGANIZATION",
+        "display_name": "Official OIDF SD-JWT issuer run-1",
+        "description": (
+            "Disposable lifecycle record for the exact credential issuer in the "
+            "commit-pinned unmodified OIDF runner"
+        ),
+        "compliance_status": "COMPLIANT",
+        "metadata": {
+            "source": "official-oidf-commit-pinned-sd-jwt-signer",
+            "verification_keys": [PUBLIC_SIGNING_JWK],
+        },
+    }
+
+    with pytest.raises(ValueError, match="private JWK material"):
+        fixtures.sd_jwt_issuer_entity_payload(
+            fixtures.DEFAULT_ORGANIZATION,
+            {**PUBLIC_SIGNING_JWK, "d": "private"},
+            run_id="run-1",
+        )
 
 
 def test_mdoc_trust_anchor_is_read_from_exact_runner_source(tmp_path: Path) -> None:
