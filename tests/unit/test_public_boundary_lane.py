@@ -486,7 +486,7 @@ def test_public_boundary_workflow_builds_pinned_independent_didcomm_verifier() -
     manifest = json.loads((root / "conformance" / "didcomm-interoperability.json").read_text(encoding="utf-8"))
     implementation = manifest["independent_implementation"]
 
-    assert "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16" in workflow
+    assert "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e" in workflow
     assert "repository: notabene-id/go-didcomm" in workflow
     assert f"ref: {implementation['commit']}" in workflow
     assert 'go build -mod=readonly -trimpath -o "$verifier" ./cmd/didcomm' in workflow
