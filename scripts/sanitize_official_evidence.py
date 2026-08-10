@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 SCHEMA = "elevenid.sanitized-official-interop/v1"
 BROWSER_SCHEMA = "elevenid.released-browser-smoke/v1"
-SD_JWT_DIAGNOSTIC_SCHEMA = "elevenid.oidf-sd-jwt-diagnostic-audit/v1"
+SD_JWT_DIAGNOSTIC_SCHEMA = "elevenid.oidf-sd-jwt-diagnostic-audit/v2"
 SD_JWT_DIAGNOSTIC_LANES = {"oid4vp-final", "oid4vp-url-query", "haip"}
 LANES = {
     "oid4vci-issuer",
@@ -121,12 +121,19 @@ def sd_jwt_diagnostic_report(value: object) -> dict[str, object]:
         raise ValueError("SD-JWT diagnostic report must contain at least one module")
     allowed_results = {"passed", "failed", "partial", "unavailable"}
     allowed_decisions = {"allow", "deny", "manual_review", "unavailable"}
+    allowed_stages = {
+        "direct-post-callback-response",
+        "no-official-failure-observed",
+        "other-official-failure",
+    }
     for module in modules:
         if not isinstance(module, dict) or set(module) != {
             "test_name",
-            "result",
-            "decision",
-            "category",
+            "marty_flow_result",
+            "marty_flow_decision",
+            "marty_flow_category",
+            "official_failure_stage",
+            "official_http_status",
         }:
             raise ValueError("SD-JWT diagnostic module has an invalid shape")
         if (
@@ -134,24 +141,46 @@ def sd_jwt_diagnostic_report(value: object) -> dict[str, object]:
             or SAFE_DIAGNOSTIC_MODULE.fullmatch(module["test_name"]) is None
         ):
             raise ValueError("SD-JWT diagnostic module name is unsafe")
-        if module["result"] not in allowed_results:
-            raise ValueError("SD-JWT diagnostic result is not allowlisted")
-        if module["decision"] not in allowed_decisions:
-            raise ValueError("SD-JWT diagnostic decision is not allowlisted")
+        if module["marty_flow_result"] not in allowed_results:
+            raise ValueError("SD-JWT diagnostic Marty flow result is not allowlisted")
+        if module["marty_flow_decision"] not in allowed_decisions:
+            raise ValueError("SD-JWT diagnostic Marty flow decision is not allowlisted")
         if (
-            not isinstance(module["category"], str)
-            or SAFE_DIAGNOSTIC_CATEGORY.fullmatch(module["category"]) is None
+            not isinstance(module["marty_flow_category"], str)
+            or SAFE_DIAGNOSTIC_CATEGORY.fullmatch(module["marty_flow_category"])
+            is None
         ):
-            raise ValueError("SD-JWT diagnostic category is unsafe")
-        outcome = (module["result"], module["decision"], module["category"])
+            raise ValueError("SD-JWT diagnostic Marty flow category is unsafe")
+        stage = module["official_failure_stage"]
+        status = module["official_http_status"]
+        if stage not in allowed_stages:
+            raise ValueError("SD-JWT diagnostic Official failure stage is not allowlisted")
+        if (
+            status is not None
+            and (
+                isinstance(status, bool)
+                or not isinstance(status, int)
+                or not 100 <= status <= 599
+            )
+        ):
+            raise ValueError("SD-JWT diagnostic Official HTTP status is invalid")
+        if (stage == "direct-post-callback-response") != (status is not None):
+            raise ValueError(
+                "SD-JWT diagnostic Official stage and HTTP status are inconsistent"
+            )
+        outcome = (
+            module["marty_flow_result"],
+            module["marty_flow_decision"],
+            module["marty_flow_category"],
+        )
         if outcome == ("passed", "allow", "accepted"):
             continue
         if outcome == ("unavailable", "unavailable", "runtime-outcome-unavailable"):
             continue
         if (
-            module["result"] in {"failed", "partial"}
-            and module["decision"] in {"deny", "manual_review"}
-            and module["category"] in SD_JWT_FAILURE_CATEGORIES
+            module["marty_flow_result"] in {"failed", "partial"}
+            and module["marty_flow_decision"] in {"deny", "manual_review"}
+            and module["marty_flow_category"] in SD_JWT_FAILURE_CATEGORIES
         ):
             continue
         raise ValueError("SD-JWT diagnostic outcome is inconsistent or not allowlisted")

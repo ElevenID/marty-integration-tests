@@ -169,14 +169,16 @@ def test_summary_preserves_only_validated_sd_jwt_diagnostic_categories(tmp_path:
     raw = tmp_path / "raw"
     raw.mkdir()
     report = {
-        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v2",
         "source_policy": "unmodified",
         "modules": [
             {
                 "test_name": "oid4vp-1final-verifier-happy-flow",
-                "result": "failed",
-                "decision": "deny",
-                "category": "issuer-audience-invalid",
+                "marty_flow_result": "failed",
+                "marty_flow_decision": "deny",
+                "marty_flow_category": "issuer-audience-invalid",
+                "official_failure_stage": "direct-post-callback-response",
+                "official_http_status": 400,
             }
         ],
     }
@@ -199,14 +201,16 @@ def test_summary_rejects_unvalidated_or_misplaced_sd_jwt_diagnostics(tmp_path: P
     raw = tmp_path / "raw"
     raw.mkdir()
     report = {
-        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v2",
         "source_policy": "unmodified",
         "modules": [
             {
                 "test_name": "oid4vp-1final-verifier-happy-flow",
-                "result": "failed",
-                "decision": "deny",
-                "category": "raw error: must-not-leak",
+                "marty_flow_result": "failed",
+                "marty_flow_decision": "deny",
+                "marty_flow_category": "raw error: must-not-leak",
+                "official_failure_stage": "direct-post-callback-response",
+                "official_http_status": 400,
             }
         ],
     }
@@ -221,7 +225,7 @@ def test_summary_rejects_unvalidated_or_misplaced_sd_jwt_diagnostics(tmp_path: P
             exit_code=1,
         )
 
-    report["modules"][0]["category"] = "issuer-audience-invalid"
+    report["modules"][0]["marty_flow_category"] = "issuer-audience-invalid"
     path.write_text(json.dumps(report), encoding="utf-8")
     with pytest.raises(ValueError, match="not permitted"):
         sanitizer.build_summary(
@@ -252,14 +256,16 @@ def test_summary_rejects_unallowlisted_or_inconsistent_sd_jwt_outcomes(
     (raw / "oidf-sd-jwt-diagnostic-audit.json").write_text(
         json.dumps(
             {
-                "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+                "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v2",
                 "source_policy": "unmodified",
                 "modules": [
                     {
                         "test_name": "oid4vp-1final-verifier-happy-flow",
-                        "result": result,
-                        "decision": decision,
-                        "category": category,
+                        "marty_flow_result": result,
+                        "marty_flow_decision": decision,
+                        "marty_flow_category": category,
+                        "official_failure_stage": "direct-post-callback-response",
+                        "official_http_status": 400,
                     }
                 ],
             }

@@ -865,7 +865,7 @@ def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     diagnostics: list[Path] = []
-    sd_jwt_audits: list[tuple[Path, Path]] = []
+    sd_jwt_audits: list[tuple[Path, Path, Path]] = []
 
     def fake_run(command: list[str], _environment: dict[str, str], **_kwargs: object) -> int:
         if "oidf_marty_browser_smoke.py" in " ".join(command):
@@ -878,10 +878,10 @@ def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
     monkeypatch.setattr(
         lane,
         "audit_oidf_sd_jwt_diagnostics",
-        lambda mapping, log: (
-            sd_jwt_audits.append((mapping, log))
+        lambda mapping, log, official: (
+            sd_jwt_audits.append((mapping, log, official))
             or {
-                "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+                "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v2",
                 "source_policy": "unmodified",
                 "modules": [],
             }
@@ -927,6 +927,11 @@ def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
         (
             tmp_path / "output" / "private" / "oidf-flow-audit",
             tmp_path / "output" / "private" / "compose.log",
+            tmp_path
+            / "output"
+            / "raw"
+            / "oid4vp-verifier"
+            / "failure-diagnostics.json",
         )
     ]
     diagnostic_report = (
