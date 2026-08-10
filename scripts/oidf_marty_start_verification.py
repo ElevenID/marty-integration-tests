@@ -12,11 +12,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 # The deployment helpers are deliberately standalone scripts rather than an
 # installed package. Make their directory importable too when this module is
@@ -28,6 +29,13 @@ from oidf_marty_public_login import authenticated_json_request  # noqa: E402 -- 
 
 REQUEST_URI_METHOD_POST_TEST = "oid4vp-1final-verifier-request-uri-method-post"
 PRIVATE_FLOW_AUDIT_SCHEMA = "elevenid.oidf-flow-correlation/private-v1"
+OFFICIAL_AUTHORIZATION_PATH = re.compile(
+    r"^/test/(?:a/)?[A-Za-z0-9._~-]{1,200}/authorize$"
+)
+RESOURCE_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 def required_env(name: str) -> str:
@@ -42,6 +50,233 @@ def https_url(value: str, field: str) -> str:
     if parsed.scheme != "https" or not parsed.netloc:
         raise ValueError(f"{field} must be an externally reachable HTTPS URL")
     return value.rstrip("/")
+
+
+def official_credential_issuer(payload: dict[str, Any], conformance_server: str) -> str:
+    """Derive the exact issuer URL used by the unchanged Official module.
+
+    The runner configures its credential ``iss`` from the test-instance base
+    URL and exposes ``<base>/authorize`` to the interaction adapter. Accept
+    only that fixed public route on the configured runner origin; arbitrary
+    endpoints must never become governed issuers.
+    """
+    endpoint_value = payload.get("authorization_endpoint")
+    if not isinstance(endpoint_value, str) or not endpoint_value:
+        raise ValueError("OIDF module authorization_endpoint is required")
+    endpoint = urlparse(endpoint_value)
+    server = urlparse(conformance_server)
+    if (
+        endpoint.scheme.lower() != "https"
+        or not endpoint.hostname
+        or endpoint.username is not None
+        or endpoint.password is not None
+        or endpoint.params
+        or endpoint.query
+        or endpoint.fragment
+        or OFFICIAL_AUTHORIZATION_PATH.fullmatch(endpoint.path) is None
+    ):
+        raise ValueError("OIDF module authorization_endpoint is not an exact Official test route")
+    if (
+        server.scheme.lower() != "https"
+        or not server.hostname
+        or server.username is not None
+        or server.password is not None
+        or server.params
+        or server.query
+        or server.fragment
+        or server.path not in {"", "/"}
+    ):
+        raise ValueError("CONFORMANCE_SERVER must be an HTTPS origin")
+    endpoint_origin = (
+        endpoint.hostname.lower(),
+        endpoint.port or 443,
+    )
+    server_origin = (
+        server.hostname.lower(),
+        server.port or 443,
+    )
+    if endpoint_origin != server_origin:
+        raise ValueError("OIDF module authorization_endpoint is not on CONFORMANCE_SERVER")
+    issuer_path = endpoint.path[: -len("/authorize")]
+    return endpoint._replace(path=issuer_path, params="", query="", fragment="").geturl()
+
+
+def official_signer_public_jwk() -> dict[str, str]:
+    """Load the public-only signer copied from the commit-pinned runner config."""
+    raw = required_env("OIDF_MARTY_OFFICIAL_SIGNER_PUBLIC_JWK")
+    try:
+        value: object = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OIDF official signer public JWK is invalid JSON") from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"kty", "crv", "x", "y"}
+        or value.get("kty") != "EC"
+        or value.get("crv") != "P-256"
+        or not isinstance(value.get("x"), str)
+        or not value["x"]
+        or not isinstance(value.get("y"), str)
+        or not value["y"]
+    ):
+        raise ValueError("OIDF official signer JWK must be a public-only P-256 key")
+    return {name: value[name] for name in ("kty", "crv", "x", "y")}
+
+
+def _resource_id(value: object, resource: str) -> str:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"public API returned a non-object for {resource}")
+    identifier = value.get("id")
+    if not isinstance(identifier, str) or RESOURCE_ID.fullmatch(identifier) is None:
+        raise RuntimeError(f"public API returned no {resource} id")
+    return identifier
+
+
+def _existing_module_issuer_entity(
+    gateway_url: str,
+    session_id: str,
+    *,
+    organization_id: str,
+    issuer_id: str,
+    signer_jwk: dict[str, str],
+) -> str | None:
+    value = authenticated_json_request(
+        gateway_url,
+        session_id,
+        f"/v1/issuer-entities?{urlencode({'organization_id': organization_id})}",
+    )
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise RuntimeError("public API returned an invalid issuer entity list")
+    matches = [item for item in value if item.get("issuer_id") == issuer_id]
+    if len(matches) > 1:
+        raise RuntimeError("public API returned ambiguous Official module issuer entities")
+    if not matches:
+        return None
+    entity = matches[0]
+    if (
+        entity.get("organization_id") != organization_id
+        or entity.get("issuer_type") != "ORGANIZATION"
+        or entity.get("display_name") != "Official OIDF test-instance issuer"
+        or entity.get("description")
+        != (
+            "Disposable exact issuer for one module in the commit-pinned "
+            "unmodified OIDF runner"
+        )
+        or entity.get("is_system_issuer") is not False
+        or entity.get("compliance_status") != "COMPLIANT"
+        or entity.get("revoked_at") is not None
+        or entity.get("metadata")
+        != {
+            "source": "official-oidf-commit-pinned-test-instance",
+            "verification_keys": [signer_jwk],
+        }
+    ):
+        raise RuntimeError("existing Official module issuer entity is not exact")
+    return _resource_id(entity, "Official module issuer entity")
+
+
+def _has_exact_module_issuer_relationship(
+    gateway_url: str,
+    session_id: str,
+    *,
+    trust_profile_id: str,
+    issuer_entity_id: str,
+) -> bool:
+    value = authenticated_json_request(
+        gateway_url,
+        session_id,
+        f"/v1/trust-profiles/{trust_profile_id}/issuers",
+    )
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise RuntimeError("public API returned an invalid issuer relationship list")
+    matches = [item for item in value if item.get("issuer_id") == issuer_entity_id]
+    if len(matches) > 1:
+        raise RuntimeError("public API returned ambiguous Official module issuer relationships")
+    if not matches:
+        return False
+    relationship = matches[0]
+    if (
+        relationship.get("trust_level") != 100
+        or relationship.get("relationship_status") != "TRUSTED"
+        or relationship.get("cascade_revocation_policy") != "AUTO_CASCADE"
+        or relationship.get("metadata")
+        != {"source": "official-oidf-commit-pinned-test-instance"}
+    ):
+        raise RuntimeError("existing Official module issuer relationship is not exact")
+    _resource_id(relationship, "Official module issuer relationship")
+    return True
+
+
+def govern_official_module_issuer(
+    gateway_url: str,
+    session_id: str,
+    payload: dict[str, Any],
+) -> None:
+    """Create one exact issuer entity and relationship before starting a flow."""
+    mode = os.environ.get("OIDF_MARTY_DYNAMIC_ISSUER_GOVERNANCE", "").strip()
+    if not mode:
+        return
+    if mode != "1":
+        raise ValueError("OIDF_MARTY_DYNAMIC_ISSUER_GOVERNANCE must be 1 when enabled")
+    issuer_id = official_credential_issuer(
+        payload,
+        required_env("CONFORMANCE_SERVER"),
+    )
+    organization_id = required_env("OIDF_MARTY_ORGANIZATION_ID")
+    signer_jwk = official_signer_public_jwk()
+    issuer_entity_id = _existing_module_issuer_entity(
+        gateway_url,
+        session_id,
+        organization_id=organization_id,
+        issuer_id=issuer_id,
+        signer_jwk=signer_jwk,
+    )
+    if issuer_entity_id is None:
+        created = authenticated_json_request(
+            gateway_url,
+            session_id,
+            "/v1/issuer-entities",
+            method="POST",
+            json_body={
+                "organization_id": organization_id,
+                "issuer_id": issuer_id,
+                "issuer_type": "ORGANIZATION",
+                "display_name": "Official OIDF test-instance issuer",
+                "description": (
+                    "Disposable exact issuer for one module in the commit-pinned "
+                    "unmodified OIDF runner"
+                ),
+                "compliance_status": "COMPLIANT",
+                "metadata": {
+                    "source": "official-oidf-commit-pinned-test-instance",
+                    "verification_keys": [signer_jwk],
+                },
+            },
+        )
+        issuer_entity_id = _resource_id(created, "Official module issuer entity")
+    trust_profile_id = required_env("OIDF_MARTY_TRUST_PROFILE_ID")
+    if _has_exact_module_issuer_relationship(
+        gateway_url,
+        session_id,
+        trust_profile_id=trust_profile_id,
+        issuer_entity_id=issuer_entity_id,
+    ):
+        return
+    relationship = authenticated_json_request(
+        gateway_url,
+        session_id,
+        f"/v1/trust-profiles/{trust_profile_id}/issuers",
+        method="POST",
+        json_body={
+            "issuer_id": issuer_entity_id,
+            "trust_level": 100,
+            "relationship_status": "TRUSTED",
+            "cascade_revocation_policy": "AUTO_CASCADE",
+            "metadata": {
+                "source": "official-oidf-commit-pinned-test-instance",
+            },
+        },
+    )
+    _resource_id(relationship, "Official module issuer relationship")
 
 
 def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
@@ -165,11 +400,9 @@ def main() -> int:
     if not isinstance(payload, dict):
         raise ValueError("OIDF flow input must be a JSON object")
     gateway = https_url(required_env("OIDF_MARTY_GATEWAY_URL"), "OIDF_MARTY_GATEWAY_URL")
-    result = start_flow(
-        gateway,
-        gateway_session_id(),
-        flow_body(payload),
-    )
+    session_id = gateway_session_id()
+    govern_official_module_issuer(gateway, session_id, payload)
+    result = start_flow(gateway, session_id, flow_body(payload))
     write_private_flow_audit(payload, result)
     value = result.get("authorization_request") or result.get("request_uri")
     if not isinstance(value, str) or not value:

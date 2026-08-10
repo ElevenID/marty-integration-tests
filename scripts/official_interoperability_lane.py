@@ -1143,9 +1143,23 @@ def bootstrap_fixtures(
     api_key = fixtures.get("w3c_api_key")
     if mode == "w3c" and (not isinstance(api_key, str) or not W3C_API_KEY.fullmatch(api_key)):
         raise RuntimeError("w3c public fixture bootstrap returned an invalid API key")
-    public_jwk_fields = {key for key in fixtures if key.endswith("_request_issuer_public_jwk")}
-    if mode in {"oid4vp", "oid4vp-mdoc", "eudi"} and len(public_jwk_fields) != 1:
+    request_jwk_fields = {
+        key for key in fixtures if key.endswith("_request_issuer_public_jwk")
+    }
+    credential_jwk_fields = {
+        key for key in fixtures if key.endswith("_credential_issuer_public_jwk")
+    }
+    public_jwk_fields = request_jwk_fields | credential_jwk_fields
+    if mode in {"oid4vp", "oid4vp-mdoc", "eudi"} and len(request_jwk_fields) != 1:
         raise RuntimeError(f"{mode} public fixture bootstrap returned no request-signing public identity")
+    if mode == "oid4vp" and len(credential_jwk_fields) != 1:
+        raise RuntimeError(
+            "oid4vp public fixture bootstrap returned no credential-issuer public identity"
+        )
+    if mode != "oid4vp" and credential_jwk_fields:
+        raise RuntimeError(
+            f"{mode} public fixture bootstrap returned an unexpected credential-issuer identity"
+        )
     for field in public_jwk_fields:
         public_jwk = fixtures[field]
         if (
@@ -1348,6 +1362,19 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         request_public_jwk = fixtures.pop(public_jwk_field, None)
         if not isinstance(request_public_jwk, dict):
             raise RuntimeError("OID4VP fixture bootstrap returned no request-signing public identity")
+        credential_issuer_public_jwk = fixtures.pop(
+            f"{fixture_prefix}_credential_issuer_public_jwk",
+            None,
+        )
+        if mdoc:
+            if credential_issuer_public_jwk is not None:
+                raise RuntimeError(
+                    "OID4VP mdoc fixture bootstrap returned an unexpected credential-issuer JWK"
+                )
+        elif not isinstance(credential_issuer_public_jwk, dict):
+            raise RuntimeError(
+                "OID4VP SD-JWT fixture bootstrap returned no credential-issuer public JWK"
+            )
         if url_query:
             discard_disposable_certificate_authority(args.haip_material)
         else:
@@ -1356,6 +1383,13 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] = fixtures[f"{fixture_prefix}_policy_id"]
         environment["OIDF_MARTY_TRUST_PROFILE_ID"] = fixtures[f"{fixture_prefix}_trust_profile_id"]
         environment["OIDF_MARTY_ISSUER_DID"] = fixtures[f"{fixture_prefix}_issuer_did"]
+        if not mdoc:
+            environment["OIDF_MARTY_DYNAMIC_ISSUER_GOVERNANCE"] = "1"
+            environment["OIDF_MARTY_OFFICIAL_SIGNER_PUBLIC_JWK"] = json.dumps(
+                credential_issuer_public_jwk,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
         if args.lane == "oid4vp-final":
             environment["OIDF_MARTY_BROWSER_CREDENTIAL_TEMPLATE_ID"] = fixtures["browser_credential_template_id"]
             environment["OIDF_MARTY_BROWSER_APPLICATION_TEMPLATE_ID"] = fixtures["browser_application_template_id"]
