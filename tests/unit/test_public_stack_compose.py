@@ -5,6 +5,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_flow_webhook_secret_is_scoped_to_auth_and_flow() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    auth = compose.split("  auth-service:\n", 1)[1].split(
+        "\n  organization-service:\n", 1
+    )[0]
+    flow = compose.split("  flow-service:\n", 1)[1].split(
+        "\n  revocation-profile-service:\n", 1
+    )[0]
+    default_secret = "oss-ci-flow-webhook-secret-32-bytes"
+    setting = f"FLOW_WEBHOOK_SECRET: ${{FLOW_WEBHOOK_SECRET:-{default_secret}}}"
+
+    secret_mounts = [
+        line
+        for line in compose.splitlines()
+        if line.strip().startswith("FLOW_WEBHOOK_SECRET:")
+    ]
+    assert len(default_secret.encode("utf-8")) >= 32
+    assert len(secret_mounts) == 2
+    assert setting in auth
+    assert setting in flow
+
+
 def test_application_event_key_is_scoped_to_applicant_and_flow() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     applicant = compose.split("  applicant-service:\n", 1)[1].split(
