@@ -89,6 +89,9 @@ services:
       OIDC_EXTERNAL_ISSUER_URL: https://oss-ci.invalid/realms/oss-ci
       UI_BASE_URL: http://ui
       COOKIE_SECURE: "false"
+      # Disposable private-network callback key shared only with Flow. Real
+      # deployments inject a governed secret instead of using this CI default.
+      FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:-oss-ci-flow-webhook-secret-32-bytes}
 
   organization-service:
     <<: *service
@@ -202,6 +205,7 @@ services:
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
       CT_GRPC_TARGET: credential-template-service:9003
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-oss-ci-application-event-hmac-key-32-bytes}
+      FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:-oss-ci-flow-webhook-secret-32-bytes}
 
   revocation-profile-service:
     <<: *service
