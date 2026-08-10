@@ -1431,6 +1431,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 diagnostic_audit = audit_oidf_sd_jwt_diagnostics(
                     args.output_dir / "private" / "oidf-flow-audit",
                     compose_log,
+                    args.output_dir / "raw" / profile / "failure-diagnostics.json",
                 )
                 diagnostic_path = (
                     args.output_dir
@@ -1446,8 +1447,12 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
                 print("--- OIDF SD-JWT verifier audit (redacted) ---")
                 for module in diagnostic_audit["modules"]:
                     print(
-                        f"{module['test_name']}: result={module['result']} "
-                        f"decision={module['decision']} category={module['category']}"
+                        f"{module['test_name']}: "
+                        f"marty_flow_result={module['marty_flow_result']} "
+                        f"marty_flow_decision={module['marty_flow_decision']} "
+                        f"marty_flow_category={module['marty_flow_category']} "
+                        f"official_failure_stage={module['official_failure_stage']} "
+                        f"official_http_status={module['official_http_status']}"
                     )
                 print("--- end OIDF SD-JWT verifier audit ---")
             except (OSError, ValueError, json.JSONDecodeError) as exc:

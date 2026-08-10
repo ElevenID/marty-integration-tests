@@ -3,8 +3,9 @@
 
 The deployment adapter records the official public module name and the Marty
 flow identifier in a private directory. This audit correlates those records
-with the private Compose log, then emits only allowlisted result, decision,
-and error-category values. Flow identifiers, tokens, claims, URLs, and raw
+with the private Compose log and the owned public-safe view of the unchanged
+Official export. It emits only allowlisted Marty flow outcomes and Official
+interaction-stage facts. Flow identifiers, tokens, claims, URLs, and raw
 error text are never included in the report.
 """
 
@@ -91,6 +92,9 @@ FAILURE_CATEGORIES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("sd-jwt-verification-unclassified", re.compile(r"(?i)SD-JWT verification failed")),
 )
 
+DIRECT_POST_CONDITION = "EnsureHttpStatusCodeIs200"
+DIRECT_POST_BLOCK = "Authorization endpoint"
+
 
 def classify_failure(reason: str) -> str:
     """Map one private product reason to a fixed public-safe category."""
@@ -126,9 +130,9 @@ def _runtime_outcomes(compose_log: Path) -> dict[str, dict[str, str]]:
     outcomes: dict[str, dict[str, str]] = {}
     for match in POLICY_OUTCOME.finditer(text):
         values = {
-            "result": match.group("result").lower(),
-            "decision": match.group("decision").lower(),
-            "category": (
+            "marty_flow_result": match.group("result").lower(),
+            "marty_flow_decision": match.group("decision").lower(),
+            "marty_flow_category": (
                 "accepted"
                 if match.group("result").lower() == "passed" and match.group("decision").lower() == "allow"
                 else classify_failure(match.group("reason"))
@@ -142,22 +146,89 @@ def _runtime_outcomes(compose_log: Path) -> dict[str, dict[str, str]]:
     return outcomes
 
 
-def audit(mapping_dir: Path, compose_log: Path) -> dict[str, Any]:
-    """Return a public-safe per-module verifier outcome report."""
+def _official_failure_outcomes(path: Path) -> dict[str, dict[str, object]]:
+    """Map the owned safe Official export view to fixed interaction stages."""
+    raw: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError("Official failure diagnostics must be a list")
+
+    failures: dict[str, list[dict[str, object]]] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError("Official failure diagnostic has an invalid shape")
+        module = entry.get("module")
+        condition = entry.get("condition")
+        if not isinstance(module, str) or SAFE_MODULE.fullmatch(module) is None:
+            raise ValueError("Official failure diagnostic has an unsafe module name")
+        if not isinstance(condition, str) or not condition:
+            raise ValueError("Official failure diagnostic has no condition")
+        failures.setdefault(module, []).append(entry)
+
+    outcomes: dict[str, dict[str, object]] = {}
+    for module, entries in failures.items():
+        direct_post = [
+            entry
+            for entry in entries
+            if entry.get("condition") == DIRECT_POST_CONDITION
+            and entry.get("block") == DIRECT_POST_BLOCK
+        ]
+        if not direct_post:
+            outcomes[module] = {
+                "official_failure_stage": "other-official-failure",
+                "official_http_status": None,
+            }
+            continue
+        statuses = {entry.get("http_status") for entry in direct_post}
+        if (
+            len(statuses) != 1
+            or any(
+                isinstance(status, bool) or not isinstance(status, int)
+                for status in statuses
+            )
+        ):
+            raise ValueError(
+                "Official direct-post failures have conflicting or invalid HTTP status"
+            )
+        status = next(iter(statuses))
+        if not 100 <= status <= 599:
+            raise ValueError("Official direct-post failure HTTP status is out of range")
+        outcomes[module] = {
+            "official_failure_stage": "direct-post-callback-response",
+            "official_http_status": status,
+        }
+    return outcomes
+
+
+def audit(
+    mapping_dir: Path,
+    compose_log: Path,
+    official_failure_diagnostics: Path,
+) -> dict[str, Any]:
+    """Return a public-safe per-module verifier and Official-stage report."""
     mappings = _private_mappings(mapping_dir)
     outcomes = _runtime_outcomes(compose_log)
-    modules: list[dict[str, str]] = []
+    official_outcomes = _official_failure_outcomes(official_failure_diagnostics)
+    if set(official_outcomes).difference(mappings.values()):
+        raise ValueError("Official failures contain modules with no private flow correlation")
+    modules: list[dict[str, object]] = []
     for flow, test_name in sorted(mappings.items(), key=lambda item: item[1]):
         outcome = outcomes.get(flow)
         if outcome is None:
             outcome = {
-                "result": "unavailable",
-                "decision": "unavailable",
-                "category": "runtime-outcome-unavailable",
+                "marty_flow_result": "unavailable",
+                "marty_flow_decision": "unavailable",
+                "marty_flow_category": "runtime-outcome-unavailable",
             }
-        modules.append({"test_name": test_name, **outcome})
+        official = official_outcomes.get(
+            test_name,
+            {
+                "official_failure_stage": "no-official-failure-observed",
+                "official_http_status": None,
+            },
+        )
+        modules.append({"test_name": test_name, **outcome, **official})
     return {
-        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v2",
         "source_policy": "unmodified",
         "modules": modules,
     }
@@ -167,13 +238,18 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--mapping-dir", type=Path, required=True)
     result.add_argument("--compose-log", type=Path, required=True)
+    result.add_argument("--official-failure-diagnostics", type=Path, required=True)
     result.add_argument("--output", type=Path, required=True)
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    report = audit(args.mapping_dir, args.compose_log)
+    report = audit(
+        args.mapping_dir,
+        args.compose_log,
+        args.official_failure_diagnostics,
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -182,8 +258,11 @@ def main(argv: list[str] | None = None) -> int:
     print("--- OIDF SD-JWT verifier audit (redacted) ---")
     for module in report["modules"]:
         print(
-            f"{module['test_name']}: result={module['result']} "
-            f"decision={module['decision']} category={module['category']}"
+            f"{module['test_name']}: marty_flow_result={module['marty_flow_result']} "
+            f"marty_flow_decision={module['marty_flow_decision']} "
+            f"marty_flow_category={module['marty_flow_category']} "
+            f"official_failure_stage={module['official_failure_stage']} "
+            f"official_http_status={module['official_http_status']}"
         )
     print("--- end OIDF SD-JWT verifier audit ---")
     return 0

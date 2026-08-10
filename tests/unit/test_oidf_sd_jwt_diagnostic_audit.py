@@ -33,6 +33,10 @@ def write_mapping(directory: Path, name: str, flow: str) -> None:
     )
 
 
+def write_official_failures(path: Path, failures: list[dict[str, object]]) -> None:
+    path.write_text(json.dumps(failures), encoding="utf-8")
+
+
 def test_audit_correlates_modules_and_emits_only_fixed_categories(tmp_path: Path) -> None:
     mapping = tmp_path / "mapping"
     positive_flow = "12345678-1234-1234-1234-123456789abc"
@@ -50,24 +54,40 @@ def test_audit_correlates_modules_and_emits_only_fixed_categories(tmp_path: Path
         "the request secret=must-not-leak\n",
         encoding="utf-8",
     )
+    official = tmp_path / "failure-diagnostics.json"
+    write_official_failures(
+        official,
+        [
+            {
+                "module": "oid4vp-1final-verifier-happy-flow",
+                "condition": "EnsureHttpStatusCodeIs200",
+                "block": "Authorization endpoint",
+                "http_status": 400,
+            }
+        ],
+    )
 
-    report = audit_module.audit(mapping, compose)
+    report = audit_module.audit(mapping, compose, official)
 
     assert report == {
-        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v1",
+        "schema": "elevenid.oidf-sd-jwt-diagnostic-audit/v2",
         "source_policy": "unmodified",
         "modules": [
             {
                 "test_name": "oid4vp-1final-verifier-happy-flow",
-                "result": "failed",
-                "decision": "deny",
-                "category": "issuer-audience-invalid",
+                "marty_flow_result": "failed",
+                "marty_flow_decision": "deny",
+                "marty_flow_category": "issuer-audience-invalid",
+                "official_failure_stage": "direct-post-callback-response",
+                "official_http_status": 400,
             },
             {
                 "test_name": "oid4vp-1final-verifier-invalid-kb-jwt-nonce",
-                "result": "failed",
-                "decision": "deny",
-                "category": "key-binding-nonce-invalid",
+                "marty_flow_result": "failed",
+                "marty_flow_decision": "deny",
+                "marty_flow_category": "key-binding-nonce-invalid",
+                "official_failure_stage": "no-official-failure-observed",
+                "official_http_status": None,
             },
         ],
     }
@@ -84,15 +104,19 @@ def test_audit_reports_missing_runtime_outcome_without_private_values(tmp_path: 
     write_mapping(mapping, "oid4vp-1final-verifier-happy-flow", flow)
     compose = tmp_path / "compose.log"
     compose.write_text("token=must-not-leak\n", encoding="utf-8")
+    official = tmp_path / "failure-diagnostics.json"
+    write_official_failures(official, [])
 
-    report = audit_module.audit(mapping, compose)
+    report = audit_module.audit(mapping, compose, official)
 
     assert report["modules"] == [
         {
             "test_name": "oid4vp-1final-verifier-happy-flow",
-            "result": "unavailable",
-            "decision": "unavailable",
-            "category": "runtime-outcome-unavailable",
+            "marty_flow_result": "unavailable",
+            "marty_flow_decision": "unavailable",
+            "marty_flow_category": "runtime-outcome-unavailable",
+            "official_failure_stage": "no-official-failure-observed",
+            "official_http_status": None,
         }
     ]
 
@@ -106,6 +130,47 @@ def test_audit_rejects_unsafe_module_names(tmp_path: Path) -> None:
     )
     compose = tmp_path / "compose.log"
     compose.write_text("", encoding="utf-8")
+    official = tmp_path / "failure-diagnostics.json"
+    write_official_failures(official, [])
 
     with pytest.raises(ValueError, match="unsafe module"):
-        audit_module.audit(mapping, compose)
+        audit_module.audit(mapping, compose, official)
+
+
+def test_audit_rejects_unmapped_or_conflicting_official_failure_facts(
+    tmp_path: Path,
+) -> None:
+    mapping = tmp_path / "mapping"
+    flow = "12345678-1234-1234-1234-123456789abc"
+    write_mapping(mapping, "oid4vp-1final-verifier-happy-flow", flow)
+    compose = tmp_path / "compose.log"
+    compose.write_text("", encoding="utf-8")
+    official = tmp_path / "failure-diagnostics.json"
+    write_official_failures(
+        official,
+        [
+            {
+                "module": "oid4vp-1final-verifier-minimal-cnf-jwk",
+                "condition": "EnsureHttpStatusCodeIs200",
+                "block": "Authorization endpoint",
+                "http_status": 400,
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="no private flow correlation"):
+        audit_module.audit(mapping, compose, official)
+
+    write_official_failures(
+        official,
+        [
+            {
+                "module": "oid4vp-1final-verifier-happy-flow",
+                "condition": "EnsureHttpStatusCodeIs200",
+                "block": "Authorization endpoint",
+                "http_status": status,
+            }
+            for status in (400, 422)
+        ],
+    )
+    with pytest.raises(ValueError, match="conflicting or invalid HTTP status"):
+        audit_module.audit(mapping, compose, official)
