@@ -11,6 +11,7 @@ This repository verifies the public Marty credential stack using only released, 
 - Headless-wallet and interoperability flows
 - Browser contracts against the released Marty UI
 - Upgrade and rollback manifest compatibility
+- The separately packaged, governed Credentials verification service image
 
 Billing, Square, subscription plans, and product-catalog tests live in the private commerce overlay and are intentionally excluded.
 
@@ -92,6 +93,12 @@ review of every official suite pin.
 - Environment-specific non-secret overrides may be supplied by the caller.
 
 Public CI must use standard GitHub-hosted runners and must not receive repository secrets for pull requests from forks.
+
+The `Credentials verifier artifact` workflow is separately labeled ElevenID-owned
+product-security evidence. It verifies the exact released image, SBOM, source commit,
+tag, and provenance before applying its real PostgreSQL migrations and exercising its
+purpose-scoped VDS-NC canonical decision path. It does not replace the UI stack's
+`/v1/verify` orchestration service and is not official conformance or certification.
 
 ## Contributing
 
