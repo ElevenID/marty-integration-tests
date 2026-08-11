@@ -1,33 +1,38 @@
 # Protocol Compliance Post-Action Report
 
 Status: in progress  
-Last updated: 2026-08-08
+Last updated: 2026-08-10
 
 ## Current evidence snapshot
 
-The current stack under test is immutable `marty-ui` v1.1.122 at release
-commit `d22a02a77707f0d9ffe15d8280ad85d5ac0d975c` and manifest digest
-`sha256:5b1e51c1992e9cbb0e59c9e16bbb2be8f0a40e1860659943d923dd97f6d1e79b`.
-[Official interoperability run 31237931277](https://github.com/ElevenID/marty-integration-tests/actions/runs/31237931277)
-executed exact harness `66aef26b3ef3051e12ce3a0fd316d31459f9f9d3`, unmodified OIDF
+The current stack under test is immutable `marty-ui` v1.1.134 at release
+commit `9a81accb3c725d3a1db5f279c6ed84243bac0a94` and manifest digest
+`sha256:cb2898b8cc8dd2596633bf3be2cb9da0f63da3118580c6e79f78bcc5d145de90`.
+[Official interoperability run 31450664822](https://github.com/ElevenID/marty-integration-tests/actions/runs/31450664822)
+executed exact harness `cf2397c2d73bb5671887d203b23b34c189f775d6`, unmodified OIDF
 `release-v5.2.2` commit `321bc5bc53601b9690b54c023c0cbfac0f0230f2`, unmodified W3C
 commit `e92936564867da9150b99b167fe1c73b9370ad6c`, and the reviewed EUDI
 component pins. Imported source, assertions, fixtures, expected results,
 selections, and exclusions remained unchanged.
 
-- OID4VCI issuer, OID4VP Final, native OID4VP URL-query, HAIP, W3C VC Data
-  Model v2, and EUDI completed successfully against the same exact release.
+- OID4VCI issuer, OID4VP Final, native OID4VP URL-query, and HAIP completed
+  successfully against the same exact release. OIDF mdoc, W3C VC Data Model
+  v2, and EUDI remained visibly failing.
 - OID4VCI exercised real holder-key proof signing, invalid-signature and nonce
   rejection, DPoP, private-key JWT, notification, and key-attestation paths.
   Its only skips are three optional capabilities Marty does not advertise:
   signed metadata, batch issuance, and credential-response encryption.
 - OID4VP Final, URL-query, and HAIP ran their public request and callback paths
-  with zero expected failures or skips. The W3C suite passed issuer, VC
-  verifier, and VP verifier through the public VC-API adapter under Node 24.
-- EUDI passed 45 tests with zero failures, errors, or skips across SD-JWT VC
-  and mdoc issuance/presentation, signed request-object trust, wallet-key
-  attestation, replay, invalid-signature, expired-request, and missing-holder-
-  binding-key cases.
+  with zero expected failures or skips.
+- The W3C suite executed the issuer capability, but VC-verifier and VP-verifier
+  positives received HTTP 422 because unrestricted public-DID fallback remains
+  disabled. One issuer case also hit JSON-LD protected-term redefinition. This
+  requires governed deterministic DID resolution and JSON-LD compatibility,
+  not enabling an unrestricted resolver or changing the imported suite.
+- EUDI executed 45 tests with zero errors or skips and 11 failures. The failures
+  cluster in SD-JWT callback/result handling and verifier rejection of mdoc/DTC
+  presentations. The exact upstream-library cases and ElevenID-owned negative
+  mutations remain separately labeled; no failed case is converted to a pass.
 - The OIDF mdoc lane remains a genuine visible failure. All three positive
   presentations had valid issuer signatures and valid holder device
   authentication; the invalid-session-transcript negative correctly produced
@@ -39,7 +44,7 @@ selections, and exclusions remained unchanged.
 
 Separately labeled ElevenID-owned product-security evidence in
 [run 31237661261](https://github.com/ElevenID/marty-integration-tests/actions/runs/31237661261)
-passed against the same v1.1.122 manifest. It covers two authenticated
+last passed against the v1.1.122 manifest. It covers two authenticated
 organizations, public API and shipped-UI adversarial substitutions, DID-first
 unknown/draft/incompatible/ambiguous rejection, external trust-registry atomic
 sync and rollback, issuer/accreditation decisions, lifecycle and revocation,
@@ -1744,14 +1749,14 @@ labeled ElevenID-owned product-security evidence.
 
 | Capability | Current evidence | Remaining gap |
 | --- | --- | --- |
-| DID-first OID4VCI issuance | Native official OIDF 5.2.2 issuer evidence on immutable v1.1.122: pre-authorized code, DPoP, `private_key_jwt`, SD-JWT VC, multiple clients, tenant/profile-owned key-attestation trust, nonce/proof/configuration negatives, notifications, and token-query rejection | Signed metadata, batch issuance, and credential-response encryption are optional, unadvertised gaps tracked by [marty-integration-tests#225](https://github.com/ElevenID/marty-integration-tests/issues/225); keep the active profile green as the runner updates |
-| DID-first signed OID4VP request | Exact unmodified OIDF 5.2.2 Final evidence on immutable v1.1.122 completes 463 conditions with zero failures/warnings or exclusions; all four review placeholders fill, seven security negatives pass, and the separately labeled browser path observes no private selector | Keep the active profile green as the official runner updates |
-| HAIP request-object trust | Exact unmodified OIDF 5.2.2 HAIP evidence on immutable v1.1.122 completes 566 conditions with zero failures/warnings or exclusions under `x509_hash` and signed `request_uri` | Keep the active pre-certification profile green; fund certification separately |
-| SD-JWT holder binding | Exact v1.1.122 EUDI evidence uses the official library for key-attestation-bound issuance and holder-bound presentation, rejects a missing binding key before presentation, and proves a tampered holder signature is denied by the production callback | Retain the native-versus-owned evidence labels: official libraries construct and resolve the positive path, while deterministic replay/signature mutations remain explicitly ElevenID-owned negative evidence |
-| mdoc issuance/presentation | Exact v1.1.122 EUDI evidence passes mdoc issuance and presentation with independent COSE/CBOR/X.509 validation. In the unmodified OIDF 5.2.2 verifier lane, all three positive presentations have valid issuer signatures and device authentication, and its invalid-session-transcript negative correctly invalidates device authentication | OIDF's current document-signer fixture is invalid because it is a CA with CA-signing usage, so Marty correctly rejects it at the trust boundary. Adopt the first reviewed fix under [#243](https://github.com/ElevenID/marty-integration-tests/issues/243) without patching the suite or weakening production validation. OIDF still has no suitable mdoc issuer plan, so issuance claims remain EUDI/reference evidence |
-| EUDI reference interoperability | Exact v1.1.122 artifacts pass 45/45 tests through current pinned EUDI OID4VCI, OID4VP, SD-JWT, verifier-endpoint, and Multipaz components. Required key-attestation-bound issuance, mdoc issuance/presentation, SD-JWT presentation, signed JAR trust, replay, invalid-signature, real expired-request, and missing-holder-binding evidence is green | The HTTP facade and deterministic negative mutations remain ElevenID-owned and accurately labeled; current upstream libraries and their assertions are unchanged |
-| OID4VP URL-query transport | Exact unmodified OIDF 5.2.2 `url_query` + `redirect_uri` evidence on immutable v1.1.122 completes 302 conditions with zero failures/warnings or exclusions; signed by-value Request Objects remain a separate `request_object` transport | Keep the active profile green as the pinned official runner advances; do not merge the two transport claims |
-| W3C VCDM v2 verification and issuance | The exact pinned upstream suite passes from an unmodified disposable worktree against immutable v1.1.122; issuer, VC-verifier, and VP-verifier roles execute with no exclusions | Retain the adapted VC-API entry-shape qualification and keep the lane green as the reviewed upstream pin advances |
+| DID-first OID4VCI issuance | Native official OIDF 5.2.2 issuer evidence passes on immutable v1.1.134: pre-authorized code, DPoP, `private_key_jwt`, SD-JWT VC, multiple clients, tenant/profile-owned key-attestation trust, nonce/proof/configuration negatives, notifications, and token-query rejection | Signed metadata, batch issuance, and credential-response encryption are optional, unadvertised gaps tracked by [marty-integration-tests#225](https://github.com/ElevenID/marty-integration-tests/issues/225); keep the active profile green as the runner updates |
+| DID-first signed OID4VP request | Exact unmodified OIDF 5.2.2 Final evidence passes on immutable v1.1.134 with zero expected failures or skips; the separately labeled v1.1.122 browser evidence observes no private selector | Keep the active profile green as the official runner updates and rerun the owned browser lane against the new governed pin |
+| HAIP request-object trust | Exact unmodified OIDF 5.2.2 HAIP evidence passes on immutable v1.1.134 with zero expected failures or skips under `x509_hash` and signed `request_uri` | Keep the active pre-certification profile green; fund certification separately |
+| SD-JWT holder binding | v1.1.122 is the last green EUDI evidence for key-attestation-bound issuance and holder-bound presentation. The current v1.1.134 EUDI run executes all 45 tests but has 11 visible failures, including the SD-JWT callback/result cluster | Repair product-owned callback/result handling while retaining native-versus-owned evidence labels; deterministic replay/signature mutations remain explicitly ElevenID-owned negatives |
+| mdoc issuance/presentation | The v1.1.134 unmodified OIDF lane still passes its invalid-session-transcript negative and rejects the positive fixture at Marty's issuer-trust boundary. The current EUDI run also reports mdoc/DTC presentation rejection; v1.1.122 remains the last green EUDI mdoc evidence | OIDF's document-signer fixture is a CA with CA-signing usage, so Marty correctly rejects it. Adopt the first reviewed upstream fix under [#243](https://github.com/ElevenID/marty-integration-tests/issues/243) without patching the suite or weakening validation; separately diagnose the current EUDI product rejection |
+| EUDI reference interoperability | Exact v1.1.134 artifacts execute 45 tests with zero errors/skips and 11 failures across SD-JWT callback/result and mdoc/DTC presentation paths; v1.1.122 remains the last 45/45 green release | Repair the product-owned regressions while leaving official libraries, assertions, and the separately labeled ElevenID-owned facade/mutations unchanged |
+| OID4VP URL-query transport | Exact unmodified OIDF 5.2.2 `url_query` + `redirect_uri` evidence passes on immutable v1.1.134 with zero expected failures or skips; signed by-value Request Objects remain a separate `request_object` transport | Keep the active profile green as the pinned official runner advances; do not merge the two transport claims |
+| W3C VCDM v2 verification and issuance | The exact pinned upstream suite runs unmodified against v1.1.134. Issuer executes, while VC-verifier and VP-verifier positives receive HTTP 422 because public-DID fallback is disabled; one issuer case also hits JSON-LD protected-term redefinition | Add governed deterministic DID resolution and the required JSON-LD compatibility without enabling unrestricted fallback or changing imported suite source/assertions |
 | UI issuance/verification | Separately labeled released v1.1.122 browser evidence completes disposable application, submit, claim, credential-offer, and signed-verification journeys using public DIDs; no private selector or issuer-profile collection request is observed. Run 31237661261 mutates actual shipped-UI organization and presentation-policy choices, requires non-enumerating denial, and then passes positive controls. The generated-client/runtime drift work under `marty-ui#222` is closed and enforced | Keep the owned browser lane green against reviewed stack pins; imported official suites remain API-driven and unchanged |
 | DIDComm delivery | Exact v1.1.122 owned evidence resolves a fresh `did:peer:2` X25519 holder, performs CA-validated HTTPS delivery, validates normative headers for the selected anoncrypt profile, and produces identical plaintext through the released Marty decoder and pinned independent `go-didcomm` implementation. It also proves both implementations reject ciphertext, authentication-tag, protected-header, and wrapped-key tampering, and denies cross-tenant transaction substitution before DID resolution | This is selected-profile cross-implementation evidence, not official certification or full independent-agent exchange. Add authcrypt/signed and inbound modes, the complete Issue Credential exchange, broader algorithms and DID methods, routing/mediation, multi-recipient, and broader message-validation negatives |
 | Multitenancy | Released v1.1.122 owned evidence runs the current two-principal/two-organization matrix, normalized issuer-relationship authorization, multiple-accreditation decisions, atomic external trust-registry synchronization/rollback, independent DIDComm, cross-tenant DIDComm transaction substitution, and shipped-browser organization/policy substitutions. It covers membership/RBAC, template/policy/DID substitution, API-key binding, SCIM, flows/results, issuance/revocation, trust ownership and decisions, applicant/evidence, deployment/device, webhook, wallet, notification/SSE, audit, custody-selector rejection, unknown/inactive/incompatible DID denial, idempotent uniqueness, forced ambiguity rejection/recovery, and non-leaking denials | Keep this owned evidence distinct from official protocol-suite results and expand it as new tenant-scoped features are added |

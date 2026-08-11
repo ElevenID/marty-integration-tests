@@ -689,9 +689,9 @@ sentinel, and a passing `evidence.json` cannot be written unless all required
 assertions appear exactly once and pass. This prevents a suite refactor from
 silently deleting the tests behind a published claim.
 
-The stack pin records immutable `marty-ui` release `v1.1.122` as `ready`, with
+The stack pin records immutable `marty-ui` release `v1.1.134` as `ready`, with
 `stack-manifest.json` SHA-256
-`sha256:5b1e51c1992e9cbb0e59c9e16bbb2be8f0a40e1860659943d923dd97f6d1e79b`
+`sha256:cb2898b8cc8dd2596633bf3be2cb9da0f63da3118580c6e79f78bcc5d145de90`
 recorded in `stack-under-test.json`. Execution hard-fails if the released asset, its
 attestation, or any digest-pinned component differs from that reviewed pin.
 The official interoperability workflow runs all seven lanes monthly on the
