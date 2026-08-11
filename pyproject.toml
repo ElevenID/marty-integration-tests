@@ -60,6 +60,7 @@ python_functions = ["test_*"]
 markers = [
     "integration: Integration tests (require services running)",
     "oss_stack: Artifact-only tests for the public stack release",
+    "credentials_verifier_artifact: Artifact-only tests for the released Credentials verifier service",
     "wallet: Walt.ID wallet integration tests",
     "marty_wallet: Marty Authenticator web app integration tests (require RUN_WALLET_TESTS=true)",
     "slow: Slow running tests",
