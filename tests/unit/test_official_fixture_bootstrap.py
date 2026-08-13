@@ -383,11 +383,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             "replay_detection_required": False,
         },
     }
-    assert calls[25][2]["trust_profile_id"] == "w3c-trust-1"
-    presentation_requirement = calls[25][2]["credential_requirements"][0]
-    assert presentation_requirement["credential_template_id"] == "template-3"
-    assert presentation_requirement["credential_payload_format"] == ("w3c_vcdm_v2_di")
-    assert presentation_requirement["trust_profile_id"] == "w3c-trust-1"
+    assert "trust_profile_id" not in calls[25][2]
+    assert calls[25][2]["credential_requirements"] == []
 
 
 def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() -> None:
@@ -965,9 +962,8 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
             "replay_detection_required": False,
         },
     }
-    assert presentation_policy["trust_profile_id"] == "trust-1"
-    assert presentation_policy["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
-    assert presentation_policy["credential_requirements"][0]["trust_profile_id"] == "trust-1"
+    assert "trust_profile_id" not in presentation_policy
+    assert presentation_policy["credential_requirements"] == []
 
 
 def test_w3c_policy_requires_governed_issuer_trust() -> None:
@@ -977,7 +973,22 @@ def test_w3c_policy_requires_governed_issuer_trust() -> None:
             "template-1",
             w3c=True,
             run_id="run-1",
+            presentation=False,
         )
+
+
+def test_w3c_presentation_policy_has_no_credential_or_issuer_trust_obligation() -> None:
+    policy = fixtures.policy_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        "template-1",
+        w3c=True,
+        run_id="run-1",
+        presentation=True,
+    )
+
+    assert policy["credential_requirements"] == []
+    assert "trust_profile_id" not in policy
+    assert policy["holder_binding"]["required"] is True
 
 
 def test_w3c_trust_payloads_bind_only_the_exact_issuer_did() -> None:
