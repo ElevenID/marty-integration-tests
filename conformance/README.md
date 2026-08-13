@@ -643,6 +643,14 @@ GitHub attestation, verifies each OCI attestation, and checks out the exact
 Marty commit recorded by that release. A tag override is accepted only when
 its reviewed manifest SHA-256 is supplied in the same dispatch.
 
+If an approved repository payload cleanup rewrites that exact commit, the
+workflow preserves the manifest's original provenance value and uses
+`history-rewrite-map.json` only to resolve the equivalent checkout commit. The
+map is intentionally empty during normal operation. Populate it solely from
+the complete old-to-new map produced by the reviewed rewrite in
+`ElevenID/.github#22`; unknown commits remain unchanged, while malformed maps
+or commit IDs fail closed.
+
 Each lane owns separate Compose projects and disposable TLS, truststore,
 keystore, operator credentials, fixtures, and output directories. OID4VP Final
 and HAIP retain their `planned` profile status while this pre-activation

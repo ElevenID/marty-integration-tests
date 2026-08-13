@@ -100,7 +100,12 @@ jobs:
             --metadata-output work/stack/stack-metadata.json
           )
           python scripts/official_stack_release.py materialize "${stack_args[@]}"
-          python -c "import json, os; value=json.load(open('work/stack/stack-metadata.json', encoding='utf-8'))['marty_commit']; open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8').write(f'marty_commit={value}\n')"
+          manifest_commit="$(python -c "import json; print(json.load(open('work/stack/stack-metadata.json', encoding='utf-8'))['marty_commit'])")"
+          checkout_commit="$(python scripts/resolve_history_rewrite.py --repository ElevenID/marty-ui --commit "$manifest_commit")"
+          {
+            printf 'marty_commit=%s\n' "$manifest_commit"
+            printf 'marty_checkout_commit=%s\n' "$checkout_commit"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify and pull attested stack images
         env:
@@ -147,7 +152,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-ui
-          ref: ${{ steps.stack.outputs.marty_commit }}
+          ref: ${{ steps.stack.outputs.marty_checkout_commit }}
           path: work/marty-ui
           persist-credentials: false
 

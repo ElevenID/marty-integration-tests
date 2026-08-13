@@ -1,0 +1,12 @@
+{
+  "schema": "elevenid.history-rewrite-map/v1",
+  "rewrite_issue": "https://github.com/ElevenID/.github/issues/22",
+  "repositories": {
+    "ElevenID/marty-microservices-framework": {
+      "old_to_new": {}
+    },
+    "ElevenID/marty-ui": {
+      "old_to_new": {}
+    }
+  }
+}
