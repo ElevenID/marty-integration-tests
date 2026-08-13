@@ -206,6 +206,57 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
     "verifier-dcql": re.compile(r"(?i)\bdcql\b"),
     "verifier-vct": re.compile(r"(?i)\bvct(?:_values)?\b"),
     "verifier-key-binding": re.compile(r"(?i)(?:key binding|kb-jwt|kb_jwt)"),
+    "marty-sd-jwt-verification": re.compile(
+        r"(?i)(?:verification error for sd-jwt|sd-jwt verification failed)"
+    ),
+    "marty-sd-jwt-issuer-key": re.compile(
+        r"(?i)(?:issuer (?:public )?jwk|did resolution failed|"
+        r"assertion method has no public jwk|issuer public key could not)"
+    ),
+    "marty-sd-jwt-holder-key": re.compile(
+        r"(?i)(?:cnf\.jwk|holder public key|key binding jwk)"
+    ),
+    "marty-sd-jwt-key-binding-required": re.compile(
+        r"(?i)key binding jwt is required"
+    ),
+    "marty-sd-jwt-key-binding-signature": re.compile(
+        r"(?i)key binding jwt signature validation failed"
+    ),
+    "marty-sd-jwt-key-binding-sd-hash": re.compile(
+        r"(?i)key binding jwt sd_hash"
+    ),
+    "marty-sd-jwt-key-binding-audience": re.compile(
+        r"(?i)key binding jwt audience"
+    ),
+    "marty-sd-jwt-key-binding-nonce": re.compile(
+        r"(?i)key binding jwt nonce"
+    ),
+    "marty-sd-jwt-key-binding-freshness": re.compile(
+        r"(?i)key binding jwt iat"
+    ),
+    "marty-sd-jwt-disclosure": re.compile(
+        r"(?i)(?:invalid disclosure|disclosure (?:decode|hash)|"
+        r"duplicate disclosure|disclosures? with no digests)"
+    ),
+    "marty-sd-jwt-native-backend": re.compile(
+        r"(?i)(?:native credential format detection failed|"
+        r"rust sd-jwt verification returned)"
+    ),
+    "marty-mdoc-device-authentication": re.compile(
+        r"(?i)device authentication.{0,80}(?:invalid|failed|mismatch)"
+    ),
+    "marty-mdoc-session-transcript": re.compile(
+        r"(?i)session transcript.{0,80}(?:invalid|failed|mismatch)"
+    ),
+    "marty-mdoc-issuer-signature": re.compile(
+        r"(?i)issuer signature.{0,80}(?:invalid|failed)"
+    ),
+    "marty-mdoc-issuer-trust": re.compile(
+        r"(?i)issuer.{0,80}(?:not trusted|untrusted)"
+    ),
+    "marty-mdoc-parse": re.compile(
+        r"(?i)(?:could not parse mso|detached issuer-auth|device response parse)"
+    ),
 }
 MDOC_RUNTIME_DIAGNOSTIC_CLASSES = {
     "api-key-transport-type": re.compile(
