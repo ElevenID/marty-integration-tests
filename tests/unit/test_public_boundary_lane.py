@@ -209,7 +209,7 @@ def test_owned_tenant_lane_exercises_multiple_accreditation_evidence() -> None:
     assert '"accreditation_body": "FIPS140-2"' in source
     assert '"accreditations": ["ISO27001"]' in source
     assert '"accreditations": ["FIPS140-2", "iso27001"]' in source
-    assert '"accreditation requirements"' in source
+    assert '"Issuer accreditation is missing: fips140-2"' in source
 
 
 def test_summary_records_only_executed_independent_didcomm_evidence(

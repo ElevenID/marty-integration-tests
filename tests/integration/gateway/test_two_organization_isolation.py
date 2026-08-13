@@ -1747,8 +1747,8 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert incomplete_accreditation_decision["result"] == "failed", incomplete_accreditation_decision
         assert incomplete_accreditation_decision["decision"] == "deny", incomplete_accreditation_decision
-        assert (
-            "accreditation requirements" in str(incomplete_accreditation_decision.get("decision_reason") or "").lower()
+        assert incomplete_accreditation_decision.get("decision_reason") == (
+            "Issuer accreditation is missing: fips140-2"
         )
         _assert_no_private_signing_selectors(incomplete_accreditation_decision)
 
