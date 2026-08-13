@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -601,6 +602,32 @@ def test_run_environment_loads_material_trust_and_public_login_values(
     assert environment["OIDF_MARTY_GATEWAY_URL"] == generated["OIDF_PUBLIC_BASE_URL"]
     assert environment["SSL_CERT_FILE"] == generated["SSL_CERT_FILE"]
     assert environment["OIDF_MARTY_RESOLVE_IP"] == "127.0.0.1"
+
+
+def test_eudi_pytest_command_resolves_only_public_test_hosts(tmp_path: Path) -> None:
+    command = eudi.eudi_pytest_command(
+        {"OIDF_MARTY_RESOLVE_IP": "127.0.0.1"},
+        {
+            "gateway": "https://marty-oidf.test:18443",
+            "verifier": "https://marty-oidf.test:28091",
+            "wallet_kit": "http://127.0.0.1:29090",
+        },
+        tmp_path,
+    )
+
+    assert command[:2] == [
+        sys.executable,
+        str(eudi.ROOT / "scripts" / "pytest_with_local_resolution.py"),
+    ]
+    assert command.count("--resolve-host") == 1
+    assert "marty-oidf.test" in command
+    assert "attacker.test" not in command
+    assert command[-4:] == [
+        "tests/integration/gateway/test_eudi_interop.py",
+        "tests/integration/gateway/test_eudi_wallet_kit.py",
+        "tests/integration/gateway/test_eudi_wallet_kit_vp.py",
+        "tests/integration/gateway/test_eudi_wallet_kit_dtc.py",
+    ]
 
 
 def test_explicit_endpoint_cannot_deviate_from_material(
