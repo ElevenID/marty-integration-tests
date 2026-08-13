@@ -132,7 +132,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-ui
-          ref: 9a81accb3c725d3a1db5f279c6ed84243bac0a94
+          ref: d819a40888165532db8e5e2bcf593cbfff2b96b0
           path: work/marty-ui
           persist-credentials: false
 

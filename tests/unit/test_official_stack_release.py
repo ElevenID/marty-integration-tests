@@ -31,6 +31,20 @@ def write_pin(path: Path, *, digest: str = "sha256:" + "a" * 64) -> dict[str, st
 
 
 def stack_bytes() -> bytes:
+    def wheel_component(name: str, repository: str, asset: str) -> dict[str, object]:
+        return {
+            "name": name,
+            "repository": repository,
+            "commit": "b" * 40,
+            "artifacts": [
+                {
+                    "type": "python",
+                    "uri": f"https://github.com/{repository}/releases/download/v0.1.0/{asset}.whl",
+                    "digest": "sha256:" + "d" * 64,
+                }
+            ],
+        }
+
     return (
         json.dumps(
             {
@@ -46,9 +60,39 @@ def stack_bytes() -> bytes:
                                 "type": "oci",
                                 "uri": "ghcr.io/elevenid/marty-ui-oss/ui",
                                 "digest": "sha256:" + "c" * 64,
+                            },
+                            {
+                                "type": "oci",
+                                "uri": "ghcr.io/elevenid/marty-ui-oss/services",
+                                "digest": "sha256:" + "c" * 64,
+                            },
+                            {
+                                "type": "oci",
+                                "uri": "ghcr.io/elevenid/marty-ui-oss/migrations",
+                                "digest": "sha256:" + "c" * 64,
+                            },
+                        ],
+                    },
+                    {
+                        "name": "marty-credentials",
+                        "repository": "ElevenID/marty-credentials",
+                        "commit": "b" * 40,
+                        "artifacts": [
+                            {
+                                "type": "oci",
+                                "uri": "ghcr.io/elevenid/marty-credentials-issuance",
+                                "digest": "sha256:" + "c" * 64,
                             }
                         ],
-                    }
+                    },
+                    wheel_component("marty-core-python", "ElevenID/marty-core", "marty_rs"),
+                    wheel_component(
+                        "marty-verification-python",
+                        "ElevenID/marty-core",
+                        "marty_verification_py",
+                    ),
+                    wheel_component("marty-iso18013-python", "ElevenID/marty-core", "marty_iso18013"),
+                    wheel_component("marty-common", "ElevenID/Marty", "marty_common"),
                 ],
             },
             sort_keys=True,
@@ -93,6 +137,18 @@ def test_stack_manifest_rejects_commit_outside_reviewed_pin(tmp_path: Path) -> N
     pin = write_pin(pin_path, digest=f"sha256:{sha256(content).hexdigest()}")
     pin["marty_commit"] = "c" * 40
     with pytest.raises(ValueError, match="expected"):
+        release.validate_stack_manifest(manifest, pin)
+
+
+def test_stack_manifest_rejects_stack_that_cannot_render_required_python_inputs(tmp_path: Path) -> None:
+    value = json.loads(stack_bytes())
+    value["components"] = [
+        component for component in value["components"] if component["name"] != "marty-verification-python"
+    ]
+    manifest = tmp_path / "stack-manifest.json"
+    manifest.write_text(json.dumps(value), encoding="utf-8")
+    pin = write_pin(tmp_path / "pin.json", digest=release.file_sha256(manifest))
+    with pytest.raises(ValueError, match="cannot render.*marty-verification-python"):
         release.validate_stack_manifest(manifest, pin)
 
 

@@ -12,6 +12,9 @@ import sys
 from hashlib import sha256
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from render_stack_env import image_map, python_artifact_map
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PIN = ROOT / "conformance" / "stack-under-test.json"
 PIN_SCHEMA = "elevenid.official-stack-pin/v1"
@@ -137,6 +140,11 @@ def validate_stack_manifest(path: Path, pin: dict[str, str]) -> dict[str, object
         )
     if not images:
         raise ValueError("released stack manifest contains no OCI artifacts")
+    try:
+        image_map(manifest)
+        python_artifact_map(manifest)
+    except ValueError as exc:
+        raise ValueError(f"released stack cannot render official Compose inputs: {exc}") from exc
     return {
         "schema": "elevenid.official-stack-material/v1",
         "repository": pin["repository"],
