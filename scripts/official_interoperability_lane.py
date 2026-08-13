@@ -220,8 +220,10 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
         r"(?i)key binding jwt is required"
     ),
     "marty-sd-jwt-key-binding-signature": re.compile(
-        r"(?i)(?:key binding jwt signature validation failed|"
-        r"sd-jwt verification failed.{0,240}(?:cannot decode jwt: )?invalidsignature)"
+        r"(?i)key binding jwt signature validation failed"
+    ),
+    "marty-sd-jwt-signature": re.compile(
+        r"(?i)sd-jwt verification failed.{0,240}(?:cannot decode jwt: )?invalidsignature"
     ),
     "marty-sd-jwt-key-binding-sd-hash": re.compile(
         r"(?i)(?:key binding jwt sd_hash|invalid digest in kb-jwt)"

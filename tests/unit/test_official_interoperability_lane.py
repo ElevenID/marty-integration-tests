@@ -1461,7 +1461,7 @@ def test_eudi_runtime_diagnostics_identify_safe_mdoc_stage(
         ("Key Binding JWT signature validation failed: private detail", "marty-sd-jwt-key-binding-signature"),
         (
             'SD-JWT verification failed: DeserializationError("InvalidSignature")',
-            "marty-sd-jwt-key-binding-signature",
+            "marty-sd-jwt-signature",
         ),
         ("Key Binding JWT sd_hash does not bind this SD-JWT", "marty-sd-jwt-key-binding-sd-hash"),
         ("Invalid digest in KB-JWT", "marty-sd-jwt-key-binding-sd-hash"),
