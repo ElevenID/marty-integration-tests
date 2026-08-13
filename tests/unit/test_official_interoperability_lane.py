@@ -40,6 +40,7 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
                     {"name": "images", "artifacts": artifacts},
                     {
                         "name": "marty-core-python",
+                        "repository": "ElevenID/marty-core",
                         "artifacts": [
                             {
                                 "type": "python",
@@ -49,7 +50,30 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
                         ],
                     },
                     {
+                        "name": "marty-verification-python",
+                        "repository": "ElevenID/marty-core",
+                        "artifacts": [
+                            {
+                                "type": "python",
+                                "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_verification_py.whl",
+                                "digest": "sha256:" + "7" * 64,
+                            }
+                        ],
+                    },
+                    {
+                        "name": "marty-iso18013-python",
+                        "repository": "ElevenID/marty-core",
+                        "artifacts": [
+                            {
+                                "type": "python",
+                                "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_iso18013.whl",
+                                "digest": "sha256:" + "8" * 64,
+                            }
+                        ],
+                    },
+                    {
                         "name": "marty-common",
+                        "repository": "ElevenID/Marty",
                         "artifacts": [
                             {
                                 "type": "python",
@@ -75,6 +99,10 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
         **references,
         "MARTY_RS_URI": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_rs.whl",
         "MARTY_RS_DIGEST": "sha256:" + "5" * 64,
+        "MARTY_VERIFICATION_URI": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_verification_py.whl",
+        "MARTY_VERIFICATION_DIGEST": "sha256:" + "7" * 64,
+        "MARTY_ISO18013_URI": "https://github.com/ElevenID/marty-core/releases/download/v0.1.0/marty_iso18013.whl",
+        "MARTY_ISO18013_DIGEST": "sha256:" + "8" * 64,
         "MARTY_COMMON_URI": "https://github.com/ElevenID/Marty/releases/download/v0.1.0/marty_common.whl",
         "MARTY_COMMON_DIGEST": "sha256:" + "6" * 64,
         "POSTGRES_IMAGE": base_images["postgres"],
@@ -85,10 +113,14 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
 
 def test_stack_environment_accepts_only_complete_digest_pins(tmp_path: Path) -> None:
     path = tmp_path / ".env.stack"
+    artifact_repositories = {
+        f"{prefix}_URI": repository
+        for prefix, (_component, _artifact_type, repository) in lane.STACK_ARTIFACT_ENVIRONMENT.items()
+    }
     path.write_text(
         "\n".join(
             (
-                f"{name}=https://github.com/ElevenID/example/releases/download/v0.1.0/{name.lower()}.whl"
+                f"{name}=https://github.com/{artifact_repositories[name]}/releases/download/v0.1.0/{name.lower()}.whl"
                 if name.endswith("_URI")
                 else f"{name}=sha256:{index:064x}"
                 if name.endswith("_DIGEST")

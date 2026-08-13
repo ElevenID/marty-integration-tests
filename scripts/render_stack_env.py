@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).parent))
 from docker_context import docker_command
@@ -22,9 +23,13 @@ REQUIRED_IMAGES = {
     "MARTY_ISSUANCE_IMAGE": "marty-credentials-issuance",
 }
 REQUIRED_PYTHON_ARTIFACTS = {
-    "MARTY_RS": ("marty-core-python", "python"),
-    "MARTY_COMMON": ("marty-common", "python"),
+    "MARTY_RS": ("marty-core-python", "python", "ElevenID/marty-core"),
+    "MARTY_VERIFICATION": ("marty-verification-python", "python", "ElevenID/marty-core"),
+    "MARTY_ISO18013": ("marty-iso18013-python", "python", "ElevenID/marty-core"),
+    "MARTY_COMMON": ("marty-common", "python", "ElevenID/Marty"),
 }
+RELEASE_SEGMENT = re.compile(r"[0-9A-Za-z._+-]+$")
+WHEEL_SEGMENT = re.compile(r"[0-9A-Za-z._+-]+\.whl$")
 
 
 def load_manifest(path: Path) -> dict:
@@ -72,32 +77,56 @@ def python_artifact_map(manifest: dict) -> dict[str, str]:
     """Render immutable wheel inputs required when Compose builds local adapters."""
     rendered: dict[str, str] = {}
     components = manifest.get("components", [])
-    for variable, (component_name, artifact_type) in REQUIRED_PYTHON_ARTIFACTS.items():
+    if not isinstance(components, list):
+        raise ValueError("stack manifest components must be a list")
+    for variable, (component_name, artifact_type, repository) in REQUIRED_PYTHON_ARTIFACTS.items():
         matches = [
             artifact
             for component in components
-            if component.get("name") == component_name
-            for artifact in component.get("artifacts", [])
-            if artifact.get("type") == artifact_type
+            if isinstance(component, dict)
+            and component.get("name") == component_name
+            and component.get("repository") == repository
+            for artifact in (component.get("artifacts") if isinstance(component.get("artifacts"), list) else [])
+            if isinstance(artifact, dict) and artifact.get("type") == artifact_type
         ]
         if len(matches) != 1:
             raise ValueError(
-                f"expected exactly one {artifact_type} artifact for {component_name}, found {len(matches)}"
+                f"expected exactly one {artifact_type} artifact for {component_name} from "
+                f"{repository}, found {len(matches)}"
             )
         artifact = matches[0]
         uri = artifact.get("uri")
         digest = artifact.get("digest")
-        if (
-            not isinstance(uri, str)
-            or not uri.startswith("https://github.com/ElevenID/")
-            or "/releases/download/" not in uri
-            or "?" in uri
-            or not DIGEST.fullmatch(digest if isinstance(digest, str) else "")
-        ):
+        if not isinstance(uri, str) or not immutable_wheel_uri(uri, repository):
+            raise ValueError(f"{component_name} must use an immutable GitHub release wheel")
+        if not DIGEST.fullmatch(digest if isinstance(digest, str) else ""):
             raise ValueError(f"{component_name} must use an immutable GitHub release artifact")
         rendered[f"{variable}_URI"] = uri
         rendered[f"{variable}_DIGEST"] = digest
     return rendered
+
+
+def immutable_wheel_uri(uri: str, repository: str) -> bool:
+    """Accept one unambiguous wheel URL from the component's governed repository."""
+    try:
+        parsed = urlsplit(uri)
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "github.com"
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return False
+    prefix = f"/{repository}/releases/download/"
+    if not parsed.path.startswith(prefix):
+        return False
+    remainder = parsed.path.removeprefix(prefix)
+    parts = remainder.split("/")
+    return len(parts) == 2 and bool(RELEASE_SEGMENT.fullmatch(parts[0])) and bool(WHEEL_SEGMENT.fullmatch(parts[1]))
 
 
 def main() -> int:
