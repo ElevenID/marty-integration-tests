@@ -220,19 +220,26 @@ EUDI_RUNTIME_DIAGNOSTIC_CLASSES = {
         r"(?i)key binding jwt is required"
     ),
     "marty-sd-jwt-key-binding-signature": re.compile(
-        r"(?i)key binding jwt signature validation failed"
+        r"(?i)(?:key binding jwt signature validation failed|"
+        r"sd-jwt verification failed.{0,240}(?:cannot decode jwt: )?invalidsignature)"
     ),
     "marty-sd-jwt-key-binding-sd-hash": re.compile(
-        r"(?i)key binding jwt sd_hash"
+        r"(?i)(?:key binding jwt sd_hash|invalid digest in kb-jwt)"
     ),
     "marty-sd-jwt-key-binding-audience": re.compile(
-        r"(?i)key binding jwt audience"
+        r"(?i)(?:key binding jwt audience|invalidaudience)"
     ),
     "marty-sd-jwt-key-binding-nonce": re.compile(
-        r"(?i)key binding jwt nonce"
+        r"(?i)(?:key binding jwt nonce|invalid nonce)"
     ),
     "marty-sd-jwt-key-binding-freshness": re.compile(
-        r"(?i)key binding jwt iat"
+        r"(?i)(?:key binding jwt iat|missing required [`']?iat[`']? claim in kb-jwt)"
+    ),
+    "marty-sd-jwt-key-binding-header": re.compile(
+        r"(?i)(?:invalid header type|kb-jwt header)"
+    ),
+    "marty-sd-jwt-issuer-validity": re.compile(
+        r"(?i)(?:expiredsignature|immaturesignature|issuer jwt.{0,80}(?:expired|not yet valid))"
     ),
     "marty-sd-jwt-disclosure": re.compile(
         r"(?i)(?:invalid disclosure|disclosure (?:decode|hash)|"
@@ -898,6 +905,15 @@ def classify_public_proxy_diagnostics(text: str) -> list[str]:
 def classify_eudi_runtime_diagnostics(text: str) -> list[str]:
     """Return fixed EUDI runtime categories without exposing source log text."""
     categories = [name for name, pattern in EUDI_RUNTIME_DIAGNOSTIC_CLASSES.items() if pattern.search(text)]
+    observed_mdoc_error_kinds = {
+        match.group(1)
+        for match in MDOC_DEVICE_AUTH_ERROR_KIND.finditer(text)
+        if match.group(1) in MDOC_DEVICE_AUTH_ERROR_KINDS
+    }
+    categories.extend(
+        f"marty-mdoc-error-kind-{kind}"
+        for kind in sorted(observed_mdoc_error_kinds)
+    )
     return categories or ["unclassified-runtime-failure"]
 
 

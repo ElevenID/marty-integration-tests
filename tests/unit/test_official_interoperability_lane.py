@@ -1459,10 +1459,20 @@ def test_eudi_runtime_diagnostics_identify_safe_mdoc_stage(
         ("SD-JWT has no cnf.jwk for key binding", "marty-sd-jwt-holder-key"),
         ("Key Binding JWT is required when verifier context is supplied", "marty-sd-jwt-key-binding-required"),
         ("Key Binding JWT signature validation failed: private detail", "marty-sd-jwt-key-binding-signature"),
+        (
+            'SD-JWT verification failed: DeserializationError("InvalidSignature")',
+            "marty-sd-jwt-key-binding-signature",
+        ),
         ("Key Binding JWT sd_hash does not bind this SD-JWT", "marty-sd-jwt-key-binding-sd-hash"),
+        ("Invalid digest in KB-JWT", "marty-sd-jwt-key-binding-sd-hash"),
         ("Key Binding JWT audience does not match the verifier", "marty-sd-jwt-key-binding-audience"),
+        ("invalid input: InvalidAudience", "marty-sd-jwt-key-binding-audience"),
         ("Key Binding JWT nonce does not match the request", "marty-sd-jwt-key-binding-nonce"),
+        ("invalid input: Invalid nonce", "marty-sd-jwt-key-binding-nonce"),
         ("Key Binding JWT iat is outside the five-minute freshness window", "marty-sd-jwt-key-binding-freshness"),
+        ("Missing required `iat` claim in KB-JWT", "marty-sd-jwt-key-binding-freshness"),
+        ("invalid input: Invalid header type", "marty-sd-jwt-key-binding-header"),
+        ("Cannot decode jwt: ExpiredSignature", "marty-sd-jwt-issuer-validity"),
         ("Disclosure hash was invalid: private detail", "marty-sd-jwt-disclosure"),
         ("Rust SD-JWT verification returned invalid JSON", "marty-sd-jwt-native-backend"),
         ("Device authentication signature invalid", "marty-mdoc-device-authentication"),
@@ -1477,6 +1487,22 @@ def test_eudi_runtime_diagnostics_identify_marty_verifier_stage_without_values(
     category: str,
 ) -> None:
     assert category in lane.classify_eudi_runtime_diagnostics(diagnostic)
+
+
+def test_eudi_runtime_diagnostics_forward_allowlisted_mdoc_error_kind() -> None:
+    classes = lane.classify_eudi_runtime_diagnostics(
+        "mDoc verification outcome device_auth_error_kind=session-transcript-parse-failed"
+    )
+
+    assert "marty-mdoc-error-kind-session-transcript-parse-failed" in classes
+
+
+def test_eudi_runtime_diagnostics_reject_unknown_mdoc_error_kind() -> None:
+    classes = lane.classify_eudi_runtime_diagnostics(
+        "mDoc verification outcome device_auth_error_kind=private-arbitrary-value"
+    )
+
+    assert "marty-mdoc-error-kind-private-arbitrary-value" not in classes
 
 
 def test_eudi_runtime_diagnostic_never_prints_private_log_text(
