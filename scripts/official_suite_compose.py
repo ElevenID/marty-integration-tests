@@ -37,6 +37,7 @@ from haip_test_certificates import (
     validate_oid4vp_trust_anchor,
     validate_verifier_environment,
 )
+from local_hostname_resolution import resolve_hosts_to
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
@@ -225,7 +226,14 @@ def wait_for_eudi_readiness(environment: dict[str, str]) -> None:
     pending = dict(probes)
     failures: dict[str, str] = {}
     deadline = time.monotonic() + timeout
-    with httpx.Client(verify=verify, follow_redirects=True, timeout=5.0) as client:
+    resolve_ip = environment.get("OIDF_MARTY_RESOLVE_IP", "").strip()
+    resolved_hosts = {
+        httpx.URL(url).host for url in probes.values() if httpx.URL(url).host
+    }
+    with (
+        resolve_hosts_to(resolve_ip, resolved_hosts),
+        httpx.Client(verify=verify, follow_redirects=True, timeout=5.0) as client,
+    ):
         while pending and time.monotonic() < deadline:
             for name, url in list(pending.items()):
                 try:

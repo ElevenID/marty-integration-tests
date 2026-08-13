@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ElementTree
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).parent))
 from eudi_test_material import (
@@ -622,6 +623,41 @@ def run_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str,
     return environment, endpoints
 
 
+def eudi_pytest_command(
+    environment: dict[str, str],
+    endpoints: dict[str, str],
+    output: Path,
+) -> list[str]:
+    pytest_args = [
+        "-q",
+        "--junitxml",
+        str(output / "junit.xml"),
+        "tests/integration/gateway/test_eudi_interop.py",
+        "tests/integration/gateway/test_eudi_wallet_kit.py",
+        "tests/integration/gateway/test_eudi_wallet_kit_vp.py",
+        "tests/integration/gateway/test_eudi_wallet_kit_dtc.py",
+    ]
+    resolve_address = environment.get("OIDF_MARTY_RESOLVE_IP", "").strip()
+    if not resolve_address:
+        return [sys.executable, "-m", "pytest", *pytest_args]
+    resolved_hosts = sorted(
+        {
+            host
+            for endpoint in (endpoints["gateway"], endpoints["verifier"])
+            if (host := urlsplit(endpoint).hostname)
+        }
+    )
+    command = [
+        sys.executable,
+        str(ROOT / "scripts" / "pytest_with_local_resolution.py"),
+        "--resolve-address",
+        resolve_address,
+    ]
+    for host in resolved_hosts:
+        command.extend(["--resolve-host", host])
+    return [*command, "--", *pytest_args]
+
+
 def run(args: argparse.Namespace) -> int:
     manifest = load_manifest()
     environment, endpoints = run_environment(args)
@@ -633,18 +669,7 @@ def run(args: argparse.Namespace) -> int:
     stack_manifest_metadata(stack_manifest)
     request_object_trust = request_object_trust_metadata(environment)
     environment["MARTY_TEST_SESSION_ID"] = public_gateway_session(environment)
-    command = [
-        sys.executable,
-        "-m",
-        "pytest",
-        "-q",
-        "--junitxml",
-        str(output / "junit.xml"),
-        "tests/integration/gateway/test_eudi_interop.py",
-        "tests/integration/gateway/test_eudi_wallet_kit.py",
-        "tests/integration/gateway/test_eudi_wallet_kit_vp.py",
-        "tests/integration/gateway/test_eudi_wallet_kit_dtc.py",
-    ]
+    command = eudi_pytest_command(environment, endpoints, output)
     completed = subprocess.run(command, cwd=ROOT, env=environment, text=True, capture_output=True, check=False)
     result = completed.returncode
     skipped = 0
