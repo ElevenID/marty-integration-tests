@@ -1706,7 +1706,8 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         assert low_trust_decision["result"] == "failed", low_trust_decision
         assert low_trust_decision["decision"] == "deny", low_trust_decision
-        assert "minimum trust level" in str(low_trust_decision.get("decision_reason") or "").lower()
+        assert low_trust_decision["credential_results"][0]["trust_check_passed"] is False
+        assert low_trust_decision.get("decision_reason") == ("Issuer trust level is below the policy minimum")
         _assert_no_private_signing_selectors(low_trust_decision)
 
         restored_relationship = await admin.client.patch(
