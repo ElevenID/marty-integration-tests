@@ -584,11 +584,11 @@ def policy_payload(
     mdoc: bool = False,
     trust_profile_id: str | None = None,
 ) -> dict[str, object]:
-    # The W3C verifier suite supplies standards-conforming generic credentials,
-    # not Marty's product-specific identity schema. Marty's policy schema still
-    # requires at least one requested-claim entry, so use credentialSubject.id as
-    # an optional structural claim. This preserves cryptographic and holder-
-    # binding validation without inventing a claim that VCDM v2 does not require.
+    # The W3C credential-verifier suite supplies standards-conforming generic
+    # credentials, not Marty's product-specific identity schema. Use
+    # credentialSubject.id as an optional structural claim for that credential
+    # policy. Presentation-verifier rows exercise the independently authenticated
+    # VP proof and therefore carry no credential obligation at all.
     claims = (
         (("id", False),)
         if w3c
@@ -601,7 +601,7 @@ def policy_payload(
     )
     if not w3c and not presentation:
         raise ValueError("OID4VP fixtures require a presentation policy")
-    if w3c and not trust_profile_id:
+    if w3c and not presentation and not trust_profile_id:
         raise ValueError("W3C verifier policies require an exact governed Trust Profile")
     label = (
         f"W3C VC v2 {'presentation' if presentation else 'credential'}"
@@ -642,7 +642,7 @@ def policy_payload(
             for claim, required in claims
         ],
     }
-    if trust_profile_id is not None:
+    if trust_profile_id is not None and not (w3c and presentation):
         requirement["trust_profile_id"] = trust_profile_id
     result: dict[str, object] = {
         "organization_id": organization_id,
@@ -657,9 +657,9 @@ def policy_payload(
         # explicitly so policy intent cannot be inferred differently by a
         # generated client or another service.
         "holder_binding": holder_binding,
-        "credential_requirements": [requirement],
+        "credential_requirements": [] if w3c and presentation else [requirement],
     }
-    if trust_profile_id is not None:
+    if trust_profile_id is not None and not (w3c and presentation):
         result["trust_profile_id"] = trust_profile_id
     return result
 
