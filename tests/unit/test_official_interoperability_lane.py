@@ -1451,6 +1451,34 @@ def test_eudi_runtime_diagnostics_identify_safe_mdoc_stage(
     assert category in lane.classify_eudi_runtime_diagnostics(diagnostic)
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "category"),
+    [
+        ("Verification error for sd-jwt: private detail", "marty-sd-jwt-verification"),
+        ("DID resolution failed: private issuer", "marty-sd-jwt-issuer-key"),
+        ("SD-JWT has no cnf.jwk for key binding", "marty-sd-jwt-holder-key"),
+        ("Key Binding JWT is required when verifier context is supplied", "marty-sd-jwt-key-binding-required"),
+        ("Key Binding JWT signature validation failed: private detail", "marty-sd-jwt-key-binding-signature"),
+        ("Key Binding JWT sd_hash does not bind this SD-JWT", "marty-sd-jwt-key-binding-sd-hash"),
+        ("Key Binding JWT audience does not match the verifier", "marty-sd-jwt-key-binding-audience"),
+        ("Key Binding JWT nonce does not match the request", "marty-sd-jwt-key-binding-nonce"),
+        ("Key Binding JWT iat is outside the five-minute freshness window", "marty-sd-jwt-key-binding-freshness"),
+        ("Disclosure hash was invalid: private detail", "marty-sd-jwt-disclosure"),
+        ("Rust SD-JWT verification returned invalid JSON", "marty-sd-jwt-native-backend"),
+        ("Device authentication signature invalid", "marty-mdoc-device-authentication"),
+        ("Session transcript mismatch: private detail", "marty-mdoc-session-transcript"),
+        ("Issuer signature validation failed", "marty-mdoc-issuer-signature"),
+        ("Issuer certificate is not trusted", "marty-mdoc-issuer-trust"),
+        ("Could not parse MSO: private detail", "marty-mdoc-parse"),
+    ],
+)
+def test_eudi_runtime_diagnostics_identify_marty_verifier_stage_without_values(
+    diagnostic: str,
+    category: str,
+) -> None:
+    assert category in lane.classify_eudi_runtime_diagnostics(diagnostic)
+
+
 def test_eudi_runtime_diagnostic_never_prints_private_log_text(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
