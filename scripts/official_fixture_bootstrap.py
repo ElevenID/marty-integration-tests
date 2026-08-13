@@ -582,6 +582,7 @@ def policy_payload(
     run_id: str,
     presentation: bool = True,
     mdoc: bool = False,
+    trust_profile_id: str | None = None,
 ) -> dict[str, object]:
     # The W3C verifier suite supplies standards-conforming generic credentials,
     # not Marty's product-specific identity schema. Marty's policy schema still
@@ -600,6 +601,8 @@ def policy_payload(
     )
     if not w3c and not presentation:
         raise ValueError("OID4VP fixtures require a presentation policy")
+    if w3c and not trust_profile_id:
+        raise ValueError("W3C verifier policies require an exact governed Trust Profile")
     label = (
         f"W3C VC v2 {'presentation' if presentation else 'credential'}"
         if w3c
@@ -616,11 +619,32 @@ def policy_payload(
                 "proof_freshness": {
                     "challenge_required": True,
                     "audience_binding_required": True,
-                    "replay_detection_required": True,
+                    # The W3C VC-API verifier operation is stateless. It binds
+                    # the proof to the supplied challenge and audience but does
+                    # not create a transaction in which Marty could truthfully
+                    # persist and report replay-detection evidence.
+                    "replay_detection_required": not w3c,
                 },
             }
         )
-    return {
+    requirement: dict[str, object] = {
+        "credential_template_id": template_id,
+        "display_name": label,
+        "credential_payload_format": (
+            "w3c_vcdm_v2_di" if w3c else "MDOC" if mdoc else "w3c_vcdm_v2_sd_jwt"
+        ),
+        "requested_claims": [
+            {
+                "claim_name": claim,
+                "display_name": claim,
+                "required": required,
+            }
+            for claim, required in claims
+        ],
+    }
+    if trust_profile_id is not None:
+        requirement["trust_profile_id"] = trust_profile_id
+    result: dict[str, object] = {
         "organization_id": organization_id,
         "name": f"Official {label} {run_id}",
         "purpose": f"Disposable {label} official-suite verification",
@@ -633,22 +657,11 @@ def policy_payload(
         # explicitly so policy intent cannot be inferred differently by a
         # generated client or another service.
         "holder_binding": holder_binding,
-        "credential_requirements": [
-            {
-                "credential_template_id": template_id,
-                "display_name": label,
-                "credential_payload_format": ("w3c_vcdm_v2_di" if w3c else "MDOC" if mdoc else "w3c_vcdm_v2_sd_jwt"),
-                "requested_claims": [
-                    {
-                        "claim_name": claim,
-                        "display_name": claim,
-                        "required": required,
-                    }
-                    for claim, required in claims
-                ],
-            }
-        ],
+        "credential_requirements": [requirement],
     }
+    if trust_profile_id is not None:
+        result["trust_profile_id"] = trust_profile_id
+    return result
 
 
 def official_signer_public_jwk(config_path: Path) -> dict[str, str]:
@@ -771,6 +784,55 @@ def trust_profile_payload(
             OFFICIAL_OIDF_ISSUER_DOMAIN: {"public_jwk": public_jwk},
         },
         "auto_generated": True,
+    }
+
+
+def w3c_trust_profile_payload(
+    organization_id: str,
+    issuer_did: str,
+    *,
+    run_id: str,
+) -> dict[str, object]:
+    """Govern the exact Marty DID used by the unchanged W3C verifier suite."""
+    if not re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did):
+        raise ValueError("W3C governed issuer id must be an exact DID")
+    return {
+        "organization_id": organization_id,
+        "name": f"Official W3C VC v2 issuer {run_id}",
+        "description": (
+            "Disposable governed trust for the exact Marty issuer DID supplied "
+            "to the commit-pinned unmodified W3C suite"
+        ),
+        "profile_type": "CUSTOM",
+        "supported_formats": ["JSON_LD"],
+        "allowed_algorithms": ["EdDSA"],
+        "allowed_issuers": [issuer_did],
+        "auto_generated": True,
+    }
+
+
+def w3c_issuer_entity_payload(
+    organization_id: str,
+    issuer_did: str,
+    *,
+    run_id: str,
+) -> dict[str, object]:
+    """Build the governed record for the exact W3C fixture issuer DID."""
+    if not re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did):
+        raise ValueError("W3C governed issuer id must be an exact DID")
+    return {
+        "organization_id": organization_id,
+        "issuer_id": issuer_did,
+        "issuer_type": "ORGANIZATION",
+        "display_name": f"Official W3C VC v2 issuer {run_id}",
+        "description": (
+            "Disposable lifecycle record for the exact Marty DID issuing "
+            "credentials to the commit-pinned unmodified W3C suite"
+        ),
+        "compliance_status": "COMPLIANT",
+        "metadata": {
+            "source": "official-w3c-marty-issuer-identity",
+        },
     }
 
 
@@ -1329,6 +1391,74 @@ def bootstrap(
                 created_presentation_template,
                 f"{prefix} presentation template",
             )
+        w3c_trust_profile_id: str | None = None
+        if w3c:
+            issuer_did = str(profile_payload["issuer_did"])
+            created_w3c_trust_profile = request(
+                gateway_url,
+                session_id,
+                "/v1/trust-profiles",
+                method="POST",
+                json_body=w3c_trust_profile_payload(
+                    organization_id,
+                    issuer_did,
+                    run_id=run_id,
+                ),
+            )
+            w3c_trust_profile_id = response_id(
+                created_w3c_trust_profile,
+                "W3C verifier Trust Profile",
+            )
+            w3c_issuer_payload = w3c_issuer_entity_payload(
+                organization_id,
+                issuer_did,
+                run_id=run_id,
+            )
+            created_w3c_issuer = request(
+                gateway_url,
+                session_id,
+                "/v1/issuer-entities",
+                method="POST",
+                json_body=w3c_issuer_payload,
+            )
+            w3c_issuer_entity_id = response_id(
+                created_w3c_issuer,
+                "W3C verifier issuer entity",
+            )
+            linked_w3c_issuer = request(
+                gateway_url,
+                session_id,
+                f"/v1/trust-profiles/{w3c_trust_profile_id}/issuers",
+                method="POST",
+                json_body={
+                    "issuer_id": w3c_issuer_entity_id,
+                    "trust_level": 100,
+                    "relationship_status": "TRUSTED",
+                    "cascade_revocation_policy": "AUTO_CASCADE",
+                    "metadata": {
+                        "source": "official-w3c-marty-issuer-identity",
+                    },
+                },
+            )
+            response_id(linked_w3c_issuer, "W3C verifier issuer relationship")
+            activated_w3c_trust_profile = request(
+                gateway_url,
+                session_id,
+                f"/v1/trust-profiles/{w3c_trust_profile_id}/activate",
+                method="POST",
+            )
+            if (
+                response_id(
+                    activated_w3c_trust_profile,
+                    "activated W3C verifier Trust Profile",
+                )
+                != w3c_trust_profile_id
+            ):
+                raise RuntimeError(
+                    "activated W3C verifier Trust Profile id changed unexpectedly"
+                )
+            result["w3c_trust_profile_id"] = w3c_trust_profile_id
+            result["w3c_trusted_issuer_id"] = issuer_did
         policy_roles = ("credential", "presentation") if w3c else (() if oid4vci else ("presentation",))
         policy_ids: dict[str, str] = {}
         for role in policy_roles:
@@ -1344,6 +1474,7 @@ def bootstrap(
                     run_id=run_id,
                     presentation=role == "presentation",
                     mdoc=mdoc,
+                    trust_profile_id=w3c_trust_profile_id,
                 ),
             )
             policy_id = response_id(created_policy, f"{prefix} {role} policy")
