@@ -208,6 +208,10 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "revocation-2"},
             {"id": "template-2"},
             {"id": "template-3"},
+            {"id": "w3c-trust-1"},
+            {"id": "w3c-issuer-entity-1"},
+            {"id": "w3c-relationship-1"},
+            {"id": "w3c-trust-1"},
             {"id": "policy-2"},
             {"id": "policy-2"},
             {"id": "policy-3"},
@@ -256,6 +260,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert result["w3c_issuer_did"] == (f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}")
     assert result["w3c_template_id"] == "template-2"
     assert result["w3c_presentation_template_id"] == "template-3"
+    assert result["w3c_trust_profile_id"] == "w3c-trust-1"
+    assert result["w3c_trusted_issuer_id"] == result["w3c_issuer_did"]
     assert result["w3c_credential_policy_id"] == "policy-2"
     assert result["w3c_presentation_policy_id"] == "policy-3"
     assert result["w3c_api_key_id"] == "w3c-api-key-1"
@@ -318,31 +324,70 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     }
     assert calls[17][2]["credential_payload_format"] == "ldp_vc"
     assert calls[18][2]["credential_payload_format"] == "ldp_vc"
-    assert calls[19][2]["holder_binding"] == {"required": False}
-    assert calls[23][0].startswith("/v1/api-keys?organization_id=")
-    assert calls[23][2] == {
+    assert calls[19] == (
+        "/v1/trust-profiles",
+        "POST",
+        fixtures.w3c_trust_profile_payload(
+            fixtures.DEFAULT_ORGANIZATION,
+            result["w3c_issuer_did"],
+            run_id="run-1",
+        ),
+    )
+    assert calls[20] == (
+        "/v1/issuer-entities",
+        "POST",
+        fixtures.w3c_issuer_entity_payload(
+            fixtures.DEFAULT_ORGANIZATION,
+            result["w3c_issuer_did"],
+            run_id="run-1",
+        ),
+    )
+    assert calls[21] == (
+        "/v1/trust-profiles/w3c-trust-1/issuers",
+        "POST",
+        {
+            "issuer_id": "w3c-issuer-entity-1",
+            "trust_level": 100,
+            "relationship_status": "TRUSTED",
+            "cascade_revocation_policy": "AUTO_CASCADE",
+            "metadata": {
+                "source": "official-w3c-marty-issuer-identity",
+            },
+        },
+    )
+    assert calls[22][0:2] == (
+        "/v1/trust-profiles/w3c-trust-1/activate",
+        "POST",
+    )
+    assert calls[23][2]["holder_binding"] == {"required": False}
+    assert calls[27][0].startswith("/v1/api-keys?organization_id=")
+    assert calls[27][2] == {
         "name": "Official W3C VC API run-1",
         "description": "Disposable key for one official VCDM v2 suite run",
         "scopes": ["credentials:issue", "credentials:read"],
         "is_test": True,
     }
-    requirement = calls[19][2]["credential_requirements"][0]
+    assert calls[23][2]["trust_profile_id"] == "w3c-trust-1"
+    requirement = calls[23][2]["credential_requirements"][0]
     assert requirement["credential_template_id"] == "template-2"
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
+    assert requirement["trust_profile_id"] == "w3c-trust-1"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[21][2]["holder_binding"] == {
+    assert calls[25][2]["holder_binding"] == {
         "required": True,
         "binding_methods": ["DEVICE_KEY"],
         "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
         "proof_freshness": {
             "challenge_required": True,
             "audience_binding_required": True,
-            "replay_detection_required": True,
+            "replay_detection_required": False,
         },
     }
-    presentation_requirement = calls[21][2]["credential_requirements"][0]
+    assert calls[25][2]["trust_profile_id"] == "w3c-trust-1"
+    presentation_requirement = calls[25][2]["credential_requirements"][0]
     assert presentation_requirement["credential_template_id"] == "template-3"
     assert presentation_requirement["credential_payload_format"] == ("w3c_vcdm_v2_di")
+    assert presentation_requirement["trust_profile_id"] == "w3c-trust-1"
 
 
 def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() -> None:
@@ -884,6 +929,7 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
         w3c=True,
         run_id="run-1",
         presentation=False,
+        trust_profile_id="trust-1",
     )
     presentation_policy = fixtures.policy_payload(
         fixtures.DEFAULT_ORGANIZATION,
@@ -891,6 +937,7 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
         w3c=True,
         run_id="run-1",
         presentation=True,
+        trust_profile_id="trust-1",
     )
     assert credential_template["supported_formats"] == ["ldp_vc"]
     assert credential_template["credential_payload_format"] == "ldp_vc"
@@ -903,8 +950,10 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
         assert "signing_service_id" not in template
         assert "signing_key_reference" not in template
     assert credential_policy["holder_binding"] == {"required": False}
+    assert credential_policy["trust_profile_id"] == "trust-1"
     credential_requirement = credential_policy["credential_requirements"][0]
     assert credential_requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
+    assert credential_requirement["trust_profile_id"] == "trust-1"
     assert credential_requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
     assert presentation_policy["holder_binding"] == {
         "required": True,
@@ -913,10 +962,59 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
         "proof_freshness": {
             "challenge_required": True,
             "audience_binding_required": True,
-            "replay_detection_required": True,
+            "replay_detection_required": False,
         },
     }
+    assert presentation_policy["trust_profile_id"] == "trust-1"
     assert presentation_policy["credential_requirements"][0]["credential_payload_format"] == ("w3c_vcdm_v2_di")
+    assert presentation_policy["credential_requirements"][0]["trust_profile_id"] == "trust-1"
+
+
+def test_w3c_policy_requires_governed_issuer_trust() -> None:
+    with pytest.raises(ValueError, match="exact governed Trust Profile"):
+        fixtures.policy_payload(
+            fixtures.DEFAULT_ORGANIZATION,
+            "template-1",
+            w3c=True,
+            run_id="run-1",
+        )
+
+
+def test_w3c_trust_payloads_bind_only_the_exact_issuer_did() -> None:
+    issuer_did = "did:web:marty.test:orgs:00000000-0000-0000-0000-000000000001"
+
+    trust_profile = fixtures.w3c_trust_profile_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        issuer_did,
+        run_id="run-1",
+    )
+    issuer_entity = fixtures.w3c_issuer_entity_payload(
+        fixtures.DEFAULT_ORGANIZATION,
+        issuer_did,
+        run_id="run-1",
+    )
+
+    assert trust_profile["supported_formats"] == ["JSON_LD"]
+    assert trust_profile["allowed_algorithms"] == ["EdDSA"]
+    assert trust_profile["allowed_issuers"] == [issuer_did]
+    assert "system_issuer_overrides" not in trust_profile
+    assert "trust_sources" not in trust_profile
+    assert issuer_entity["issuer_id"] == issuer_did
+    assert issuer_entity["compliance_status"] == "COMPLIANT"
+    assert issuer_entity["metadata"] == {
+        "source": "official-w3c-marty-issuer-identity"
+    }
+
+    for builder in (
+        fixtures.w3c_trust_profile_payload,
+        fixtures.w3c_issuer_entity_payload,
+    ):
+        with pytest.raises(ValueError, match="exact DID"):
+            builder(
+                fixtures.DEFAULT_ORGANIZATION,
+                "https://not-a-did.example",
+                run_id="run-1",
+            )
 
 
 def test_w3c_data_integrity_identity_requests_eddsa_without_custody_selectors() -> None:
