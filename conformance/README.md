@@ -640,16 +640,19 @@ all seven lanes: OID4VCI issuer, OID4VP Final, native OID4VP URL-query,
 OID4VP mdoc, HAIP, W3C VC Data Model v2, and EUDI. The workflow downloads the reviewed `marty-ui` release
 manifest named in `stack-under-test.json`, checks its independent SHA-256 and
 GitHub attestation, verifies each OCI attestation, and checks out the exact
-Marty commit recorded by that release. A tag override is accepted only when
-its reviewed manifest SHA-256 is supplied in the same dispatch.
+Marty commit recorded by that release. The release, manifest digest, provenance
+commit, and executable checkout commit are repository-reviewed together; a
+new stack therefore requires a PR rather than a dispatch-time override.
 
 If an approved repository payload cleanup rewrites that exact commit, the
-workflow preserves the manifest's original provenance value and uses
-`history-rewrite-map.json` only to resolve the equivalent checkout commit. The
-map is intentionally empty during normal operation. Populate it solely from
-the complete old-to-new map produced by the reviewed rewrite in
-`ElevenID/.github#22`; unknown commits remain unchanged, while malformed maps
-or commit IDs fail closed.
+reviewed pin preserves the manifest's original provenance value and records a
+separate, literal executable checkout commit. Unit validation requires that
+checkout to equal the result in `history-rewrite-map.json`. The map is
+intentionally empty during normal operation. Populate it solely from the
+complete old-to-new map produced by the reviewed rewrite in
+`ElevenID/.github#22`, then update the pin and both workflow literals in the
+same reviewed PR; unknown commits remain unchanged, while malformed maps or
+commit IDs fail closed.
 
 Each lane owns separate Compose projects and disposable TLS, truststore,
 keystore, operator credentials, fixtures, and output directories. OID4VP Final

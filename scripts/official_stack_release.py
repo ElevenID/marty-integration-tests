@@ -51,6 +51,12 @@ def load_pin(path: Path = DEFAULT_PIN) -> dict[str, str | None]:
         raise ValueError("ready stack pin manifest_sha256 must be sha256:<64 lowercase hex>")
     if state == "awaiting_release" and digest is not None:
         raise ValueError("awaiting-release stack pin must not invent a manifest digest")
+    marty_commit = data.get("marty_commit")
+    checkout_commit = data.get("marty_checkout_commit")
+    if not isinstance(marty_commit, str) or not COMMIT.fullmatch(marty_commit):
+        raise ValueError("stack pin marty_commit must be a full lowercase SHA")
+    if not isinstance(checkout_commit, str) or not COMMIT.fullmatch(checkout_commit):
+        raise ValueError("stack pin marty_checkout_commit must be a full lowercase SHA")
     return {
         "schema": str(data["schema"]),
         "state": str(state),
@@ -58,34 +64,18 @@ def load_pin(path: Path = DEFAULT_PIN) -> dict[str, str | None]:
         "release_tag": str(data["release_tag"]),
         "manifest_asset": str(data["manifest_asset"]),
         "manifest_sha256": digest,
+        "marty_commit": marty_commit,
+        "marty_checkout_commit": checkout_commit,
     }
 
 
 def resolve_pin(
     pin: dict[str, str | None],
-    *,
-    release_tag: str | None = None,
-    manifest_sha256: str | None = None,
 ) -> dict[str, str]:
-    """Apply an intentional manual override only when tag and digest travel together."""
-    supplied = (bool(release_tag), bool(manifest_sha256))
-    if supplied[0] != supplied[1]:
-        raise ValueError("manual stack override requires both release tag and manifest sha256")
-    if not supplied[0]:
-        if pin["state"] != "ready":
-            raise ValueError(
-                f"stack pin is awaiting the signed {pin['release_tag']} release and reviewed manifest sha256"
-            )
-        return {key: str(value) for key, value in pin.items()}
-    if not SEMVER_TAG.fullmatch(release_tag or ""):
-        raise ValueError("manual release tag must be a v-prefixed SemVer tag")
-    if not SHA256.fullmatch(manifest_sha256 or ""):
-        raise ValueError("manual manifest digest must be sha256:<64 lowercase hex>")
-    result = dict(pin)
-    result["state"] = "ready"
-    result["release_tag"] = release_tag or ""
-    result["manifest_sha256"] = manifest_sha256 or ""
-    return {key: str(value) for key, value in result.items()}
+    """Require the repository-reviewed stack pin used by privileged workflows."""
+    if pin["state"] != "ready":
+        raise ValueError(f"stack pin is awaiting the signed {pin['release_tag']} release and reviewed metadata")
+    return {key: str(value) for key, value in pin.items()}
 
 
 def validate_stack_manifest(path: Path, pin: dict[str, str]) -> dict[str, object]:
@@ -141,6 +131,10 @@ def validate_stack_manifest(path: Path, pin: dict[str, str]) -> dict[str, object
             )
     if len(marty_components) != 1 or marty_components[0].get("repository") != REPOSITORY:
         raise ValueError("released stack must contain exactly one ElevenID/marty-ui component")
+    if marty_components[0].get("commit") != pin["marty_commit"]:
+        raise ValueError(
+            f"released stack marty-ui commit is {marty_components[0].get('commit')}; expected {pin['marty_commit']}"
+        )
     if not images:
         raise ValueError("released stack manifest contains no OCI artifacts")
     return {
@@ -207,8 +201,6 @@ def parser() -> argparse.ArgumentParser:
     validate.add_argument("--pin", type=Path, default=DEFAULT_PIN)
     materialize = commands.add_parser("materialize")
     materialize.add_argument("--pin", type=Path, default=DEFAULT_PIN)
-    materialize.add_argument("--release-tag")
-    materialize.add_argument("--manifest-sha256")
     materialize.add_argument("--output-dir", type=Path, required=True)
     materialize.add_argument("--metadata-output", type=Path, required=True)
     return result
@@ -220,11 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "validate-pin":
         print(json.dumps(pin, indent=2, sort_keys=True))
         return 0
-    resolved = resolve_pin(
-        pin,
-        release_tag=args.release_tag,
-        manifest_sha256=args.manifest_sha256,
-    )
+    resolved = resolve_pin(pin)
     manifest_path = download_and_attest(resolved, args.output_dir.resolve())
     metadata = validate_stack_manifest(manifest_path, resolved)
     metadata_output = args.metadata_output.resolve()

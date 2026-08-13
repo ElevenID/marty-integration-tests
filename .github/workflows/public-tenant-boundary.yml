@@ -4,15 +4,6 @@ on:
   schedule:
     - cron: "17 6 15 * *"
   workflow_dispatch:
-    inputs:
-      stack_release_tag:
-        description: Optional reviewed stack tag override (requires its SHA-256)
-        type: string
-        required: false
-      stack_manifest_sha256:
-        description: Optional sha256:<digest> for the overridden stack manifest
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -85,27 +76,16 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Resolve and attest released stack
-        id: stack
         env:
           GH_TOKEN: ${{ github.token }}
-          STACK_RELEASE_TAG: ${{ inputs.stack_release_tag }}
-          STACK_MANIFEST_SHA256: ${{ inputs.stack_manifest_sha256 }}
         shell: bash
         run: |
           stack_args=(
             --pin conformance/stack-under-test.json
-            --release-tag "$STACK_RELEASE_TAG"
-            --manifest-sha256 "$STACK_MANIFEST_SHA256"
             --output-dir work/stack
             --metadata-output work/stack/stack-metadata.json
           )
           python scripts/official_stack_release.py materialize "${stack_args[@]}"
-          manifest_commit="$(python -c "import json; print(json.load(open('work/stack/stack-metadata.json', encoding='utf-8'))['marty_commit'])")"
-          checkout_commit="$(python scripts/resolve_history_rewrite.py --repository ElevenID/marty-ui --commit "$manifest_commit")"
-          {
-            printf 'marty_commit=%s\n' "$manifest_commit"
-            printf 'marty_checkout_commit=%s\n' "$checkout_commit"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Verify and pull attested stack images
         env:
@@ -152,7 +132,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-ui
-          ref: ${{ steps.stack.outputs.marty_checkout_commit }}
+          ref: 9a81accb3c725d3a1db5f279c6ed84243bac0a94
           path: work/marty-ui
           persist-credentials: false
 

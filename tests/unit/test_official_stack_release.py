@@ -23,6 +23,8 @@ def write_pin(path: Path, *, digest: str = "sha256:" + "a" * 64) -> dict[str, st
         "release_tag": "v1.2.3",
         "manifest_asset": release.ASSET,
         "manifest_sha256": digest,
+        "marty_commit": "b" * 40,
+        "marty_checkout_commit": "b" * 40,
     }
     path.write_text(json.dumps(value), encoding="utf-8")
     return value
@@ -55,14 +57,11 @@ def stack_bytes() -> bytes:
     ).encode()
 
 
-def test_pin_override_requires_tag_and_digest_together(tmp_path: Path) -> None:
+def test_privileged_workflow_uses_only_repository_reviewed_pin(tmp_path: Path) -> None:
     write_pin_path = tmp_path / "pin.json"
     write_pin(write_pin_path)
     pin = release.load_pin(write_pin_path)
-    with pytest.raises(ValueError, match="requires both"):
-        release.resolve_pin(pin, release_tag="v2.0.0")
-    overridden = release.resolve_pin(pin, release_tag="v2.0.0", manifest_sha256="sha256:" + "d" * 64)
-    assert overridden["release_tag"] == "v2.0.0"
+    assert release.resolve_pin(pin) == pin
 
 
 def test_awaiting_release_pin_cannot_execute_without_reviewed_digest(tmp_path: Path) -> None:
@@ -84,6 +83,29 @@ def test_stack_manifest_records_exact_commit_and_digest_image(tmp_path: Path) ->
     metadata = release.validate_stack_manifest(manifest, pin)
     assert metadata["marty_commit"] == "b" * 40
     assert metadata["images"][0]["reference"].endswith("@sha256:" + "c" * 64)
+
+
+def test_stack_manifest_rejects_commit_outside_reviewed_pin(tmp_path: Path) -> None:
+    content = stack_bytes()
+    manifest = tmp_path / "stack-manifest.json"
+    manifest.write_bytes(content)
+    pin_path = tmp_path / "pin.json"
+    pin = write_pin(pin_path, digest=f"sha256:{sha256(content).hexdigest()}")
+    pin["marty_commit"] = "c" * 40
+    with pytest.raises(ValueError, match="expected"):
+        release.validate_stack_manifest(manifest, pin)
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    ["official-interoperability.yml", "public-tenant-boundary.yml"],
+)
+def test_privileged_workflow_checkout_is_the_literal_reviewed_commit(workflow: str) -> None:
+    pin = release.load_pin()
+    content = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+    assert f"ref: {pin['marty_checkout_commit']}" in content
+    assert "steps.stack.outputs.marty_commit" not in content
+    assert "steps.stack.outputs.marty_checkout_commit" not in content
 
 
 def test_stack_manifest_rejects_mutable_oci_uri(tmp_path: Path) -> None:

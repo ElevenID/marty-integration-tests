@@ -48,6 +48,11 @@ def test_default_map_declares_rewritten_repositories_and_is_initially_noop() -> 
     assert mappings["ElevenID/marty-microservices-framework"] == {}
 
 
+def test_reviewed_stack_checkout_matches_rewrite_map() -> None:
+    pin = json.loads((ROOT / "conformance" / "stack-under-test.json").read_text(encoding="utf-8"))
+    assert resolver.resolve_commit(pin["repository"], pin["marty_commit"]) == pin["marty_checkout_commit"]
+
+
 @pytest.mark.parametrize("commit", ["", "A" * 40, "a" * 39, "not-a-commit"])
 def test_rejects_noncanonical_commit(commit: str, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="full lowercase"):
