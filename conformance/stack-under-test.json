@@ -4,5 +4,7 @@
   "repository": "ElevenID/marty-ui",
   "release_tag": "v1.1.134",
   "manifest_asset": "stack-manifest.json",
-  "manifest_sha256": "sha256:cb2898b8cc8dd2596633bf3be2cb9da0f63da3118580c6e79f78bcc5d145de90"
+  "manifest_sha256": "sha256:cb2898b8cc8dd2596633bf3be2cb9da0f63da3118580c6e79f78bcc5d145de90",
+  "marty_commit": "9a81accb3c725d3a1db5f279c6ed84243bac0a94",
+  "marty_checkout_commit": "9a81accb3c725d3a1db5f279c6ed84243bac0a94"
 }
