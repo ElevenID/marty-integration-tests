@@ -29,6 +29,11 @@ SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+from eudi_runtime_diagnostic_contract import (  # noqa: E402
+    EUDI_RUNTIME_DIAGNOSTIC_CATEGORIES,
+    EUDI_RUNTIME_DIAGNOSTIC_SCHEMA,
+    MDOC_DEVICE_AUTH_ERROR_KINDS,
+)
 from haip_test_certificates import (  # noqa: E402
     AUTHORITY_KEY_FILE,
     OID4VP_TRUST_ANCHOR_FILE_ENV,
@@ -295,28 +300,12 @@ MDOC_RUNTIME_DIAGNOSTIC_CLASSES = {
     "presentation-invalid": re.compile(r"(?i)(?:invalid_presentation|invalid presentation)"),
     "dcql-contract": re.compile(r"(?i)(?:\bdcql\b|mso_mdoc.{0,80}\bclaims\b)"),
 }
-MDOC_DEVICE_AUTH_ERROR_KINDS = frozenset(
-    {
-        "detached-issuer-auth",
-        "device-response-parse-failed",
-        "session-transcript-parse-failed",
-        "device-response-status-invalid",
-        "device-response-documents-missing",
-        "device-response-version-unsupported",
-        "mso-parse-failed",
-        "device-key-coordinates-missing",
-        "device-key-type-unsupported",
-        "device-auth-method-unsupported",
-        "device-signature-invalid",
-        "device-signature-processing-error",
-        "device-signature-malformed",
-        "device-signature-algorithm-mismatch",
-        "device-key-invalid",
-        "device-auth-cbor-error",
-        "unclassified",
-    }
-)
 MDOC_DEVICE_AUTH_ERROR_KIND = re.compile(r"\bdevice_auth_error_kind=([a-z0-9-]+)\b")
+
+if not set(EUDI_RUNTIME_DIAGNOSTIC_CLASSES).issubset(
+    EUDI_RUNTIME_DIAGNOSTIC_CATEGORIES
+):
+    raise RuntimeError("EUDI runtime classifier contains an unallowlisted category")
 STACK_ENV_KEYS = {
     "MARTY_UI_IMAGE",
     "MARTY_SERVICES_IMAGE",
@@ -919,17 +908,30 @@ def classify_eudi_runtime_diagnostics(text: str) -> list[str]:
     return categories or ["unclassified-runtime-failure"]
 
 
-def emit_eudi_runtime_diagnostic(path: Path) -> None:
-    """Print only allowlisted classes from the private Compose log."""
+def emit_eudi_runtime_diagnostic(
+    path: Path, report_path: Path | None = None
+) -> dict[str, object]:
+    """Emit and optionally persist only allowlisted classes from a private log."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         categories = ["runtime-log-unavailable"]
     else:
         categories = classify_eudi_runtime_diagnostics(text)
+    report: dict[str, object] = {
+        "schema": EUDI_RUNTIME_DIAGNOSTIC_SCHEMA,
+        "categories": categories,
+    }
+    if report_path is not None:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     print("--- EUDI runtime diagnostic (redacted) ---", file=sys.stderr)
     print(f"categories={','.join(categories)}", file=sys.stderr)
     print("--- end EUDI runtime diagnostic ---", file=sys.stderr)
+    return report
 
 
 def classify_mdoc_runtime_diagnostics(text: str) -> list[str]:
@@ -1807,7 +1809,10 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
             capture=compose_log,
         )
         if result:
-            emit_eudi_runtime_diagnostic(compose_log)
+            emit_eudi_runtime_diagnostic(
+                compose_log,
+                args.output_dir / "raw" / "eudi" / "eudi-runtime-diagnostics.json",
+            )
         run(compose_command(args, "down", eudi=True, haip=True), environment)
     return result
 

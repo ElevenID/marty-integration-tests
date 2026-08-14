@@ -11,6 +11,15 @@ import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from eudi_runtime_diagnostic_contract import (  # noqa: E402
+    EUDI_RUNTIME_DIAGNOSTIC_CATEGORIES,
+    EUDI_RUNTIME_DIAGNOSTIC_SCHEMA,
+)
+
 SCHEMA = "elevenid.sanitized-official-interop/v1"
 BROWSER_SCHEMA = "elevenid.released-browser-smoke/v1"
 SD_JWT_DIAGNOSTIC_SCHEMA = "elevenid.oidf-sd-jwt-diagnostic-audit/v2"
@@ -187,6 +196,26 @@ def sd_jwt_diagnostic_report(value: object) -> dict[str, object]:
     return value
 
 
+def eudi_runtime_diagnostic_report(value: object) -> dict[str, object]:
+    """Validate the fixed-category public-safe EUDI diagnostic contract."""
+    if not isinstance(value, dict) or set(value) != {"schema", "categories"}:
+        raise ValueError("EUDI runtime diagnostic report has an invalid shape")
+    if value.get("schema") != EUDI_RUNTIME_DIAGNOSTIC_SCHEMA:
+        raise ValueError("EUDI runtime diagnostic report has an unsupported schema")
+    categories = value.get("categories")
+    if not isinstance(categories, list) or not categories:
+        raise ValueError("EUDI runtime diagnostic report must contain categories")
+    if len(categories) != len(set(map(str, categories))):
+        raise ValueError("EUDI runtime diagnostic categories must be unique")
+    if any(
+        not isinstance(category, str)
+        or category not in EUDI_RUNTIME_DIAGNOSTIC_CATEGORIES
+        for category in categories
+    ):
+        raise ValueError("EUDI runtime diagnostic category is not allowlisted")
+    return value
+
+
 def build_summary(
     input_dir: Path,
     *,
@@ -246,6 +275,20 @@ def build_summary(
                 raise ValueError("SD-JWT diagnostic evidence is not permitted for this lane")
             verifier_diagnostics, count = sanitize(
                 sd_jwt_diagnostic_report(load_json(diagnostic_paths[0]))
+            )
+            redactions += count
+        eudi_diagnostic_paths = sorted(
+            input_dir.rglob("eudi-runtime-diagnostics.json")
+        )
+        if len(eudi_diagnostic_paths) > 1:
+            raise ValueError("official evidence contains multiple EUDI diagnostic reports")
+        if eudi_diagnostic_paths:
+            if lane != "eudi":
+                raise ValueError(
+                    "EUDI runtime diagnostic evidence is permitted only for the eudi lane"
+                )
+            verifier_diagnostics, count = sanitize(
+                eudi_runtime_diagnostic_report(load_json(eudi_diagnostic_paths[0]))
             )
             redactions += count
         for path in sorted(input_dir.rglob("evidence.json")):

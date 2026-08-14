@@ -1489,12 +1489,21 @@ def test_eudi_runtime_diagnostics_identify_marty_verifier_stage_without_values(
     assert category in lane.classify_eudi_runtime_diagnostics(diagnostic)
 
 
-def test_eudi_runtime_diagnostics_forward_allowlisted_mdoc_error_kind() -> None:
+@pytest.mark.parametrize(
+    "error_kind",
+    [
+        "session-transcript-parse-failed",
+        "issuer-disclosure-digest-mismatch",
+    ],
+)
+def test_eudi_runtime_diagnostics_forward_allowlisted_mdoc_error_kind(
+    error_kind: str,
+) -> None:
     classes = lane.classify_eudi_runtime_diagnostics(
-        "mDoc verification outcome device_auth_error_kind=session-transcript-parse-failed"
+        f"mDoc verification outcome device_auth_error_kind={error_kind}"
     )
 
-    assert "marty-mdoc-error-kind-session-transcript-parse-failed" in classes
+    assert f"marty-mdoc-error-kind-{error_kind}" in classes
 
 
 def test_eudi_runtime_diagnostics_reject_unknown_mdoc_error_kind() -> None:
@@ -1515,12 +1524,21 @@ def test_eudi_runtime_diagnostic_never_prints_private_log_text(
         encoding="utf-8",
     )
 
-    lane.emit_eudi_runtime_diagnostic(log)
+    report_path = tmp_path / "raw" / "eudi" / "eudi-runtime-diagnostics.json"
+    report = lane.emit_eudi_runtime_diagnostic(log, report_path)
 
     output = capsys.readouterr().err
     assert "hostname-resolution" in output
     assert "host.private" not in output
     assert "must-not-be-reported" not in output
+    assert report == {
+        "schema": "elevenid.eudi-runtime-diagnostics/v1",
+        "categories": ["hostname-resolution"],
+    }
+    serialized_report = report_path.read_text(encoding="utf-8")
+    assert json.loads(serialized_report) == report
+    assert "host.private" not in serialized_report
+    assert "must-not-be-reported" not in serialized_report
 
 
 def test_public_proxy_diagnostic_selects_exact_compose_service(

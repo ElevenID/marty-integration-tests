@@ -236,6 +236,115 @@ def test_summary_rejects_unvalidated_or_misplaced_sd_jwt_diagnostics(tmp_path: P
         )
 
 
+def test_summary_preserves_only_allowlisted_eudi_runtime_categories(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "raw" / "eudi"
+    raw.mkdir(parents=True)
+    report = {
+        "schema": "elevenid.eudi-runtime-diagnostics/v1",
+        "categories": [
+            "marty-sd-jwt-signature",
+            "marty-mdoc-error-kind-issuer-disclosure-digest-mismatch",
+        ],
+    }
+    (raw / "eudi-runtime-diagnostics.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+
+    summary = sanitizer.build_summary(
+        raw.parent,
+        lane="eudi",
+        harness_commit="a" * 40,
+        exit_code=1,
+    )
+
+    assert summary["verifier_diagnostics"] == report
+
+
+def test_summary_rejects_unknown_or_misplaced_eudi_runtime_categories(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    path = raw / "eudi-runtime-diagnostics.json"
+    report = {
+        "schema": "elevenid.eudi-runtime-diagnostics/v1",
+        "categories": ["private-arbitrary-value"],
+    }
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not allowlisted"):
+        sanitizer.build_summary(
+            raw,
+            lane="eudi",
+            harness_commit="a" * 40,
+            exit_code=1,
+        )
+
+    report["categories"] = ["marty-sd-jwt-signature"]
+    path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError, match="permitted only"):
+        sanitizer.build_summary(
+            raw,
+            lane="haip",
+            harness_commit="a" * 40,
+            exit_code=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("report", "message"),
+    [
+        (
+            {
+                "schema": "elevenid.eudi-runtime-diagnostics/v1",
+                "categories": [
+                    "marty-sd-jwt-signature",
+                    "marty-sd-jwt-signature",
+                ],
+            },
+            "must be unique",
+        ),
+        (
+            {
+                "schema": "elevenid.eudi-runtime-diagnostics/v1",
+                "categories": [],
+            },
+            "must contain categories",
+        ),
+        (
+            {
+                "schema": "elevenid.eudi-runtime-diagnostics/v1",
+                "categories": ["marty-sd-jwt-signature"],
+                "raw_log": "must-not-be-accepted",
+            },
+            "invalid shape",
+        ),
+    ],
+)
+def test_summary_rejects_malformed_eudi_runtime_reports(
+    tmp_path: Path,
+    report: dict[str, object],
+    message: str,
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "eudi-runtime-diagnostics.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        sanitizer.build_summary(
+            raw,
+            lane="eudi",
+            harness_commit="a" * 40,
+            exit_code=1,
+        )
+
+
 @pytest.mark.parametrize(
     ("result", "decision", "category"),
     [
