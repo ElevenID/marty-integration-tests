@@ -41,11 +41,19 @@ def test_reviewed_mapping_translates_old_commit(tmp_path: Path) -> None:
     assert resolver.resolve_commit(REPOSITORY, OLD, write_map(tmp_path / "map.json", {OLD: NEW})) == NEW
 
 
-def test_default_map_declares_rewritten_repositories_and_is_initially_noop() -> None:
+def test_default_map_contains_the_complete_final_rewrite() -> None:
     mappings = resolver.load_rewrite_map(resolver.DEFAULT_MAP)
     assert set(mappings) == {"ElevenID/marty-ui", "ElevenID/marty-microservices-framework"}
-    assert mappings["ElevenID/marty-ui"] == {}
-    assert mappings["ElevenID/marty-microservices-framework"] == {}
+    assert len(mappings["ElevenID/marty-ui"]) == 1153
+    assert len(mappings["ElevenID/marty-microservices-framework"]) == 310
+    assert (
+        mappings["ElevenID/marty-ui"]["e8599a2658b48e43880859e9aebdefb1d169eae5"]
+        == "ad45d366f1d082d7a3cba4ffa9b250b28704dc5d"
+    )
+    assert (
+        mappings["ElevenID/marty-microservices-framework"]["46773c48814f3eb263b207ef5ee64bcd0deebc48"]
+        == "df9dbf58e1bd2be9e770109c24d67e9fa318fb0b"
+    )
 
 
 def test_reviewed_stack_checkout_matches_rewrite_map() -> None:
