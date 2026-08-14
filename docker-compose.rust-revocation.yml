@@ -1,0 +1,124 @@
+# Opt-in topology for validating a release candidate whose shared services
+# image contains the canonical Rust revocation-profile implementation. Keep
+# this separate from docker-compose.yml until the Python service deletion has
+# landed in a coordinated Marty UI release.
+
+x-rust-revocation-service-auth: &rust-revocation-service-auth
+  # Disposable private-network credential. A caller can override it to record
+  # the exact secret provenance used by a lifecycle evidence run.
+  GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-oss-ci-rust-revocation-lifecycle-token-32-bytes}
+
+services:
+  # Rust owns this schema after the cutover. It must run before the shared
+  # migration artifact because credential-template migrations read the seeded
+  # revocation profile.
+  revocation-profile-migrations:
+    image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}
+    restart: "no"
+    environment:
+      SERVICE_NAME: revocation_profile
+      RP_MIGRATE_ONLY: "true"
+      ENVIRONMENT: test
+      DATABASE_URL: postgresql://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [marty-oss]
+
+  migrations:
+    depends_on:
+      revocation-profile-migrations:
+        condition: service_completed_successfully
+
+  auth-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_TARGET: organization-service:9002
+
+  organization-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_PORT: "9002"
+
+  credential-template-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_TARGET: organization-service:9002
+      RP_GRPC_TARGET: revocation-profile-service:9013
+      CT_GRPC_PORT: "9003"
+    depends_on:
+      revocation-profile-service:
+        condition: service_healthy
+
+  trust-profile-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_TARGET: organization-service:9002
+
+  issuance-service:
+    environment:
+      <<: *rust-revocation-service-auth
+    depends_on:
+      revocation-profile-service:
+        condition: service_healthy
+
+  applicant-service:
+    environment:
+      <<: *rust-revocation-service-auth
+
+  compliance-profile-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_TARGET: organization-service:9002
+
+  presentation-policy-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_TARGET: organization-service:9002
+      PP_GRPC_PORT: "9009"
+
+  deployment-profile-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_TARGET: organization-service:9002
+
+  flow-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_TARGET: organization-service:9002
+      CT_GRPC_TARGET: credential-template-service:9003
+      PP_GRPC_TARGET: presentation-policy-service:9009
+
+  revocation-profile-service:
+    environment:
+      <<: *rust-revocation-service-auth
+      SERVICE_NAME: revocation_profile
+      ENVIRONMENT: test
+      REVOCATION_PROFILE_SERVICE_PORT: "8013"
+      ORG_GRPC_TARGET: organization-service:9002
+      PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      STATUS_LIST_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      RP_GRPC_ENABLED: "true"
+      RP_GRPC_PORT: "9013"
+      RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
+    depends_on:
+      revocation-profile-migrations:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8013/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  gateway:
+    environment:
+      <<: *rust-revocation-service-auth
+      ORG_GRPC_TARGET: organization-service:9002

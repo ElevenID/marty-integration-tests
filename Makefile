@@ -1,6 +1,6 @@
 # Makefile for Marty Integration Tests
 
-.PHONY: help install install-e2e stack-env test test-fast test-wallet test-ui-contracts conformance conformance-local conformance-oidf-validate conformance-stack-start conformance-stack-stop clean start stop restart logs
+.PHONY: help install install-e2e stack-env test test-fast test-wallet test-ui-contracts conformance conformance-local conformance-oidf-validate conformance-stack-start conformance-stack-stop clean start start-rust-revocation stop stop-rust-revocation restart logs
 
 STACK_MANIFEST ?= stack-manifest.json
 
@@ -11,7 +11,9 @@ help:
 	@echo "  make install-e2e       - Install browser-test dependencies and Chromium"
 	@echo "  make stack-env         - Verify STACK_MANIFEST and render digest-only image inputs"
 	@echo "  make start             - Start the immutable stack described by STACK_MANIFEST"
+	@echo "  make start-rust-revocation - Start the opt-in Rust revocation candidate stack"
 	@echo "  make stop              - Stop all services"
+	@echo "  make stop-rust-revocation  - Stop the opt-in Rust revocation candidate stack"
 	@echo "  make restart           - Restart all services"
 	@echo "  make test              - Run all integration tests"
 	@echo "  make test-fast         - Run tests with parallel execution"
@@ -44,9 +46,17 @@ start: stack-env
 	@sleep 10
 	docker compose --env-file .env.stack ps
 
+start-rust-revocation: stack-env
+	docker compose --env-file .env.stack --file docker-compose.yml --file docker-compose.rust-revocation.yml up -d --wait
+	docker compose --env-file .env.stack --file docker-compose.yml --file docker-compose.rust-revocation.yml ps
+
 stop:
 	@test -f .env.stack || { echo "ERROR: .env.stack is missing; run make stack-env first"; exit 1; }
 	docker compose --env-file .env.stack down
+
+stop-rust-revocation:
+	@test -f .env.stack || { echo "ERROR: .env.stack is missing; run make stack-env first"; exit 1; }
+	docker compose --env-file .env.stack --file docker-compose.yml --file docker-compose.rust-revocation.yml down
 
 restart: stop start
 
