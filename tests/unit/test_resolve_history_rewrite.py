@@ -47,8 +47,8 @@ def test_default_map_contains_the_complete_final_rewrite() -> None:
     assert len(mappings["ElevenID/marty-ui"]) == 1153
     assert len(mappings["ElevenID/marty-microservices-framework"]) == 310
     assert (
-        mappings["ElevenID/marty-ui"]["e8599a2658b48e43880859e9aebdefb1d169eae5"]
-        == "ad45d366f1d082d7a3cba4ffa9b250b28704dc5d"
+        mappings["ElevenID/marty-ui"]["ff7b5286a50b6e271e2b60dbde93f56cd32cc1d1"]
+        == "908c4390d544851d22d16e2079ec77ec8115f9aa"
     )
     assert (
         mappings["ElevenID/marty-microservices-framework"]["46773c48814f3eb263b207ef5ee64bcd0deebc48"]
