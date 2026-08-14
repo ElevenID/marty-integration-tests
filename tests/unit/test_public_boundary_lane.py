@@ -218,6 +218,16 @@ def test_summary_records_only_executed_independent_didcomm_evidence(
     manifest = tmp_path / "stack-manifest.json"
     manifest.write_text(json.dumps({"release": "marty-ui@test"}) + "\n", encoding="utf-8")
     output = tmp_path / "evidence"
+    private = output / "private"
+    private.mkdir(parents=True)
+    (private / "pytest.xml").write_text(
+        (
+            '<testsuites><testsuite><testcase classname="'
+            f'{lane.DIDCOMM_TEST_CLASSNAME}" name="test_deliver_to_mock_agent"'
+            " /></testsuite></testsuites>"
+        ),
+        encoding="utf-8",
+    )
     implementation = lane.independent_didcomm_record()
     implementation["required"] = True
 
@@ -241,6 +251,87 @@ def test_summary_records_only_executed_independent_didcomm_evidence(
     assert "independent go-didcomm decryption of Marty's released anoncrypt envelope" in summary["coverage"]
     assert summary["didcomm_interoperability"]["cross_implementation_tamper_rejection_passed"] is True
     assert any("wrapped-key tampering" in item for item in summary["coverage"])
+
+
+@pytest.mark.parametrize(
+    "testcase_result",
+    [
+        "<failure />",
+        "<error />",
+        "<skipped />",
+    ],
+)
+def test_summary_does_not_claim_failed_or_unexecuted_didcomm_evidence(
+    tmp_path: Path,
+    testcase_result: str,
+) -> None:
+    manifest = tmp_path / "stack-manifest.json"
+    manifest.write_text(json.dumps({"release": "marty-ui@test"}) + "\n", encoding="utf-8")
+    output = tmp_path / "evidence"
+    private = output / "private"
+    private.mkdir(parents=True)
+    (private / "pytest.xml").write_text(
+        (
+            '<testsuites><testsuite><testcase classname="'
+            f'{lane.DIDCOMM_TEST_CLASSNAME}" name="test_deliver_to_mock_agent">'
+            f"{testcase_result}</testcase></testsuite></testsuites>"
+        ),
+        encoding="utf-8",
+    )
+    implementation = lane.independent_didcomm_record()
+    implementation["required"] = True
+
+    lane.write_summary(
+        SimpleNamespace(stack_manifest=manifest, output_dir=output),
+        {
+            "marty_commit": "a" * 40,
+            "didcomm_interoperability": implementation,
+        },
+        1,
+    )
+
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    interop = summary["didcomm_interoperability"]
+    assert interop["cross_implementation_decryption_passed"] is False
+    assert interop["cross_implementation_tamper_rejection_passed"] is False
+    assert "independent go-didcomm decryption of Marty's released anoncrypt envelope" not in summary["coverage"]
+
+
+def test_summary_preserves_didcomm_success_when_an_unrelated_tenant_test_fails(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "stack-manifest.json"
+    manifest.write_text(json.dumps({"release": "marty-ui@test"}) + "\n", encoding="utf-8")
+    output = tmp_path / "evidence"
+    private = output / "private"
+    private.mkdir(parents=True)
+    (private / "pytest.xml").write_text(
+        (
+            '<testsuites><testsuite failures="1" tests="2">'
+            '<testcase classname="tests.integration.gateway.test_two_organization_isolation" '
+            'name="test_two_principals_cannot_cross_tenant_product_boundaries"><failure /></testcase>'
+            '<testcase classname="'
+            f'{lane.DIDCOMM_TEST_CLASSNAME}" name="test_deliver_to_mock_agent" />'
+            "</testsuite></testsuites>"
+        ),
+        encoding="utf-8",
+    )
+    implementation = lane.independent_didcomm_record()
+    implementation["required"] = True
+
+    lane.write_summary(
+        SimpleNamespace(stack_manifest=manifest, output_dir=output),
+        {
+            "marty_commit": "a" * 40,
+            "didcomm_interoperability": implementation,
+        },
+        1,
+    )
+
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert summary["result"]["passed"] is False
+    assert summary["didcomm_interoperability"]["cross_implementation_decryption_passed"] is True
+    assert summary["didcomm_interoperability"]["cross_implementation_tamper_rejection_passed"] is True
 
 
 def test_local_summary_cannot_be_mistaken_for_release_evidence(

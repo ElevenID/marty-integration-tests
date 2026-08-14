@@ -15,6 +15,7 @@ import re
 import secrets
 import subprocess
 import sys
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -36,6 +37,10 @@ TEST_PATH = "tests/integration/gateway/test_two_organization_isolation.py"
 DIDCOMM_TEST_PATH = (
     "tests/integration/gateway/test_didcomm_v2_delivery.py::"
     "TestDidcommDeliveryWithMockAgent::test_deliver_to_mock_agent"
+)
+DIDCOMM_TEST_CLASSNAME = (
+    "tests.integration.gateway.test_didcomm_v2_delivery."
+    "TestDidcommDeliveryWithMockAgent"
 )
 PUBLIC_LOGIN = ROOT / "scripts" / "oidf_marty_public_login.py"
 DIDCOMM_INTEROP_MANIFEST = ROOT / "conformance" / "didcomm-interoperability.json"
@@ -333,7 +338,9 @@ def write_summary(
     didcomm_interop = metadata.get("didcomm_interoperability")
     if not isinstance(didcomm_interop, dict):
         didcomm_interop = independent_didcomm_record()
-    didcomm_passed = bool(didcomm_interop.get("required")) and exit_code == 0
+    didcomm_passed = bool(didcomm_interop.get("required")) and didcomm_test_passed(
+        args.output_dir / "private" / "pytest.xml"
+    )
     didcomm_interop = dict(didcomm_interop)
     didcomm_interop["cross_implementation_decryption_passed"] = didcomm_passed
     didcomm_interop["cross_implementation_tamper_rejection_passed"] = didcomm_passed
@@ -422,6 +429,29 @@ def write_summary(
     )
 
 
+def didcomm_test_passed(junit_path: Path) -> bool:
+    """Return true only for one executed, successful DIDComm evidence testcase."""
+    if not junit_path.is_file():
+        return False
+    try:
+        root = ElementTree.parse(junit_path).getroot()
+    except (OSError, ElementTree.ParseError):
+        return False
+
+    matches = [
+        testcase
+        for testcase in root.iter("testcase")
+        if testcase.attrib.get("name") == "test_deliver_to_mock_agent"
+        and testcase.attrib.get("classname") == DIDCOMM_TEST_CLASSNAME
+    ]
+    if len(matches) != 1:
+        return False
+    return not any(
+        child.tag.rsplit("}", 1)[-1] in {"error", "failure", "skipped"}
+        for child in matches[0]
+    )
+
+
 def execute(args: argparse.Namespace) -> int:
     lane_environment, metadata = environment(args)
     metadata = dict(metadata)
@@ -485,6 +515,8 @@ def execute(args: argparse.Namespace) -> int:
                     "-m",
                     "pytest",
                     "-q",
+                    "--junitxml",
+                    str(private / "pytest.xml"),
                     TEST_PATH,
                     DIDCOMM_TEST_PATH,
                 ],
