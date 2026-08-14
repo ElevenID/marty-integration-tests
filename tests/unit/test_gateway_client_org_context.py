@@ -264,6 +264,48 @@ async def test_start_verification_flow_sends_selected_organization_header() -> N
 
 
 @pytest.mark.asyncio
+async def test_presentation_policy_can_require_checked_non_revoked_status() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(return_value={"id": "policy-1"})
+    client._request = request
+
+    try:
+        result = await client.create_presentation_policy(
+            organization_id="org-1",
+            name="Require active credential",
+            credential_requirements=[
+                {
+                    "credential_template_id": "template-1",
+                    "display_name": "Identity Credential",
+                    "requested_claims": [],
+                }
+            ],
+            freshness={"require_not_revoked": True},
+        )
+    finally:
+        await client.close()
+
+    assert result == {"id": "policy-1"}
+    request.assert_awaited_once_with(
+        "POST",
+        "/v1/presentation-policies",
+        json={
+            "organization_id": "org-1",
+            "name": "Require active credential",
+            "credential_requirements": [
+                {
+                    "credential_template_id": "template-1",
+                    "display_name": "Identity Credential",
+                    "requested_claims": [],
+                }
+            ],
+            "purpose": None,
+            "freshness": {"require_not_revoked": True},
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_didcomm_delivery_uses_current_tenant_scoped_contract() -> None:
     client = GatewayClient("https://gateway.example")
     request = AsyncMock(return_value={"status": "delivered"})

@@ -575,6 +575,7 @@ class GatewayClient:
         purpose: Optional[str] = None,
         trust_profile_id: Optional[str] = None,
         holder_binding: Optional[Dict[str, Any]] = None,
+        freshness: Optional[Dict[str, Any]] = None,
         prefer_predicates: bool = False,
         fallback_policy: Optional[str] = None,
         supported_circuits: Optional[List[str]] = None,
@@ -589,6 +590,7 @@ class GatewayClient:
             purpose: Purpose of the verification
             trust_profile_id: Trust profile used to validate presented issuers
             holder_binding: Required holder proof and request-binding policy
+            freshness: Credential age and revocation requirements
             prefer_predicates: Whether to prefer ZK predicate proofs
             fallback_policy: Optional fallback policy ID
             supported_circuits: Optional list of supported ZK circuits
@@ -608,6 +610,8 @@ class GatewayClient:
             body["trust_profile_id"] = trust_profile_id
         if holder_binding:
             body["holder_binding"] = holder_binding
+        if freshness:
+            body["freshness"] = freshness
         if fallback_policy:
             body["fallback_policy"] = fallback_policy
         if supported_circuits:
