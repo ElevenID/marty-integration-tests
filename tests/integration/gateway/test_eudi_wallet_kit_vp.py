@@ -96,6 +96,19 @@ def _decode_jwt_payload(jwt_str: str) -> dict[str, Any]:
     return json.loads(base64.urlsafe_b64decode(payload_b64))
 
 
+def _sd_jwt_credential_status(credential: str) -> list[dict[str, Any]]:
+    """Return status-list entries carried by the signed SD-JWT payload."""
+    issuer_jwt = credential.split("~", 1)[0]
+    payload = _decode_jwt_payload(issuer_jwt)
+    status = payload.get("credentialStatus")
+    if status is None and isinstance(payload.get("vc"), dict):
+        status = payload["vc"].get("credentialStatus")
+    entries = status if isinstance(status, list) else [status]
+    if not entries or not all(isinstance(entry, dict) for entry in entries):
+        raise AssertionError("Issued SD-JWT does not carry credentialStatus")
+    return entries
+
+
 def _extract_request_uri(openid4vp_uri: str) -> str:
     """Extract the inner HTTP request_uri from an openid4vp:// URI."""
     parsed = urlparse(openid4vp_uri)
@@ -1242,8 +1255,10 @@ class TestEndToEndIssuanceAndPresentation:
         vp_test_org,
         vp_sd_jwt_resources,
         vp_request_object_issuer_profile,
+        record_property,
     ):
-        """Full SD-JWT lifecycle: create template → issue → present → verify."""
+        """Issue, verify, revoke, and reject the exact same SD-JWT credential."""
+        record_property("evidence_id", "marty.rust-revocation.sd-jwt-lifecycle.v1")
         # 1. Create credential template
         template = await authenticated_gateway_client.create_credential_template(
             organization_id=vp_test_org["id"],
@@ -1277,6 +1292,9 @@ class TestEndToEndIssuanceAndPresentation:
         wallet_result = await wallet_kit.run_preauth_issuance(offer_uri)
         assert wallet_result["success"], f"Issuance failed: {wallet_result.get('error')}"
         credential = wallet_result["credentials"][0]["credential"]
+        status_entries = _sd_jwt_credential_status(credential)
+        assert all(entry.get("statusListCredential") for entry in status_entries)
+        assert all(str(entry.get("statusListIndex", "")).isdigit() for entry in status_entries)
         logger.info("[E2E] Credential received via EUDI wallet kit")
 
         # 4. Create and activate presentation policy
@@ -1284,6 +1302,7 @@ class TestEndToEndIssuanceAndPresentation:
             organization_id=vp_test_org["id"],
             name=f"E2E Policy ({uuid.uuid4().hex[:6]})",
             purpose="End-to-end test",
+            freshness={"require_not_revoked": True},
             credential_requirements=[
                 {
                     "credential_template_id": template["id"],
@@ -1335,19 +1354,79 @@ class TestEndToEndIssuanceAndPresentation:
         assert post_result["success"], f"VP direct-post failed: {(post_result.get('responseBody') or '')[:500]}"
         logger.info("[E2E] VP token accepted by verifier")
 
-        # 9. Check verification result
-        result = await authenticated_gateway_client.get_verification_result(instance_id)
+        # 9. Require the verifier to check the published status-list entry.
+        result = await authenticated_gateway_client.get_verification_decision(instance_id)
         logger.info(
             "[E2E] Verification result: status=%s",
             result.get("status"),
         )
 
-        status = result.get("status", "").upper()
-        assert status in (
-            "COMPLETED",
-            "VERIFIED",
-            "SUCCESS",
-            "APPROVED",
-        ), f"Unexpected final status: {status} — full result: {json.dumps(result)[:500]}"
+        assert result["status"] == "COMPLETED", result
+        assert result["result"] == "passed", result
+        assert result["decision"] == "allow", result
+        assert any(
+            item.get("revocation_checked") is True
+            for item in result.get("credential_results", [])
+        ), result
 
-        logger.info("[E2E] ✓ Full SD-JWT lifecycle passed: issue → present → verify")
+        active_status = await authenticated_gateway_client.get_revocation_status(issuance["id"])
+        assert (
+            active_status.get("revoked") is False
+            or str(active_status.get("status", "")).lower() in {"active", "valid"}
+        )
+
+        # 10. Revoke through issuance -> canonical Rust revocation service.
+        revoked = await authenticated_gateway_client.revoke_credential(
+            issuance_id=issuance["id"],
+            reason="Pre-v1 Rust deletion lifecycle evidence",
+        )
+        assert (
+            str(revoked.get("status", "")).lower() == "revoked"
+            or "revoked" in str(revoked).lower()
+        )
+        revoked_status = await authenticated_gateway_client.get_revocation_status(issuance["id"])
+        assert (
+            revoked_status.get("revoked") is True
+            or str(revoked_status.get("status", "")).lower() == "revoked"
+        )
+
+        # 11. Present the same immutable credential in a fresh OID4VP session.
+        revoked_flow = await authenticated_gateway_client.start_verification_flow(
+            presentation_policy_id=policy["id"],
+            organization_id=policy["organization_id"],
+            issuer_did=vp_request_object_issuer_profile["issuer_did"],
+        )
+        revoked_auth_req = await authenticated_gateway_client.get_verification_request(
+            revoked_flow["instance_id"]
+        )
+        revoked_vp_token = await wallet_kit.build_vp_token(
+            credential=credential,
+            audience=revoked_auth_req["client_id"],
+            nonce=revoked_auth_req["nonce"],
+        )
+        await wallet_kit.direct_post_presentation(
+            response_uri=revoked_auth_req["response_uri"],
+            vp_token=revoked_vp_token,
+            presentation_submission=_presentation_submission_for_request(
+                revoked_auth_req,
+                "dc+sd-jwt",
+            ),
+            state=revoked_auth_req.get("state", revoked_flow["instance_id"]),
+        )
+
+        # 12. The verifier must fail closed based on checked status evidence.
+        denied = await authenticated_gateway_client.get_verification_decision(
+            revoked_flow["instance_id"]
+        )
+        assert denied["status"] == "COMPLETED", denied
+        assert denied["result"] == "failed", denied
+        assert denied["decision"] == "deny", denied
+        assert "revok" in denied.get("decision_reason", "").lower(), denied
+        denied_credentials = denied.get("credential_results", [])
+        assert any(item.get("revocation_checked") is True for item in denied_credentials), denied
+        assert any(item.get("satisfied") is False for item in denied_credentials), denied
+
+        logger.info(
+            "[E2E] Rust revocation lifecycle passed: issue -> status check -> "
+            "allow -> revoke -> status check -> deny"
+        )
