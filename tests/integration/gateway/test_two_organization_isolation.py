@@ -2212,9 +2212,14 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             },
         )
         assert caller_approved_start.status_code == 409, caller_approved_start.text
-        caller_approved_error = caller_approved_start.json().get("detail", {})
+        caller_approved_error = caller_approved_start.json()
+        assert "detail" not in caller_approved_error
         assert caller_approved_error.get("error") == "ISSUANCE_PRECONDITIONS_NOT_MET"
-        assert caller_approved_error.get("unmet_preconditions") == ["application_approved"]
+        assert caller_approved_error.get("error_description")
+        uuid.UUID(str(caller_approved_error.get("message_id")))
+        assert caller_approved_error.get("details", {}).get("unmet_preconditions") == [
+            "application_approved"
+        ]
 
         private_evidence_start = await admin.client.post(
             "/v1/flows/instances",
