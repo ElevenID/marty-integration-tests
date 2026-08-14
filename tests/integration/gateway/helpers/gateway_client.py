@@ -341,6 +341,63 @@ class GatewayClient:
         """Delete a trust profile."""
         await self._request("DELETE", f"/v1/trust-profiles/{profile_id}")
 
+    async def list_issuer_entities(self, organization_id: str) -> List[Dict[str, Any]]:
+        """List normalized issuer identities available to one organization."""
+        return await self._request(
+            "GET",
+            "/v1/issuer-entities",
+            params={"organization_id": organization_id},
+        )
+
+    async def create_issuer_entity(
+        self,
+        organization_id: str,
+        issuer_id: str,
+        display_name: str,
+        *,
+        issuer_type: str = "ORGANIZATION",
+        description: Optional[str] = None,
+        accreditation_body: Optional[str] = None,
+        accreditations: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Register a public issuer identity as policy trust evidence."""
+        payload: Dict[str, Any] = {
+            "organization_id": organization_id,
+            "issuer_id": issuer_id,
+            "issuer_type": issuer_type,
+            "display_name": display_name,
+        }
+        optional_fields = {
+            "description": description,
+            "accreditation_body": accreditation_body,
+            "accreditations": accreditations,
+            "metadata": metadata,
+        }
+        payload.update({field: value for field, value in optional_fields.items() if value is not None})
+        return await self._request("POST", "/v1/issuer-entities", json=payload)
+
+    async def add_trust_profile_issuer(
+        self,
+        profile_id: str,
+        issuer_entity_id: str,
+        *,
+        trust_level: int = 100,
+        relationship_status: str = "TRUSTED",
+    ) -> Dict[str, Any]:
+        """Attach normalized issuer trust evidence to a Trust Profile."""
+        return await self._request(
+            "POST",
+            f"/v1/trust-profiles/{profile_id}/issuers",
+            json={
+                "issuer_id": issuer_entity_id,
+                "trust_level": trust_level,
+                "relationship_status": relationship_status,
+                "cascade_revocation_policy": "NOTIFY_ONLY",
+                "metadata": {"credential_template_ids": []},
+            },
+        )
+
     async def activate_trust_profile(self, profile_id: str) -> Dict[str, Any]:
         """Activate a trust profile."""
         return await self._request("POST", f"/v1/trust-profiles/{profile_id}/activate")
@@ -1738,17 +1795,24 @@ class GatewayClient:
         self,
         issuance_id: str,
         reason: Optional[str] = None,
+        organization_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Revoke a credential."""
         return await self._request(
             "POST",
             f"/v1/issuance/{issuance_id}/revoke",
             json={"reason": reason or "Test revocation"},
+            params={"organization_id": organization_id} if organization_id else None,
         )
 
-    async def get_revocation_status(self, issuance_id: str) -> Dict[str, Any]:
+    async def get_revocation_status(
+        self,
+        issuance_id: str,
+        organization_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Get revocation status for a credential."""
         return await self._request(
             "GET",
             f"/v1/issuance/{issuance_id}/revocation-status",
+            params={"organization_id": organization_id} if organization_id else None,
         )
