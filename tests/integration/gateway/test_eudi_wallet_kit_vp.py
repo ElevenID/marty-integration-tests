@@ -255,6 +255,44 @@ async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_te
 
 
 @pytest.fixture
+async def vp_sd_jwt_trust_profile(
+    authenticated_gateway_client: GatewayClient,
+    vp_test_org,
+    vp_sd_jwt_resources,
+):
+    """Create explicit numeric trust evidence for the credential-signing DID."""
+    issuer_did = vp_sd_jwt_resources["issuer_did"]
+    entities = await authenticated_gateway_client.list_issuer_entities(vp_test_org["id"])
+    issuer_entity = next(
+        (entity for entity in entities if entity.get("issuer_id") == issuer_did),
+        None,
+    )
+    if issuer_entity is None:
+        issuer_entity = await authenticated_gateway_client.create_issuer_entity(
+            organization_id=vp_test_org["id"],
+            issuer_id=issuer_did,
+            display_name="EUDI SD-JWT lifecycle issuer",
+            description="Disposable public-protocol issuer trust evidence",
+            accreditation_body="Marty integration test authority",
+            accreditations=["EUDI"],
+        )
+
+    trust_profile = await authenticated_gateway_client.create_trust_profile(
+        organization_id=vp_test_org["id"],
+        name=f"EUDI VP SD-JWT trust ({uuid.uuid4().hex[:6]})",
+        supported_formats=["SD_JWT_VC"],
+        revocation_profile_id=vp_sd_jwt_resources["revocation_profile_id"],
+        revocation_policy={"check_mode": "HARD_FAIL"},
+    )
+    await authenticated_gateway_client.add_trust_profile_issuer(
+        trust_profile["id"],
+        issuer_entity["id"],
+        trust_level=100,
+    )
+    return await authenticated_gateway_client.activate_trust_profile(trust_profile["id"])
+
+
+@pytest.fixture
 async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test_org):
     """Provision the mDoc-specific profile and document signer used in production."""
     with eudi_stage("mdoc-compliance-profile"):
@@ -515,6 +553,7 @@ async def vp_age_policy(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
     sd_jwt_dl_template,
+    vp_sd_jwt_trust_profile,
     vp_request_object_issuer_profile,
 ):
     """Create and activate an age verification policy for VP tests."""
@@ -522,6 +561,7 @@ async def vp_age_policy(
         organization_id=vp_test_org["id"],
         name=f"VP Age 21+ ({uuid.uuid4().hex[:6]})",
         purpose="Verify holder is at least 21 years old",
+        trust_profile_id=vp_sd_jwt_trust_profile["id"],
         credential_requirements=[
             {
                 "credential_template_id": sd_jwt_dl_template["id"],
@@ -546,6 +586,7 @@ async def vp_identity_policy(
     authenticated_gateway_client: GatewayClient,
     vp_test_org,
     sd_jwt_dl_template,
+    vp_sd_jwt_trust_profile,
     vp_request_object_issuer_profile,
 ):
     """Create and activate an identity verification policy for VP tests."""
@@ -553,6 +594,7 @@ async def vp_identity_policy(
         organization_id=vp_test_org["id"],
         name=f"VP Identity ({uuid.uuid4().hex[:6]})",
         purpose="Verify holder identity",
+        trust_profile_id=vp_sd_jwt_trust_profile["id"],
         credential_requirements=[
             {
                 "credential_template_id": sd_jwt_dl_template["id"],
@@ -1254,6 +1296,7 @@ class TestEndToEndIssuanceAndPresentation:
         wallet_kit: EUDIWalletKitClient,
         vp_test_org,
         vp_sd_jwt_resources,
+        vp_sd_jwt_trust_profile,
         vp_request_object_issuer_profile,
         record_property,
     ):
@@ -1302,6 +1345,7 @@ class TestEndToEndIssuanceAndPresentation:
             organization_id=vp_test_org["id"],
             name=f"E2E Policy ({uuid.uuid4().hex[:6]})",
             purpose="End-to-end test",
+            trust_profile_id=vp_sd_jwt_trust_profile["id"],
             freshness={"require_not_revoked": True},
             credential_requirements=[
                 {
@@ -1321,6 +1365,7 @@ class TestEndToEndIssuanceAndPresentation:
         flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
+            trust_profile_id=vp_sd_jwt_trust_profile["id"],
             issuer_did=vp_request_object_issuer_profile["issuer_did"],
         )
         instance_id = flow["instance_id"]
@@ -1369,7 +1414,10 @@ class TestEndToEndIssuanceAndPresentation:
             for item in result.get("credential_results", [])
         ), result
 
-        active_status = await authenticated_gateway_client.get_revocation_status(issuance["id"])
+        active_status = await authenticated_gateway_client.get_revocation_status(
+            issuance["id"],
+            organization_id=vp_test_org["id"],
+        )
         assert (
             active_status.get("revoked") is False
             or str(active_status.get("status", "")).lower() in {"active", "valid"}
@@ -1379,12 +1427,16 @@ class TestEndToEndIssuanceAndPresentation:
         revoked = await authenticated_gateway_client.revoke_credential(
             issuance_id=issuance["id"],
             reason="Pre-v1 Rust deletion lifecycle evidence",
+            organization_id=vp_test_org["id"],
         )
         assert (
             str(revoked.get("status", "")).lower() == "revoked"
             or "revoked" in str(revoked).lower()
         )
-        revoked_status = await authenticated_gateway_client.get_revocation_status(issuance["id"])
+        revoked_status = await authenticated_gateway_client.get_revocation_status(
+            issuance["id"],
+            organization_id=vp_test_org["id"],
+        )
         assert (
             revoked_status.get("revoked") is True
             or str(revoked_status.get("status", "")).lower() == "revoked"
@@ -1394,6 +1446,7 @@ class TestEndToEndIssuanceAndPresentation:
         revoked_flow = await authenticated_gateway_client.start_verification_flow(
             presentation_policy_id=policy["id"],
             organization_id=policy["organization_id"],
+            trust_profile_id=vp_sd_jwt_trust_profile["id"],
             issuer_did=vp_request_object_issuer_profile["issuer_did"],
         )
         revoked_auth_req = await authenticated_gateway_client.get_verification_request(
@@ -1418,13 +1471,15 @@ class TestEndToEndIssuanceAndPresentation:
         denied = await authenticated_gateway_client.get_verification_decision(
             revoked_flow["instance_id"]
         )
-        assert denied["status"] == "COMPLETED", denied
+        assert denied["status"] in {"COMPLETED", "FAILED"}, denied
         assert denied["result"] == "failed", denied
         assert denied["decision"] == "deny", denied
         assert "revok" in denied.get("decision_reason", "").lower(), denied
         denied_credentials = denied.get("credential_results", [])
         assert any(item.get("revocation_checked") is True for item in denied_credentials), denied
+        assert any(item.get("not_revoked") is False for item in denied_credentials), denied
         assert any(item.get("satisfied") is False for item in denied_credentials), denied
+        assert "credential_revoked" in denied.get("error_codes", []), denied
 
         logger.info(
             "[E2E] Rust revocation lifecycle passed: issue -> status check -> "
