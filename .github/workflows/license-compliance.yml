@@ -37,9 +37,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install tomllib backport
-        run: pip install tomli
-
       - name: Check license metadata consistency
         run: |
           python - <<'EOF'
@@ -108,8 +105,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.11.3"
+          enable-cache: false
+
       - name: Install security tools
-        run: pip install bandit pip-audit
+        run: uv pip install --system bandit pip-audit
 
       - name: Run Bandit
         run: |
@@ -145,11 +148,17 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.11.3"
+          enable-cache: false
+
       - name: Install cyclonedx-bom
-        run: pip install cyclonedx-bom
+        run: uv pip install --system cyclonedx-bom
 
       - name: Install project dependencies
-        run: pip install -e .
+        run: uv pip install --system -e .
 
       - name: Generate CycloneDX SBOM
         run: |
