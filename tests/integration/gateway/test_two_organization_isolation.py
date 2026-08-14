@@ -2235,7 +2235,16 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
                 },
             },
         )
-        assert private_evidence_start.status_code == 422, private_evidence_start.text
+        assert private_evidence_start.status_code == 400, private_evidence_start.text
+        private_evidence_error = private_evidence_start.json()
+        assert "detail" not in private_evidence_error
+        assert private_evidence_error.get("error") == "invalid_request"
+        assert private_evidence_error.get("error_description") == (
+            "Request validation failed"
+        )
+        uuid.UUID(str(private_evidence_error.get("message_id")))
+        assert "_marty_precondition_evidence_v1" not in private_evidence_start.text
+        assert "marty-applicant-service" not in private_evidence_start.text
 
         instances_after_response = await admin.client.get(
             "/v1/flows/instances",

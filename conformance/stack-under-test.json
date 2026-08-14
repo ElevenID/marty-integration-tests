@@ -2,9 +2,9 @@
   "schema": "elevenid.official-stack-pin/v1",
   "state": "ready",
   "repository": "ElevenID/marty-ui",
-  "release_tag": "v1.1.168",
+  "release_tag": "v1.1.169",
   "manifest_asset": "stack-manifest.json",
-  "manifest_sha256": "sha256:ca8f731154ad78c9c1c7aebb9235f025cc3260927ff1608533cb2573756c8635",
-  "marty_commit": "07fa270bfc509464b83dc93f125dbaab30170392",
-  "marty_checkout_commit": "07fa270bfc509464b83dc93f125dbaab30170392"
+  "manifest_sha256": "sha256:30f43d3b45255402bddd462f78e9e4adc5367ca2275e88f9e7025a508bfcb60f",
+  "marty_commit": "a7771270e3a3b9ccd57819fcbe9cb4fbc346f297",
+  "marty_checkout_commit": "a7771270e3a3b9ccd57819fcbe9cb4fbc346f297"
 }
