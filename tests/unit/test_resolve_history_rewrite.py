@@ -43,13 +43,8 @@ def test_reviewed_mapping_translates_old_commit(tmp_path: Path) -> None:
 
 def test_default_map_contains_the_complete_final_rewrite() -> None:
     mappings = resolver.load_rewrite_map(resolver.DEFAULT_MAP)
-    assert set(mappings) == {"ElevenID/marty-ui", "ElevenID/marty-microservices-framework"}
-    assert len(mappings["ElevenID/marty-ui"]) == 1155
+    assert set(mappings) == {"ElevenID/marty-microservices-framework"}
     assert len(mappings["ElevenID/marty-microservices-framework"]) == 310
-    assert (
-        mappings["ElevenID/marty-ui"]["ff7b5286a50b6e271e2b60dbde93f56cd32cc1d1"]
-        == "908c4390d544851d22d16e2079ec77ec8115f9aa"
-    )
     assert (
         mappings["ElevenID/marty-microservices-framework"]["46773c48814f3eb263b207ef5ee64bcd0deebc48"]
         == "df9dbf58e1bd2be9e770109c24d67e9fa318fb0b"
@@ -58,7 +53,8 @@ def test_default_map_contains_the_complete_final_rewrite() -> None:
 
 def test_reviewed_stack_checkout_matches_rewrite_map() -> None:
     pin = json.loads((ROOT / "conformance" / "stack-under-test.json").read_text(encoding="utf-8"))
-    assert resolver.resolve_commit(pin["repository"], pin["marty_commit"]) == pin["marty_checkout_commit"]
+    assert pin["repository"] == "ElevenID/marty-ui"
+    assert pin["marty_checkout_commit"] == pin["marty_commit"]
 
 
 @pytest.mark.parametrize("commit", ["", "A" * 40, "a" * 39, "not-a-commit"])

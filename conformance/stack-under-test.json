@@ -6,5 +6,5 @@
   "manifest_asset": "stack-manifest.json",
   "manifest_sha256": "sha256:c6cbde36a99974ca7fa574abe7c05643c395a245e079c5ce1dce2dd46cf6f006",
   "marty_commit": "d819a40888165532db8e5e2bcf593cbfff2b96b0",
-  "marty_checkout_commit": "4886828d4624fb6f4fd0cd798f5d5c5d57d893c9"
+  "marty_checkout_commit": "d819a40888165532db8e5e2bcf593cbfff2b96b0"
 }
