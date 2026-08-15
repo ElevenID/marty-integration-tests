@@ -126,13 +126,13 @@ jobs:
           printf '%s  %s\n' "${digest#sha256:}" "$wheel" | sha256sum --check --strict
           gh attestation verify "$wheel" --repo "$repository"
           python -m pip install --disable-pip-version-check --no-deps --no-index "$wheel"
-          python -c "from marty_rs import _marty_rs; assert callable(_marty_rs.didcomm_decrypt)"
+          python -c "from marty_rs import _marty_rs; assert callable(_marty_rs.didcomm_decrypt); assert callable(_marty_rs.didcomm_decrypt_authcrypt)"
 
       - name: Checkout released deployment adapter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-ui
-          ref: 4e9b12d0fb338a507140435c3e609d8e73a52afa
+          ref: fdbbdd202e0807db4ed7c07d9a1d66de129ee1e0
           path: work/marty-ui
           persist-credentials: false
 

@@ -1626,6 +1626,36 @@ class GatewayClient:
             raise GatewayClientError("DID document did not match the requested issuer DID")
         return value
 
+    async def publish_issuer_didcomm_key_agreement(
+        self,
+        *,
+        organization_id: str,
+        issuer_did: str,
+        public_x: str,
+        key_purpose: str = "vc_jwt_issuer",
+        credential_format: str = "SD_JWT_VC",
+        algorithm: str = "ES256",
+    ) -> Dict[str, Any]:
+        """Publish public X25519 material for one exact managed issuer tuple."""
+
+        return await self._request(
+            "PUT",
+            "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
+            json={
+                "organization_id": organization_id,
+                "issuer_did": issuer_did,
+                "key_purpose": key_purpose,
+                "credential_format": credential_format,
+                "algorithm": algorithm,
+                "public_jwk": {
+                    "kty": "OKP",
+                    "crv": "X25519",
+                    "x": public_x,
+                },
+            },
+            headers={"X-Organization-ID": organization_id},
+        )
+
     async def resolve_issuer_identity_public_key(
         self,
         *,

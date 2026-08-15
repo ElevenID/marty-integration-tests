@@ -1,39 +1,51 @@
 status: complete
 search_scope:
-  - current_module_or_crate
-  - current_repository
-  - workspace_crates_packages_and_services
-  - bindings_adapters_ffi_and_api_layers
-  - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
+  - current DIDComm integration module and independent verifier harness
+  - current public tenant-boundary release evidence lane
+  - immutable DIDComm interoperability manifest and updater
+  - marty-core v0.1.57 authenticated decryption binding
+  - marty-credentials v0.1.64 exhaustive issuer encryption policy
+  - marty-ui managed issuer key-agreement publication and opt-in Compose overlay
+  - pinned notabene-id/go-didcomm v0.4.0 source and CLI contracts
 search_queries:
-  - "marty-integration-tests immutable UI stack pin"
-  - "public tenant boundary released stack pin"
-  - "official interoperability exact marty-ui checkout"
-  - "conformance stack-under-test manifest digest"
-  - "previous coordinated UI pin PR 372"
+  - "didcomm_decrypt_authcrypt sender_kid recipient_kid"
+  - "ECDH-1PU+A256KW independent unpack did-doc"
+  - "DIDCOMM_ENCRYPTION_POLICY_FILE active issuer authcrypt"
+  - "issuer-identities didcomm-key-agreement public X25519"
+  - "public_boundary_lane DIDCOMM_TEST_PATH immutable release"
 candidate_implementations:
-  - path: conformance/stack-under-test.json
+  - path: tests/integration/gateway/test_didcomm_v2_delivery.py
+    language: Python
+    disposition: extend_existing_owned_delivery_and_independent_verifier_harness
+  - path: scripts/public_boundary_lane.py
+    language: Python
+    disposition: extend_existing_immutable_release_evidence_lane
+  - path: conformance/didcomm-interoperability.json
     language: JSON
-    disposition: reuse_existing_immutable_stack_pin
-  - path: .github/workflows/public-tenant-boundary.yml
-    language: YAML
-    disposition: reuse_existing_two_organization_release_evidence_lane
-  - path: .github/workflows/official-interoperability.yml
-    language: YAML
-    disposition: reuse_existing_exact_source_checkout
-  - path: https://github.com/ElevenID/marty-integration-tests/pull/372
-    language: GitHub pull request
-    disposition: reuse_previous_coordinated_pin_pattern
+    disposition: extend_existing_reviewed_independent_implementation_pin
+  - path: https://github.com/ElevenID/marty-core/releases/tag/v0.1.57
+    language: Rust and Python binding release
+    disposition: reuse_released_authenticated_decryption_oracle
+  - path: https://github.com/notabene-id/go-didcomm/tree/5ffd085c2b5088a639c1c0d3910d668887298ce5/cmd/didcomm
+    language: Go
+    disposition: reuse_pinned_independent_authcrypt_unpacker
+  - path: https://github.com/ElevenID/marty-credentials/pull/186
+    language: Python
+    disposition: reuse_exhaustive_runtime_policy_and_internal_did_web_resolution
+  - path: https://github.com/ElevenID/marty-ui/pull/547
+    language: Rust Python YAML
+    disposition: reuse_managed_public_key_publication_and_isolated_policy_mount
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: conformance/stack-under-test.json
-  language: JSON
+  path: tests/integration/gateway/test_didcomm_v2_delivery.py
+  language: Python
 rust_disposition: rust_not_applicable
 non_rust_rationale: >-
-  This task advances exact immutable release metadata and workflow source pins.
-  It adds no runtime, protocol, validation, security, or cryptographic behavior
-  for Rust to own.
+  This repository owns release-boundary orchestration and independent evidence,
+  not cryptographic implementation. The test calls the released Rust binding
+  and the separately maintained pinned Go implementation for authenticated
+  decryption and tamper rejection; it does not duplicate either algorithm.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""

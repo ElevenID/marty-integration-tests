@@ -184,6 +184,49 @@ async def test_issuer_identity_creation_cannot_select_private_custody() -> None:
 
 
 @pytest.mark.asyncio
+async def test_didcomm_key_agreement_publication_sends_only_public_x25519() -> None:
+    client = GatewayClient("https://gateway.example")
+    request = AsyncMock(
+        return_value={
+            "issuer_did": "did:web:issuer.example:orgs:test",
+            "key_agreement_method_id": (
+                "did:web:issuer.example:orgs:test#didcomm-authcrypt-x25519"
+            ),
+        }
+    )
+    client._request = request
+    public_x = "A" * 43
+
+    try:
+        await client.publish_issuer_didcomm_key_agreement(
+            organization_id="org-1",
+            issuer_did="did:web:issuer.example:orgs:test",
+            public_x=public_x,
+        )
+    finally:
+        await client.close()
+
+    request.assert_awaited_once_with(
+        "PUT",
+        "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
+        json={
+            "organization_id": "org-1",
+            "issuer_did": "did:web:issuer.example:orgs:test",
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "ES256",
+            "public_jwk": {
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": public_x,
+            },
+        },
+        headers={"X-Organization-ID": "org-1"},
+    )
+    assert "d" not in request.await_args.kwargs["json"]["public_jwk"]
+
+
+@pytest.mark.asyncio
 async def test_credential_template_with_did_never_exposes_custody_selectors() -> None:
     client = GatewayClient("https://gateway.example")
     request = AsyncMock(return_value={"id": "template-1"})

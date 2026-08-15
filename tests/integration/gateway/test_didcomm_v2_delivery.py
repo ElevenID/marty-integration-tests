@@ -50,10 +50,15 @@ DIDCOMM_PRIVATE_AGENT_TESTS = os.getenv("DIDCOMM_PRIVATE_AGENT_TESTS", "").lower
 }
 INDEPENDENT_IMPLEMENTATION = "notabene-id/go-didcomm@v0.4.0#5ffd085c2b5088a639c1c0d3910d668887298ce5"
 OPTIONAL_ABSENT_OR_NULL_PLAINTEXT_MEMBERS = frozenset({"expires_time", "pthid"})
+AUTHCRYPT_POLICY_FILE_ENV = "MARTY_DIDCOMM_TEST_POLICY_FILE"
 
 
 def _base64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + ("=" * (-len(value) % 4)))
+
+
+def _base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
 def _assert_selected_anoncrypt_profile(encrypted: dict[str, Any]) -> dict[str, Any]:
@@ -90,6 +95,45 @@ def _assert_selected_anoncrypt_profile(encrypted: dict[str, Any]) -> dict[str, A
     return protected
 
 
+def _assert_selected_authcrypt_profile(
+    encrypted: dict[str, Any],
+    *,
+    expected_sender_kid: str,
+) -> tuple[dict[str, Any], str]:
+    """Enforce the sender-authenticated DIDComm profile and bound key IDs."""
+
+    recipients = encrypted.get("recipients")
+    assert isinstance(recipients, list)
+    assert len(recipients) == 1
+    recipient_header = recipients[0].get("header")
+    assert isinstance(recipient_header, dict)
+    recipient_kid = recipient_header.get("kid")
+    assert isinstance(recipient_kid, str)
+    assert recipient_kid
+    assert "epk" not in recipient_header, "DIDComm requires epk to be integrity protected"
+
+    protected_value = encrypted.get("protected")
+    assert isinstance(protected_value, str)
+    protected: object = json.loads(_base64url_decode(protected_value))
+    assert isinstance(protected, dict)
+    assert protected.get("typ") == "application/didcomm-encrypted+json"
+    assert protected.get("alg") == "ECDH-1PU+A256KW"
+    assert protected.get("enc") == "A256CBC-HS512"
+    assert protected.get("skid") == expected_sender_kid
+    assert protected.get("apu") == _base64url_encode(expected_sender_kid.encode())
+    ephemeral_key = protected.get("epk")
+    assert isinstance(ephemeral_key, dict)
+    assert ephemeral_key.get("kty") == "OKP"
+    assert ephemeral_key.get("crv") == "X25519"
+    ephemeral_x = ephemeral_key.get("x")
+    assert isinstance(ephemeral_x, str)
+    assert len(_base64url_decode(ephemeral_x)) == 32
+
+    expected_apv = _base64url_encode(hashlib.sha256(recipient_kid.encode()).digest())
+    assert protected.get("apv") == expected_apv
+    return protected, recipient_kid
+
+
 def _independent_didcomm_decrypt(
     encrypted: dict[str, Any],
     holder_did: str,
@@ -117,10 +161,44 @@ def _independent_didcomm_decrypt(
     return message
 
 
+def _independent_didcomm_decrypt_authcrypt(
+    encrypted: dict[str, Any],
+    holder_did: str,
+    holder_private_key: bytes,
+    *,
+    sender_did_document: dict[str, Any],
+    recipient_did_document: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Authenticate and decrypt Marty authcrypt with the pinned Go implementation."""
+
+    completed = _run_independent_didcomm_verifier(
+        encrypted,
+        holder_did,
+        holder_private_key,
+        did_documents=(sender_did_document, recipient_did_document),
+    )
+    if completed is None:
+        return None
+    assert completed.returncode == 0, (
+        "independent DIDComm verifier rejected Marty's authcrypt profile: "
+        f"{completed.stderr.strip()[:300]}"
+    )
+    output: object = json.loads(completed.stdout)
+    assert isinstance(output, dict)
+    assert output.get("encrypted") is True
+    assert output.get("anonymous") is False, "authcrypt must authenticate its sender"
+    assert output.get("signed") is True, "authcrypt must report sender authentication"
+    message = output.get("message")
+    assert isinstance(message, dict)
+    return message
+
+
 def _run_independent_didcomm_verifier(
     encrypted: dict[str, Any],
     holder_did: str,
     holder_private_key: bytes,
+    *,
+    did_documents: tuple[dict[str, Any], ...] = (),
 ) -> subprocess.CompletedProcess[str] | None:
     """Run the pinned independent verifier without interpreting its result."""
     required = os.getenv("DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED", "").lower() in {
@@ -150,9 +228,6 @@ def _run_independent_didcomm_verifier(
         .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     )
 
-    def base64url(value: bytes) -> str:
-        return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
     # The upstream CLI accepts a standard private JWK Set. This disposable
     # holder key is generated solely for the test and is never a Marty custody
     # or issuer key.
@@ -163,21 +238,29 @@ def _run_independent_didcomm_verifier(
                 "crv": "X25519",
                 "kid": recipient_kid,
                 "alg": "ECDH-ES+A256KW",
-                "x": base64url(holder_public_key),
-                "d": base64url(holder_private_key),
+                "x": _base64url_encode(holder_public_key),
+                "d": _base64url_encode(holder_private_key),
             }
         ]
     }
     with tempfile.TemporaryDirectory(prefix="didcomm-independent-") as temporary:
         keys = Path(temporary) / "keys.json"
         keys.write_text(json.dumps(key_material), encoding="utf-8")
+        command = [
+            str(cli),
+            "unpack",
+            "--key-file",
+            str(keys),
+        ]
+        if did_documents:
+            document_paths: list[str] = []
+            for index, document in enumerate(did_documents):
+                document_path = Path(temporary) / f"did-document-{index}.json"
+                document_path.write_text(json.dumps(document), encoding="utf-8")
+                document_paths.append(str(document_path))
+            command.extend(["--did-doc", ",".join(document_paths)])
         return subprocess.run(
-            [
-                str(cli),
-                "unpack",
-                "--key-file",
-                str(keys),
-            ],
+            command,
             input=json.dumps(encrypted),
             capture_output=True,
             text=True,
@@ -191,12 +274,15 @@ def _assert_independent_didcomm_rejects(
     holder_did: str,
     holder_private_key: bytes,
     case: str,
+    *,
+    did_documents: tuple[dict[str, Any], ...] = (),
 ) -> bool | None:
     """Require the independent implementation to reject a tampered envelope."""
     completed = _run_independent_didcomm_verifier(
         encrypted,
         holder_did,
         holder_private_key,
+        did_documents=did_documents,
     )
     if completed is None:
         return None
@@ -204,6 +290,60 @@ def _assert_independent_didcomm_rejects(
         "independent DIDComm verifier accepted a tampered envelope "
         f"({case})"
     )
+    return True
+
+
+def _configure_didcomm_issuer_policy(
+    issuer_did: str,
+    *,
+    mode: str,
+    sender_private_key: bytes | None = None,
+) -> bool:
+    """Atomically configure the disposable deployment's exhaustive issuer policy."""
+
+    configured_file = os.getenv(AUTHCRYPT_POLICY_FILE_ENV, "").strip()
+    if not configured_file:
+        assert mode == "anoncrypt", "authcrypt evidence requires a mounted policy file"
+        return False
+
+    configured_dir = os.getenv("DIDCOMM_ENCRYPTION_POLICY_DIR", "").strip()
+    assert configured_dir, "the disposable policy directory must be explicit"
+    policy_dir = Path(configured_dir).resolve()
+    policy_file = Path(configured_file).resolve()
+    assert policy_dir.is_dir()
+    assert policy_file.parent == policy_dir
+    assert policy_file.name == "didcomm-encryption-policy.json"
+    assert not policy_file.is_symlink()
+    assert mode in {"anoncrypt", "authcrypt"}
+
+    issuer_policy: dict[str, Any] = {"mode": mode}
+    if mode == "authcrypt":
+        assert sender_private_key is not None
+        assert len(sender_private_key) == 32
+        issuer_policy["sender_x25519_private_key"] = _base64url_encode(
+            sender_private_key
+        )
+    else:
+        assert sender_private_key is None
+
+    payload = {"version": 1, "issuers": {issuer_did: issuer_policy}}
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".didcomm-encryption-policy-",
+        suffix=".json",
+        dir=policy_dir,
+        text=True,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as policy_stream:
+            json.dump(payload, policy_stream, separators=(",", ":"), sort_keys=True)
+            policy_stream.write("\n")
+            policy_stream.flush()
+            os.fsync(policy_stream.fileno())
+        os.replace(temporary_name, policy_file)
+    finally:
+        temporary_path = Path(temporary_name)
+        if temporary_path.exists():
+            temporary_path.unlink()
     return True
 
 
@@ -418,6 +558,7 @@ class TestDidcommDeliveryWithMockAgent:
         self,
         gateway_client: GatewayClient,
         test_organization: dict[str, Any],
+        vc_jwt_issuer_did: str,
         sd_jwt_mdl_template: dict[str, Any],
         mock_agent: tuple[str, list[dict[str, Any]]],
     ) -> None:
@@ -432,6 +573,10 @@ class TestDidcommDeliveryWithMockAgent:
 
         # Construct a did:peer:2 DID that points to the mock agent
         holder_did, holder_private_key = make_did_peer_2_with_service(agent_url)
+        _configure_didcomm_issuer_policy(
+            vc_jwt_issuer_did,
+            mode="anoncrypt",
+        )
 
         claims = TestDataBuilder.mdl_claims(
             given_name="DIDComm",
@@ -513,6 +658,199 @@ class TestDidcommDeliveryWithMockAgent:
 
         tx = await gateway_client.get_issuance(issuance["id"])
         assert tx["status"] == "issued"
+
+    @pytest.mark.skipif(
+        not os.getenv(AUTHCRYPT_POLICY_FILE_ENV, "").strip(),
+        reason="authcrypt evidence requires the disposable deployment policy mount",
+    )
+    async def test_deliver_authcrypt_with_managed_issuer(
+        self,
+        gateway_client: GatewayClient,
+        test_organization: dict[str, Any],
+        vc_jwt_issuer_did: str,
+        sd_jwt_mdl_template: dict[str, Any],
+        mock_agent: tuple[str, list[dict[str, Any]]],
+    ) -> None:
+        """Prove released authcrypt, sender binding, and wrong-key fail-closed behavior."""
+
+        agent_url, received = mock_agent
+        holder_did, holder_private_key = make_did_peer_2_with_service(agent_url)
+
+        sender_key = x25519.X25519PrivateKey.generate()
+        sender_private_key = sender_key.private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+        sender_public_x = _base64url_encode(
+            sender_key.public_key().public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+        )
+        publication = await gateway_client.publish_issuer_didcomm_key_agreement(
+            organization_id=str(test_organization["id"]),
+            issuer_did=vc_jwt_issuer_did,
+            public_x=sender_public_x,
+        )
+        expected_sender_kid = (
+            f"{vc_jwt_issuer_did}#didcomm-authcrypt-x25519"
+        )
+        assert publication == {
+            "issuer_did": vc_jwt_issuer_did,
+            "key_agreement_method_id": expected_sender_kid,
+        }
+
+        sender_document = await gateway_client.get_public_did_document(
+            issuer_did=vc_jwt_issuer_did
+        )
+        methods = sender_document.get("verificationMethod")
+        assert isinstance(methods, list)
+        sender_methods = [
+            method
+            for method in methods
+            if isinstance(method, dict) and method.get("id") == expected_sender_kid
+        ]
+        assert sender_methods == [
+            {
+                "id": expected_sender_kid,
+                "type": "JsonWebKey2020",
+                "controller": vc_jwt_issuer_did,
+                "publicKeyJwk": {
+                    "kty": "OKP",
+                    "crv": "X25519",
+                    "x": sender_public_x,
+                },
+            }
+        ]
+        assert expected_sender_kid in sender_document.get("keyAgreement", [])
+        assert all(
+            "d" not in method.get("publicKeyJwk", {})
+            for method in methods
+            if isinstance(method, dict)
+            and isinstance(method.get("publicKeyJwk"), dict)
+        )
+
+        wrong_sender_key = x25519.X25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+        _configure_didcomm_issuer_policy(
+            vc_jwt_issuer_did,
+            mode="authcrypt",
+            sender_private_key=wrong_sender_key,
+        )
+
+        issuance = await gateway_client.issue_credential(
+            organization_id=str(test_organization["id"]),
+            credential_template_id=str(sd_jwt_mdl_template["id"]),
+            claims=TestDataBuilder.mdl_claims(
+                given_name="DIDComm",
+                family_name="Authcrypt",
+                birth_date="1990-01-15",
+            ),
+        )
+        transaction_before_failure = await gateway_client.get_issuance(issuance["id"])
+        with pytest.raises(GatewayClientError) as wrong_key_failure:
+            await gateway_client.didcomm_deliver(
+                organization_id=str(test_organization["id"]),
+                transaction_id=str(issuance["id"]),
+                holder_did=holder_did,
+            )
+        assert wrong_key_failure.value.status_code == 503
+        assert received == [], "wrong sender custody must fail before transport"
+        transaction_after_failure = await gateway_client.get_issuance(issuance["id"])
+        assert transaction_after_failure.get("status") == transaction_before_failure.get(
+            "status"
+        )
+        assert transaction_after_failure.get("status") != "issued"
+
+        _configure_didcomm_issuer_policy(
+            vc_jwt_issuer_did,
+            mode="authcrypt",
+            sender_private_key=sender_private_key,
+        )
+        result = await gateway_client.didcomm_deliver(
+            organization_id=str(test_organization["id"]),
+            transaction_id=str(issuance["id"]),
+            holder_did=holder_did,
+        )
+
+        assert result["transaction_id"] == issuance["id"]
+        assert result["holder_did"] == holder_did
+        assert result["status"] == "delivered"
+        assert len(received) == 1
+        encrypted = received[0]
+        assert encrypted["content_type"] == "application/didcomm-encrypted+json"
+        protected, recipient_kid = _assert_selected_authcrypt_profile(
+            encrypted["body"],
+            expected_sender_kid=expected_sender_kid,
+        )
+        assert protected.get("skid") != recipient_kid
+
+        try:
+            from marty_rs import _marty_rs
+        except ImportError:
+            import _marty_rs  # type: ignore[no-redef]
+
+        recipient_document_json = _marty_rs.didcomm_resolve_did(holder_did)
+        recipient_document: object = json.loads(recipient_document_json)
+        assert isinstance(recipient_document, dict)
+        assert recipient_document.get("id") == holder_did
+        authenticated: object = json.loads(
+            _marty_rs.didcomm_decrypt_authcrypt(
+                json.dumps(encrypted["body"]),
+                holder_private_key,
+                recipient_document_json,
+                json.dumps(sender_document),
+            )
+        )
+        assert isinstance(authenticated, dict)
+        assert authenticated.get("sender_kid") == expected_sender_kid
+        assert authenticated.get("recipient_kid") == recipient_kid
+        plaintext_value = authenticated.get("plaintext")
+        assert isinstance(plaintext_value, str)
+        plaintext: object = json.loads(plaintext_value)
+        assert isinstance(plaintext, dict)
+        assert plaintext.get("from") == vc_jwt_issuer_did
+        assert plaintext.get("to") == [holder_did]
+        assert plaintext.get("thid") == issuance["id"]
+
+        independent_plaintext = _independent_didcomm_decrypt_authcrypt(
+            encrypted["body"],
+            holder_did,
+            holder_private_key,
+            sender_did_document=sender_document,
+            recipient_did_document=recipient_document,
+        )
+        if independent_plaintext is not None:
+            _assert_same_didcomm_plaintext(independent_plaintext, plaintext)
+
+        did_documents = (sender_document, recipient_document)
+        for case, tampered in _tampered_envelopes(encrypted["body"]).items():
+            with pytest.raises(
+                Exception,
+                match=r"(?i)(decrypt|unpack|crypto|jwe|tag|header)",
+            ):
+                _marty_rs.didcomm_decrypt_authcrypt(
+                    json.dumps(tampered),
+                    holder_private_key,
+                    recipient_document_json,
+                    json.dumps(sender_document),
+                )
+            independent_rejected = _assert_independent_didcomm_rejects(
+                tampered,
+                holder_did,
+                holder_private_key,
+                case,
+                did_documents=did_documents,
+            )
+            if independent_plaintext is not None:
+                assert independent_rejected is True
+
+        transaction = await gateway_client.get_issuance(issuance["id"])
+        assert transaction["status"] == "issued"
 
 
 # =============================================================================

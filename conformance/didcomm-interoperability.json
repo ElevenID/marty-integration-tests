@@ -26,6 +26,26 @@
       "wrapped-content-key tampering"
     ]
   },
-  "claim": "Cross-implementation decryption and cryptographic tamper-rejection evidence for Marty's selected outbound anoncrypt credential-delivery profile; not full DIDComm conformance, certification, inbound-agent support, or sender authentication.",
+  "authenticated_profile": {
+    "specification": "DIDComm Messaging 2.1",
+    "message": "https://didcomm.org/issue-credential/3.0/issue-credential",
+    "envelope": "authcrypt",
+    "serialization": "JWE General JSON",
+    "key_agreement": "ECDH-1PU+A256KW",
+    "curve": "X25519",
+    "content_encryption": "A256CBC-HS512",
+    "recipients": 1,
+    "transport": "CA-validated HTTPS",
+    "holder_did_method": "did:peer:2",
+    "sender_did_method": "did:web",
+    "negative_cases": [
+      "sender private key and published key mismatch",
+      "ciphertext tampering",
+      "authentication-tag tampering",
+      "protected-header tampering",
+      "wrapped-content-key tampering"
+    ]
+  },
+  "claim": "Cross-implementation decryption and cryptographic tamper-rejection evidence for Marty's selected outbound anoncrypt and managed-issuer authcrypt credential-delivery profiles, including wrong-sender-key fail-closed behavior; not full DIDComm conformance, certification, or inbound-agent support.",
   "update_policy": "The monthly interoperability updater reports newer upstream releases. Pins change only after source review and the immutable public-boundary lane passes."
 }
