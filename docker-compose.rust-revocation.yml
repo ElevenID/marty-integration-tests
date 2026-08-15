@@ -8,7 +8,35 @@ x-rust-revocation-service-auth: &rust-revocation-service-auth
   # the exact secret provenance used by a lifecycle evidence run.
   GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-oss-ci-rust-revocation-lifecycle-token-32-bytes}
 
+x-rust-signing-service-auth: &rust-signing-service-auth
+  # Separate disposable private-network credential for the canonical Rust
+  # signing-key service. Keep the signing boundary distinct from issuance API
+  # authentication even in this short-lived artifact stack.
+  SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
+
 services:
+  signing-keys:
+    image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}
+    restart: "no"
+    environment:
+      <<: *rust-signing-service-auth
+      SIGNING_KEYS_SERVICE_PORT: "8017"
+      SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+      RUST_LOG: ${SIGNING_KEYS_RUST_LOG:-info}
+    depends_on:
+      redis:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8017/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [marty-oss]
+
   # Rust owns this schema after the cutover. It must run before the shared
   # migration artifact because credential-template migrations read the seeded
   # revocation profile.
@@ -46,6 +74,7 @@ services:
   credential-template-service:
     environment:
       <<: *rust-revocation-service-auth
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
       ORG_GRPC_TARGET: organization-service:9002
       RP_GRPC_TARGET: revocation-profile-service:9013
       CT_GRPC_PORT: "9003"
@@ -56,13 +85,17 @@ services:
   trust-profile-service:
     environment:
       <<: *rust-revocation-service-auth
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
       ORG_GRPC_TARGET: organization-service:9002
 
   issuance-service:
     environment:
       <<: *rust-revocation-service-auth
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
     depends_on:
       revocation-profile-service:
+        condition: service_healthy
+      signing-keys:
         condition: service_healthy
 
   applicant-service:
@@ -88,6 +121,7 @@ services:
   flow-service:
     environment:
       <<: *rust-revocation-service-auth
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
       ORG_GRPC_TARGET: organization-service:9002
       CT_GRPC_TARGET: credential-template-service:9003
       PP_GRPC_TARGET: presentation-policy-service:9009
@@ -121,4 +155,13 @@ services:
   gateway:
     environment:
       <<: *rust-revocation-service-auth
+      SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
       ORG_GRPC_TARGET: organization-service:9002
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      signing-keys:
+        condition: service_healthy
