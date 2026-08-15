@@ -5,7 +5,7 @@ search_scope:
   - immutable DIDComm interoperability manifest and updater
   - marty-core v0.1.57 authenticated decryption binding
   - marty-credentials v0.1.65 exhaustive issuer encryption policy and deterministic DIDComm preflight
-  - marty-ui v1.1.191 immutable stack release, managed issuer key agreement, and internal signing-key topology
+  - marty-ui v1.1.193 immutable stack release, managed issuer key agreement, canonical port-qualified did:web publication, verified W3C SD-JWT claim extraction, and internal signing-key topology
   - pinned notabene-id/go-didcomm v0.4.0 source and CLI contracts
 search_queries:
   - "didcomm_decrypt_authcrypt sender_kid recipient_kid"
@@ -13,7 +13,7 @@ search_queries:
   - "DIDCOMM_ENCRYPTION_POLICY_FILE active issuer authcrypt"
   - "issuer-identities didcomm-key-agreement public X25519"
   - "public_boundary_lane DIDCOMM_TEST_PATH immutable release"
-  - "marty-ui v1.1.191 stack-manifest exact commit digest"
+  - "marty-ui v1.1.193 stack-manifest exact commit digest"
   - "official_suite_compose didcomm-authcrypt conformance_stack pass-through"
   - "did:web non-default HTTPS port percent-encoded authority resolution"
 candidate_implementations:
@@ -44,7 +44,10 @@ candidate_implementations:
   - path: https://github.com/ElevenID/marty-ui/pull/547
     language: Rust Python YAML
     disposition: reuse_managed_public_key_publication_and_isolated_policy_mount
-  - path: https://github.com/ElevenID/marty-ui/releases/tag/v1.1.191
+  - path: https://github.com/ElevenID/marty-ui/pull/558
+    language: Python YAML
+    disposition: reuse_port_qualified_did_web_publication_and_verified_w3c_sd_jwt_claim_extraction
+  - path: https://github.com/ElevenID/marty-ui/releases/tag/v1.1.193
     language: JSON and OCI release artifacts
     disposition: reuse_audited_immutable_stack_release_and_exact_source_pin
 no_match_statement: ""
