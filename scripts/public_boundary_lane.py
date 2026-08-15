@@ -15,6 +15,7 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -37,6 +38,10 @@ TEST_PATH = "tests/integration/gateway/test_two_organization_isolation.py"
 DIDCOMM_TEST_PATH = (
     "tests/integration/gateway/test_didcomm_v2_delivery.py::"
     "TestDidcommDeliveryWithMockAgent::test_deliver_to_mock_agent"
+)
+DIDCOMM_AUTHCRYPT_TEST_PATH = (
+    "tests/integration/gateway/test_didcomm_v2_delivery.py::"
+    "TestDidcommDeliveryWithMockAgent::test_deliver_authcrypt_with_managed_issuer"
 )
 DIDCOMM_TEST_CLASSNAME = (
     "tests.integration.gateway.test_didcomm_v2_delivery."
@@ -102,7 +107,12 @@ def independent_didcomm_record(
         raise ValueError("independent DIDComm manifest has an unsupported schema")
     implementation = data.get("independent_implementation")
     profile = data.get("tested_profile")
-    if not isinstance(implementation, dict) or not isinstance(profile, dict):
+    authenticated_profile = data.get("authenticated_profile")
+    if (
+        not isinstance(implementation, dict)
+        or not isinstance(profile, dict)
+        or not isinstance(authenticated_profile, dict)
+    ):
         raise ValueError("independent DIDComm manifest is incomplete")
     repository = implementation.get("repository")
     release = implementation.get("release")
@@ -134,6 +144,7 @@ def independent_didcomm_record(
             "commit": commit,
         },
         "tested_profile": profile,
+        "authenticated_profile": authenticated_profile,
         "required": required,
         "claim": data.get("claim"),
     }
@@ -159,6 +170,7 @@ def boundary_compose_command(
 ) -> list[str]:
     """Select released images by default and source builds only when explicit."""
     command = compose_command(args, action, marty_only=True)
+    command.append("--didcomm-authcrypt")
     if getattr(args, "local_build", False):
         command.append("--local-build")
     return command
@@ -338,12 +350,29 @@ def write_summary(
     didcomm_interop = metadata.get("didcomm_interoperability")
     if not isinstance(didcomm_interop, dict):
         didcomm_interop = independent_didcomm_record()
-    didcomm_passed = bool(didcomm_interop.get("required")) and didcomm_test_passed(
-        args.output_dir / "private" / "pytest.xml"
+    junit_path = args.output_dir / "private" / "pytest.xml"
+    anoncrypt_passed = bool(didcomm_interop.get("required")) and didcomm_test_passed(
+        junit_path,
+        test_name="test_deliver_to_mock_agent",
+    )
+    authcrypt_passed = bool(didcomm_interop.get("required")) and didcomm_test_passed(
+        junit_path,
+        test_name="test_deliver_authcrypt_with_managed_issuer",
     )
     didcomm_interop = dict(didcomm_interop)
-    didcomm_interop["cross_implementation_decryption_passed"] = didcomm_passed
-    didcomm_interop["cross_implementation_tamper_rejection_passed"] = didcomm_passed
+    didcomm_interop["cross_implementation_decryption_passed"] = anoncrypt_passed
+    didcomm_interop["cross_implementation_tamper_rejection_passed"] = (
+        anoncrypt_passed
+    )
+    didcomm_interop["authcrypt_cross_implementation_decryption_passed"] = (
+        authcrypt_passed
+    )
+    didcomm_interop["authcrypt_cross_implementation_tamper_rejection_passed"] = (
+        authcrypt_passed
+    )
+    didcomm_interop["authcrypt_wrong_sender_key_fail_closed_passed"] = (
+        authcrypt_passed
+    )
     coverage = [
         "two authenticated principals",
         "organization membership and RBAC",
@@ -383,11 +412,24 @@ def write_summary(
         "encrypted DIDComm v2 delivery with holder-key decryption",
         "public response custody-metadata minimization",
     ]
-    if didcomm_passed:
+    if anoncrypt_passed:
         coverage.append("independent go-didcomm decryption of Marty's released anoncrypt envelope")
         coverage.append(
             "released Marty and independent go-didcomm rejection of ciphertext, "
             "authentication-tag, protected-header, and wrapped-key tampering"
+        )
+    if authcrypt_passed:
+        coverage.append(
+            "released Marty and independent go-didcomm authentication and decryption "
+            "of Marty's managed-issuer authcrypt envelope"
+        )
+        coverage.append(
+            "released Marty and independent go-didcomm rejection of authcrypt "
+            "ciphertext, authentication-tag, protected-header, and wrapped-key tampering"
+        )
+        coverage.append(
+            "managed issuer authcrypt fails closed before transport when private custody "
+            "does not match the published sender key, without issuing the transaction"
         )
     summary = {
         "schema": "elevenid.product-security-evidence/v1",
@@ -411,7 +453,7 @@ def write_summary(
             "repository": "ElevenID/marty-integration-tests",
             "commit": os.environ.get("GITHUB_SHA", "local"),
             "path": TEST_PATH,
-            "additional_paths": [DIDCOMM_TEST_PATH],
+            "additional_paths": [DIDCOMM_TEST_PATH, DIDCOMM_AUTHCRYPT_TEST_PATH],
             "owner": "ElevenID",
         },
         "official_suite_boundary": {
@@ -429,7 +471,7 @@ def write_summary(
     )
 
 
-def didcomm_test_passed(junit_path: Path) -> bool:
+def didcomm_test_passed(junit_path: Path, *, test_name: str) -> bool:
     """Return true only for one executed, successful DIDComm evidence testcase."""
     if not junit_path.is_file():
         return False
@@ -441,7 +483,7 @@ def didcomm_test_passed(junit_path: Path) -> bool:
     matches = [
         testcase
         for testcase in root.iter("testcase")
-        if testcase.attrib.get("name") == "test_deliver_to_mock_agent"
+        if testcase.attrib.get("name") == test_name
         and testcase.attrib.get("classname") == DIDCOMM_TEST_CLASSNAME
     ]
     if len(matches) != 1:
@@ -452,13 +494,48 @@ def didcomm_test_passed(junit_path: Path) -> bool:
     )
 
 
+def initialize_didcomm_policy(policy_dir: Path) -> Path:
+    """Create the empty fail-closed policy before the issuance container starts."""
+
+    policy_dir = policy_dir.resolve()
+    if not policy_dir.is_dir() or policy_dir.is_symlink():
+        raise ValueError("DIDComm policy directory must be an exact real directory")
+    policy_file = policy_dir / "didcomm-encryption-policy.json"
+    descriptor = os.open(
+        policy_file,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump({"version": 1, "issuers": {}}, stream, separators=(",", ":"))
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    return policy_file
+
+
 def execute(args: argparse.Namespace) -> int:
+    """Run the lane with ephemeral sender custody removed on every exit path."""
+
+    with tempfile.TemporaryDirectory(
+        prefix=f"marty-{args.run_id}-didcomm-authcrypt-"
+    ) as temporary:
+        return _execute_with_didcomm_policy(args, Path(temporary))
+
+
+def _execute_with_didcomm_policy(
+    args: argparse.Namespace,
+    policy_dir: Path,
+) -> int:
     lane_environment, metadata = environment(args)
     metadata = dict(metadata)
     metadata["didcomm_interoperability"] = independent_didcomm_record(lane_environment)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     private = args.output_dir / "private"
     private.mkdir(parents=True, exist_ok=True)
+    policy_file = initialize_didcomm_policy(policy_dir)
+    lane_environment["DIDCOMM_ENCRYPTION_POLICY_DIR"] = str(policy_dir.resolve())
+    lane_environment["MARTY_DIDCOMM_TEST_POLICY_FILE"] = str(policy_file.resolve())
     lane_environment["MARTY_BROWSER_EVIDENCE_DIR"] = str((private / "browser").resolve())
     lane_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] = "true"
     lane_environment["MARTY_CONFORMANCE_PROJECT"] = f"marty-conformance-{args.run_id}"
@@ -519,6 +596,7 @@ def execute(args: argparse.Namespace) -> int:
                     str(private / "pytest.xml"),
                     TEST_PATH,
                     DIDCOMM_TEST_PATH,
+                    DIDCOMM_AUTHCRYPT_TEST_PATH,
                 ],
                 lane_environment,
                 capture=private / "pytest.log",

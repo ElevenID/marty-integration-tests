@@ -41,6 +41,22 @@ def envelope(holder_did: str) -> dict[str, Any]:
     }
 
 
+def authcrypt_envelope(holder_did: str, sender_kid: str) -> dict[str, Any]:
+    message = envelope(holder_did)
+    protected = json.loads(didcomm._base64url_decode(message["protected"]))
+    protected.update(
+        {
+            "alg": "ECDH-1PU+A256KW",
+            "skid": sender_kid,
+            "apu": didcomm._base64url_encode(sender_kid.encode()),
+        }
+    )
+    message["protected"] = didcomm._base64url_encode(
+        json.dumps(protected).encode()
+    )
+    return message
+
+
 def test_selected_profile_requires_normative_protected_headers() -> None:
     message = envelope("did:peer:2.test")
     protected = didcomm._assert_selected_anoncrypt_profile(message)
@@ -57,6 +73,21 @@ def test_selected_profile_rejects_unprotected_ephemeral_key() -> None:
 
     with pytest.raises(AssertionError, match="integrity protected"):
         didcomm._assert_selected_anoncrypt_profile(message)
+
+
+def test_selected_authcrypt_profile_binds_sender_and_recipient_key_ids() -> None:
+    holder_did = "did:peer:2.test"
+    sender_kid = "did:web:issuer.example:orgs:test#didcomm-authcrypt-x25519"
+    message = authcrypt_envelope(holder_did, sender_kid)
+
+    protected, recipient_kid = didcomm._assert_selected_authcrypt_profile(
+        message,
+        expected_sender_kid=sender_kid,
+    )
+
+    assert protected["skid"] == sender_kid
+    assert didcomm._base64url_decode(protected["apu"]).decode() == sender_kid
+    assert recipient_kid == f"{holder_did}#key-1"
 
 
 def test_independent_verifier_is_optional_outside_release_evidence(
@@ -110,6 +141,93 @@ def test_pinned_independent_verifier_decrypts_anoncrypt(
     assert private_jwk["kty"] == "OKP"
     assert private_jwk["crv"] == "X25519"
     assert base64.urlsafe_b64decode(private_jwk["d"] + "==") == private_key
+
+
+def test_pinned_independent_verifier_authenticates_authcrypt_with_did_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder_did = "did:peer:2.test"
+    sender_did = "did:web:issuer.example:orgs:test"
+    sender_kid = f"{sender_did}#didcomm-authcrypt-x25519"
+    private_key = bytes(range(32))
+    cli = tmp_path / "didcomm-verifier"
+    cli.touch()
+    monkeypatch.setenv("DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED", "true")
+    monkeypatch.setenv("DIDCOMM_INTEROP_CLI", str(cli))
+    monkeypatch.setenv("DIDCOMM_INTEROP_IMPLEMENTATION", didcomm.INDEPENDENT_IMPLEMENTATION)
+    sender_document = {"id": sender_did, "keyAgreement": [sender_kid]}
+    recipient_document = {"id": holder_did, "keyAgreement": [f"{holder_did}#key-1"]}
+    captured: dict[str, object] = {}
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        did_doc_argument = command[command.index("--did-doc") + 1]
+        captured["documents"] = [
+            json.loads(Path(path).read_text(encoding="utf-8"))
+            for path in did_doc_argument.split(",")
+        ]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "message": {
+                        "id": "message-1",
+                        "from": sender_did,
+                        "to": [holder_did],
+                    },
+                    "encrypted": True,
+                    "anonymous": False,
+                    "signed": True,
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(didcomm.subprocess, "run", run)
+    result = didcomm._independent_didcomm_decrypt_authcrypt(
+        authcrypt_envelope(holder_did, sender_kid),
+        holder_did,
+        private_key,
+        sender_did_document=sender_document,
+        recipient_did_document=recipient_document,
+    )
+
+    assert result == {
+        "id": "message-1",
+        "from": sender_did,
+        "to": [holder_did],
+    }
+    assert captured["documents"] == [sender_document, recipient_document]
+
+
+def test_authcrypt_policy_update_is_atomic_and_exact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_file = tmp_path / "didcomm-encryption-policy.json"
+    policy_file.write_text('{"version":1,"issuers":{}}\n', encoding="utf-8")
+    monkeypatch.setenv("DIDCOMM_ENCRYPTION_POLICY_DIR", str(tmp_path))
+    monkeypatch.setenv(didcomm.AUTHCRYPT_POLICY_FILE_ENV, str(policy_file))
+    private_key = bytes(range(32))
+
+    assert didcomm._configure_didcomm_issuer_policy(
+        "did:web:issuer.example:orgs:test",
+        mode="authcrypt",
+        sender_private_key=private_key,
+    )
+
+    policy = json.loads(policy_file.read_text(encoding="utf-8"))
+    assert policy == {
+        "version": 1,
+        "issuers": {
+            "did:web:issuer.example:orgs:test": {
+                "mode": "authcrypt",
+                "sender_x25519_private_key": didcomm._base64url_encode(private_key),
+            }
+        },
+    }
+    assert list(tmp_path.iterdir()) == [policy_file]
 
 
 def test_independent_verifier_rejects_false_sender_authentication(
