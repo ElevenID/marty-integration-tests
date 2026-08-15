@@ -1,0 +1,44 @@
+status: complete
+search_scope:
+  - current_module_or_crate
+  - current_repository
+  - workspace_crates_packages_and_services
+  - bindings_adapters_ffi_and_api_layers
+  - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
+search_queries:
+  - "marty-integration-tests immutable UI stack pin"
+  - "public tenant boundary released stack pin"
+  - "official interoperability exact marty-ui checkout"
+  - "conformance stack-under-test manifest digest"
+  - "previous coordinated UI pin PR 365"
+candidate_implementations:
+  - path: conformance/stack-under-test.json
+    language: JSON
+    disposition: reuse_existing_immutable_stack_pin
+  - path: .github/workflows/public-tenant-boundary.yml
+    language: YAML
+    disposition: reuse_existing_two_organization_release_evidence_lane
+  - path: .github/workflows/official-interoperability.yml
+    language: YAML
+    disposition: reuse_existing_exact_source_checkout
+  - path: https://github.com/ElevenID/marty-integration-tests/pull/365
+    language: GitHub pull request
+    disposition: reuse_previous_coordinated_pin_pattern
+no_match_statement: ""
+decision: reuse_existing
+canonical_implementation:
+  path: conformance/stack-under-test.json
+  language: JSON
+rust_disposition: rust_not_applicable
+non_rust_rationale: >-
+  This task advances exact immutable release metadata and workflow source pins.
+  It adds no runtime, protocol, validation, security, or cryptographic behavior
+  for Rust to own.
+non_rust_exception_approval: ""
+intentional_duplicate_exception:
+  rationale: ""
+  divergence_owner: ""
+  synchronization_or_compatibility_strategy: ""
+  retirement_or_convergence_plan: ""
+  architecture_decision_ref: ""
+  human_approval: ""
