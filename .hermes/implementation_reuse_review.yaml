@@ -10,7 +10,7 @@ search_queries:
   - "public tenant boundary released stack pin"
   - "official interoperability exact marty-ui checkout"
   - "conformance stack-under-test manifest digest"
-  - "previous coordinated UI pin PR 371"
+  - "previous coordinated UI pin PR 372"
 candidate_implementations:
   - path: conformance/stack-under-test.json
     language: JSON
@@ -21,7 +21,7 @@ candidate_implementations:
   - path: .github/workflows/official-interoperability.yml
     language: YAML
     disposition: reuse_existing_exact_source_checkout
-  - path: https://github.com/ElevenID/marty-integration-tests/pull/371
+  - path: https://github.com/ElevenID/marty-integration-tests/pull/372
     language: GitHub pull request
     disposition: reuse_previous_coordinated_pin_pattern
 no_match_statement: ""
