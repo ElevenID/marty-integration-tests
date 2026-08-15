@@ -164,6 +164,17 @@ def local_source_commit(marty_ui: Path) -> str:
     return commit
 
 
+def did_web_authority(hostname: str, port: int | None) -> str:
+    """Encode the public HTTPS authority for a standards-resolvable did:web."""
+    if not hostname or ":" in hostname:
+        raise ValueError("public did:web authority requires a DNS hostname")
+    if port in (None, 443):
+        return hostname
+    if not 1 <= port <= 65535:
+        raise ValueError("public did:web authority port is invalid")
+    return f"{hostname}%3A{port}"
+
+
 def boundary_compose_command(
     args: argparse.Namespace,
     action: str,
@@ -241,6 +252,10 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
             ),
             "GATEWAY_URL": gateway_url,
             "PUBLIC_DOMAIN": gateway.hostname,
+            "PUBLIC_DID_WEB_AUTHORITY": did_web_authority(
+                gateway.hostname,
+                gateway.port,
+            ),
             "GATEWAY_EXTERNAL": gateway.hostname,
             "TEST_USERNAME": result.get(
                 "MARTY_CONFORMANCE_ADMIN_EMAIL",

@@ -471,13 +471,15 @@ async def _grant_reviewer_boundary_roles(
 
 def _issuer_did(organization: dict[str, Any]) -> str:
     """Build the deployment's canonical public did:web for an organization."""
-    domain = os.getenv("PUBLIC_DOMAIN", "").strip()
+    domain = os.getenv("PUBLIC_DID_WEB_AUTHORITY", "").strip()
+    if not domain:
+        domain = os.getenv("PUBLIC_DOMAIN", "").strip()
     if not domain:
         domain = urlsplit(os.getenv("GATEWAY_URL", "https://marty.test")).hostname or ""
     # Organization responses currently expose the canonical URL-safe name,
     # while the DID publication API records that name as the public org slug.
     slug = str(organization.get("slug") or organization.get("name") or "").strip().lower()
-    assert domain, "PUBLIC_DOMAIN or a hostname-bearing GATEWAY_URL is required"
+    assert domain, "a public did:web authority or hostname-bearing GATEWAY_URL is required"
     assert slug, f"Organization response has no canonical slug: {organization}"
     return f"did:web:{domain}:orgs:{slug}"
 

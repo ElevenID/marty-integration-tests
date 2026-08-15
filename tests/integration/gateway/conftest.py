@@ -353,7 +353,9 @@ async def vc_jwt_issuer_did(
         raise AssertionError(f"Malformed issuer-identity response: {identities}")
 
     if not active:
-        domain = os.getenv("PUBLIC_DOMAIN", "").strip()
+        domain = os.getenv("PUBLIC_DID_WEB_AUTHORITY", "").strip()
+        if not domain:
+            domain = os.getenv("PUBLIC_DOMAIN", "").strip()
         if not domain:
             domain = urlsplit(
                 os.getenv("GATEWAY_URL", "https://marty.test")
@@ -362,7 +364,7 @@ async def vc_jwt_issuer_did(
             test_organization.get("slug") or test_organization.get("name") or ""
         ).strip().lower()
         if not domain or not slug:
-            raise AssertionError("The organization has no canonical public DID context")
+            raise AssertionError("The organization has no canonical public did:web context")
         issuer_did = f"did:web:{domain}:orgs:{slug}"
         await gateway_client.create_issuer_identity(
             organization_id=organization_id,

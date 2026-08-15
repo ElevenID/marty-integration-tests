@@ -15,6 +15,7 @@ search_queries:
   - "public_boundary_lane DIDCOMM_TEST_PATH immutable release"
   - "marty-ui v1.1.191 stack-manifest exact commit digest"
   - "official_suite_compose didcomm-authcrypt conformance_stack pass-through"
+  - "did:web non-default HTTPS port percent-encoded authority resolution"
 candidate_implementations:
   - path: tests/integration/gateway/test_didcomm_v2_delivery.py
     language: Python
