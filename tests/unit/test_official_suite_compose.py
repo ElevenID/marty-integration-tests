@@ -102,6 +102,32 @@ def test_marty_only_runs_without_an_official_runner(
     assert calls == [("marty", "up")]
 
 
+@pytest.mark.parametrize("lifecycle_action", ["up", "down", "ps", "logs"])
+def test_didcomm_authcrypt_profile_is_forwarded_for_every_marty_lifecycle_action(
+    tmp_path: Path,
+    lifecycle_action: str,
+) -> None:
+    args = lifecycle.parser().parse_args(
+        [
+            lifecycle_action,
+            "--run-id",
+            "didcomm-boundary",
+            "--marty-ui",
+            str(marty_checkout(tmp_path)),
+            "--marty-only",
+            "--didcomm-authcrypt",
+        ]
+    )
+
+    command = lifecycle.marty_command(
+        args,
+        lifecycle.project_names(args.run_id),
+        lifecycle_action,
+    )
+
+    assert command[-2:] == ["--didcomm-authcrypt", lifecycle_action]
+
+
 def test_marty_only_is_mutually_exclusive_with_official_runners(
     tmp_path: Path,
 ) -> None:

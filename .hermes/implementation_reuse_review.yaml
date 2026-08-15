@@ -14,6 +14,7 @@ search_queries:
   - "issuer-identities didcomm-key-agreement public X25519"
   - "public_boundary_lane DIDCOMM_TEST_PATH immutable release"
   - "marty-ui v1.1.191 stack-manifest exact commit digest"
+  - "official_suite_compose didcomm-authcrypt conformance_stack pass-through"
 candidate_implementations:
   - path: tests/integration/gateway/test_didcomm_v2_delivery.py
     language: Python
@@ -21,6 +22,9 @@ candidate_implementations:
   - path: scripts/public_boundary_lane.py
     language: Python
     disposition: extend_existing_immutable_release_evidence_lane
+  - path: scripts/official_suite_compose.py
+    language: Python
+    disposition: extend_existing_cross_project_lifecycle_wrapper
   - path: conformance/didcomm-interoperability.json
     language: JSON
     disposition: extend_existing_reviewed_independent_implementation_pin
@@ -45,7 +49,7 @@ candidate_implementations:
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: tests/integration/gateway/test_didcomm_v2_delivery.py
+  path: scripts/official_suite_compose.py
   language: Python
 rust_disposition: rust_not_applicable
 non_rust_rationale: >-
