@@ -69,3 +69,47 @@ def test_oid4vci_services_share_one_external_https_issuer_identifier() -> None:
     assert public_issuer in issuance
     assert public_issuer in gateway
     assert "ISSUER_BASE_URL: ${ISSUER_BASE_URL:-http://gateway:8000}" not in compose
+
+
+def test_rust_cutover_overlay_runs_authenticated_signing_service() -> None:
+    overlay = (ROOT / "docker-compose.rust-revocation.yml").read_text(
+        encoding="utf-8"
+    )
+    signing = overlay.split("  signing-keys:\n", 1)[1].split(
+        "\n  # Rust owns this schema", 1
+    )[0]
+    gateway = overlay.split("  gateway:\n", 1)[1]
+    signing_key = (
+        "SIGNING_KEYS_INTERNAL_API_KEY: "
+        "${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}"
+    )
+
+    assert "image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}" in signing
+    assert 'SIGNING_KEYS_SERVICE_PORT: "8017"' in signing
+    assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in signing
+    assert "<<: *rust-signing-service-auth" in signing
+    assert 'http://localhost:8017/health' in signing
+    assert "SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017" in gateway
+    assert signing_key in gateway
+    assert "signing-keys:\n        condition: service_healthy" in gateway
+
+
+def test_rust_signing_secret_reaches_every_internal_signing_caller() -> None:
+    overlay = (ROOT / "docker-compose.rust-revocation.yml").read_text(
+        encoding="utf-8"
+    )
+    signing_key = (
+        "SIGNING_KEYS_INTERNAL_API_KEY: "
+        "${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}"
+    )
+
+    for service, next_service in (
+        ("credential-template-service", "trust-profile-service"),
+        ("trust-profile-service", "issuance-service"),
+        ("issuance-service", "applicant-service"),
+        ("flow-service", "revocation-profile-service"),
+    ):
+        section = overlay.split(f"  {service}:\n", 1)[1].split(
+            f"\n  {next_service}:\n", 1
+        )[0]
+        assert signing_key in section
