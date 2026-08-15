@@ -85,6 +85,7 @@ def test_rust_cutover_overlay_runs_authenticated_signing_service() -> None:
     )
 
     assert "image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}" in signing
+    assert "SERVICE_NAME: signing_keys" in signing
     assert 'SIGNING_KEYS_SERVICE_PORT: "8017"' in signing
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in signing
     assert "<<: *rust-signing-service-auth" in signing

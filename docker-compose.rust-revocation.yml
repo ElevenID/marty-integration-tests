@@ -20,6 +20,7 @@ services:
     restart: "no"
     environment:
       <<: *rust-signing-service-auth
+      SERVICE_NAME: signing_keys
       SIGNING_KEYS_SERVICE_PORT: "8017"
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       BAO_ADDR: http://openbao:8200
