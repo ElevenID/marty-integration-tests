@@ -79,7 +79,10 @@ def test_local_source_commit_requires_exact_git_commit(
         lane.local_source_commit(tmp_path)
 
 
-def test_did_web_authority_encodes_a_non_default_https_port() -> None:
+def test_did_web_domain_and_authority_bind_the_same_non_default_https_port() -> None:
+    assert lane.did_web_domain("marty-oidf.test", None) == "marty-oidf.test"
+    assert lane.did_web_domain("marty-oidf.test", 443) == "marty-oidf.test"
+    assert lane.did_web_domain("marty-oidf.test", 18443) == "marty-oidf.test:18443"
     assert lane.did_web_authority("marty-oidf.test", None) == "marty-oidf.test"
     assert lane.did_web_authority("marty-oidf.test", 443) == "marty-oidf.test"
     assert lane.did_web_authority("marty-oidf.test", 18443) == "marty-oidf.test%3A18443"

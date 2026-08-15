@@ -164,15 +164,20 @@ def local_source_commit(marty_ui: Path) -> str:
     return commit
 
 
-def did_web_authority(hostname: str, port: int | None) -> str:
-    """Encode the public HTTPS authority for a standards-resolvable did:web."""
+def did_web_domain(hostname: str, port: int | None) -> str:
+    """Return the deployment domain Marty uses to recognize locally owned DIDs."""
     if not hostname or ":" in hostname:
         raise ValueError("public did:web authority requires a DNS hostname")
     if port in (None, 443):
         return hostname
     if not 1 <= port <= 65535:
         raise ValueError("public did:web authority port is invalid")
-    return f"{hostname}%3A{port}"
+    return f"{hostname}:{port}"
+
+
+def did_web_authority(hostname: str, port: int | None) -> str:
+    """Encode the deployment domain for a standards-resolvable did:web."""
+    return did_web_domain(hostname, port).replace(":", "%3A")
 
 
 def boundary_compose_command(
@@ -251,7 +256,7 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
                 "127.0.0.1",
             ),
             "GATEWAY_URL": gateway_url,
-            "PUBLIC_DOMAIN": gateway.hostname,
+            "PUBLIC_DOMAIN": did_web_domain(gateway.hostname, gateway.port),
             "PUBLIC_DID_WEB_AUTHORITY": did_web_authority(
                 gateway.hostname,
                 gateway.port,
