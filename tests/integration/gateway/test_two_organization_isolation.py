@@ -88,6 +88,57 @@ def _assert_no_private_signing_selectors(value: Any, *, path: str = "$") -> None
             _assert_no_private_signing_selectors(child, path=f"{path}[{index}]")
 
 
+def _verification_decision_diagnostic(value: dict[str, Any]) -> dict[str, Any]:
+    """Return failure evidence without credential values or custody selectors."""
+
+    credential_results = value.get("credential_results")
+    sanitized_results: list[dict[str, Any]] = []
+    if isinstance(credential_results, list):
+        for result in credential_results:
+            if not isinstance(result, dict):
+                continue
+            claim_results = result.get("claim_results")
+            sanitized_claims: list[dict[str, Any]] = []
+            if isinstance(claim_results, list):
+                for claim in claim_results:
+                    if isinstance(claim, dict):
+                        sanitized_claims.append(
+                            {
+                                "claim_name": claim.get("claim_name"),
+                                "satisfied": claim.get("satisfied"),
+                                "error": claim.get("error"),
+                            }
+                        )
+            sanitized_results.append(
+                {
+                    "satisfied": result.get("satisfied"),
+                    "signature_valid": result.get("signature_valid"),
+                    "trust_check_passed": result.get("trust_check_passed"),
+                    "freshness_check_passed": result.get("freshness_check_passed"),
+                    "revocation_checked": result.get("revocation_checked"),
+                    "not_revoked": result.get("not_revoked"),
+                    "error_codes": result.get("error_codes"),
+                    "errors": result.get("errors"),
+                    "warnings": result.get("warnings"),
+                    "claim_results": sanitized_claims,
+                }
+            )
+    verified_claims = value.get("verified_claims")
+    return {
+        "result": value.get("result"),
+        "decision": value.get("decision"),
+        "decision_reason": value.get("decision_reason"),
+        "error_codes": value.get("error_codes"),
+        "warnings": value.get("warnings"),
+        "verified_claim_names": (
+            sorted(str(key) for key in verified_claims)
+            if isinstance(verified_claims, dict)
+            else []
+        ),
+        "credential_results": sanitized_results,
+    }
+
+
 def _disposable_registry_ca() -> str:
     """Create a public test anchor; its unused private key never leaves memory."""
     private_key = ec.generate_private_key(ec.SECP256R1())
@@ -1595,7 +1646,15 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
             str(trust_decision_policy_b["id"]),
             raw_credential_b,
         )
-        assert trusted_decision["result"] == "passed", trusted_decision
+        if trusted_decision["result"] != "passed":
+            pytest.fail(
+                "Trusted credential decision failed with sanitized evidence: "
+                + json.dumps(
+                    _verification_decision_diagnostic(trusted_decision),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
         assert trusted_decision["decision"] == "allow", trusted_decision
         assert trusted_decision["credential_results"][0]["trust_check_passed"] is True
         _assert_no_private_signing_selectors(trusted_decision)

@@ -347,6 +347,76 @@ def _configure_didcomm_issuer_policy(
     return True
 
 
+def _deployed_authcrypt_preflight_diagnostic(
+    issuer_did: str,
+    holder_did: str,
+) -> str:
+    """Classify a released-stack preflight failure without exposing key material."""
+
+    project = os.getenv("MARTY_CONFORMANCE_PROJECT", "").strip()
+    if not project:
+        return "deployment probe unavailable: no Compose project"
+    selection = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            "label=com.docker.compose.service=issuance",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    containers = [line.strip() for line in selection.stdout.splitlines() if line.strip()]
+    if selection.returncode != 0 or len(containers) != 1:
+        return (
+            "deployment probe unavailable: issuance container selection "
+            f"returned rc={selection.returncode} count={len(containers)}"
+        )
+    probe = """
+import json
+import sys
+from issuance.application.rust_integration import (
+    didcomm_resolve_did,
+    prepare_didcomm_delivery_encryption,
+)
+
+try:
+    recipient = didcomm_resolve_did(sys.argv[2])
+    context = prepare_didcomm_delivery_encryption(sys.argv[1], recipient)
+except Exception as error:
+    chain = []
+    current = error
+    while current is not None and len(chain) < 6:
+        chain.append({"type": type(current).__name__, "message": str(current)})
+        current = current.__cause__
+    print(json.dumps({"ok": False, "chain": chain}, separators=(",", ":"), sort_keys=True))
+    raise SystemExit(1)
+else:
+    print(json.dumps({"ok": True, "mode": context.mode}, separators=(",", ":"), sort_keys=True))
+"""
+    completed = subprocess.run(
+        [
+            "docker",
+            "exec",
+            containers[0],
+            "python",
+            "-c",
+            probe,
+            issuer_did,
+            holder_did,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = (completed.stdout.strip() or completed.stderr.strip()).replace("\n", " ")
+    return f"deployment preflight rc={completed.returncode}: {output[:2000]}"
+
+
 def _flip_base64url_byte(value: str) -> str:
     decoded = bytearray(_base64url_decode(value))
     assert decoded, "DIDComm encoded value must not be empty"
@@ -771,11 +841,21 @@ class TestDidcommDeliveryWithMockAgent:
             mode="authcrypt",
             sender_private_key=sender_private_key,
         )
-        result = await gateway_client.didcomm_deliver(
-            organization_id=str(test_organization["id"]),
-            transaction_id=str(issuance["id"]),
-            holder_did=holder_did,
-        )
+        try:
+            result = await gateway_client.didcomm_deliver(
+                organization_id=str(test_organization["id"]),
+                transaction_id=str(issuance["id"]),
+                holder_did=holder_did,
+            )
+        except GatewayClientError as error:
+            pytest.fail(
+                "Released authcrypt delivery failed after correct-key recovery; "
+                f"public_status={error.status_code}; "
+                + _deployed_authcrypt_preflight_diagnostic(
+                    vc_jwt_issuer_did,
+                    holder_did,
+                )
+            )
 
         assert result["transaction_id"] == issuance["id"]
         assert result["holder_did"] == holder_did
