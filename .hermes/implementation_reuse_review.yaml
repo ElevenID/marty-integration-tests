@@ -6,7 +6,7 @@ search_scope:
   - marty-core v0.1.58 authenticated decryption binding and standards-valid port-qualified did:web authority resolution
   - marty-credentials v0.1.66 exhaustive issuer encryption policy and deterministic DIDComm preflight rebuilt against marty-core v0.1.58
   - marty-ui v1.1.195 immutable stack release, managed issuer key agreement, canonical port-qualified did:web publication, verified W3C SD-JWT claim extraction, and internal signing-key topology
-  - pinned notabene-id/go-didcomm v0.4.0 source and CLI contracts
+  - pinned sicpa-dlab/didcomm-rust v0.4.1 source, unpack API, and upstream authcrypt vectors
 search_queries:
   - "didcomm_decrypt_authcrypt sender_kid recipient_kid"
   - "ECDH-1PU+A256KW independent unpack did-doc"
@@ -32,9 +32,12 @@ candidate_implementations:
   - path: https://github.com/ElevenID/marty-core/releases/tag/v0.1.58
     language: Rust and Python binding release
     disposition: reuse_released_authenticated_decryption_oracle
-  - path: https://github.com/notabene-id/go-didcomm/tree/5ffd085c2b5088a639c1c0d3910d668887298ce5/cmd/didcomm
-    language: Go
+  - path: https://github.com/sicpa-dlab/didcomm-rust/tree/9fd70993e9a6e5fd527058ecfe173ee066bcbc27/src/message/unpack
+    language: Rust
     disposition: reuse_pinned_independent_authcrypt_unpacker
+  - path: tools/didcomm-independent-verifier/src/main.rs
+    language: Rust
+    disposition: add_thin_resolver_and_cli_adapter_without_cryptographic_implementation
   - path: https://github.com/ElevenID/marty-credentials/pull/186
     language: Python
     disposition: reuse_exhaustive_runtime_policy_and_internal_did_web_resolution
@@ -53,14 +56,10 @@ candidate_implementations:
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: scripts/official_suite_compose.py
-  language: Python
-rust_disposition: rust_not_applicable
-non_rust_rationale: >-
-  This repository owns release-boundary orchestration and independent evidence,
-  not cryptographic implementation. The test calls the released Rust binding
-  and the separately maintained pinned Go implementation for authenticated
-  decryption and tamper rejection; it does not duplicate either algorithm.
+  path: https://github.com/sicpa-dlab/didcomm-rust/tree/9fd70993e9a6e5fd527058ecfe173ee066bcbc27/src/message/unpack
+  language: Rust
+rust_disposition: reuse_existing_rust_owner
+non_rust_rationale: ""
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""

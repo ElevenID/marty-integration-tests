@@ -21,6 +21,11 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Set up Rust for independent DIDComm verifier tests
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: "1.97.1"
+
       - name: Install uv with a bounded dependency cache
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
@@ -38,6 +43,11 @@ jobs:
       # digest-pinned public artifacts.
       - name: Run hermetic unit tests
         run: pytest -n 2 --dist=worksteal tests/unit/ -v --tb=short
+
+      - name: Test locked independent DIDComm verifier adapter
+        run: |
+          cargo fetch --locked --manifest-path tools/didcomm-independent-verifier/Cargo.toml
+          cargo test --locked --offline --manifest-path tools/didcomm-independent-verifier/Cargo.toml
 
       - name: Validate changed integration contracts
         run: |

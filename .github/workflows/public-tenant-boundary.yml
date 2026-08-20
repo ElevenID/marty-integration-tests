@@ -40,36 +40,25 @@ jobs:
           --require-hashes --only-binary=:all:
           --requirement requirements/official-py312.lock
 
-      - name: Set up Go for independent DIDComm verification
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - name: Set up Rust for independent DIDComm verification
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          go-version: "1.25.0"
-          cache: false
-
-      - name: Checkout pinned independent DIDComm implementation
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: notabene-id/go-didcomm
-          ref: 5ffd085c2b5088a639c1c0d3910d668887298ce5
-          path: work/go-didcomm
-          persist-credentials: false
+          toolchain: "1.97.1"
 
       - name: Build independent DIDComm verifier
         shell: bash
         run: |
           set -euo pipefail
-          export GOSUMDB=sum.golang.org
-          export GONOSUMDB=
-          verifier="$RUNNER_TEMP/go-didcomm-verifier"
-          (
-            cd work/go-didcomm
-            test "$(git rev-parse HEAD)" = "5ffd085c2b5088a639c1c0d3910d668887298ce5"
-            test -z "$(git status --short)"
-            go build -mod=readonly -trimpath -o "$verifier" ./cmd/didcomm
-          )
-          go version -m "$verifier" | grep -F 'github.com/Notabene-id/go-didcomm'
+          manifest=tools/didcomm-independent-verifier/Cargo.toml
+          cargo fetch --locked --manifest-path "$manifest"
+          cargo build --locked --offline --release --manifest-path "$manifest"
+          verifier=tools/didcomm-independent-verifier/target/release/didcomm-independent-verifier
+          source="$(cargo metadata --locked --offline --format-version 1 --manifest-path "$manifest" |
+            jq -er '.packages[] | select(.name == "didcomm" and .version == "0.4.1") | .source')"
+          test "$source" = "git+https://github.com/sicpa-dlab/didcomm-rust?rev=9fd70993e9a6e5fd527058ecfe173ee066bcbc27#9fd70993e9a6e5fd527058ecfe173ee066bcbc27"
+          test "$("$verifier" --version)" = "sicpa-dlab/didcomm-rust@v0.4.1#9fd70993e9a6e5fd527058ecfe173ee066bcbc27"
           echo "DIDCOMM_INTEROP_CLI=$verifier" >> "$GITHUB_ENV"
-          echo "DIDCOMM_INTEROP_IMPLEMENTATION=notabene-id/go-didcomm@v0.4.0#5ffd085c2b5088a639c1c0d3910d668887298ce5" >> "$GITHUB_ENV"
+          echo "DIDCOMM_INTEROP_IMPLEMENTATION=sicpa-dlab/didcomm-rust@v0.4.1#9fd70993e9a6e5fd527058ecfe173ee066bcbc27" >> "$GITHUB_ENV"
           echo "DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED=true" >> "$GITHUB_ENV"
 
       - name: Install released-stack browser

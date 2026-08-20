@@ -48,7 +48,7 @@ DIDCOMM_PRIVATE_AGENT_TESTS = os.getenv("DIDCOMM_PRIVATE_AGENT_TESTS", "").lower
     "true",
     "yes",
 }
-INDEPENDENT_IMPLEMENTATION = "notabene-id/go-didcomm@v0.4.0#5ffd085c2b5088a639c1c0d3910d668887298ce5"
+INDEPENDENT_IMPLEMENTATION = "sicpa-dlab/didcomm-rust@v0.4.1#9fd70993e9a6e5fd527058ecfe173ee066bcbc27"
 OPTIONAL_ABSENT_OR_NULL_PLAINTEXT_MEMBERS = frozenset({"expires_time", "pthid"})
 AUTHCRYPT_POLICY_FILE_ENV = "MARTY_DIDCOMM_TEST_POLICY_FILE"
 
@@ -139,7 +139,7 @@ def _independent_didcomm_decrypt(
     holder_did: str,
     holder_private_key: bytes,
 ) -> dict[str, Any] | None:
-    """Decrypt Marty's envelope with the separately maintained Go implementation."""
+    """Decrypt Marty's envelope with the separately maintained Rust implementation."""
     completed = _run_independent_didcomm_verifier(
         encrypted,
         holder_did,
@@ -169,7 +169,7 @@ def _independent_didcomm_decrypt_authcrypt(
     sender_did_document: dict[str, Any],
     recipient_did_document: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Authenticate and decrypt Marty authcrypt with the pinned Go implementation."""
+    """Authenticate and decrypt Marty authcrypt with the pinned independent implementation."""
 
     completed = _run_independent_didcomm_verifier(
         encrypted,
@@ -228,7 +228,7 @@ def _run_independent_didcomm_verifier(
         .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     )
 
-    # The upstream CLI accepts a standard private JWK Set. This disposable
+    # The independent adapter accepts a standard private JWK Set. This disposable
     # holder key is generated solely for the test and is never a Marty custody
     # or issuer key.
     key_material = {
@@ -454,7 +454,7 @@ def _assert_same_didcomm_plaintext(
     """Compare decoded messages without weakening optional-member semantics.
 
     The released Python binding materializes two absent optional DIDComm fields
-    as ``None`` while the independent Go decoder preserves their absence. Only
+    as ``None`` while the independent decoder preserves their absence. Only
     that representation difference is equivalent; every other key, nested
     value, attachment, and non-null optional value must match exactly.
 

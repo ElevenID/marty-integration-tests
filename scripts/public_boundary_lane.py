@@ -117,7 +117,7 @@ def independent_didcomm_record(
     repository = implementation.get("repository")
     release = implementation.get("release")
     commit = implementation.get("commit")
-    if repository != "https://github.com/notabene-id/go-didcomm.git":
+    if repository != "https://github.com/sicpa-dlab/didcomm-rust.git":
         raise ValueError("independent DIDComm repository is not the reviewed implementation")
     if not isinstance(release, str) or not release.startswith("v"):
         raise ValueError("independent DIDComm release is invalid")
@@ -130,7 +130,7 @@ def independent_didcomm_record(
         "true",
         "yes",
     }
-    expected_identity = f"notabene-id/go-didcomm@{release}#{commit}"
+    expected_identity = f"sicpa-dlab/didcomm-rust@{release}#{commit}"
     if required:
         if values.get("DIDCOMM_INTEROP_IMPLEMENTATION") != expected_identity:
             raise ValueError("independent DIDComm implementation does not match the reviewed pin")
@@ -433,18 +433,18 @@ def write_summary(
         "public response custody-metadata minimization",
     ]
     if anoncrypt_passed:
-        coverage.append("independent go-didcomm decryption of Marty's released anoncrypt envelope")
+        coverage.append("independent didcomm-rust decryption of Marty's released anoncrypt envelope")
         coverage.append(
-            "released Marty and independent go-didcomm rejection of ciphertext, "
+            "released Marty and independent didcomm-rust rejection of ciphertext, "
             "authentication-tag, protected-header, and wrapped-key tampering"
         )
     if authcrypt_passed:
         coverage.append(
-            "released Marty and independent go-didcomm authentication and decryption "
+            "released Marty and independent didcomm-rust authentication and decryption "
             "of Marty's managed-issuer authcrypt envelope"
         )
         coverage.append(
-            "released Marty and independent go-didcomm rejection of authcrypt "
+            "released Marty and independent didcomm-rust rejection of authcrypt "
             "ciphertext, authentication-tag, protected-header, and wrapped-key tampering"
         )
         coverage.append(
