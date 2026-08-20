@@ -117,7 +117,7 @@ def independent_didcomm_record(
     repository = implementation.get("repository")
     release = implementation.get("release")
     commit = implementation.get("commit")
-    if repository != "https://github.com/notabene-id/go-didcomm.git":
+    if repository != "https://github.com/affinidi/affinidi-tdk-rs.git":
         raise ValueError("independent DIDComm repository is not the reviewed implementation")
     if not isinstance(release, str) or not release.startswith("v"):
         raise ValueError("independent DIDComm release is invalid")
@@ -130,7 +130,9 @@ def independent_didcomm_record(
         "true",
         "yes",
     }
-    expected_identity = f"notabene-id/go-didcomm@{release}#{commit}"
+    expected_identity = (
+        f"affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@{release}#{commit}"
+    )
     if required:
         if values.get("DIDCOMM_INTEROP_IMPLEMENTATION") != expected_identity:
             raise ValueError("independent DIDComm implementation does not match the reviewed pin")
@@ -162,6 +164,22 @@ def local_source_commit(marty_ui: Path) -> str:
     if completed.returncode or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("local marty-ui checkout must resolve to an exact Git commit")
     return commit
+
+
+def did_web_domain(hostname: str, port: int | None) -> str:
+    """Return the deployment domain Marty uses to recognize locally owned DIDs."""
+    if not hostname or ":" in hostname:
+        raise ValueError("public did:web authority requires a DNS hostname")
+    if port in (None, 443):
+        return hostname
+    if not 1 <= port <= 65535:
+        raise ValueError("public did:web authority port is invalid")
+    return f"{hostname}:{port}"
+
+
+def did_web_authority(hostname: str, port: int | None) -> str:
+    """Encode the deployment domain for a standards-resolvable did:web."""
+    return did_web_domain(hostname, port).replace(":", "%3A")
 
 
 def boundary_compose_command(
@@ -240,7 +258,11 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
                 "127.0.0.1",
             ),
             "GATEWAY_URL": gateway_url,
-            "PUBLIC_DOMAIN": gateway.hostname,
+            "PUBLIC_DOMAIN": did_web_domain(gateway.hostname, gateway.port),
+            "PUBLIC_DID_WEB_AUTHORITY": did_web_authority(
+                gateway.hostname,
+                gateway.port,
+            ),
             "GATEWAY_EXTERNAL": gateway.hostname,
             "TEST_USERNAME": result.get(
                 "MARTY_CONFORMANCE_ADMIN_EMAIL",
@@ -413,18 +435,20 @@ def write_summary(
         "public response custody-metadata minimization",
     ]
     if anoncrypt_passed:
-        coverage.append("independent go-didcomm decryption of Marty's released anoncrypt envelope")
         coverage.append(
-            "released Marty and independent go-didcomm rejection of ciphertext, "
+            "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"
+        )
+        coverage.append(
+            "released Marty and independent affinidi-messaging-didcomm rejection of ciphertext, "
             "authentication-tag, protected-header, and wrapped-key tampering"
         )
     if authcrypt_passed:
         coverage.append(
-            "released Marty and independent go-didcomm authentication and decryption "
+            "released Marty and independent affinidi-messaging-didcomm authentication and decryption "
             "of Marty's managed-issuer authcrypt envelope"
         )
         coverage.append(
-            "released Marty and independent go-didcomm rejection of authcrypt "
+            "released Marty and independent affinidi-messaging-didcomm rejection of authcrypt "
             "ciphertext, authentication-tag, protected-header, and wrapped-key tampering"
         )
         coverage.append(

@@ -40,36 +40,45 @@ jobs:
           --require-hashes --only-binary=:all:
           --requirement requirements/official-py312.lock
 
-      - name: Set up Go for independent DIDComm verification
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - name: Set up Rust for independent DIDComm verification
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          go-version: "1.25.0"
-          cache: false
-
-      - name: Checkout pinned independent DIDComm implementation
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: notabene-id/go-didcomm
-          ref: 5ffd085c2b5088a639c1c0d3910d668887298ce5
-          path: work/go-didcomm
-          persist-credentials: false
+          toolchain: "1.97.1"
 
       - name: Build independent DIDComm verifier
         shell: bash
         run: |
           set -euo pipefail
-          export GOSUMDB=sum.golang.org
-          export GONOSUMDB=
-          verifier="$RUNNER_TEMP/go-didcomm-verifier"
-          (
-            cd work/go-didcomm
-            test "$(git rev-parse HEAD)" = "5ffd085c2b5088a639c1c0d3910d668887298ce5"
-            test -z "$(git status --short)"
-            go build -mod=readonly -trimpath -o "$verifier" ./cmd/didcomm
+          manifest=tools/didcomm-independent-verifier/Cargo.toml
+          cargo fetch --locked --manifest-path "$manifest"
+          cargo build --locked --offline --release --manifest-path "$manifest"
+          verifier=tools/didcomm-independent-verifier/target/release/didcomm-independent-verifier
+          package_manifest="$(cargo metadata --locked --offline --format-version 1 --manifest-path "$manifest" |
+            jq -er '.packages[] | select(.name == "affinidi-messaging-didcomm" and .version == "0.15.8") |
+              select(.source == "registry+https://github.com/rust-lang/crates.io-index") | .manifest_path')"
+          python - "$manifest" "$package_manifest" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+          import tomllib
+
+          lock = tomllib.loads((Path(sys.argv[1]).parent / "Cargo.lock").read_text(encoding="utf-8"))
+          package = next(
+              item
+              for item in lock["package"]
+              if item["name"] == "affinidi-messaging-didcomm" and item["version"] == "0.15.8"
           )
-          go version -m "$verifier" | grep -F 'github.com/Notabene-id/go-didcomm'
+          assert package["source"] == "registry+https://github.com/rust-lang/crates.io-index"
+          assert package["checksum"] == "7e50820cf32736246a5e918a5eb1773c31ffcec898ad2ab5b26477cf7a547fa5"
+          provenance = json.loads(
+              (Path(sys.argv[2]).parent / ".cargo_vcs_info.json").read_text(encoding="utf-8")
+          )
+          assert provenance["git"]["sha1"] == "2bec127b171b8fcf69a6c0e6aedca516a3e201b7"
+          assert provenance["git"].get("dirty", False) is False
+          PY
+          test "$("$verifier" --version)" = "affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.15.8#2bec127b171b8fcf69a6c0e6aedca516a3e201b7"
           echo "DIDCOMM_INTEROP_CLI=$verifier" >> "$GITHUB_ENV"
-          echo "DIDCOMM_INTEROP_IMPLEMENTATION=notabene-id/go-didcomm@v0.4.0#5ffd085c2b5088a639c1c0d3910d668887298ce5" >> "$GITHUB_ENV"
+          echo "DIDCOMM_INTEROP_IMPLEMENTATION=affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.15.8#2bec127b171b8fcf69a6c0e6aedca516a3e201b7" >> "$GITHUB_ENV"
           echo "DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED=true" >> "$GITHUB_ENV"
 
       - name: Install released-stack browser
@@ -132,7 +141,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-ui
-          ref: fdbbdd202e0807db4ed7c07d9a1d66de129ee1e0
+          ref: 43b7f9fffbbe5774867bbc493a67449fb40011c8
           path: work/marty-ui
           persist-credentials: false
 

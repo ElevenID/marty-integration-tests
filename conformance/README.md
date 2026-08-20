@@ -787,15 +787,16 @@ no second certification-only implementation to drift from daily testing.
 
 The public tenant-boundary lane tests Marty's selected outbound DIDComm
 Messaging 2.1 profile against the separately maintained
-`notabene-id/go-didcomm` implementation pinned in
-`didcomm-interoperability.json`. The workflow checks out the exact reviewed
-commit, requires a clean source tree, and builds its command with read-only Go
-module resolution and the public checksum database. It does not download a
-moving binary or substitute another Marty binding.
+Affinidi `affinidi-messaging-didcomm` implementation pinned in
+`didcomm-interoperability.json`. The workflow fetches the exact reviewed
+crate through the checked-in Cargo lock, verifies its registry checksum and
+embedded source-commit provenance, and builds the thin resolver adapter offline
+after the locked fetch.
+It does not download a moving binary or substitute another Marty binding.
 
 After Marty issues through the normal organization-plus-issuer-DID path and
 delivers to a fresh X25519 `did:peer:2` holder over CA-validated HTTPS, both
-the attested released Marty binding and the independent Go implementation must
+the attested released Marty binding and the independent Rust implementation must
 decrypt the same JWE to the same plaintext. The independent implementation
 must classify the message as encrypted anoncrypt with no authenticated sender;
 the plaintext `from` value is not promoted into an authentication result.

@@ -98,6 +98,11 @@ def parser() -> argparse.ArgumentParser:
         help="start only the released Marty project for ElevenID-owned product tests",
     )
     result.add_argument(
+        "--didcomm-authcrypt",
+        action="store_true",
+        help="enable the released Marty's deployment-owned DIDComm authcrypt policy overlay",
+    )
+    result.add_argument(
         "--eudi-material",
         type=Path,
         help="generated EUDI/TLS material; a complete external environment takes precedence",
@@ -450,6 +455,8 @@ def marty_command(
     command = [sys.executable, str(script), "--project", projects["marty"]]
     if args.haip if include_haip is None else include_haip:
         command.append("--haip")
+    if getattr(args, "didcomm_authcrypt", False):
+        command.append("--didcomm-authcrypt")
     if args.local_build:
         command.append("--local-build")
     if resume:

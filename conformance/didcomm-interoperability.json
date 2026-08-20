@@ -1,12 +1,13 @@
 {
   "schema": "elevenid.didcomm-interoperability/v1",
   "independent_implementation": {
-    "name": "go-didcomm",
-    "repository": "https://github.com/notabene-id/go-didcomm.git",
-    "release": "v0.4.0",
-    "commit": "5ffd085c2b5088a639c1c0d3910d668887298ce5",
-    "command_package": "./cmd/didcomm",
-    "license": "MIT"
+    "name": "affinidi-messaging-didcomm",
+    "repository": "https://github.com/affinidi/affinidi-tdk-rs.git",
+    "release": "v0.15.8",
+    "commit": "2bec127b171b8fcf69a6c0e6aedca516a3e201b7",
+    "crate_checksum": "7e50820cf32736246a5e918a5eb1773c31ffcec898ad2ab5b26477cf7a547fa5",
+    "command_package": "tools/didcomm-independent-verifier",
+    "license": "Apache-2.0"
   },
   "tested_profile": {
     "specification": "DIDComm Messaging 2.1",

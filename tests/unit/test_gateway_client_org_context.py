@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from tests.integration.gateway.helpers.gateway_client import GatewayClient
@@ -224,6 +225,25 @@ async def test_didcomm_key_agreement_publication_sends_only_public_x25519() -> N
         headers={"X-Organization-ID": "org-1"},
     )
     assert "d" not in request.await_args.kwargs["json"]["public_jwk"]
+
+
+@pytest.mark.asyncio
+async def test_public_did_resolution_decodes_the_declared_non_default_port() -> None:
+    issuer_did = "did:web:marty-oidf.test%3A18443:orgs:test"
+    client = GatewayClient("https://marty-oidf.test:18443")
+    get = AsyncMock(return_value=httpx.Response(200, json={"id": issuer_did}))
+    client.client.get = get
+
+    try:
+        document = await client.get_public_did_document(issuer_did=issuer_did)
+    finally:
+        await client.close()
+
+    assert document == {"id": issuer_did}
+    get.assert_awaited_once_with(
+        "https://marty-oidf.test:18443/orgs/test/did.json",
+        headers={"Accept": "application/did+json, application/json"},
+    )
 
 
 @pytest.mark.asyncio
