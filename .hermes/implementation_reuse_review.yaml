@@ -6,7 +6,7 @@ search_scope:
   - marty-core v0.1.58 authenticated decryption binding and standards-valid port-qualified did:web authority resolution
   - marty-credentials v0.1.66 exhaustive issuer encryption policy and deterministic DIDComm preflight rebuilt against marty-core v0.1.58
   - marty-ui v1.1.195 immutable stack release, managed issuer key agreement, canonical port-qualified did:web publication, verified W3C SD-JWT claim extraction, and internal signing-key topology
-  - pinned sicpa-dlab/didcomm-rust v0.4.1 source, unpack API, and upstream authcrypt vectors
+  - pinned Affinidi affinidi-messaging-didcomm v0.15.8 source, decrypt API, and authcrypt fail-closed contracts
 search_queries:
   - "didcomm_decrypt_authcrypt sender_kid recipient_kid"
   - "ECDH-1PU+A256KW independent unpack did-doc"
@@ -32,7 +32,7 @@ candidate_implementations:
   - path: https://github.com/ElevenID/marty-core/releases/tag/v0.1.58
     language: Rust and Python binding release
     disposition: reuse_released_authenticated_decryption_oracle
-  - path: https://github.com/sicpa-dlab/didcomm-rust/tree/9fd70993e9a6e5fd527058ecfe173ee066bcbc27/src/message/unpack
+  - path: https://github.com/affinidi/affinidi-tdk-rs/tree/2bec127b171b8fcf69a6c0e6aedca516a3e201b7/crates/messaging/affinidi-messaging-didcomm/src/jwe/decrypt.rs
     language: Rust
     disposition: reuse_pinned_independent_authcrypt_unpacker
   - path: tools/didcomm-independent-verifier/src/main.rs
@@ -56,7 +56,7 @@ candidate_implementations:
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: https://github.com/sicpa-dlab/didcomm-rust/tree/9fd70993e9a6e5fd527058ecfe173ee066bcbc27/src/message/unpack
+  path: https://github.com/affinidi/affinidi-tdk-rs/tree/2bec127b171b8fcf69a6c0e6aedca516a3e201b7/crates/messaging/affinidi-messaging-didcomm/src/jwe/decrypt.rs
   language: Rust
 rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: ""

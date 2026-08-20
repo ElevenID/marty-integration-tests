@@ -268,11 +268,14 @@ def test_summary_records_only_executed_independent_didcomm_evidence(
     interop = summary["didcomm_interoperability"]
     assert interop["cross_implementation_decryption_passed"] is True
     assert interop["implementation"] == {
-        "repository": "https://github.com/sicpa-dlab/didcomm-rust.git",
-        "release": "v0.4.1",
-        "commit": "9fd70993e9a6e5fd527058ecfe173ee066bcbc27",
+        "repository": "https://github.com/affinidi/affinidi-tdk-rs.git",
+        "release": "v0.15.8",
+        "commit": "2bec127b171b8fcf69a6c0e6aedca516a3e201b7",
     }
-    assert "independent didcomm-rust decryption of Marty's released anoncrypt envelope" in summary["coverage"]
+    assert (
+        "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"
+        in summary["coverage"]
+    )
     assert summary["didcomm_interoperability"]["cross_implementation_tamper_rejection_passed"] is True
     assert interop["authcrypt_cross_implementation_decryption_passed"] is True
     assert interop["authcrypt_cross_implementation_tamper_rejection_passed"] is True
@@ -325,7 +328,10 @@ def test_summary_does_not_claim_failed_or_unexecuted_didcomm_evidence(
     assert interop["cross_implementation_tamper_rejection_passed"] is False
     assert interop["authcrypt_cross_implementation_decryption_passed"] is False
     assert interop["authcrypt_wrong_sender_key_fail_closed_passed"] is False
-    assert "independent didcomm-rust decryption of Marty's released anoncrypt envelope" not in summary["coverage"]
+    assert (
+        "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"
+        not in summary["coverage"]
+    )
 
 
 def test_summary_preserves_didcomm_success_when_an_unrelated_tenant_test_fails(
@@ -632,6 +638,12 @@ def test_public_boundary_workflow_builds_pinned_independent_didcomm_verifier() -
     assert 'toolchain: "1.97.1"' in workflow
     assert "cargo fetch --locked --manifest-path" in workflow
     assert "cargo build --locked --offline --release --manifest-path" in workflow
-    assert f"sicpa-dlab/didcomm-rust@{implementation['release']}#{implementation['commit']}" in workflow
-    assert f"didcomm-rust?rev={implementation['commit']}#{implementation['commit']}" in workflow
+    assert (
+        "affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm"
+        f"@{implementation['release']}#{implementation['commit']}"
+        in workflow
+    )
+    assert implementation["crate_checksum"] in workflow
+    assert implementation["commit"] in workflow
+    assert ".cargo_vcs_info.json" in workflow
     assert "DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED=true" in workflow

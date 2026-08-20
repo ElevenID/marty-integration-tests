@@ -4,16 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+use affinidi_messaging_didcomm::jwe::decrypt;
 use anyhow::{bail, Context, Result};
-use didcomm::{
-    did::{resolvers::ExampleDIDResolver, DIDDoc},
-    secrets::{resolvers::ExampleSecretsResolver, Secret, SecretMaterial, SecretType},
-    Message, UnpackOptions,
-};
-use serde_json::{json, Map, Value};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde_json::{json, Value};
 
-const IMPLEMENTATION: &str =
-    "sicpa-dlab/didcomm-rust@v0.4.1#9fd70993e9a6e5fd527058ecfe173ee066bcbc27";
+const IMPLEMENTATION: &str = "affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.15.8#2bec127b171b8fcf69a6c0e6aedca516a3e201b7";
 
 struct Inputs {
     key_file: PathBuf,
@@ -28,6 +25,9 @@ fn parse_args() -> Result<Option<Inputs>> {
         );
     };
     if command == "--version" {
+        if args.next().is_some() {
+            bail!("--version does not accept arguments");
+        }
         println!("{IMPLEMENTATION}");
         return Ok(None);
     }
@@ -67,111 +67,166 @@ fn read_json(path: &Path) -> Result<Value> {
     serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
 }
 
-fn normalized_did_doc(value: Value) -> Result<DIDDoc> {
-    let source = value
-        .as_object()
-        .context("DID document must be an object")?;
-    let id = source
-        .get("id")
-        .and_then(Value::as_str)
-        .context("DID document id is required")?;
-    let mut methods = source
-        .get("verificationMethod")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut agreements = Vec::new();
-    for agreement in source
-        .get("keyAgreement")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        match agreement {
-            Value::String(id) => agreements.push(Value::String(id.clone())),
-            Value::Object(method) => {
-                let method_id = method
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .context("embedded keyAgreement id is required")?;
-                agreements.push(Value::String(method_id.to_owned()));
-                methods.push(Value::Object(method.clone()));
-            }
-            _ => bail!("DID document keyAgreement entries must be strings or objects"),
-        }
+fn curve(jwk: &Value) -> Result<Curve> {
+    match jwk.get("crv").and_then(Value::as_str) {
+        Some("X25519") => Ok(Curve::X25519),
+        Some("P-256") => Ok(Curve::P256),
+        Some("secp256k1") => Ok(Curve::K256),
+        Some("P-384") => Ok(Curve::P384),
+        Some("P-521") => Ok(Curve::P521),
+        Some(value) => bail!("unsupported key-agreement curve: {value}"),
+        None => bail!("key crv is required"),
     }
-    // The verifier only resolves key-agreement material during unpacking. Build
-    // the narrower schema expected by didcomm-rust without changing key data.
-    serde_json::from_value(json!({
-        "id": id,
-        "keyAgreement": agreements,
-        "authentication": [],
-        "verificationMethod": methods,
-        "service": [],
-    }))
-    .context("normalize DID document")
 }
 
-fn load_secrets(path: &Path) -> Result<Vec<Secret>> {
-    let value = read_json(path)?;
-    let keys = value
+fn load_recipient(packed: &Value, key_file: &Path) -> Result<(String, PrivateKeyAgreement)> {
+    let keys = read_json(key_file)?;
+    let keys = keys
         .get("keys")
         .and_then(Value::as_array)
         .context("key file must contain a keys array")?;
-    keys.iter()
-        .map(|key| {
-            let mut jwk: Map<String, Value> = key
-                .as_object()
-                .cloned()
-                .context("key entry must be an object")?;
-            let id = jwk
-                .get("kid")
-                .and_then(Value::as_str)
-                .context("key kid is required")?
-                .to_owned();
-            jwk.remove("alg");
-            Ok(Secret {
-                id,
-                type_: SecretType::JsonWebKey2020,
-                secret_material: SecretMaterial::JWK {
-                    private_key_jwk: Value::Object(jwk),
-                },
-            })
-        })
-        .collect()
+    let recipients = packed
+        .get("recipients")
+        .and_then(Value::as_array)
+        .context("encrypted message must contain recipients")?;
+
+    for recipient in recipients {
+        let Some(kid) = recipient.pointer("/header/kid").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(jwk) = keys
+            .iter()
+            .find(|key| key.get("kid").and_then(Value::as_str) == Some(kid))
+        else {
+            continue;
+        };
+        let private = jwk
+            .get("d")
+            .and_then(Value::as_str)
+            .context("recipient private JWK d is required")?;
+        let private = URL_SAFE_NO_PAD
+            .decode(private)
+            .context("decode recipient private JWK d")?;
+        let key = PrivateKeyAgreement::from_raw_bytes(curve(jwk)?, &private)
+            .context("parse recipient private key")?;
+        return Ok((kid.to_owned(), key));
+    }
+    bail!("no encrypted recipient matches a private key")
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+fn protected_header(packed: &Value) -> Result<Value> {
+    let encoded = packed
+        .get("protected")
+        .and_then(Value::as_str)
+        .context("encrypted message protected header is required")?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .context("decode protected header")?;
+    serde_json::from_slice(&decoded).context("parse protected header")
+}
+
+fn sender_kid(header: &Value) -> Result<String> {
+    let skid = header
+        .get("skid")
+        .and_then(Value::as_str)
+        .context("authcrypt protected header skid is required")?;
+    let apu = header
+        .get("apu")
+        .and_then(Value::as_str)
+        .context("authcrypt protected header apu is required")?;
+    let apu = String::from_utf8(
+        URL_SAFE_NO_PAD
+            .decode(apu)
+            .context("decode authcrypt apu")?,
+    )
+    .context("authcrypt apu must be UTF-8")?;
+    if skid != apu {
+        bail!("authcrypt skid and apu identify different senders");
+    }
+    Ok(skid.to_owned())
+}
+
+fn load_sender_public(did_docs: &[PathBuf], kid: &str) -> Result<PublicKeyAgreement> {
+    for path in did_docs {
+        let document = read_json(path)?;
+        let methods = document
+            .get("verificationMethod")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .chain(
+                document
+                    .get("keyAgreement")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            );
+        for method in methods {
+            if method.get("id").and_then(Value::as_str) != Some(kid) {
+                continue;
+            }
+            let jwk = method
+                .get("publicKeyJwk")
+                .context("sender verification method publicKeyJwk is required")?;
+            return PublicKeyAgreement::from_jwk(jwk).context("parse sender public key");
+        }
+    }
+    bail!("sender key is not present in the provided DID documents")
+}
+
+fn main() -> Result<()> {
     let Some(inputs) = parse_args()? else {
         return Ok(());
     };
-    let secrets = load_secrets(&inputs.key_file)?;
-    let did_docs = inputs
-        .did_docs
-        .iter()
-        .map(|path| read_json(path).and_then(normalized_did_doc))
-        .collect::<Result<Vec<_>>>()?;
     let mut packed = String::new();
     io::stdin()
         .read_to_string(&mut packed)
         .context("read packed message")?;
-    let did_resolver = ExampleDIDResolver::new(did_docs);
-    let secrets_resolver = ExampleSecretsResolver::new(secrets);
-    let (message, metadata) = Message::unpack(
+    let packed_value: Value = serde_json::from_str(&packed).context("parse packed message")?;
+    let header = protected_header(&packed_value)?;
+    let algorithm = header
+        .get("alg")
+        .and_then(Value::as_str)
+        .context("protected header alg is required")?;
+    let (recipient_kid, recipient_private) = load_recipient(&packed_value, &inputs.key_file)?;
+
+    let expected_sender = match algorithm {
+        "ECDH-1PU+A256KW" => Some(sender_kid(&header)?),
+        "ECDH-ES+A256KW" => None,
+        value => bail!("unsupported DIDComm key-encryption algorithm: {value}"),
+    };
+    let sender_public = expected_sender
+        .as_deref()
+        .map(|kid| load_sender_public(&inputs.did_docs, kid))
+        .transpose()?;
+    let decrypted = decrypt::decrypt(
         &packed,
-        &did_resolver,
-        &secrets_resolver,
-        &UnpackOptions::default(),
+        &recipient_kid,
+        &recipient_private,
+        sender_public.as_ref(),
     )
-    .await
-    .context("unpack DIDComm message")?;
+    .context("decrypt DIDComm message")?;
+
+    if decrypted.recipient_kid != recipient_kid {
+        bail!("independent verifier returned a different recipient key");
+    }
+    if decrypted.legacy_kek_used {
+        bail!("message only decrypted with the nonstandard legacy ECDH-1PU derivation");
+    }
+    if decrypted.authenticated != expected_sender.is_some() {
+        bail!("independent verifier authentication classification is inconsistent");
+    }
+    if decrypted.sender_kid.as_deref() != expected_sender.as_deref() {
+        bail!("independent verifier returned a different sender key");
+    }
+    let message: Value =
+        serde_json::from_slice(&decrypted.plaintext).context("parse DIDComm plaintext")?;
     println!(
         "{}",
         serde_json::to_string(&json!({
-            "encrypted": metadata.encrypted,
-            "anonymous": metadata.anonymous_sender,
-            "signed": metadata.authenticated,
+            "encrypted": true,
+            "anonymous": !decrypted.authenticated,
+            "signed": decrypted.authenticated,
             "message": message,
         }))?
     );

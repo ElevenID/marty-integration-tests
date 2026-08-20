@@ -53,12 +53,32 @@ jobs:
           cargo fetch --locked --manifest-path "$manifest"
           cargo build --locked --offline --release --manifest-path "$manifest"
           verifier=tools/didcomm-independent-verifier/target/release/didcomm-independent-verifier
-          source="$(cargo metadata --locked --offline --format-version 1 --manifest-path "$manifest" |
-            jq -er '.packages[] | select(.name == "didcomm" and .version == "0.4.1") | .source')"
-          test "$source" = "git+https://github.com/sicpa-dlab/didcomm-rust?rev=9fd70993e9a6e5fd527058ecfe173ee066bcbc27#9fd70993e9a6e5fd527058ecfe173ee066bcbc27"
-          test "$("$verifier" --version)" = "sicpa-dlab/didcomm-rust@v0.4.1#9fd70993e9a6e5fd527058ecfe173ee066bcbc27"
+          package_manifest="$(cargo metadata --locked --offline --format-version 1 --manifest-path "$manifest" |
+            jq -er '.packages[] | select(.name == "affinidi-messaging-didcomm" and .version == "0.15.8") |
+              select(.source == "registry+https://github.com/rust-lang/crates.io-index") | .manifest_path')"
+          python - "$manifest" "$package_manifest" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+          import tomllib
+
+          lock = tomllib.loads((Path(sys.argv[1]).parent / "Cargo.lock").read_text(encoding="utf-8"))
+          package = next(
+              item
+              for item in lock["package"]
+              if item["name"] == "affinidi-messaging-didcomm" and item["version"] == "0.15.8"
+          )
+          assert package["source"] == "registry+https://github.com/rust-lang/crates.io-index"
+          assert package["checksum"] == "7e50820cf32736246a5e918a5eb1773c31ffcec898ad2ab5b26477cf7a547fa5"
+          provenance = json.loads(
+              (Path(sys.argv[2]).parent / ".cargo_vcs_info.json").read_text(encoding="utf-8")
+          )
+          assert provenance["git"]["sha1"] == "2bec127b171b8fcf69a6c0e6aedca516a3e201b7"
+          assert provenance["git"].get("dirty", False) is False
+          PY
+          test "$("$verifier" --version)" = "affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.15.8#2bec127b171b8fcf69a6c0e6aedca516a3e201b7"
           echo "DIDCOMM_INTEROP_CLI=$verifier" >> "$GITHUB_ENV"
-          echo "DIDCOMM_INTEROP_IMPLEMENTATION=sicpa-dlab/didcomm-rust@v0.4.1#9fd70993e9a6e5fd527058ecfe173ee066bcbc27" >> "$GITHUB_ENV"
+          echo "DIDCOMM_INTEROP_IMPLEMENTATION=affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.15.8#2bec127b171b8fcf69a6c0e6aedca516a3e201b7" >> "$GITHUB_ENV"
           echo "DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED=true" >> "$GITHUB_ENV"
 
       - name: Install released-stack browser
