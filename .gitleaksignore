@@ -1,4 +1,4 @@
-﻿# Exact reviewed false positives from the pre-publication full-history audit.
+# Exact reviewed false positives from the pre-publication full-history audit.
 # Each entry binds one finding to its commit, path, rule, and line; new findings still fail.
 
 5e5e1c90720ed4c0cd581c937ae5db22abd606cb:tests/integration/gateway/test_didcomm_v2_delivery.py:generic-api-key:107
@@ -14,3 +14,9 @@ f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/
 f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/token_response.json:generic-api-key:2
 f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/vp_token_jwt.txt:generic-api-key:1
 f80ddea8e71ba9c089b9a9cf3aaa98412f326f7f:tests/integration/fixtures/conformance/vp_token_jwt.txt:jwt:1
+4c079ae36b98e8e68ed2a08ea3a5547b40f51847:tests/integration/gateway/test_two_organization_isolation.py:generic-api-key:59
+b9a7c7996c2fa59ce82758532e32099551bb16a5:tests/integration/test_oid4vci_issuer_conformance.py:generic-api-key:243
+d8642c93a2421e5ef61ed6f78b100874067cf1f6:scripts/eudi_test_material.py:generic-api-key:941
+c15aed8353a03306ecca62ab7e4c7c57272fa13a:scripts/eudi_test_material.py:generic-api-key:965
+9b66a032cb3fdf691dd6e5f3d9a78353484d1f97:docker-compose.yml:generic-api-key:23
+9b66a032cb3fdf691dd6e5f3d9a78353484d1f97:docker-compose.yml:generic-api-key:45
