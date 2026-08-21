@@ -23,8 +23,13 @@ from urllib.parse import urlencode, urlsplit
 if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page, Request, Response
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from oidf_marty_public_login import login, public_origin, required_env  # noqa: E402
+
+from tests.integration.gateway.helpers.playwright_browser import (  # noqa: E402
+    hosted_browser_launch_options,
+)
 
 FORBIDDEN_PUBLIC_SELECTORS = {
     "issuer_profile_id",
@@ -453,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
                 base_url,
                 os.environ.get("OIDF_MARTY_RESOLVE_IP", ""),
             ),
+            **hosted_browser_launch_options(),
         )
         context = browser.new_context(ignore_https_errors=True)
         context.add_cookies(

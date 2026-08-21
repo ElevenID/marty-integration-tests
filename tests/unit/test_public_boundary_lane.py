@@ -628,6 +628,23 @@ def test_public_boundary_workflow_installs_manifest_pinned_didcomm_verifier() ->
     assert "callable(_marty_rs.didcomm_decrypt_authcrypt)" in workflow
 
 
+def test_public_boundary_workflow_uses_runner_browser_without_live_download() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "public-tenant-boundary.yml").read_text(
+        encoding="utf-8"
+    )
+    browser_test = (root / "tests" / "integration" / "gateway" / "test_two_organization_isolation.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Verify runner-provided released-stack browser" in workflow
+    assert "runs-on: ubuntu-24.04" in workflow
+    assert 'browser="$(command -v google-chrome)"' in workflow
+    assert 'echo "MARTY_PLAYWRIGHT_BROWSER_CHANNEL=chrome" >> "$GITHUB_ENV"' in workflow
+    assert "playwright install" not in workflow
+    assert "**hosted_browser_launch_options()" in browser_test
+
+
 def test_public_boundary_workflow_builds_pinned_independent_didcomm_verifier() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "public-tenant-boundary.yml").read_text(encoding="utf-8")

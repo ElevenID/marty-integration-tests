@@ -17,7 +17,7 @@ def test_workflow_is_manual_and_monthly_with_isolated_standard_runner_lanes() ->
     assert "github.event_name == 'schedule' || inputs.lane == 'all'" in text
     assert "inputs.lane || 'all'" in text
     assert "pull_request:" not in text
-    assert "runs-on: ubuntu-latest" in text
+    assert "runs-on: ubuntu-24.04" in text
     for lane in (
         "oid4vci-issuer",
         "oid4vp-final",
@@ -55,7 +55,10 @@ def test_workflow_installs_only_frozen_verified_tooling() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "--require-hashes --only-binary=:all:" in text
     assert "requirements/official-py312.lock" in text
-    assert "python -m playwright install --with-deps chromium" in text
+    assert "Verify runner-provided released-stack browser" in text
+    assert 'browser="$(command -v google-chrome)"' in text
+    assert 'echo "MARTY_PLAYWRIGHT_BROWSER_CHANNEL=chrome" >> "$GITHUB_ENV"' in text
+    assert "playwright install" not in text
     assert "matrix.lane == 'oid4vp-final'" in text
     assert "w3c_vc_conformance.py bootstrap-npm" in text
     assert "npm install --global" not in text

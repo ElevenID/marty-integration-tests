@@ -31,6 +31,7 @@ from .helpers.auth_helper import AuthHelper
 from .helpers.didcomm import make_did_peer_2_with_service
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.marty_wallet_client import MartyHeadlessWalletClient
+from .helpers.playwright_browser import hosted_browser_launch_options
 from .helpers.test_data import TestDataBuilder
 
 MARTY_DEFAULT_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001"
@@ -284,7 +285,10 @@ async def _exercise_browser_issuance_and_verification(
         evidence_dir.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await playwright.chromium.launch(
+            headless=True,
+            **hosted_browser_launch_options(),
+        )
         context = await browser.new_context(ignore_https_errors=True)
         await context.add_cookies([{"name": "sessionId", "value": session_id, "url": base_url}])
         page = await context.new_page()
