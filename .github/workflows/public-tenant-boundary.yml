@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   two-organization-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       PYTHONUNBUFFERED: "1"
@@ -81,8 +81,14 @@ jobs:
           echo "DIDCOMM_INTEROP_IMPLEMENTATION=affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.15.8#2bec127b171b8fcf69a6c0e6aedca516a3e201b7" >> "$GITHUB_ENV"
           echo "DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED=true" >> "$GITHUB_ENV"
 
-      - name: Install released-stack browser
-        run: python -m playwright install --with-deps chromium
+      - name: Verify runner-provided released-stack browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          browser="$(command -v google-chrome)"
+          test -x "$browser"
+          "$browser" --version
+          echo "MARTY_PLAYWRIGHT_BROWSER_CHANNEL=chrome" >> "$GITHUB_ENV"
 
       - name: Resolve and attest released stack
         env:

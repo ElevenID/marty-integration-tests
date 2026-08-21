@@ -1,5 +1,7 @@
 status: complete
 search_scope:
+  - current GitHub Ubuntu 24.04 runner browser inventory and Playwright branded-browser channel support
+  - both released-stack workflows and every browser launch path they execute
   - current official-stack and public-boundary immutable UI pin surfaces
   - marty-ui v1.1.200 corrected common-profile release, manifest, provenance, and artifact-only Marty smoke evidence
   - current open EUDI and owned multitenancy evidence issues
@@ -11,6 +13,8 @@ search_scope:
   - marty-ui v1.1.200 immutable stack release, corrected operation-scoped certificate-builder capability, managed issuer key agreement, verified W3C SD-JWT extraction, retry-safe status allocation, retired legacy allocation HTTP route, and zero-downtime rollout policy
   - pinned Affinidi affinidi-messaging-didcomm v0.15.8 source, decrypt API, and authcrypt fail-closed contracts
 search_queries:
+  - "GitHub ubuntu-24.04 installed Google Chrome Playwright channel chrome"
+  - "playwright install released-stack browser official-interoperability public-tenant-boundary"
   - "didcomm_decrypt_authcrypt sender_kid recipient_kid"
   - "ECDH-1PU+A256KW independent unpack did-doc"
   - "DIDCOMM_ENCRYPTION_POLICY_FILE active issuer authcrypt"
@@ -22,6 +26,9 @@ search_queries:
   - "official_suite_compose didcomm-authcrypt conformance_stack pass-through"
   - "did:web non-default HTTPS port percent-encoded authority resolution"
 candidate_implementations:
+  - path: tests/integration/gateway/helpers/playwright_browser.py
+    language: Python
+    disposition: add_one_shared_fail_closed_launch_policy_for_both_owned_browser_lanes
   - path: tests/integration/gateway/test_didcomm_v2_delivery.py
     language: Python
     disposition: extend_existing_owned_delivery_and_independent_verifier_harness
@@ -64,14 +71,14 @@ candidate_implementations:
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: conformance/stack-under-test.json
-  language: JSON
+  path: tests/integration/gateway/helpers/playwright_browser.py
+  language: Python
 rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: >-
-  This task changes only Marty-owned immutable release pins and their workflow
-  checkouts so current official and owned evidence execute against the already
-  reviewed Rust/product implementation. It does not change implementation,
-  imported suite source, fixtures, assertions, expectations, or exclusions.
+  This task changes only ElevenID-owned browser launch and workflow setup code.
+  It reuses the GitHub runner's reviewed stable Chrome channel instead of a live
+  Playwright CDN download. It does not change product implementation, imported
+  suite source, fixtures, vectors, assertions, expectations, or exclusions.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""

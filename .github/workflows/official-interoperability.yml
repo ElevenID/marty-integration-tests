@@ -32,7 +32,7 @@ concurrency:
 jobs:
   run-lane:
     name: ${{ matrix.lane }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -60,9 +60,15 @@ jobs:
           --require-hashes --only-binary=:all:
           --requirement requirements/official-py312.lock
 
-      - name: Install released-stack browser
+      - name: Verify runner-provided released-stack browser
         if: matrix.lane == 'oid4vp-final'
-        run: python -m playwright install --with-deps chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          browser="$(command -v google-chrome)"
+          test -x "$browser"
+          "$browser" --version
+          echo "MARTY_PLAYWRIGHT_BROWSER_CHANNEL=chrome" >> "$GITHUB_ENV"
 
       - name: Resolve and attest released stack
         env:
