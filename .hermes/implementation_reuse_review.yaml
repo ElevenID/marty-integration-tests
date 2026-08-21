@@ -1,14 +1,14 @@
 status: complete
 search_scope:
   - current official-stack and public-boundary immutable UI pin surfaces
-  - marty-ui v1.1.198 final status-allocation cutover release, manifest, provenance, and artifact-only Marty smoke evidence
+  - marty-ui v1.1.200 corrected common-profile release, manifest, provenance, and artifact-only Marty smoke evidence
   - current open EUDI and owned multitenancy evidence issues
   - current DIDComm integration module and independent verifier harness
   - current public tenant-boundary release evidence lane
   - immutable DIDComm interoperability manifest and updater
   - marty-core v0.1.58 authenticated decryption binding and standards-valid port-qualified did:web authority resolution
   - marty-credentials v0.1.66 exhaustive issuer encryption policy and deterministic DIDComm preflight rebuilt against marty-core v0.1.58
-  - marty-ui v1.1.198 immutable stack release, managed issuer key agreement, verified W3C SD-JWT extraction, retry-safe status allocation, retired legacy allocation HTTP route, and zero-downtime rollout policy
+  - marty-ui v1.1.200 immutable stack release, corrected operation-scoped certificate-builder capability, managed issuer key agreement, verified W3C SD-JWT extraction, retry-safe status allocation, retired legacy allocation HTTP route, and zero-downtime rollout policy
   - pinned Affinidi affinidi-messaging-didcomm v0.15.8 source, decrypt API, and authcrypt fail-closed contracts
 search_queries:
   - "didcomm_decrypt_authcrypt sender_kid recipient_kid"
@@ -16,7 +16,7 @@ search_queries:
   - "DIDCOMM_ENCRYPTION_POLICY_FILE active issuer authcrypt"
   - "issuer-identities didcomm-key-agreement public X25519"
   - "public_boundary_lane DIDCOMM_TEST_PATH immutable release"
-  - "marty-ui v1.1.198 stack-manifest exact commit digest immutable release"
+  - "marty-ui v1.1.200 stack-manifest exact commit digest immutable release"
   - "EUDI unchanged official lane current released stack pin"
   - "public tenant boundary current released stack pin"
   - "official_suite_compose didcomm-authcrypt conformance_stack pass-through"
@@ -58,7 +58,7 @@ candidate_implementations:
   - path: https://github.com/ElevenID/marty-ui/releases/tag/v1.1.195
     language: JSON and OCI release artifacts
     disposition: replace_stale_release_pin
-  - path: https://github.com/ElevenID/marty-ui/releases/tag/v1.1.198
+  - path: https://github.com/ElevenID/marty-ui/releases/tag/v1.1.200
     language: JSON and OCI release artifacts
     disposition: reuse_audited_immutable_stack_release_and_exact_source_pin
 no_match_statement: ""
