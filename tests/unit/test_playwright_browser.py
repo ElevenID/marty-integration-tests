@@ -15,7 +15,10 @@ def test_released_stack_browser_uses_reviewed_hosted_chrome_channel() -> None:
     }
 
 
-@pytest.mark.parametrize("channel", ["chromium", "msedge", "chrome-beta", "/tmp/browser"])
+@pytest.mark.parametrize(
+    "channel",
+    ["chromium", "msedge", "chrome-beta", "unreviewed-browser"],
+)
 def test_released_stack_browser_rejects_unreviewed_channel(channel: str) -> None:
     with pytest.raises(ValueError, match="must be 'chrome'"):
         hosted_browser_launch_options({"MARTY_PLAYWRIGHT_BROWSER_CHANNEL": channel})
