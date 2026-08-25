@@ -43,11 +43,19 @@ def test_reviewed_mapping_translates_old_commit(tmp_path: Path) -> None:
 
 def test_default_map_contains_the_complete_final_rewrite() -> None:
     mappings = resolver.load_rewrite_map(resolver.DEFAULT_MAP)
-    assert set(mappings) == {"ElevenID/marty-microservices-framework"}
+    assert set(mappings) == {
+        "ElevenID/marty-microservices-framework",
+        "ElevenID/marty-ui",
+    }
     assert len(mappings["ElevenID/marty-microservices-framework"]) == 310
     assert (
         mappings["ElevenID/marty-microservices-framework"]["46773c48814f3eb263b207ef5ee64bcd0deebc48"]
         == "df9dbf58e1bd2be9e770109c24d67e9fa318fb0b"
+    )
+    assert len(mappings["ElevenID/marty-ui"]) == 1666
+    assert (
+        mappings["ElevenID/marty-ui"]["45f5739e99fe383444ea16b1d9d1a61642729823"]
+        == "0f1cd4911a8d7a8bfe0642d131fc7b84d53aacac"
     )
 
 
