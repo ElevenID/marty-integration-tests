@@ -71,6 +71,8 @@ markers = [
     "interop: Cross-wallet and cross-implementation interoperability tests",
     "passport: ICAO passport and eMRTD tests",
     "e2e: End-to-end tests requiring a complete deployed stack",
+    "legacy_compatibility: Preserved runtime compatibility checks that are explicitly not standards-conformance evidence",
+    "implementation_smoke: Internal crypto and format smoke tests that are explicitly not standards-conformance evidence",
 ]
 addopts = [
     "-v",

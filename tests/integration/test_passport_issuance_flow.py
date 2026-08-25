@@ -1,6 +1,10 @@
 """
 Integration tests for the physical passport issuance flow.
 
+These endpoint lifecycle checks preserve deployed behavior. They are not
+format-native ICAO Doc 9303 conformance evidence and do not substitute for
+authoritative personalization and inspection-system vectors.
+
 Requires a running Gateway and supporting services. Uses the existing
 GatewayClient / TestDataBuilder patterns from the integration test suite.
 

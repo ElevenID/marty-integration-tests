@@ -1,10 +1,9 @@
-"""
-EUDI Wallet Kit — DTC (Digital Travel Credential) Interop Tests
+"""Legacy EUDI-wallet interop for the historical DTC-labelled mDoc lane.
 
-Proves that Marty's ICAO DTC credential issuance and verification flows
-are compatible with the EUDI Wallet Kit libraries.  DTC credentials use
-mDoc format (ISO 18013-5) with the ``com.icao.dtc`` namespace per
-ICAO Doc 9303 Part 13.
+This suite proves only that the deployed Marty compatibility lane can exchange
+its historical mDoc payload with the pinned EUDI harness. It does not prove
+ICAO DTC conformance, and neither ISO mDoc interoperability nor an OID4VCI flow
+is evidence for the ICAO ``DTCContentInfo`` format or DTC PKI model.
 
 The test flow:
 1. Create a DTC credential template (com.icao.dtc, mDoc format)
@@ -83,6 +82,7 @@ run_eudi = os.getenv("RUN_EUDI_TESTS", "false").lower() == "true"
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.eudi,
+    pytest.mark.legacy_compatibility,
     pytest.mark.skipif(not run_eudi, reason="RUN_EUDI_TESTS not set"),
 ]
 

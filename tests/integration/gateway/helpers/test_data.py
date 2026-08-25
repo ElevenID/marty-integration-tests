@@ -965,7 +965,11 @@ class TestDataBuilder:
         organization_id: str,
         name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create trust profile for ICAO CSCA/DSC PKI trust chain."""
+        """Build the legacy ICAO-labelled trust fixture used by compatibility tests.
+
+        This fixture is not evidence that a raw registry-sync endpoint implements
+        ICAO PKD distribution or that the historical mDoc lane is ICAO-conformant.
+        """
         return {
             "organization_id": organization_id,
             "name": name or f"icao-trust-profile-{str(uuid4())[:8]}",
@@ -999,7 +1003,11 @@ class TestDataBuilder:
         organization_id: str,
         name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create ICAO DTC compliance profile (MDOC format, com.icao.dtc namespace)."""
+        """Build the historical DTC-labelled mDoc compatibility payload.
+
+        ICAO DTC itself is format-native ``DTCContentInfo``, not ISO mDoc. Keep
+        this payload only to detect regressions while the deployed lane migrates.
+        """
         return {
             "organization_id": organization_id,
             "name": name or f"icao-dtc-compliance-{str(uuid4())[:8]}",
@@ -1031,11 +1039,11 @@ class TestDataBuilder:
         compliance_profile_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Create ICAO Digital Travel Credential (DTC) template.
+        Build the historical DTC-labelled mDoc compatibility template.
 
-        Uses ``com.icao.dtc`` namespace with required DG1 (MRZ mirror),
-        DG2 (facial biometric), and SOD (Document Security Object) claims
-        per ICAO Doc 9303 Part 13.
+        The ``com.icao.dtc`` namespace and OID4VCI/mDoc envelope below preserve
+        deployed behavior only; they do not model ICAO ``DTCContentInfo`` and
+        must not be used as ICAO conformance evidence.
         """
         data: Dict[str, Any] = {
             "organization_id": organization_id,

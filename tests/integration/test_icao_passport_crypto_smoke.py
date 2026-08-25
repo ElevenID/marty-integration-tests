@@ -1,13 +1,13 @@
-"""
-ICAO Doc 9303 Passport Conformance Tests
+"""Implementation smoke tests for passport-related crypto and MRZ helpers.
 
-Integration-level conformance tests that verify the full passport issuance
-pipeline conforms to ICAO Doc 9303 Parts 10–12.  Referenced by the
-``icao/passport.json`` compliance profile (``conformance_tests`` field).
+These self-generated certificates, round trips, and sample MRZ checks preserve
+useful implementation coverage but do not establish ICAO Doc 9303 conformance.
+Authoritative TD3, LDS, EF.SOD, PKI, CRL, and Part 11 mechanism fixtures are
+required before this repository may advertise a format-native conformance lane.
 
-Covers:
-  - LDS (Logical Data Structure) conformance: EF.COM, EF.SOD, DG encoding
-  - PKI conformance: CSCA → DSC chain, key usage, validity periods
+Covers implementation behavior for:
+  - LDS (Logical Data Structure) helpers: EF.COM, EF.SOD, DG encoding
+  - PKI helpers: CSCA → DSC chain, key usage, validity periods
   - SOD signature verification round-trip
   - BAC key derivation from known test vectors
   - MRZ ↔ DG1 consistency
@@ -16,7 +16,7 @@ These tests use the project's crypto primitives (Rust or Python fallback) and
 do NOT require a running gateway.
 
 Markers:
-  @pytest.mark.conformance
+  @pytest.mark.implementation_smoke
   @pytest.mark.passport
 """
 
@@ -25,21 +25,27 @@ import hashlib
 
 import pytest
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 
+pytestmark = [pytest.mark.implementation_smoke, pytest.mark.passport]
 
-pytestmark = [pytest.mark.conformance, pytest.mark.passport]
+PkiMaterial = tuple[
+    ec.EllipticCurvePrivateKey,
+    x509.Certificate,
+    ec.EllipticCurvePrivateKey,
+    x509.Certificate,
+]
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _generate_csca_dsc_pair():
+def _generate_csca_dsc_pair() -> PkiMaterial:
     """Generate a CSCA + DSC key pair for test purposes."""
     csca_key = ec.generate_private_key(ec.SECP256R1())
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC)
 
     csca_cert = (
         x509.CertificateBuilder()
@@ -101,64 +107,64 @@ def _generate_csca_dsc_pair():
 
 
 # ---------------------------------------------------------------------------
-# PKI hierarchy conformance
+# PKI hierarchy implementation smoke coverage
 # ---------------------------------------------------------------------------
 
-class TestCSCADSCConformance:
-    """ICAO Doc 9303 Part 12 — PKI for MRTDs."""
+class TestCSCADSCSmoke:
+    """Exercise local CSCA/DSC helper behavior without claiming conformance."""
 
     @pytest.fixture
-    def pki(self):
+    def pki(self) -> PkiMaterial:
         return _generate_csca_dsc_pair()
 
-    def test_csca_is_ca(self, pki):
+    def test_csca_is_ca(self, pki: PkiMaterial) -> None:
         _, csca_cert, _, _ = pki
         bc = csca_cert.extensions.get_extension_for_class(x509.BasicConstraints)
         assert bc.value.ca is True
 
-    def test_csca_key_usage(self, pki):
+    def test_csca_key_usage(self, pki: PkiMaterial) -> None:
         _, csca_cert, _, _ = pki
         ku = csca_cert.extensions.get_extension_for_class(x509.KeyUsage)
         assert ku.value.key_cert_sign is True
         assert ku.value.crl_sign is True
 
-    def test_dsc_is_not_ca(self, pki):
+    def test_dsc_is_not_ca(self, pki: PkiMaterial) -> None:
         _, _, _, dsc_cert = pki
         bc = dsc_cert.extensions.get_extension_for_class(x509.BasicConstraints)
         assert bc.value.ca is False
 
-    def test_dsc_key_usage_digital_signature(self, pki):
+    def test_dsc_key_usage_digital_signature(self, pki: PkiMaterial) -> None:
         _, _, _, dsc_cert = pki
         ku = dsc_cert.extensions.get_extension_for_class(x509.KeyUsage)
         assert ku.value.digital_signature is True
 
-    def test_dsc_issued_by_csca(self, pki):
+    def test_dsc_issued_by_csca(self, pki: PkiMaterial) -> None:
         _, csca_cert, _, dsc_cert = pki
         assert dsc_cert.issuer == csca_cert.subject
 
-    def test_csca_validity_at_least_10_years(self, pki):
+    def test_csca_validity_at_least_10_years(self, pki: PkiMaterial) -> None:
         _, csca_cert, _, _ = pki
         delta = csca_cert.not_valid_after_utc - csca_cert.not_valid_before_utc
         assert delta.days >= 3650
 
-    def test_dsc_validity_at_most_5_years(self, pki):
+    def test_dsc_validity_at_most_5_years(self, pki: PkiMaterial) -> None:
         _, _, _, dsc_cert = pki
         delta = dsc_cert.not_valid_after_utc - dsc_cert.not_valid_before_utc
         assert delta.days <= 1826  # 5 years + 1 day tolerance
 
 
 # ---------------------------------------------------------------------------
-# SOD round-trip conformance
+# SOD round-trip implementation smoke coverage
 # ---------------------------------------------------------------------------
 
-class TestSODConformance:
-    """ICAO Doc 9303 Part 10 — LDSSecurityObject in EF.SOD."""
+class TestSODSmoke:
+    """Exercise local EF.SOD helpers with self-generated material."""
 
     @pytest.fixture
-    def pki(self):
+    def pki(self) -> PkiMaterial:
         return _generate_csca_dsc_pair()
 
-    def test_sod_create_and_verify_round_trip(self, pki):
+    def test_sod_create_and_verify_round_trip(self, pki: PkiMaterial) -> None:
         """Create an EF.SOD and verify the signature."""
         try:
             from marty_backend_common.crypto.sod_signer import create_sod, verify_sod_signature
@@ -181,7 +187,7 @@ class TestSODConformance:
         assert len(sod_blob) > 0
         assert verify_sod_signature(sod_blob, [dsc_cert])
 
-    def test_sod_with_all_standard_dgs(self, pki):
+    def test_sod_with_all_standard_dgs(self, pki: PkiMaterial) -> None:
         """SOD with DG1-DG16 hashes (max set)."""
         try:
             from marty_backend_common.crypto.sod_signer import create_sod, verify_sod_signature
@@ -199,18 +205,17 @@ class TestSODConformance:
 
 
 # ---------------------------------------------------------------------------
-# BAC key derivation conformance
+# BAC key derivation implementation smoke coverage
 # ---------------------------------------------------------------------------
 
-class TestBACConformance:
-    """ICAO Doc 9303 Part 11 — BAC key derivation vectors."""
+class TestBACSmoke:
+    """Exercise local BAC helper behavior against the existing sample."""
 
-    def test_bac_keys_from_icao_example(self):
+    def test_bac_keys_from_icao_example(self) -> None:
         """Known MRZ info → deterministic K_enc and K_mac."""
         try:
             from marty_backend_common.verification.bac_protocol import (
                 _derive_bac_keys_python,
-                _adjust_parity_byte,
             )
         except ImportError:
             pytest.skip("bac_protocol not available")
@@ -227,7 +232,7 @@ class TestBACConformance:
         for b in k_enc + k_mac:
             assert bin(b).count("1") % 2 == 1
 
-    def test_bac_key_derivation_determinism(self):
+    def test_bac_key_derivation_determinism(self) -> None:
         """Same MRZ info always yields the same keys."""
         try:
             from marty_backend_common.verification.bac_protocol import _derive_bac_keys_python
@@ -250,27 +255,27 @@ class TestMRZDG1Consistency:
         "L898902C36UTO7408122F1204159ZE184226B<<<<<10"
     )
 
-    def test_dg1_matches_mrz_document_number(self):
+    def test_dg1_matches_mrz_document_number(self) -> None:
         """Document number extracted from MRZ line 2 matches DG1."""
         line2 = self.ICAO_MRZ[44:]
         doc_number = line2[0:9]  # Positions 1-9
         assert doc_number == "L898902C3"
 
-    def test_dg1_matches_mrz_dob(self):
+    def test_dg1_matches_mrz_dob(self) -> None:
         line2 = self.ICAO_MRZ[44:]
         dob = line2[13:19]  # Positions 14-19
         assert dob == "740812"
 
-    def test_dg1_matches_mrz_expiry(self):
+    def test_dg1_matches_mrz_expiry(self) -> None:
         line2 = self.ICAO_MRZ[44:]
         expiry = line2[21:27]  # Positions 22-27
         assert expiry == "120415"
 
-    def test_td3_total_length(self):
+    def test_td3_total_length(self) -> None:
         """TD3 MRZ is exactly 88 characters (2 × 44)."""
         assert len(self.ICAO_MRZ) == 88
 
-    def test_bac_input_from_mrz(self):
+    def test_bac_input_from_mrz(self) -> None:
         """
         BAC MRZ_info = doc_number(9)+check + dob(6)+check + expiry(6)+check = 24 chars.
         """
