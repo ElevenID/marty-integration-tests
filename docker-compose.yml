@@ -5,6 +5,9 @@ x-service: &service
   image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}
   restart: "no"
   environment: &service-env
+    # This stack is a disposable artifact-verification environment. Declare it
+    # explicitly so native services never inherit production-only mTLS policy.
+    ENVIRONMENT: test
     DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
     REDIS_URL: redis://redis:6379
   depends_on:
@@ -89,6 +92,10 @@ services:
       OIDC_EXTERNAL_ISSUER_URL: https://oss-ci.invalid/realms/oss-ci
       UI_BASE_URL: http://ui
       COOKIE_SECURE: "false"
+      ALLOW_PLAINTEXT_GRPC: "true"
+      CREDENTIAL_LOGIN_POLICY_ID: oss-ci-credential-login
+      CREDENTIAL_LOGIN_ORGANIZATION_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      CREDENTIAL_LOGIN_ISSUER_DID: did:web:oss-ci.elevenid.dev
       # Disposable private-network callback key shared only with Flow. Real
       # deployments inject a governed secret instead of using this CI default.
       FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:-oss-ci-flow-webhook-secret-32-bytes}
@@ -113,6 +120,7 @@ services:
       <<: *service-env
       SERVICE_NAME: trust_profile
       SERVICE_PORT: "8004"
+      MARTY_ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
 
   issuance-service:
     image: ${MARTY_ISSUANCE_IMAGE:?run scripts/render_stack_env.py first}
@@ -201,6 +209,8 @@ services:
       SERVICE_NAME: flow
       SERVICE_PORT: "8011"
       FLOW_GRPC_PORT: "9011"
+      PUBLIC_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      GRPC_INSECURE_ALLOWED: "true"
       ISSUANCE_SERVICE_URL: http://issuance-service:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
       CT_GRPC_TARGET: credential-template-service:9003
