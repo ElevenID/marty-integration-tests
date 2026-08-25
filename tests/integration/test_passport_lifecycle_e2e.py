@@ -1,6 +1,10 @@
 """
 End-to-End Passport Lifecycle Test Skeleton
 
+This is deployment workflow coverage, not ICAO Doc 9303 conformance evidence.
+The format-native profile remains unproven until authoritative fixtures and
+personalization/inspection gates replace the skipped skeleton phases.
+
 Exercises the complete physical passport lifecycle through the gateway:
   Application → Evidence Validation → Approval → DG Generation →
   SOD Signing → Bureau Submission → Production Tracking →

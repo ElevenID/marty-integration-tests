@@ -1,9 +1,9 @@
-"""
-DTC / Passport Verification Flow Integration Tests (Phase 3)
+"""Legacy verification compatibility plus independent MRZ endpoint coverage.
 
-Tests DTC credential verification through the MIP gateway OID4VP flow,
-Cedar policy enforcement (format, holder binding, freshness), revocation
-checks, and MRZ read/verify API endpoints.
+The DTC-labelled cases retain deployed OID4VP, Cedar, revocation, and lifecycle
+behavior for the historical mDoc mapping. They are not ICAO DTC conformance
+evidence. The MRZ endpoint cases exercise parsing and check-digit behavior only
+and make no cryptographic-authenticity claim.
 """
 
 import pytest
@@ -11,6 +11,9 @@ from typing import Dict, Any
 
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.test_data import TestDataBuilder
+
+
+pytestmark = pytest.mark.legacy_compatibility
 
 
 # =============================================================================

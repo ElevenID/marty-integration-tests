@@ -1,14 +1,10 @@
-"""
-DTC / Passport Credential Flow Integration Tests (Phases 1 & 2)
+"""Legacy gateway compatibility for the historical DTC-labelled mDoc lane.
 
-Tests ICAO DTC compliance profile enforcement, credential template
-creation, and DTC issuance through the MIP gateway.
-
-Covers:
-- ICAO_DTC and ICAO_MRZ compliance profile creation & constraints
-- DTC credential template creation with com.icao.dtc namespace
-- DTC pre-authorized issuance flow (OID4VCI)
-- DTC claim validation (DG1, DG2, SOD)
+These tests preserve deployed CRUD, issuance, claim-validation, and retrieval
+behavior while the runtime migrates away from its former ``ICAO_DTC`` + mDoc +
+OID4VCI mapping. They are not ICAO DTC conformance evidence: an ICAO DTC
+virtual component uses format-native ``DTCContentInfo`` and its own PKI model.
+New behavior must not treat this compatibility lane as a standards profile.
 """
 
 import pytest
@@ -16,6 +12,9 @@ from typing import Dict, Any
 
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.test_data import TestDataBuilder
+
+
+pytestmark = pytest.mark.legacy_compatibility
 
 
 # =============================================================================
