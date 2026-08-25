@@ -5,6 +5,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def service_section(compose: str, service: str, next_service: str) -> str:
+    return compose.split(f"  {service}:\n", 1)[1].split(
+        f"\n  {next_service}:\n", 1
+    )[0]
+
+
+def test_native_services_receive_explicit_artifact_test_configuration() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    shared = compose.split("x-service: &service\n", 1)[1].split("\nservices:\n", 1)[0]
+    auth = service_section(compose, "auth-service", "organization-service")
+    trust = service_section(
+        compose, "trust-profile-service", "issuance-service"
+    )
+    flow = service_section(compose, "flow-service", "revocation-profile-service")
+    public_origin = "${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}"
+
+    assert "ENVIRONMENT: test" in shared
+    assert 'ALLOW_PLAINTEXT_GRPC: "true"' in auth
+    assert "CREDENTIAL_LOGIN_POLICY_ID: oss-ci-credential-login" in auth
+    assert "CREDENTIAL_LOGIN_ORGANIZATION_ID:" in auth
+    assert "CREDENTIAL_LOGIN_ISSUER_DID: did:web:oss-ci.elevenid.dev" in auth
+    assert f"MARTY_ISSUER_BASE_URL: {public_origin}" in trust
+    assert f"PUBLIC_BASE_URL: {public_origin}" in flow
+    assert 'GRPC_INSECURE_ALLOWED: "true"' in flow
+
+
 def test_flow_webhook_secret_is_scoped_to_auth_and_flow() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     auth = compose.split("  auth-service:\n", 1)[1].split(
