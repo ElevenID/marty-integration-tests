@@ -2,19 +2,31 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import subprocess
 import textwrap
 import time
 import uuid
+from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 
+from tests.oss_stack.application_event_probe import (
+    internal_url_is_healthy,
+    post_json,
+    send_without_reading_response,
+    sign_application_event,
+)
+from tests.oss_stack.compose import stack_compose_command
+
 pytestmark = [pytest.mark.integration, pytest.mark.oss_stack]
 
-_COMPOSE = ("docker", "compose", "--env-file", ".env.stack")
 _ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001"
 _CREDENTIAL_TEMPLATE_ID = "50000000-0000-0000-0000-000000000040"
+_DISPOSABLE_EXTENSION_URI = "urn:elevenid:test:released-stack-offer-recovery"
 
 
 def _compose(
@@ -23,7 +35,7 @@ def _compose(
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [*_COMPOSE, *args],
+        [*stack_compose_command(), *args],
         check=True,
         capture_output=True,
         input=input_text,
@@ -58,7 +70,7 @@ def _psql(sql: str, *, variables: dict[str, str] | None = None) -> str:
 def _install_disposable_application_flow(flow_id: str) -> None:
     extension = json.dumps(
         {
-            "extension_uri": "urn:elevenid:test:released-stack-offer-recovery",
+            "extension_uri": _DISPOSABLE_EXTENSION_URI,
             "extension_version": "1.0.0",
             "extends_flow_type": "oid4vci_pre_authorized",
             "entry_step_id": "create_offer",
@@ -108,59 +120,39 @@ def _install_disposable_application_flow(flow_id: str) -> None:
     )
 
 
-def _send_without_reading_response(application_id: str) -> None:
-    """Send one signed request, wait for an unread response, then close it."""
-    probe = textwrap.dedent(
-        f"""
-        import json
-        import socket
-        from datetime import UTC, datetime
-        from pathlib import Path
-
-        from common.application_event_auth import sign_application_event
-
-        event = {{
-            "event_type": "application.approved",
-            "aggregate_id": "{application_id}",
-            "aggregate_type": "application",
-            "organization_id": "{_ORGANIZATION_ID}",
-            "data": {{
-                "applicant_id": "applicant-{application_id}",
-                "credential_template_id": "{_CREDENTIAL_TEMPLATE_ID}",
-                "claims": {{"email": "offer-recovery@example.invalid"}},
-            }},
-            "timestamp": datetime.now(UTC).isoformat(),
-        }}
-        headers = sign_application_event(event)
-        Path("/tmp/application-offer-recovery.json").write_text(
-            json.dumps({{"event": event, "headers": headers}}), encoding="utf-8"
-        )
-        body = json.dumps(event, separators=(",", ":")).encode()
-        lines = [
-            b"POST /v1/flows/webhooks/application-approved HTTP/1.1",
-            b"Host: flow-service:8011",
-            b"Content-Type: application/json",
-            f"Content-Length: {{len(body)}}".encode(),
-            b"Connection: close",
-            *[f"{{name}}: {{value}}".encode() for name, value in headers.items()],
-            b"",
-            b"",
-        ]
-        with socket.create_connection(("flow-service", 8011), timeout=10) as connection:
-            connection.sendall(b"\\r\\n".join(lines) + body)
-            connection.settimeout(30)
-            if not connection.recv(1, socket.MSG_PEEK):
-                raise RuntimeError("application-offer connection closed before a response")
-        """
+def _deactivate_disposable_application_flows() -> None:
+    _psql(
+        textwrap.dedent(
+            """
+            UPDATE flow_service.flow_definitions
+               SET status = 'ARCHIVED', updated_at = NOW()
+             WHERE extension->>'extension_uri' = :'extension_uri'
+               AND status <> 'ARCHIVED';
+            """
+        ),
+        variables={"extension_uri": _DISPOSABLE_EXTENSION_URI},
     )
-    _compose(
-        "exec",
-        "-T",
-        "applicant-service",
-        "python",
-        "-c",
-        probe,
-    )
+
+
+def _send_without_reading_response(
+    application_id: str,
+) -> tuple[dict[str, object], dict[str, str]]:
+    """Send one signed request and return the exact language-neutral envelope."""
+    event: dict[str, object] = {
+        "event_type": "application.approved",
+        "aggregate_id": application_id,
+        "aggregate_type": "application",
+        "organization_id": _ORGANIZATION_ID,
+        "data": {
+            "applicant_id": f"applicant-{application_id}",
+            "credential_template_id": _CREDENTIAL_TEMPLATE_ID,
+            "claims": {"email": "offer-recovery@example.invalid"},
+        },
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    headers = sign_application_event(event)
+    send_without_reading_response(event, headers)
+    return event, headers
 
 
 def _durable_state(application_id: str) -> dict[str, object] | None:
@@ -209,7 +201,7 @@ def _durable_state(application_id: str) -> dict[str, object] | None:
     )
     if not result:
         return None
-    state = json.loads(result)
+    state = cast(dict[str, object], json.loads(result))
     planned_flows = state.get("planned_flows")
     flows = state.get("flows")
     if state.get("receipt_count") != 1 or not isinstance(planned_flows, int):
@@ -250,105 +242,77 @@ def _wait_for_durable_state(application_id: str, timeout: float = 60.0) -> dict[
 
 
 def _wait_for_flow_service(timeout: float = 60.0) -> None:
-    probe = (
-        "import httpx; response=httpx.get('http://flow-service:8011/health', timeout=2); response.raise_for_status()"
-    )
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        try:
-            _compose(
-                "exec",
-                "-T",
-                "applicant-service",
-                "python",
-                "-c",
-                probe,
-                timeout=10,
-            )
+        if internal_url_is_healthy("http://flow-service:8011/health"):
             return
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            time.sleep(1)
+        time.sleep(1)
     pytest.fail("flow service did not recover after restart")
 
 
-def _retry_saved_event(*, mutate_claims: bool = False) -> dict[str, object]:
-    probe = textwrap.dedent(
-        f"""
-        import hashlib
-        import json
-        from pathlib import Path
-
-        import httpx
-        from common.application_event_auth import sign_application_event
-
-        saved = json.loads(Path("/tmp/application-offer-recovery.json").read_text(encoding="utf-8"))
-        event = saved["event"]
-        headers = saved["headers"]
-        if {mutate_claims!r}:
-            event["data"]["claims"]["email"] = "changed@example.invalid"
-            headers = sign_application_event(event)
-        response = httpx.post(
-            "http://flow-service:8011/v1/flows/webhooks/application-approved",
-            json=event,
-            headers=headers,
-            timeout=30,
-        )
-        body = response.json()
-        if response.status_code == 200:
-            body = {{
-                "flows_triggered": body["flows_triggered"],
-                "flows": [
-                    {{
-                        "flow_definition_id": offer["flow_definition_id"],
-                        "instance_id": offer["flow_instance_id"],
-                        "artifact_id": offer["artifact_id"],
-                        "transaction_id": offer["credential_offer_transaction_id"],
-                        "offer_sha256": hashlib.sha256(
-                            offer["credential_offer_uri"].encode()
-                        ).hexdigest(),
-                        "pre_auth_sha256": hashlib.sha256(
-                            offer["pre_authorized_code"].encode()
-                        ).hexdigest(),
-                    }}
-                    for offer in body["offers"]
-                ],
-            }}
-        else:
-            body = {{"detail": body.get("detail")}}
-        print(json.dumps({{"status": response.status_code, "body": body}}, sort_keys=True))
-        """
+def _retry_event(event: dict[str, object], headers: dict[str, str]) -> dict[str, Any]:
+    result = post_json(
+        "http://flow-service:8011/v1/flows/webhooks/application-approved",
+        event,
+        headers,
     )
-    completed = _compose(
-        "exec",
-        "-T",
-        "applicant-service",
-        "python",
-        "-c",
-        probe,
-    )
-    return json.loads(completed.stdout.strip().splitlines()[-1])
+    if result["status"] != 200:
+        return {
+            "status": result["status"],
+            "body": {
+                "error": result["body"].get("error"),
+                "detail": result["body"].get("detail"),
+            },
+        }
+    body = result["body"]
+    return {
+        "status": 200,
+        "body": {
+            "flows_triggered": body["flows_triggered"],
+            "flows": [
+                {
+                    "flow_definition_id": offer["flow_definition_id"],
+                    "instance_id": offer["flow_instance_id"],
+                    "artifact_id": offer["artifact_id"],
+                    "transaction_id": offer["credential_offer_transaction_id"],
+                    "offer_sha256": hashlib.sha256(offer["credential_offer_uri"].encode()).hexdigest(),
+                    "pre_auth_sha256": hashlib.sha256(offer["pre_authorized_code"].encode()).hexdigest(),
+                }
+                for offer in body["offers"]
+            ],
+        },
+    }
 
 
 def test_uncertain_application_offer_response_recovers_after_flow_restart() -> None:
     flow_id = str(uuid.uuid4())
     application_id = f"artifact-recovery-{uuid.uuid4()}"
+    _deactivate_disposable_application_flows()
     _install_disposable_application_flow(flow_id)
+    try:
+        event, headers = _send_without_reading_response(application_id)
+        before_restart = _wait_for_durable_state(application_id)
 
-    _send_without_reading_response(application_id)
-    before_restart = _wait_for_durable_state(application_id)
+        _compose("restart", "flow-service", timeout=60)
+        _wait_for_flow_service()
 
-    _compose("restart", "flow-service", timeout=60)
-    _wait_for_flow_service()
+        recovered = _retry_event(event, headers)
+        assert recovered["status"] == 200, recovered
+        assert recovered["body"] == {
+            "flows_triggered": before_restart["planned_flows"],
+            "flows": before_restart["flows"],
+        }
+        assert _wait_for_durable_state(application_id) == before_restart
 
-    recovered = _retry_saved_event()
-    assert recovered["status"] == 200, recovered
-    assert recovered["body"] == {
-        "flows_triggered": before_restart["planned_flows"],
-        "flows": before_restart["flows"],
-    }
-    assert _wait_for_durable_state(application_id) == before_restart
-
-    changed = _retry_saved_event(mutate_claims=True)
-    assert changed["status"] == 409, changed
-    assert changed["body"]["detail"]["error"] == "APPLICATION_OFFER_CONFLICT"
-    assert _wait_for_durable_state(application_id) == before_restart
+        changed_event = copy.deepcopy(event)
+        changed_data = changed_event["data"]
+        assert isinstance(changed_data, dict)
+        changed_claims = changed_data["claims"]
+        assert isinstance(changed_claims, dict)
+        changed_claims["email"] = "changed@example.invalid"
+        changed = _retry_event(changed_event, sign_application_event(changed_event))
+        assert changed["status"] == 409, changed
+        assert changed["body"]["error"] == "APPLICATION_OFFER_CONFLICT"
+        assert _wait_for_durable_state(application_id) == before_restart
+    finally:
+        _deactivate_disposable_application_flows()

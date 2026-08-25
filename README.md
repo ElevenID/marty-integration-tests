@@ -112,6 +112,14 @@ review of every official suite pin.
 - `.env.stack` is generated from the signed stack manifest.
 - Environment-specific non-secret overrides may be supplied by the caller.
 
+The artifact-only smoke stack uses a pinned, discovery-only OIDC fixture so
+Auth can prove its fail-closed discovery and JWKS startup contract without a
+private identity provider. It does not claim login coverage. Governed public
+boundary lanes exercise operator login against a real OIDC provider.
+Artifact-stack probes always select both public Compose files. When the stack
+was started with a custom Compose project, set `MARTY_OSS_STACK_PROJECT` to the
+same project name before running `tests/oss_stack`.
+
 Public CI must use standard GitHub-hosted runners and must not receive repository secrets for pull requests from forks.
 
 The `Credentials verifier artifact` workflow is separately labeled ElevenID-owned

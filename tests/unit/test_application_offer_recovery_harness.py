@@ -6,6 +6,34 @@ import subprocess
 import pytest
 
 from tests.oss_stack import test_application_offer_recovery as recovery
+from tests.oss_stack.compose import stack_compose_command
+
+
+def test_stack_compose_command_pins_rust_overlay_and_optional_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MARTY_OSS_STACK_PROJECT", "candidate-stack")
+
+    assert stack_compose_command() == (
+        "docker",
+        "compose",
+        "--env-file",
+        ".env.stack",
+        "--file",
+        "docker-compose.yml",
+        "--file",
+        "docker-compose.rust-revocation.yml",
+        "--project-name",
+        "candidate-stack",
+    )
+
+
+def test_stack_compose_command_uses_default_project_when_unspecified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MARTY_OSS_STACK_PROJECT", raising=False)
+
+    assert "--project-name" not in stack_compose_command()
 
 
 def test_psql_streams_sql_for_client_variable_expansion(
@@ -79,3 +107,47 @@ def test_durable_state_rejects_an_incomplete_multi_flow_plan(
     monkeypatch.setattr(recovery, "_psql", lambda *_args, **_kwargs: json.dumps(state))
 
     assert recovery._durable_state("application-1") is None
+
+
+def test_retry_event_preserves_the_language_neutral_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        recovery,
+        "post_json",
+        lambda *_args, **_kwargs: {
+            "status": 409,
+            "body": {
+                "error": "APPLICATION_OFFER_CONFLICT",
+                "detail": "conflicting application offer",
+            },
+        },
+    )
+
+    result = recovery._retry_event({}, {})
+
+    assert result == {
+        "status": 409,
+        "body": {
+            "error": "APPLICATION_OFFER_CONFLICT",
+            "detail": "conflicting application offer",
+        },
+    }
+
+
+def test_disposable_flow_uses_canonical_definition_status_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statements: list[str] = []
+
+    def capture(sql: str, **_kwargs: object) -> str:
+        statements.append(sql)
+        return ""
+
+    monkeypatch.setattr(recovery, "_psql", capture)
+    recovery._install_disposable_application_flow("flow-id")
+    recovery._deactivate_disposable_application_flows()
+
+    assert "'ACTIVE', 'custom'" in statements[0]
+    assert "SET status = 'ARCHIVED'" in statements[1]
+    assert "'INACTIVE'" not in "".join(statements)
