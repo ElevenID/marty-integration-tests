@@ -10,11 +10,17 @@ x-service: &service
     ENVIRONMENT: test
     DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
     REDIS_URL: redis://redis:6379
+    GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-oss-ci-rust-revocation-lifecycle-token-32-bytes}
   depends_on:
     migrations:
       condition: service_completed_successfully
     redis:
       condition: service_healthy
+  healthcheck:
+    test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${SERVICE_PORT}/health >/dev/null"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
   networks: [marty-oss]
 
 services:
@@ -58,6 +64,21 @@ services:
       retries: 10
     networks: [marty-oss]
 
+  # Auth resolves discovery and JWKS before reporting ready. This deliberately
+  # limited fixture supplies only that startup contract; end-to-end login is
+  # exercised against a real OIDC provider in the governed boundary lanes.
+  oidc-discovery-fixture:
+    image: nginx@sha256:679a5fd058f6ca754a561846fe27927e408074431d63556e8fc588fc38be6901
+    restart: "no"
+    volumes:
+      - ./services/oidc-discovery-fixture:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/realms/oss-ci/.well-known/openid-configuration"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks: [marty-oss]
+
   migrations:
     image: ${MARTY_MIGRATIONS_IMAGE:?run scripts/render_stack_env.py first}
     environment:
@@ -88,8 +109,8 @@ services:
       SERVICE_NAME: auth
       SERVICE_PORT: "8001"
       KEYCLOAK_REALM: oss-ci
-      OIDC_ISSUER_URL: https://oss-ci.invalid/realms/oss-ci
-      OIDC_EXTERNAL_ISSUER_URL: https://oss-ci.invalid/realms/oss-ci
+      OIDC_ISSUER_URL: http://oidc-discovery-fixture/realms/oss-ci
+      OIDC_EXTERNAL_ISSUER_URL: http://oidc-discovery-fixture/realms/oss-ci
       UI_BASE_URL: http://ui
       COOKIE_SECURE: "false"
       ALLOW_PLAINTEXT_GRPC: "true"
@@ -99,6 +120,29 @@ services:
       # Disposable private-network callback key shared only with Flow. Real
       # deployments inject a governed secret instead of using this CI default.
       FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:-oss-ci-flow-webhook-secret-32-bytes}
+      FLOW_GRPC_TARGET: flow-service:9011
+      ORG_GRPC_TARGET: organization-service:9002
+      ES_GRPC_TARGET: event-stream-service:9015
+      AUTH_SERVICE_INTERNAL_URL: http://auth-service:8001
+      APPLICANT_SERVICE_URL: http://applicant-service:8006
+      ISSUANCE_SERVICE_URL: http://issuance-service:8005
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      oidc-discovery-fixture:
+        condition: service_healthy
+      organization-service:
+        condition: service_healthy
+      flow-service:
+        condition: service_healthy
+      event-stream-service:
+        condition: service_healthy
+      applicant-service:
+        condition: service_healthy
+      issuance-service:
+        condition: service_healthy
 
   organization-service:
     <<: *service
@@ -113,6 +157,9 @@ services:
       <<: *service-env
       SERVICE_NAME: credential_template
       SERVICE_PORT: "8003"
+      # System template identifiers and issuer DIDs must match the public
+      # issuer identity seeded by the migration artifact.
+      PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
 
   trust-profile-service:
     <<: *service
@@ -144,7 +191,7 @@ services:
       # Shared only on the private Compose network so the authenticated gateway
       # can call the issuer's management API. This disposable default is not a
       # deployment credential; production supplies its own secret.
-      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key-32-bytes}
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -175,7 +222,7 @@ services:
       FLOW_SERVICE_URL: http://flow-service:8011
       FLOW_GRPC_TARGET: flow-service:9011
       ISSUANCE_SERVICE_URL: http://issuance-service:8005
-      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key-32-bytes}
       ORG_GRPC_TARGET: organization-service:9002
       # Disposable artifact-test identity. Production deployments inject a
       # random secret; this value is scoped only to Applicant and Flow here.
@@ -202,6 +249,16 @@ services:
       SERVICE_NAME: deployment_profile
       SERVICE_PORT: "8010"
 
+  event-stream-service:
+    <<: *service
+    environment:
+      <<: *service-env
+      SERVICE_NAME: event_stream
+      SERVICE_PORT: "8015"
+      EVENT_STREAM_SERVICE_PORT: "8015"
+      EVENT_STREAM_GRPC_ENABLED: "true"
+      EVENT_STREAM_GRPC_PORT: "9015"
+
   flow-service:
     <<: *service
     environment:
@@ -212,10 +269,35 @@ services:
       PUBLIC_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       GRPC_INSECURE_ALLOWED: "true"
       ISSUANCE_SERVICE_URL: http://issuance-service:8005
-      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key-32-bytes}
+      ISSUANCE_GRPC_TARGET: issuance-service:9005
       CT_GRPC_TARGET: credential-template-service:9003
+      PP_GRPC_TARGET: presentation-policy-service:9009
+      ORG_GRPC_TARGET: organization-service:9002
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile-service:8004
+      DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile-service:8010
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-oss-ci-application-event-hmac-key-32-bytes}
       FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:-oss-ci-flow-webhook-secret-32-bytes}
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      organization-service:
+        condition: service_healthy
+      credential-template-service:
+        condition: service_healthy
+      presentation-policy-service:
+        condition: service_healthy
+      issuance-service:
+        condition: service_healthy
+      signing-keys:
+        condition: service_healthy
+      trust-profile-service:
+        condition: service_healthy
+      deployment-profile-service:
+        condition: service_healthy
 
   revocation-profile-service:
     <<: *service
@@ -241,7 +323,7 @@ services:
       ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       # Must match the issuer's internal management key above. It is injected
       # only after the gateway's normal authentication/authorization checks.
-      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key-32-bytes}
       COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile-service:8008
       PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy-service:8009
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile-service:8010

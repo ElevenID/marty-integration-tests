@@ -2,70 +2,34 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
-import textwrap
+import uuid
+from datetime import UTC, datetime
 
 import pytest
+
+from tests.oss_stack.application_event_probe import post_json, sign_application_event
 
 pytestmark = [pytest.mark.integration, pytest.mark.oss_stack]
 
 
 def test_application_approval_authentication_and_replay_inside_private_network() -> None:
-    """Use released workload code without disclosing its dedicated key."""
-    probe = textwrap.dedent(
-        """
-        import json
-        import uuid
-        from datetime import UTC, datetime
+    """Authenticate the wire protocol without importing either implementation."""
+    event = {
+        "event_type": "application.approved",
+        "aggregate_id": f"artifact-probe-{uuid.uuid4()}",
+        "aggregate_type": "application",
+        "organization_id": str(uuid.uuid4()),
+        "data": {"applicant_id": f"artifact-probe-{uuid.uuid4()}"},
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    endpoint = "http://flow-service:8011/v1/flows/webhooks/application-approved"
+    unsigned = post_json(endpoint, event)
+    headers = sign_application_event(event)
+    accepted = post_json(endpoint, event, headers)
+    replayed = post_json(endpoint, event, headers)
 
-        import httpx
-
-        from common.application_event_auth import sign_application_event
-
-        event = {
-            "event_type": "application.approved",
-            "aggregate_id": f"artifact-probe-{uuid.uuid4()}",
-            "aggregate_type": "application",
-            "organization_id": str(uuid.uuid4()),
-            "data": {"applicant_id": f"artifact-probe-{uuid.uuid4()}"},
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-        endpoint = "http://flow-service:8011/v1/flows/webhooks/application-approved"
-        unsigned = httpx.post(endpoint, json=event, timeout=10.0)
-        headers = sign_application_event(event)
-        accepted = httpx.post(endpoint, json=event, headers=headers, timeout=10.0)
-        replayed = httpx.post(endpoint, json=event, headers=headers, timeout=10.0)
-        print(json.dumps({
-            "unsigned": unsigned.status_code,
-            "accepted": accepted.status_code,
-            "accepted_body": accepted.json(),
-            "replayed": replayed.status_code,
-        }, sort_keys=True))
-        """
-    )
-    completed = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "--env-file",
-            ".env.stack",
-            "exec",
-            "-T",
-            "applicant-service",
-            "python",
-            "-c",
-            probe,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=45,
-    )
-    result = json.loads(completed.stdout.strip().splitlines()[-1])
-
-    assert result["unsigned"] == 401
-    assert result["accepted"] == 200
-    assert result["replayed"] == 409
-    assert result["accepted_body"]["success"] is True
-    assert result["accepted_body"]["flows_triggered"] == 0
+    assert unsigned["status"] == 401
+    assert accepted["status"] == 200
+    assert replayed["status"] == 409
+    assert accepted["body"]["success"] is True
+    assert accepted["body"]["flows_triggered"] == 0

@@ -1,0 +1,6 @@
+{
+  "issuer": "http://oidc-discovery-fixture/realms/oss-ci",
+  "authorization_endpoint": "http://oidc-discovery-fixture/realms/oss-ci/protocol/openid-connect/auth",
+  "token_endpoint": "http://oidc-discovery-fixture/realms/oss-ci/protocol/openid-connect/token",
+  "jwks_uri": "http://oidc-discovery-fixture/realms/oss-ci/protocol/openid-connect/certs"
+}
