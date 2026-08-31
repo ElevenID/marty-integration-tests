@@ -26,6 +26,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - name: Bind release tag to protected main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check_release_lineage.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --expected-commit "$GITHUB_SHA"
       - name: Install uv without a tag-scoped dependency cache
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
@@ -84,6 +88,10 @@ jobs:
           files: release-assets/**
           draft: true
           overwrite_files: false
+      - name: Revalidate release tag lineage before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check_release_lineage.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --expected-commit "$GITHUB_SHA"
       - name: Publish complete immutable release
         env:
           GH_TOKEN: ${{ github.token }}
