@@ -62,10 +62,6 @@ def known_ineligible_failure() -> dict[str, object]:
     return {
         "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
         "message": artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
-        "transient_retry": {
-            "message": artifact.KNOWN_INELIGIBLE_TRANSIENT_MESSAGE,
-            "max_attempts": artifact.KNOWN_INELIGIBLE_MAX_ATTEMPTS,
-        },
     }
 
 
@@ -506,6 +502,191 @@ def test_session_projection_requires_exact_shape_binding_and_nonce_lifecycle() -
         )
 
 
+def _pending_session(session_id: str) -> dict[str, object]:
+    return {
+        "id": session_id,
+        "organization_id": "org-1",
+        "verifier_did": "did:web:verifier.integration.invalid",
+        "status": "pending",
+        "request_uri": f"oid4vp://request?session_id={session_id}",
+        "nonce": "n" * 43,
+        "expires_at": "2026-08-31T15:00:00+00:00",
+        "created_at": "2026-08-31T14:50:00+00:00",
+    }
+
+
+def test_safe_session_allowlist_is_exact_and_future_rust_is_not_resampled() -> None:
+    for allowed, expected_reason in (
+        (artifact.FROZEN_LEGACY_SAFE_SESSION_PIN, "frozen_python_v0.1.71_invalid_leading_identifier"),
+        (artifact.REJECTED_RUST_SAFE_SESSION_PIN, "rejected_rust_v1.1.208_invalid_leading_identifier"),
+    ):
+        assert artifact._safe_session_resample_reason(allowed) == expected_reason
+
+        def mutations(value: object, path: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
+            if isinstance(value, dict):
+                return [nested for key, item in value.items() for nested in mutations(item, (*path, key))]
+            return [path]
+
+        for path in mutations(allowed):
+            candidate = json.loads(json.dumps(allowed))
+            cursor = candidate
+            for key in path[:-1]:
+                cursor = cursor[key]
+            cursor[path[-1]] = "mutated"
+            assert artifact._safe_session_resample_reason(candidate) is None
+
+        with_extra = {**allowed, "unexpected": True}
+        assert artifact._safe_session_resample_reason(with_extra) is None
+
+    future_rust = valid_rust_pin()
+    assert artifact._safe_session_resample_reason(future_rust) is None
+
+
+def test_safe_session_creation_discards_only_allowlisted_unsafe_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    sessions = iter([_pending_session("_bad"), _pending_session("-bad"), _pending_session("Aok")])
+    calls: list[str] = []
+
+    def create(_method: str, url: str, **_kwargs: object) -> dict[str, object]:
+        calls.append(url)
+        return next(sessions)
+
+    monkeypatch.setattr(artifact, "_http_json", create)
+    selected, resampled, reason = artifact._create_safe_session(
+        "https://verifier.invalid",
+        {"fixture": True},
+        "api-key",
+        artifact.FROZEN_LEGACY_SAFE_SESSION_PIN,
+        "org-1",
+    )
+
+    assert selected["id"] == "Aok"
+    assert resampled == 2
+    assert reason == "frozen_python_v0.1.71_invalid_leading_identifier"
+    assert len(calls) == 3
+    assert all(url.endswith("/v1/verification/sessions") and "/submit" not in url for url in calls)
+
+
+def test_safe_session_creation_does_not_resample_future_rust(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def create(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return _pending_session("_future-rust")
+
+    monkeypatch.setattr(artifact, "_http_json", create)
+    selected, resampled, reason = artifact._create_safe_session(
+        "https://verifier.invalid",
+        {"fixture": True},
+        "api-key",
+        valid_rust_pin(),
+        "org-1",
+    )
+
+    assert selected["id"] == "_future-rust"
+    assert resampled == 0
+    assert reason == "not_allowlisted_no_resampling"
+    assert calls == 1
+
+
+def test_safe_session_creation_allows_digit_leading_identifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def create(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return _pending_session("7safe")
+
+    monkeypatch.setattr(artifact, "_http_json", create)
+    selected, resampled, _reason = artifact._create_safe_session(
+        "https://verifier.invalid",
+        {"fixture": True},
+        "api-key",
+        artifact.FROZEN_LEGACY_SAFE_SESSION_PIN,
+        "org-1",
+    )
+
+    assert selected["id"] == "7safe"
+    assert resampled == 0
+    assert calls == 1
+
+
+def test_safe_session_creation_exhausts_without_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text('{"status":"stale"}\n', encoding="utf-8")
+    calls = 0
+
+    def create(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return _pending_session("_bad")
+
+    def exhaust(
+        pin: dict[str, object],
+        _evidence_path: Path,
+        *,
+        provenance_verified: bool,
+    ) -> dict[str, object]:
+        assert provenance_verified is True
+        artifact._create_safe_session(
+            "https://verifier.invalid",
+            {"fixture": True},
+            "api-key",
+            pin,
+            "org-1",
+            max_creations=4,
+        )
+        raise AssertionError("safe session selection unexpectedly returned")
+
+    monkeypatch.setattr(artifact, "_http_json", create)
+    monkeypatch.setattr(artifact, "_run_artifact_test", exhaust)
+
+    with pytest.raises(ValueError, match="exhausted"):
+        artifact.run_artifact_test(
+            artifact.FROZEN_LEGACY_SAFE_SESSION_PIN,
+            evidence,
+            provenance_verified=True,
+        )
+    assert calls == 4
+    assert not evidence.exists()
+
+
+def test_safe_session_creation_rejects_malformed_created_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def malformed(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {"id": "Asafe"}
+
+    monkeypatch.setattr(artifact, "_http_json", malformed)
+    with pytest.raises(ValueError, match="session response shape changed"):
+        artifact._create_safe_session(
+            "https://verifier.invalid",
+            {"fixture": True},
+            "api-key",
+            artifact.FROZEN_LEGACY_SAFE_SESSION_PIN,
+            "org-1",
+        )
+    assert calls == 1
+
+
+def test_session_selection_evidence_contains_no_ids_or_nonces() -> None:
+    evidence = artifact._session_selection_evidence(
+        "frozen_python_v0.1.71_invalid_leading_identifier",
+        2,
+    )
+    serialized = json.dumps({"safe_session_selection": evidence})
+
+    assert evidence["resampled_unsafe_ids"] == 2
+    assert "session_id" not in serialized
+    assert "nonce" not in serialized
+    assert "_bad" not in serialized
+
+
 def test_session_result_limits_legacy_transaction_id_to_the_frozen_oracle() -> None:
     value = {
         "decision": "FAIL",
@@ -542,14 +723,15 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
     pin["state"] = "ineligible"
     pin["expected_failure"] = known_ineligible_failure()
     evidence_path = tmp_path / "negative-control.json"
-    calls = 0
 
     def reject(*_args: object, **_kwargs: object) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise ValueError(artifact.KNOWN_INELIGIBLE_TRANSIENT_MESSAGE)
-        raise ValueError(artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE)
+        raise artifact.ArtifactRunError(
+            artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+            {
+                "reason": "rejected_rust_v1.1.208_invalid_leading_identifier",
+                "resampled_unsafe_ids": 2,
+            },
+        )
 
     monkeypatch.setattr(artifact, "run_artifact_test", reject)
     evidence = artifact.run_expected_failure(
@@ -560,8 +742,11 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
 
     assert evidence["status"] == "expected_failure_observed"
     assert evidence["failure_id"] == artifact.KNOWN_INELIGIBLE_FAILURE_ID
-    assert evidence["attempts"] == 2
-    assert evidence["transient_readiness_failures"] == 1
+    assert evidence["attempts"] == 1
+    assert evidence["safe_session_selection"] == {
+        "reason": "rejected_rust_v1.1.208_invalid_leading_identifier",
+        "resampled_unsafe_ids": 2,
+    }
     assert json.loads(evidence_path.read_text(encoding="utf-8")) == evidence
 
     def wrong_failure(*_args: object, **_kwargs: object) -> None:
@@ -571,12 +756,17 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
     with pytest.raises(ValueError, match="unexpected reason"):
         artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
 
-    def transient_failure(*_args: object, **_kwargs: object) -> None:
-        raise ValueError(artifact.KNOWN_INELIGIBLE_TRANSIENT_MESSAGE)
+    calls = 0
 
-    monkeypatch.setattr(artifact, "run_artifact_test", transient_failure)
-    with pytest.raises(ValueError, match="exhausted bounded readiness retries"):
+    def canonical_omission(*_args: object, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise ValueError("verification response omitted canonical_result")
+
+    monkeypatch.setattr(artifact, "run_artifact_test", canonical_omission)
+    with pytest.raises(ValueError, match="unexpected reason"):
         artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
+    assert calls == 1
     assert not evidence_path.exists()
 
     def unexpected_pass(_pin: object, private_path: Path, **_kwargs: object) -> dict[str, str]:
