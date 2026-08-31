@@ -6,11 +6,15 @@ from __future__ import annotations
 import argparse
 import base64
 import concurrent.futures
+import gzip
 import hashlib
 import json
+import os
 import re
 import secrets
+import stat
 import subprocess
+import tarfile
 import tempfile
 import threading
 import time
@@ -22,8 +26,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from typing import Any, NamedTuple
+from pathlib import Path, PurePosixPath
+from typing import Any, BinaryIO, NamedTuple
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
@@ -34,12 +38,64 @@ DEFAULT_PIN = ROOT / "config" / "credentials-verifier-oracle.json"
 BASE_IMAGES = ROOT / "config" / "base-images.json"
 PIN_SCHEMA = "elevenid.credentials-verifier-artifact-pin/v1"
 RUST_PIN_SCHEMA = "elevenid.credentials-verifier-artifact-pin/v2"
+CANDIDATE_PIN_SCHEMA = "elevenid.credentials-verifier-candidate-pin/v1"
 EVIDENCE_SCHEMA = "elevenid.credentials-verifier-artifact-evidence/v1"
 RUST_EVIDENCE_SCHEMA = "elevenid.credentials-verifier-artifact-evidence/v2"
+CANDIDATE_EVIDENCE_SCHEMA = "elevenid.credentials-verifier-candidate-evidence/v1"
+CANDIDATE_PROVENANCE_SCHEMA = "elevenid.marty-ui.services-candidate-provenance/v1"
+CANDIDATE_METADATA_SCHEMA = "elevenid.marty-ui.services-candidate-build-metadata/v1"
 EXPECTED_REPOSITORY = "ElevenID/marty-credentials"
 EXPECTED_IMAGE_URI = "ghcr.io/elevenid/marty-credentials-verification"
 RUST_REPOSITORY = "ElevenID/marty-ui"
 RUST_IMAGE_URI = "ghcr.io/elevenid/marty-ui-oss/services"
+CANDIDATE_LOCAL_IMAGE_REPOSITORY = "docker.io/elevenid/marty-ui-verification-candidate"
+MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+MAX_SBOM_BYTES = 128 * 1024 * 1024
+MAX_CANDIDATE_METADATA_BYTES = 4 * 1024 * 1024
+MAX_CANDIDATE_PROVENANCE_BYTES = 4 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 512
+MAX_ARCHIVE_REGULAR_MEMBERS = 256
+MAX_LAYERS = 64
+MAX_COMPRESSED_LAYER_BYTES = 128 * 1024 * 1024
+MAX_TOTAL_COMPRESSED_LAYER_BYTES = 512 * 1024 * 1024
+MAX_EXPANDED_LAYER_BYTES = 256 * 1024 * 1024
+MAX_TOTAL_EXPANDED_LAYER_BYTES = 1024 * 1024 * 1024
+MAX_LAYER_MEMBERS = 20_000
+MAX_TOTAL_LAYER_MEMBERS = 50_000
+MAX_TAR_SPECIAL_HEADER_BYTES = 64 * 1024
+MAX_TOTAL_TAR_SPECIAL_HEADER_BYTES = 4 * 1024 * 1024
+MAX_TAR_SPECIAL_HEADERS = 256
+MAX_SBOM_TOP_LEVEL_KEYS = 64
+MAX_SBOM_COMPONENTS = 100_000
+MAX_SBOM_DEPENDENCIES = 100_000
+MAX_SBOM_PROPERTIES = 4_096
+MAX_SBOM_SCANNER_COMPONENTS = 64
+TAR_BLOCK_BYTES = 512
+OCI_GZIP_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
+TAR_SPECIAL_HEADER_TYPES = frozenset(
+    {
+        tarfile.XHDTYPE,
+        tarfile.XGLTYPE,
+        tarfile.GNUTYPE_LONGNAME,
+        tarfile.GNUTYPE_LONGLINK,
+        tarfile.SOLARIS_XHDTYPE,
+    }
+)
+CYCLONEDX_COMPONENT_TYPES = {
+    "application",
+    "container",
+    "cryptographic-asset",
+    "data",
+    "device",
+    "device-driver",
+    "file",
+    "firmware",
+    "framework",
+    "library",
+    "machine-learning-model",
+    "operating-system",
+    "platform",
+}
 EXPECTED_COMPONENT_ID = "marty-credentials"
 EXPECTED_ADAPTER_ID = "verification-service"
 EXPECTED_SBOM_PACKAGES = {"marty-rs", "marty-verification-py"}
@@ -94,6 +150,7 @@ KNOWN_INELIGIBLE_FAILURE_MESSAGE = "session transaction ID changed outside the a
 SAFE_SESSION_MAX_CREATIONS = 8
 OID4VP_POSITIVE_RUNTIME_BLOCKER = "canonical.oid4vp-positive-runtime-not-exercised"
 RELEASE_CLEARANCE_BLOCKED = "blocked"
+RELEASE_CLEARANCE_ELIGIBLE = "eligible"
 VALIDATION_PRIVACY_DIFFERENCE_ID = "validation.unknown-field-detail-minimized"
 DOCUMENTED_DIFFERENCE_DETAILS = {
     KNOWN_INELIGIBLE_FAILURE_ID: (
@@ -172,6 +229,24 @@ REJECTED_RUST_SAFE_SESSION_PIN = {
         "message": KNOWN_INELIGIBLE_FAILURE_MESSAGE,
     },
 }
+CANDIDATE_VERSION = re.compile(r"^0\.0\.0-candidate\.([0-9a-f]{12})$")
+RUN_ID = re.compile(r"^[1-9][0-9]*$")
+CANDIDATE_BUILD_WORKFLOW = ".github/workflows/verification-candidate-build.yml"
+CANDIDATE_SIGNER_WORKFLOW = f"{RUST_REPOSITORY}/{CANDIDATE_BUILD_WORKFLOW}"
+INTEGRATION_REPOSITORY = "ElevenID/marty-integration-tests"
+HARDENED_HARNESS_FLOOR = "f0062b4e48ea1a7a489d2576bcea0e5d1fce484b"
+EXPECTED_MIGRATION_HEAD = "202608091200"
+COMPATIBILITY_OPERATIONS = [
+    ("GET", "/v1/verification/health"),
+    ("POST", "/v1/verification/sessions"),
+    ("GET", "/v1/verification/sessions/A"),
+    ("POST", "/v1/verification/sessions/A/submit"),
+    ("POST", "/v1/verification/verify"),
+    ("POST", "/v1/verification/verify/vds-nc"),
+]
+POSITIVE_OID4VP_CHECK = "canonical.oid4vp-positive-pass-with-claims"
+POSITIVE_LANGUAGE_NEUTRAL_CHECKS = EXPECTED_LANGUAGE_NEUTRAL_CHECKS | {POSITIVE_OID4VP_CHECK}
+CANDIDATE_REQUIRED_CHECKS = POSITIVE_LANGUAGE_NEUTRAL_CHECKS | RUST_ONLY_CHECKS
 
 
 class ArtifactTarget(NamedTuple):
@@ -211,9 +286,9 @@ def artifact_target(pin: dict[str, Any]) -> ArtifactTarget:
     schema = pin.get("schema")
     if schema == PIN_SCHEMA:
         return LEGACY_TARGET
-    if schema == RUST_PIN_SCHEMA:
+    if schema in {RUST_PIN_SCHEMA, CANDIDATE_PIN_SCHEMA}:
         return RUST_TARGET
-    raise ValueError(f"artifact pin must use {PIN_SCHEMA} or {RUST_PIN_SCHEMA}")
+    raise ValueError(f"artifact pin must use {PIN_SCHEMA}, {RUST_PIN_SCHEMA}, or {CANDIDATE_PIN_SCHEMA}")
 
 
 class ArtifactRuntimeError(RuntimeError):
@@ -247,21 +322,97 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
+def _require_digest(value: Any, message: str) -> str:
+    digest = str(value)
+    _require(bool(SHA256.fullmatch(digest)), message)
+    return digest
+
+
+def _require_asset(value: Any, *, asset: str, label: str) -> dict[str, Any]:
+    _require(isinstance(value, dict), f"{label} pin is required")
+    _require(set(value) == {"asset", "digest"}, f"{label} pin shape changed")
+    _require(value.get("asset") == asset, f"unexpected {label} asset")
+    _require_digest(value.get("digest"), f"{label} digest must be sha256:<64 lowercase hex>")
+    return value
+
+
+def _validate_candidate_pin(value: dict[str, Any]) -> None:
+    _require("release_tag" not in value, "candidate pin must not reserve a release tag")
+    _require(
+        set(value)
+        == {
+            "schema",
+            "state",
+            "repository",
+            "version",
+            "commit",
+            "source_ref",
+            "run",
+            "archive",
+            "image",
+            "sbom",
+            "metadata",
+            "provenance",
+        },
+        "candidate pin shape changed",
+    )
+    version_match = CANDIDATE_VERSION.fullmatch(str(value.get("version", "")))
+    _require(bool(version_match), "candidate version must be commit-bound and non-release")
+    _require(
+        version_match is not None and version_match.group(1) == value["commit"][:12],
+        "candidate version must agree with the source commit",
+    )
+    _require(value.get("source_ref") == "refs/heads/main", "candidate source_ref must identify protected main")
+
+    run = value.get("run")
+    _require(isinstance(run, dict), "candidate run identity is required")
+    _require(
+        set(run) == {"repository", "workflow", "id", "attempt"},
+        "candidate run identity shape changed",
+    )
+    _require(run.get("repository") == RUST_REPOSITORY, "candidate run repository changed")
+    _require(run.get("workflow") == CANDIDATE_BUILD_WORKFLOW, "candidate run workflow changed")
+    _require(bool(RUN_ID.fullmatch(str(run.get("id", "")))), "candidate run ID must be a positive integer")
+    _require(type(run.get("attempt")) is int and run["attempt"] > 0, "candidate run attempt must be positive")
+
+    _require_asset(value.get("archive"), asset="marty-ui-services.oci.tar", label="candidate archive")
+    _require_asset(value.get("metadata"), asset="marty-ui-services-build-metadata.json", label="candidate metadata")
+    _require_asset(value.get("provenance"), asset="marty-ui-services-provenance.json", label="candidate provenance")
+
+    image = value["image"]
+    _require(
+        set(image) == {"uri", "digest", "config_digest", "archive_tag"},
+        "candidate image pin shape changed",
+    )
+    _require(set(value["sbom"]) == {"asset", "digest"}, "candidate SBOM pin shape changed")
+    _require_digest(image.get("config_digest"), "image config digest must be sha256:<64 lowercase hex>")
+    _require(
+        image.get("archive_tag") == f"candidate-{value['commit']}",
+        "candidate archive tag changed",
+    )
+    _require(value.get("expected_failure") is None, "candidate pin must not declare an expected failure")
+
+
 def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict[str, Any]:
-    _require(expected_state in {"ready", "ineligible"}, "unsupported artifact pin state")
+    _require(expected_state in {"ready", "ineligible", "candidate"}, "unsupported artifact pin state")
     value = json.loads(path.read_text(encoding="utf-8"))
     target = artifact_target(value)
     _require(value.get("state") == expected_state, f"artifact pin must be {expected_state}")
     _require(value.get("repository") == target.repository, "artifact repository does not match its schema")
-    _require(bool(SEMVER_TAG.fullmatch(str(value.get("release_tag", "")))), "release_tag must be stable SemVer")
-    _require(bool(VERSION.fullmatch(str(value.get("version", "")))), "version must be stable SemVer")
-    _require(value["release_tag"] == f"v{value['version']}", "release_tag and version must agree")
     _require(bool(COMMIT.fullmatch(str(value.get("commit", "")))), "commit must be a full lowercase SHA")
-    expected_source_ref = "refs/heads/main" if target is LEGACY_TARGET else f"refs/tags/{value['release_tag']}"
-    _require(
-        value.get("source_ref") == expected_source_ref,
-        "source_ref must identify the attested release source",
-    )
+
+    if value["schema"] == CANDIDATE_PIN_SCHEMA:
+        _require(expected_state == "candidate", "candidate pin must be validated as candidate")
+    else:
+        _require(expected_state != "candidate", "release pin cannot be validated as candidate")
+        _require(bool(SEMVER_TAG.fullmatch(str(value.get("release_tag", "")))), "release_tag must be stable SemVer")
+        _require(bool(VERSION.fullmatch(str(value.get("version", "")))), "version must be stable SemVer")
+        _require(value["release_tag"] == f"v{value['version']}", "release_tag and version must agree")
+        expected_source_ref = "refs/heads/main" if target is LEGACY_TARGET else f"refs/tags/{value['release_tag']}"
+        _require(
+            value.get("source_ref") == expected_source_ref,
+            "source_ref must identify the attested release source",
+        )
 
     image = value.get("image")
     _require(isinstance(image, dict), "image pin is required")
@@ -270,12 +421,15 @@ def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict
         "@" not in image["uri"] and ":" not in image["uri"].split("/", 1)[1],
         "image URI must not contain a mutable tag",
     )
-    _require(bool(SHA256.fullmatch(str(image.get("digest", "")))), "image digest must be sha256:<64 lowercase hex>")
+    _require_digest(image.get("digest"), "image digest must be sha256:<64 lowercase hex>")
 
     sbom = value.get("sbom")
     _require(isinstance(sbom, dict), "SBOM pin is required")
     _require(sbom.get("asset") == target.sbom_asset, "unexpected verification SBOM asset")
-    _require(bool(SHA256.fullmatch(str(sbom.get("digest", "")))), "SBOM digest must be sha256:<64 lowercase hex>")
+    _require_digest(sbom.get("digest"), "SBOM digest must be sha256:<64 lowercase hex>")
+    if value["schema"] == CANDIDATE_PIN_SCHEMA:
+        _validate_candidate_pin(value)
+        return value
     expected_failure = value.get("expected_failure")
     if expected_state == "ineligible":
         _require(
@@ -292,10 +446,26 @@ def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict
 
 
 def image_reference(pin: dict[str, Any]) -> str:
+    if pin["schema"] == CANDIDATE_PIN_SCHEMA:
+        return f"{CANDIDATE_LOCAL_IMAGE_REPOSITORY}:verified-{pin['commit']}"
     return f"{pin['image']['uri']}@{pin['image']['digest']}"
 
 
 def evidence_subject(pin: dict[str, Any]) -> dict[str, Any]:
+    if pin["schema"] == CANDIDATE_PIN_SCHEMA:
+        return {
+            "repository": pin["repository"],
+            "commit": pin["commit"],
+            "source_ref": pin["source_ref"],
+            "version": pin["version"],
+            "run": pin["run"],
+            "archive": pin["archive"],
+            "image": pin["image"],
+            "sbom": pin["sbom"],
+            "metadata": pin["metadata"],
+            "provenance": pin["provenance"],
+            "provenance_verified": True,
+        }
     return {
         "repository": pin["repository"],
         "release_tag": pin["release_tag"],
@@ -307,8 +477,1074 @@ def evidence_subject(pin: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_sbom(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+def file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _bytes_digest(raw: bytes) -> str:
+    return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+
+def _preflight_regular_file(path: Path, *, label: str, maximum_bytes: int) -> int:
+    metadata = path.lstat()
+    _require(stat.S_ISREG(metadata.st_mode), f"{label} must be a regular file")
+    _require(0 < metadata.st_size <= maximum_bytes, f"{label} is too large or empty")
+    return metadata.st_size
+
+
+def _read_bounded_regular_file(path: Path, *, label: str, maximum_bytes: int) -> bytes:
+    metadata = path.lstat()
+    _require(stat.S_ISREG(metadata.st_mode), f"{label} must be a regular file")
+    _require(0 < metadata.st_size <= maximum_bytes, f"{label} is too large or empty")
+    with path.open("rb") as handle:
+        opened = os.fstat(handle.fileno())
+        _require(
+            stat.S_ISREG(opened.st_mode)
+            and opened.st_dev == metadata.st_dev
+            and opened.st_ino == metadata.st_ino
+            and opened.st_size == metadata.st_size,
+            f"{label} changed before it was read",
+        )
+        raw = handle.read(maximum_bytes + 1)
+    _require(len(raw) == metadata.st_size, f"{label} size changed while it was read")
+    return raw
+
+
+def _tar_number(field: bytes, *, label: str) -> int:
+    try:
+        value = tarfile.nti(field)
+    except tarfile.InvalidHeaderError as exc:
+        raise ValueError(f"{label} contains a malformed tar size") from exc
+    _require(value >= 0, f"{label} contains a negative tar size")
+    return value
+
+
+def _pax_size_override(payload: bytes, *, label: str) -> int | None:
+    position = 0
+    size_override: int | None = None
+    while position < len(payload):
+        if payload[position:] == bytes(len(payload) - position):
+            break
+        separator = payload.find(b" ", position)
+        _require(separator > position, f"{label} contains malformed PAX metadata")
+        length_bytes = payload[position:separator]
+        _require(length_bytes.isdigit(), f"{label} contains malformed PAX metadata")
+        length = int(length_bytes)
+        end = position + length
+        _require(length >= 5 and end <= len(payload), f"{label} contains malformed PAX metadata")
+        record = payload[separator + 1 : end]
+        _require(record.endswith(b"\n") and b"=" in record, f"{label} contains malformed PAX metadata")
+        key, value = record[:-1].split(b"=", 1)
+        _require(bool(key), f"{label} contains malformed PAX metadata")
+        _require(not key.startswith(b"GNU.sparse."), f"{label} contains unsupported sparse PAX metadata")
+        if key == b"size":
+            _require(value.isdigit(), f"{label} contains malformed PAX size metadata")
+            size_override = int(value)
+        position = end
+    return size_override
+
+
+def _scan_tar_headers(
+    source: BinaryIO,
+    *,
+    stream_bytes: int,
+    maximum_members: int,
+    label: str,
+) -> None:
+    """Bound special tar metadata before tarfile can allocate it."""
+    _require(
+        stream_bytes % TAR_BLOCK_BYTES == 0,
+        f"{label} contains a truncated tar block",
+    )
+    source.seek(0)
+    offset = 0
+    member_count = 0
+    special_count = 0
+    special_bytes = 0
+    global_size_override: int | None = None
+    next_size_override: int | None = None
+    while offset + TAR_BLOCK_BYTES <= stream_bytes:
+        source.seek(offset)
+        header = source.read(TAR_BLOCK_BYTES)
+        _require(len(header) == TAR_BLOCK_BYTES, f"{label} contains a truncated tar header")
+        if header == bytes(TAR_BLOCK_BYTES):
+            remaining = stream_bytes - offset - TAR_BLOCK_BYTES
+            _require(
+                remaining >= TAR_BLOCK_BYTES,
+                f"{label} is missing the canonical tar end-of-archive",
+            )
+            while remaining:
+                chunk = source.read(min(1024 * 1024, remaining))
+                _require(
+                    bool(chunk) and not any(chunk),
+                    f"{label} contains non-zero data after its end-of-archive",
+                )
+                remaining -= len(chunk)
+            return
+        member_count += 1
+        _require(
+            member_count <= maximum_members + MAX_TAR_SPECIAL_HEADERS,
+            f"{label} contains too many raw tar headers",
+        )
+        raw_size = _tar_number(header[124:136], label=label)
+        typeflag = header[156:157] or tarfile.REGTYPE
+        _require(typeflag != tarfile.GNUTYPE_SPARSE, f"{label} contains unsupported GNU sparse metadata")
+        is_special = typeflag in TAR_SPECIAL_HEADER_TYPES
+        if is_special:
+            special_count += 1
+            special_bytes += raw_size
+            _require(special_count <= MAX_TAR_SPECIAL_HEADERS, f"{label} contains too many special tar headers")
+            _require(
+                raw_size <= MAX_TAR_SPECIAL_HEADER_BYTES,
+                f"{label} special tar header is too large",
+            )
+            _require(
+                special_bytes <= MAX_TOTAL_TAR_SPECIAL_HEADER_BYTES,
+                f"{label} aggregate special tar headers are too large",
+            )
+            payload_size = raw_size
+        else:
+            payload_size = (
+                next_size_override
+                if next_size_override is not None
+                else global_size_override
+                if global_size_override is not None
+                else raw_size
+            )
+            next_size_override = None
+        padded_size = ((payload_size + TAR_BLOCK_BYTES - 1) // TAR_BLOCK_BYTES) * TAR_BLOCK_BYTES
+        next_offset = offset + TAR_BLOCK_BYTES + padded_size
+        _require(next_offset <= stream_bytes, f"{label} contains a truncated tar member")
+        if typeflag in {tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE}:
+            payload = source.read(raw_size)
+            _require(len(payload) == raw_size, f"{label} contains truncated PAX metadata")
+            override = _pax_size_override(payload, label=label)
+            if typeflag == tarfile.XGLTYPE:
+                if override is not None:
+                    global_size_override = override
+            elif override is not None:
+                next_size_override = override
+        offset = next_offset
+    raise ValueError(f"{label} is missing the canonical tar end-of-archive")
+
+
+def _assert_candidate_runtime_config(runtime_config: Any, pin: dict[str, Any]) -> dict[str, Any]:
+    _require(isinstance(runtime_config, dict), "candidate runtime config changed")
+    environment = runtime_config.get("Env")
+    _require(isinstance(environment, list), "candidate image environment is missing")
+    for name, expected in {
+        "SERVICE_NAME": "verification",
+        "MARTY_RELEASE_VERSION": pin["version"],
+        "MARTY_UI_SHA": pin["commit"],
+    }.items():
+        bindings = [item for item in environment if isinstance(item, str) and item.startswith(f"{name}=")]
+        _require(bindings == [f"{name}={expected}"], f"candidate image {name} binding changed")
+    labels = runtime_config.get("Labels")
+    _require(isinstance(labels, dict), "candidate image labels are missing")
+    _require(
+        {
+            "org.opencontainers.image.source": labels.get("org.opencontainers.image.source"),
+            "org.opencontainers.image.revision": labels.get("org.opencontainers.image.revision"),
+            "org.opencontainers.image.version": labels.get("org.opencontainers.image.version"),
+        }
+        == {
+            "org.opencontainers.image.source": "https://github.com/ElevenID/marty-ui",
+            "org.opencontainers.image.revision": pin["commit"],
+            "org.opencontainers.image.version": pin["version"],
+        },
+        "candidate image source labels changed",
+    )
+    return labels
+
+
+def inspect_oci_archive(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
+    archive_bytes = _preflight_regular_file(
+        path,
+        label="OCI archive",
+        maximum_bytes=MAX_ARCHIVE_BYTES,
+    )
+    with path.open("rb") as raw_archive:
+        _require(
+            raw_archive.read(2) != b"\x1f\x8b",
+            "candidate archive is not a readable OCI archive: outer wrapper must be uncompressed",
+        )
+        _scan_tar_headers(
+            raw_archive,
+            stream_bytes=archive_bytes,
+            maximum_members=MAX_ARCHIVE_MEMBERS,
+            label="OCI archive",
+        )
+    reachable_members = {"oci-layout", "index.json"}
+
+    def normalized(member: tarfile.TarInfo) -> str:
+        name = member.name.removeprefix("./")
+        parts = PurePosixPath(name).parts
+        _require(bool(parts) and bool(parts[0]), "OCI archive path changed")
+        _require(".." not in parts and not name.startswith("/"), "OCI archive contains an unsafe path")
+        return name
+
+    def read_member(archive: tarfile.TarFile, members: dict[str, tarfile.TarInfo], name: str) -> bytes:
+        member = members.get(name)
+        _require(member is not None and member.isfile(), f"OCI archive member is missing: {name}")
+        _require(member.size <= 16 * 1024 * 1024, f"OCI metadata member is too large: {name}")
+        extracted = archive.extractfile(member)
+        _require(extracted is not None, f"OCI archive member could not be read: {name}")
+        return extracted.read()
+
+    def descriptor_blob(
+        archive: tarfile.TarFile,
+        members: dict[str, tarfile.TarInfo],
+        descriptor: dict[str, Any],
+        *,
+        metadata: bool,
+        sink: BinaryIO | None = None,
+    ) -> tuple[str, bytes]:
+        digest = _require_digest(descriptor.get("digest"), "OCI descriptor digest changed")
+        _require(isinstance(descriptor.get("size"), int) and descriptor["size"] >= 0, "OCI descriptor size changed")
+        algorithm, encoded = digest.split(":", 1)
+        _require(algorithm == "sha256", "OCI descriptor algorithm changed")
+        name = f"blobs/{algorithm}/{encoded}"
+        member = members.get(name)
+        _require(member is not None and member.isfile(), f"OCI archive member is missing: {name}")
+        _require(member.size == descriptor["size"], "OCI descriptor size does not match its blob")
+        if metadata:
+            _require(member.size <= 16 * 1024 * 1024, f"OCI metadata member is too large: {name}")
+        else:
+            _require(member.size <= MAX_COMPRESSED_LAYER_BYTES, "OCI compressed layer is too large")
+        reachable_members.add(name)
+        extracted = archive.extractfile(member)
+        _require(extracted is not None, f"OCI archive member could not be read: {name}")
+        digest_state = hashlib.sha256()
+        chunks: list[bytes] = []
+        size = 0
+        for chunk in iter(lambda: extracted.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest_state.update(chunk)
+            if sink is not None:
+                sink.write(chunk)
+            if metadata:
+                chunks.append(chunk)
+        raw = b"".join(chunks)
+        _require(size == descriptor["size"], "OCI descriptor size does not match its blob")
+        _require(f"sha256:{digest_state.hexdigest()}" == digest, "OCI descriptor digest does not match its blob")
+        return digest, raw
+
+    def read_descriptor(
+        archive: tarfile.TarFile,
+        members: dict[str, tarfile.TarInfo],
+        descriptor: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        digest, raw = descriptor_blob(archive, members, descriptor, metadata=True)
+        value = json.loads(raw)
+        _require(isinstance(value, dict), "OCI descriptor blob must be a JSON object")
+        return digest, value
+
+    @contextmanager
+    def open_archive() -> Iterator[tarfile.TarFile]:
+        try:
+            with tarfile.open(path, mode="r:") as archive:
+                yield archive
+        except (OSError, tarfile.TarError) as exc:
+            raise ValueError("candidate archive is not a readable OCI archive") from exc
+
+    with open_archive() as archive:
+        members: dict[str, tarfile.TarInfo] = {}
+        directories: set[str] = set()
+        member_names: set[str] = set()
+        member_count = 0
+        regular_member_count = 0
+        for member in archive:
+            member_count += 1
+            _require(member_count <= MAX_ARCHIVE_MEMBERS, "OCI archive contains too many members")
+            name = normalized(member)
+            _require(name not in member_names, "OCI archive contains duplicate members")
+            member_names.add(name)
+            if member.isdir():
+                directories.add(name)
+                continue
+            _require(member.isfile(), "OCI archive contains a non-regular member")
+            regular_member_count += 1
+            _require(
+                regular_member_count <= MAX_ARCHIVE_REGULAR_MEMBERS,
+                "OCI archive contains too many regular members",
+            )
+            members[name] = member
+        layout = json.loads(read_member(archive, members, "oci-layout"))
+        _require(layout == {"imageLayoutVersion": "1.0.0"}, "OCI layout version changed")
+        index = json.loads(read_member(archive, members, "index.json"))
+        _require(isinstance(index, dict) and index.get("schemaVersion") == 2, "OCI index schema changed")
+        descriptors = index.get("manifests")
+        _require(isinstance(descriptors, list) and len(descriptors) == 1, "OCI archive must contain one image")
+        descriptor = descriptors[0]
+        _require(isinstance(descriptor, dict), "OCI image descriptor changed")
+        annotations = descriptor.get("annotations")
+        _require(
+            isinstance(annotations, dict)
+            and annotations.get("org.opencontainers.image.ref.name") == pin["image"]["archive_tag"],
+            "OCI archive tag changed",
+        )
+
+        descriptor_digest, value = read_descriptor(archive, members, descriptor)
+        if descriptor.get("mediaType") == "application/vnd.oci.image.index.v1+json":
+            nested = value.get("manifests")
+            _require(isinstance(nested, list) and len(nested) == 1, "OCI image index must contain one platform")
+            descriptor = nested[0]
+            _require(isinstance(descriptor, dict), "OCI platform descriptor changed")
+            _require(
+                descriptor.get("platform") == {"architecture": "amd64", "os": "linux"},
+                "OCI candidate platform changed",
+            )
+            descriptor_digest, value = read_descriptor(archive, members, descriptor)
+        elif "platform" in descriptor:
+            _require(
+                descriptor.get("platform") == {"architecture": "amd64", "os": "linux"},
+                "OCI candidate platform changed",
+            )
+        _require(
+            descriptor.get("mediaType") == "application/vnd.oci.image.manifest.v1+json",
+            "OCI candidate descriptor is not an image manifest",
+        )
+        _require(value.get("schemaVersion") == 2, "OCI manifest schema changed")
+        _require(descriptor_digest == pin["image"]["digest"], "OCI manifest digest does not match the candidate pin")
+
+        config_descriptor = value.get("config")
+        _require(isinstance(config_descriptor, dict), "OCI image config descriptor is missing")
+        _require(
+            config_descriptor.get("mediaType") == "application/vnd.oci.image.config.v1+json",
+            "OCI config media type changed",
+        )
+        config_digest, config = read_descriptor(archive, members, config_descriptor)
+        _require(config_digest == pin["image"]["config_digest"], "OCI config digest does not match the candidate pin")
+        _require(
+            config.get("architecture") == "amd64" and config.get("os") == "linux",
+            "OCI image config platform changed",
+        )
+        labels = _assert_candidate_runtime_config(config.get("config"), pin)
+        layers = value.get("layers")
+        _require(isinstance(layers, list) and layers, "OCI image layers are missing")
+        _require(len(layers) <= MAX_LAYERS, "OCI image contains too many layers")
+        rootfs = config.get("rootfs")
+        _require(isinstance(rootfs, dict) and rootfs.get("type") == "layers", "OCI rootfs changed")
+        diff_ids = rootfs.get("diff_ids")
+        _require(
+            isinstance(diff_ids, list)
+            and len(diff_ids) == len(layers)
+            and all(isinstance(item, str) and SHA256.fullmatch(item) for item in diff_ids),
+            "OCI rootfs diff IDs changed",
+        )
+        compressed_sizes = [layer.get("size") for layer in layers if isinstance(layer, dict)]
+        _require(
+            len(compressed_sizes) == len(layers)
+            and all(type(size) is int and 0 <= size <= MAX_COMPRESSED_LAYER_BYTES for size in compressed_sizes),
+            "OCI compressed layer is too large",
+        )
+        _require(
+            sum(compressed_sizes) <= MAX_TOTAL_COMPRESSED_LAYER_BYTES, "OCI aggregate compressed layers are too large"
+        )
+        total_expanded = 0
+        total_layer_members = 0
+        for layer, diff_id in zip(layers, diff_ids, strict=True):
+            _require(isinstance(layer, dict), "OCI layer descriptor changed")
+            _require(layer.get("mediaType") == OCI_GZIP_LAYER, "OCI layer media type changed")
+            with tempfile.TemporaryFile() as compressed, tempfile.TemporaryFile() as uncompressed:
+                descriptor_blob(archive, members, layer, metadata=False, sink=compressed)
+                compressed.seek(0)
+                digest_state = hashlib.sha256()
+                layer_expanded = 0
+                try:
+                    with gzip.GzipFile(fileobj=compressed, mode="rb") as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            next_layer_size = layer_expanded + len(chunk)
+                            next_total_size = total_expanded + len(chunk)
+                            _require(next_layer_size <= MAX_EXPANDED_LAYER_BYTES, "OCI expanded layer is too large")
+                            _require(
+                                next_total_size <= MAX_TOTAL_EXPANDED_LAYER_BYTES,
+                                "OCI aggregate expanded layers are too large",
+                            )
+                            layer_expanded = next_layer_size
+                            total_expanded = next_total_size
+                            digest_state.update(chunk)
+                            uncompressed.write(chunk)
+                except (EOFError, OSError) as exc:
+                    raise ValueError("OCI layer is not valid gzip content") from exc
+                _require(f"sha256:{digest_state.hexdigest()}" == diff_id, "OCI layer does not match its rootfs diff ID")
+                uncompressed.seek(0)
+                _scan_tar_headers(
+                    uncompressed,
+                    stream_bytes=layer_expanded,
+                    maximum_members=MAX_LAYER_MEMBERS,
+                    label="OCI layer",
+                )
+                uncompressed.seek(0)
+                try:
+                    with tarfile.open(fileobj=uncompressed, mode="r|") as layer_archive:
+                        layer_member_count = 0
+                        for _member in layer_archive:
+                            layer_member_count += 1
+                            total_layer_members += 1
+                            _require(
+                                layer_member_count <= MAX_LAYER_MEMBERS,
+                                "OCI layer contains too many members",
+                            )
+                            _require(
+                                total_layer_members <= MAX_TOTAL_LAYER_MEMBERS,
+                                "OCI aggregate layer members are too large",
+                            )
+                        _require(layer_member_count > 0, "OCI layer tar is empty")
+                except tarfile.TarError as exc:
+                    raise ValueError("OCI layer is not a readable tar archive") from exc
+        _require(
+            set(members) == reachable_members,
+            "OCI archive contains an unreferenced regular member",
+        )
+        reachable_directories = {
+            str(parent) for name in reachable_members for parent in PurePosixPath(name).parents if str(parent) != "."
+        }
+        _require(
+            directories <= reachable_directories,
+            "OCI archive contains an unreferenced directory member",
+        )
+        return {
+            "manifest_digest": descriptor_digest,
+            "config_digest": config_digest,
+            "platform": "linux/amd64",
+            "labels": labels,
+        }
+
+
+def verify_candidate_attestations(
+    pin: dict[str, Any],
+    pin_path: Path,
+    archive_path: Path,
+) -> dict[str, dict[str, Any]]:
+    run = pin["run"]
+    expected_invocation = f"https://github.com/{RUST_REPOSITORY}/actions/runs/{run['id']}/attempts/{run['attempt']}"
+    expected_builder = f"https://github.com/{RUST_REPOSITORY}/{CANDIDATE_BUILD_WORKFLOW}@{pin['source_ref']}"
+
+    def verify_subject(path: Path, label: str) -> dict[str, Any]:
+        verification = json.loads(
+            _run(
+                [
+                    "gh",
+                    "attestation",
+                    "verify",
+                    str(path),
+                    "--repo",
+                    RUST_REPOSITORY,
+                    "--signer-workflow",
+                    CANDIDATE_SIGNER_WORKFLOW,
+                    "--signer-digest",
+                    pin["commit"],
+                    "--source-digest",
+                    pin["commit"],
+                    "--source-ref",
+                    pin["source_ref"],
+                    "--deny-self-hosted-runners",
+                    "--format",
+                    "json",
+                ],
+                label=f"verify candidate {label} attestation",
+            )
+        )
+        _require(
+            isinstance(verification, list) and verification,
+            f"candidate {label} attestation verification returned no result",
+        )
+        accepted = []
+        for item in verification:
+            if not isinstance(item, dict):
+                continue
+            verification_result = item.get("verificationResult")
+            if not isinstance(verification_result, dict):
+                continue
+            statement = verification_result.get("statement")
+            if not isinstance(statement, dict):
+                continue
+            predicate = statement.get("predicate")
+            if not isinstance(predicate, dict):
+                continue
+            build_definition = predicate.get("buildDefinition")
+            run_details = predicate.get("runDetails")
+            if not isinstance(build_definition, dict) or not isinstance(run_details, dict):
+                continue
+            external_parameters = build_definition.get("externalParameters")
+            builder = run_details.get("builder")
+            run_metadata = run_details.get("metadata")
+            if not all(isinstance(value, dict) for value in (external_parameters, builder, run_metadata)):
+                continue
+            workflow = external_parameters.get("workflow")
+            dependencies = build_definition.get("resolvedDependencies")
+            source_dependency = {
+                "uri": f"git+https://github.com/{RUST_REPOSITORY}@{pin['source_ref']}",
+                "digest": {"gitCommit": pin["commit"]},
+            }
+            if (
+                isinstance(dependencies, list)
+                and workflow
+                == {
+                    "ref": pin["source_ref"],
+                    "repository": f"https://github.com/{RUST_REPOSITORY}",
+                    "path": CANDIDATE_BUILD_WORKFLOW,
+                }
+                and source_dependency in dependencies
+                and builder.get("id") == expected_builder
+                and run_metadata.get("invocationId") == expected_invocation
+            ):
+                accepted.append(item)
+        _require(
+            len(accepted) == 1,
+            f"candidate {label} attestation did not bind the exact producer run",
+        )
+        return accepted[0]
+
+    accepted = {
+        "pin": verify_subject(pin_path, "pin"),
+        "archive": verify_subject(archive_path, "archive"),
+    }
+
+    run_record = json.loads(
+        _run(
+            [
+                "gh",
+                "api",
+                f"repos/{RUST_REPOSITORY}/actions/runs/{run['id']}/attempts/{run['attempt']}",
+            ],
+            label="verify candidate producer run",
+        )
+    )
+    _require(isinstance(run_record, dict), "candidate producer run response changed")
+    status = run_record.get("status")
+    conclusion = run_record.get("conclusion")
+    _require(
+        (status, conclusion) == ("completed", "success"),
+        "candidate producer run has not completed successfully",
+    )
+    _require(
+        {
+            "head_sha": run_record.get("head_sha"),
+            "head_branch": run_record.get("head_branch"),
+            "event": run_record.get("event"),
+            "run_attempt": run_record.get("run_attempt"),
+            "path": run_record.get("path"),
+        }
+        == {
+            "head_sha": pin["commit"],
+            "head_branch": "main",
+            "event": "workflow_dispatch",
+            "run_attempt": run["attempt"],
+            "path": CANDIDATE_BUILD_WORKFLOW,
+        },
+        "candidate producer run identity or conclusion changed",
+    )
+    return accepted
+
+
+def _assert_loaded_candidate_inspection(
+    inspected: Any,
+    pin: dict[str, Any],
+    *,
+    exported_config_digest: str | None = None,
+) -> None:
+    _require(isinstance(inspected, dict), "loaded candidate image inspection changed")
+    image_id = inspected.get("Id")
+    descriptor = inspected.get("Descriptor")
+    manifest_bound = isinstance(descriptor, dict) and descriptor.get("digest") == pin["image"]["digest"]
+    config_bound = image_id == pin["image"]["config_digest"] or (
+        image_id == pin["image"]["digest"] and exported_config_digest == pin["image"]["config_digest"]
+    )
+    _require(manifest_bound and config_bound, "loaded candidate image identity changed")
+    _require(
+        inspected.get("Os") == "linux" and inspected.get("Architecture") == "amd64",
+        "loaded candidate platform changed",
+    )
+    _assert_candidate_runtime_config(inspected.get("Config"), pin)
+
+
+def _exported_candidate_config_digest(reference: str, pin: dict[str, Any], inspected: dict[str, Any]) -> str:
+    image_id = inspected.get("Id")
+    if image_id == pin["image"]["config_digest"]:
+        return image_id
+    _require(image_id == pin["image"]["digest"], "loaded candidate image identity changed")
+    with tempfile.TemporaryDirectory(prefix="marty-candidate-export-") as temporary:
+        exported = Path(temporary) / "loaded.oci.tar"
+        _run(
+            ["docker", "image", "save", "--output", str(exported), reference],
+            label="export loaded candidate identity",
+            timeout=300,
+        )
+        exported_bytes = _preflight_regular_file(
+            exported,
+            label="exported candidate image",
+            maximum_bytes=MAX_ARCHIVE_BYTES,
+        )
+        with exported.open("rb") as raw:
+            _scan_tar_headers(
+                raw,
+                stream_bytes=exported_bytes,
+                maximum_members=MAX_ARCHIVE_MEMBERS,
+                label="exported candidate image",
+            )
+        manifest_name = f"blobs/sha256/{pin['image']['digest'].split(':', 1)[1]}"
+        config_name = f"blobs/sha256/{pin['image']['config_digest'].split(':', 1)[1]}"
+        selected: dict[str, bytes] = {}
+        try:
+            with tarfile.open(exported, mode="r:") as archive:
+                members = 0
+                regular_members = 0
+                names: set[str] = set()
+                for member in archive:
+                    members += 1
+                    _require(members <= MAX_ARCHIVE_MEMBERS, "exported candidate image contains too many members")
+                    name = member.name.removeprefix("./")
+                    _require(name not in names, "exported candidate image contains duplicate members")
+                    names.add(name)
+                    if member.isdir():
+                        continue
+                    _require(member.isfile(), "exported candidate image contains a non-regular member")
+                    regular_members += 1
+                    _require(
+                        regular_members <= MAX_ARCHIVE_REGULAR_MEMBERS,
+                        "exported candidate image contains too many regular members",
+                    )
+                    if name not in {manifest_name, config_name}:
+                        continue
+                    _require(member.size <= 16 * 1024 * 1024, "exported candidate identity member is too large")
+                    handle = archive.extractfile(member)
+                    _require(handle is not None, "exported candidate identity member could not be read")
+                    selected[name] = handle.read()
+        except (OSError, tarfile.TarError) as exc:
+            raise ValueError("exported candidate image is not a readable OCI archive") from exc
+        _require(set(selected) == {manifest_name, config_name}, "exported candidate identity members are missing")
+        config_raw = selected[config_name]
+        _require(
+            f"sha256:{hashlib.sha256(config_raw).hexdigest()}" == pin["image"]["config_digest"],
+            "exported candidate config digest changed",
+        )
+        manifest_raw = selected[manifest_name]
+        _require(
+            f"sha256:{hashlib.sha256(manifest_raw).hexdigest()}" == pin["image"]["digest"],
+            "exported candidate manifest digest changed",
+        )
+        manifest = json.loads(manifest_raw)
+        _require(isinstance(manifest, dict), "exported candidate manifest changed")
+        config = manifest.get("config")
+        _require(
+            isinstance(config, dict)
+            and config.get("mediaType") == "application/vnd.oci.image.config.v1+json"
+            and config.get("digest") == pin["image"]["config_digest"]
+            and config.get("size") == len(config_raw),
+            "exported candidate config identity changed",
+        )
+        return pin["image"]["config_digest"]
+
+
+def _verify_staged_candidate_archive(pin: dict[str, Any], archive_path: Path) -> None:
+    metadata = archive_path.lstat()
+    _require(stat.S_ISREG(metadata.st_mode), "staged candidate archive must be a regular file")
+    _require(0 < metadata.st_size <= MAX_ARCHIVE_BYTES, "staged candidate archive is too large or empty")
+    if os.name != "nt":
+        _require(stat.S_IMODE(metadata.st_mode) & 0o077 == 0, "staged candidate archive is not private")
+        getuid = getattr(os, "getuid", None)
+        if getuid is not None:
+            _require(metadata.st_uid == getuid(), "staged candidate archive is not owned by this user")
+    _require(file_digest(archive_path) == pin["archive"]["digest"], "staged candidate archive digest changed")
+    inspect_oci_archive(archive_path, pin)
+
+
+@contextmanager
+def stage_candidate_archive(pin: dict[str, Any], archive_path: Path) -> Iterator[Path]:
+    source_metadata = archive_path.lstat()
+    _require(stat.S_ISREG(source_metadata.st_mode), "OCI archive must be a regular file")
+    _require(0 < source_metadata.st_size <= MAX_ARCHIVE_BYTES, "OCI archive is too large or empty")
+    with tempfile.TemporaryDirectory(prefix="marty-candidate-private-") as temporary:
+        directory = Path(temporary)
+        if os.name != "nt":
+            directory.chmod(0o700)
+        staged = directory / "candidate.oci.tar"
+        digest = hashlib.sha256()
+        copied = 0
+        descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with archive_path.open("rb") as source, os.fdopen(descriptor, "wb") as destination:
+                descriptor = -1
+                opened = os.fstat(source.fileno())
+                _require(
+                    stat.S_ISREG(opened.st_mode)
+                    and opened.st_dev == source_metadata.st_dev
+                    and opened.st_ino == source_metadata.st_ino
+                    and opened.st_size == source_metadata.st_size,
+                    "candidate archive changed before private staging",
+                )
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    copied += len(chunk)
+                    _require(copied <= MAX_ARCHIVE_BYTES, "OCI archive is too large or empty")
+                    digest.update(chunk)
+                    destination.write(chunk)
+                destination.flush()
+                os.fsync(destination.fileno())
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        _require(copied == source_metadata.st_size, "candidate archive size changed during private staging")
+        _require(
+            f"sha256:{digest.hexdigest()}" == pin["archive"]["digest"],
+            "candidate archive digest changed during private staging",
+        )
+        if os.name != "nt":
+            staged.chmod(0o600)
+        _verify_staged_candidate_archive(pin, staged)
+        yield staged
+
+
+def _inspect_optional_docker_image(reference: str) -> dict[str, Any] | None:
+    try:
+        completed = subprocess.run(
+            ["docker", "image", "inspect", reference, "--format", "{{json .}}"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ArtifactRuntimeError("inspect candidate image could not complete") from exc
+    if completed.returncode != 0:
+        if re.search(r"No such (?:image|object)", completed.stderr, flags=re.IGNORECASE):
+            return None
+        raise ArtifactRuntimeError(f"inspect candidate image failed with exit code {completed.returncode}")
+    inspected = json.loads(completed.stdout)
+    _require(isinstance(inspected, dict), "candidate image inspection changed")
+    return inspected
+
+
+def _remove_candidate_image(reference: str) -> None:
+    subprocess.run(
+        ["docker", "image", "rm", "-f", reference],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
+    _verify_staged_candidate_archive(pin, archive_path)
+    load_report_reference = f"{pin['image']['archive_tag']}:latest"
+    expected_reference = f"{pin['image']['archive_tag']}@{pin['image']['digest']}"
+    verified_reference = image_reference(pin)
+    _require(_inspect_optional_docker_image(expected_reference) is None, "candidate archive tag already exists locally")
+    _require(
+        _inspect_optional_docker_image(verified_reference) is None, "verified candidate tag already exists locally"
+    )
+    loaded = False
+    bound = False
+    try:
+        output = _run(
+            ["docker", "load", "--input", str(archive_path)],
+            label="load verified candidate archive",
+            timeout=300,
+        )
+        _require(
+            f"Loaded image: {load_report_reference}" in {line.strip() for line in output.splitlines()},
+            "candidate archive load did not report the expected image tag",
+        )
+        loaded = True
+        inspected = _inspect_optional_docker_image(expected_reference)
+        _require(inspected is not None, "loaded candidate image could not be resolved by its new archive tag")
+        exported_config_digest = _exported_candidate_config_digest(expected_reference, pin, inspected)
+        _assert_loaded_candidate_inspection(
+            inspected,
+            pin,
+            exported_config_digest=exported_config_digest,
+        )
+        _run(
+            ["docker", "image", "tag", expected_reference, verified_reference],
+            label="bind loaded candidate runtime reference",
+        )
+        bound = True
+        rebound = _inspect_optional_docker_image(verified_reference)
+        _require(rebound is not None, "bound candidate runtime image could not be resolved")
+        _assert_loaded_candidate_inspection(
+            rebound,
+            pin,
+            exported_config_digest=exported_config_digest,
+        )
+        _remove_candidate_image(expected_reference)
+        loaded = False
+        bound = False
+        return verified_reference
+    finally:
+        if loaded:
+            _remove_candidate_image(expected_reference)
+        if bound:
+            _remove_candidate_image(verified_reference)
+
+
+def validate_candidate_inputs(
+    pin: dict[str, Any],
+    *,
+    archive_path: Path,
+    sbom_path: Path,
+    metadata_path: Path,
+    provenance_path: Path,
+) -> dict[str, Any]:
+    _require(pin["schema"] == CANDIDATE_PIN_SCHEMA, "candidate validation requires a candidate pin")
+    for path, label, maximum_bytes in (
+        (archive_path, "OCI archive", MAX_ARCHIVE_BYTES),
+        (sbom_path, "candidate SBOM", MAX_SBOM_BYTES),
+        (metadata_path, "candidate metadata", MAX_CANDIDATE_METADATA_BYTES),
+        (provenance_path, "candidate provenance", MAX_CANDIDATE_PROVENANCE_BYTES),
+    ):
+        _preflight_regular_file(path, label=label, maximum_bytes=maximum_bytes)
+    _require(file_digest(archive_path) == pin["archive"]["digest"], "candidate archive digest changed")
+    sbom_raw = _read_bounded_regular_file(
+        sbom_path,
+        label="candidate SBOM",
+        maximum_bytes=MAX_SBOM_BYTES,
+    )
+    metadata_raw = _read_bounded_regular_file(
+        metadata_path,
+        label="candidate metadata",
+        maximum_bytes=MAX_CANDIDATE_METADATA_BYTES,
+    )
+    provenance_raw = _read_bounded_regular_file(
+        provenance_path,
+        label="candidate provenance",
+        maximum_bytes=MAX_CANDIDATE_PROVENANCE_BYTES,
+    )
+    _require(_bytes_digest(sbom_raw) == pin["sbom"]["digest"], "candidate SBOM digest changed")
+    _require(_bytes_digest(metadata_raw) == pin["metadata"]["digest"], "candidate metadata digest changed")
+    _require(_bytes_digest(provenance_raw) == pin["provenance"]["digest"], "candidate provenance digest changed")
+    inspect_oci_archive(archive_path, pin)
+    validate_sbom(sbom_path, pin, raw=sbom_raw)
+
+    source = {
+        "repository": pin["repository"],
+        "commit": pin["commit"],
+        "ref": pin["source_ref"],
+    }
+    metadata = json.loads(metadata_raw)
+    _require(isinstance(metadata, dict), "candidate metadata must be a JSON object")
+    _require(
+        set(metadata) == {"schema", "source", "builder", "build", "image"},
+        "candidate metadata shape changed",
+    )
+    _require(metadata.get("schema") == CANDIDATE_METADATA_SCHEMA, "candidate metadata schema changed")
+    _require(metadata.get("source") == source, "candidate metadata source changed")
+    _require(metadata.get("builder") == pin["run"], "candidate metadata builder changed")
+    build = metadata.get("build")
+    _require(isinstance(build, dict), "candidate build metadata is required")
+    _require(
+        build
+        == {
+            "context": ".",
+            "dockerfile": "services/Dockerfile",
+            "dockerfile_digest": build.get("dockerfile_digest"),
+            "platform": "linux/amd64",
+            "version": pin["version"],
+            "arguments": {
+                "SERVICE_NAME": "verification",
+                "MARTY_RELEASE_VERSION": pin["version"],
+                "MARTY_UI_SHA": pin["commit"],
+            },
+        },
+        "candidate build metadata changed",
+    )
+    _require_digest(
+        build["dockerfile_digest"],
+        "candidate Dockerfile digest must be sha256:<64 lowercase hex>",
+    )
+    _require(metadata.get("image") == pin["image"], "candidate metadata image changed")
+
+    provenance = json.loads(provenance_raw)
+    _require(isinstance(provenance, dict), "candidate provenance must be a JSON object")
+    _require(
+        set(provenance) == {"schema", "source", "builder", "subjects"},
+        "candidate provenance shape changed",
+    )
+    _require(provenance.get("schema") == CANDIDATE_PROVENANCE_SCHEMA, "candidate provenance schema changed")
+    _require(
+        provenance.get("source") == source,
+        "candidate provenance source changed",
+    )
+    _require(provenance.get("builder") == pin["run"], "candidate provenance builder changed")
+    _require(
+        provenance.get("subjects")
+        == {
+            "archive": pin["archive"],
+            "image": pin["image"],
+            "sbom": pin["sbom"],
+            "metadata": pin["metadata"],
+        },
+        "candidate provenance subjects changed",
+    )
+    return provenance
+
+
+def harness_subject() -> dict[str, Any]:
+    _run(
+        ["git", "-C", str(ROOT), "diff", "--quiet", "--ignore-submodules", "--"],
+        label="verify clean verification harness worktree",
+    )
+    _run(
+        ["git", "-C", str(ROOT), "diff", "--cached", "--quiet", "--ignore-submodules", "--"],
+        label="verify clean verification harness index",
+    )
+    commit = _run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+        label="resolve verification harness commit",
+    )
+    _require(bool(COMMIT.fullmatch(commit)), "verification harness commit changed")
+    _run(
+        [
+            "git",
+            "-C",
+            str(ROOT),
+            "merge-base",
+            "--is-ancestor",
+            HARDENED_HARNESS_FLOOR,
+            commit,
+        ],
+        label="verify hardened harness ancestry",
+    )
+    return {
+        "repository": INTEGRATION_REPOSITORY,
+        "commit": commit,
+        "hardened_floor": HARDENED_HARNESS_FLOOR,
+        "script": {
+            "path": "scripts/credentials_verifier_artifact.py",
+            "digest": file_digest(Path(__file__).resolve()),
+        },
+    }
+
+
+def compare_oracle_candidate_evidence(
+    oracle_path: Path,
+    candidate_path: Path,
+    oracle_pin: dict[str, Any],
+    candidate_pin: dict[str, Any],
+) -> dict[str, Any]:
+    oracle = json.loads(oracle_path.read_text(encoding="utf-8"))
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    _require(oracle_pin == FROZEN_LEGACY_SAFE_SESSION_PIN, "oracle pin changed")
+    _require(candidate_pin.get("schema") == CANDIDATE_PIN_SCHEMA, "candidate pin changed")
+    _require(isinstance(oracle, dict) and isinstance(candidate, dict), "artifact evidence must be JSON objects")
+    _require(oracle.get("schema") == EVIDENCE_SCHEMA, "oracle evidence schema changed")
+    _require(candidate.get("schema") == CANDIDATE_EVIDENCE_SCHEMA, "candidate evidence schema changed")
+    evidence_shape = {
+        "schema",
+        "classification",
+        "official_suite_invoked",
+        "official_suite_source_modified",
+        "status",
+        "release_clearance",
+        "blockers",
+        "subject",
+        "harness",
+        "checks",
+        "safe_session_selection",
+        "documented_differences",
+        "resolver_request_count",
+        "started_at",
+        "completed_at",
+    }
+    _require(set(oracle) == evidence_shape, "oracle evidence shape changed")
+    _require(set(candidate) == evidence_shape, "candidate evidence shape changed")
+    _require(oracle.get("subject") == evidence_subject(oracle_pin), "oracle evidence subject changed")
+    _require(
+        candidate.get("subject") == evidence_subject(candidate_pin),
+        "candidate evidence subject changed",
+    )
+    current_harness = harness_subject()
+    _require(oracle.get("harness") == current_harness, "oracle evidence harness changed")
+    _require(candidate.get("harness") == current_harness, "candidate evidence harness changed")
+    for label, evidence in (("oracle", oracle), ("candidate", candidate)):
+        _require(
+            evidence.get("classification") == "ElevenID-owned artifact integration",
+            f"{label} evidence classification changed",
+        )
+        _require(evidence.get("official_suite_invoked") is False, f"{label} suite claim changed")
+        _require(
+            evidence.get("official_suite_source_modified") is False,
+            f"{label} suite-source claim changed",
+        )
+        _require(evidence.get("status") == "passed", f"{label} artifact evidence did not pass")
+        _require(
+            evidence.get("release_clearance") == RELEASE_CLEARANCE_BLOCKED,
+            f"{label} evidence did not remain fail-closed",
+        )
+        _require(
+            evidence.get("blockers") == [OID4VP_POSITIVE_RUNTIME_BLOCKER],
+            f"{label} evidence omitted the positive-runtime blocker",
+        )
+        _require(
+            isinstance(evidence.get("started_at"), str) and isinstance(evidence.get("completed_at"), str),
+            f"{label} evidence timestamps changed",
+        )
+
+    _require(oracle.get("documented_differences") == [], "oracle evidence contained a difference")
+    candidate_differences = candidate.get("documented_differences")
+    _require(
+        isinstance(candidate_differences, list)
+        and all(isinstance(difference, str) for difference in candidate_differences)
+        and len(candidate_differences) == len(set(candidate_differences))
+        and set(candidate_differences) == DOCUMENTED_TARGET_DIFFERENCES,
+        "candidate evidence contained an undocumented difference",
+    )
+    _require(
+        candidate.get("resolver_request_count") == oracle.get("resolver_request_count"),
+        "candidate and oracle resolver evidence counts diverged",
+    )
+
+    oracle_selection = oracle.get("safe_session_selection")
+    candidate_selection = candidate.get("safe_session_selection")
+    _require(
+        isinstance(oracle_selection, dict)
+        and set(oracle_selection) == {"reason", "resampled_unsafe_ids"}
+        and oracle_selection.get("reason") == "frozen_python_v0.1.71_invalid_leading_identifier"
+        and type(oracle_selection.get("resampled_unsafe_ids")) is int
+        and oracle_selection["resampled_unsafe_ids"] >= 0,
+        "oracle safe-session evidence changed",
+    )
+    _require(
+        candidate_selection
+        == {
+            "reason": "not_allowlisted_no_resampling",
+            "resampled_unsafe_ids": 0,
+        },
+        "candidate safe-session evidence changed",
+    )
+    oracle_checks = _check_set(oracle)
+    candidate_checks = _check_set(candidate)
+    _require(oracle_checks == EXPECTED_LANGUAGE_NEUTRAL_CHECKS, "frozen oracle evidence set changed")
+    _require(
+        candidate_checks == EXPECTED_LANGUAGE_NEUTRAL_CHECKS | RUST_ONLY_CHECKS,
+        "frozen candidate evidence set changed",
+    )
+    return {
+        "schema": "elevenid.credentials-verifier-candidate-comparison/v1",
+        "status": "matched_with_runtime_blocker",
+        "release_clearance": RELEASE_CLEARANCE_BLOCKED,
+        "blockers": [OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "language_neutral_checks": sorted(oracle_checks),
+        "candidate_only_checks": sorted(candidate_checks - oracle_checks),
+        "documented_differences": sorted(DOCUMENTED_TARGET_DIFFERENCES),
+    }
+
+
+def validate_sbom(path: Path, pin: dict[str, Any], *, raw: bytes | None = None) -> dict[str, Any]:
+    value = json.loads(
+        raw
+        if raw is not None
+        else _read_bounded_regular_file(
+            path,
+            label="verification SBOM",
+            maximum_bytes=MAX_SBOM_BYTES,
+        )
+    )
     _require(isinstance(value, dict), "verification SBOM must be a JSON object")
     target = artifact_target(pin)
     if target is LEGACY_TARGET:
@@ -327,6 +1563,105 @@ def validate_sbom(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
         _require(
             EXPECTED_SBOM_PACKAGES.issubset(package_names),
             "verification SBOM is missing required native Marty packages",
+        )
+    elif pin["schema"] == CANDIDATE_PIN_SCHEMA:
+        _require(len(value) <= MAX_SBOM_TOP_LEVEL_KEYS, "candidate SBOM contains too many top-level fields")
+        _require(value.get("bomFormat") == "CycloneDX", "verification SBOM must use CycloneDX")
+        _require(value.get("specVersion") == "1.6", "verification SBOM must use CycloneDX 1.6")
+        components = value.get("components")
+        _require(
+            isinstance(components, list) and bool(components) and len(components) <= MAX_SBOM_COMPONENTS,
+            "candidate SBOM components are missing",
+        )
+        component_refs: set[str] = set()
+        for item in components:
+            _require(isinstance(item, dict), "candidate SBOM component changed")
+            _require(item.get("type") in CYCLONEDX_COMPONENT_TYPES, "candidate SBOM component type changed")
+            _require(
+                isinstance(item.get("name"), str) and bool(item["name"].strip()),
+                "candidate SBOM component name is missing",
+            )
+            reference = item.get("bom-ref")
+            _require(
+                isinstance(reference, str) and bool(reference),
+                "candidate SBOM component reference is missing",
+            )
+            _require(reference not in component_refs, "candidate SBOM component reference is duplicated")
+            component_refs.add(reference)
+        metadata = value.get("metadata")
+        _require(isinstance(metadata, dict), "verification SBOM metadata is required")
+        tools = metadata.get("tools")
+        _require(isinstance(tools, dict), "candidate SBOM scanner identity is missing")
+        scanner_components = tools.get("components")
+        _require(
+            isinstance(scanner_components, list)
+            and len(scanner_components) <= MAX_SBOM_SCANNER_COMPONENTS
+            and any(isinstance(tool, dict) and tool.get("name") == "syft" for tool in scanner_components),
+            "candidate SBOM was not generated by Syft",
+        )
+        component = metadata.get("component")
+        _require(isinstance(component, dict), "verification SBOM image component is required")
+        _require(component.get("type") == "container", "candidate SBOM root is not a container")
+        _require(component.get("name") == target.image_uri, "verification SBOM describes an unexpected image")
+        _require(
+            component.get("version") == pin["image"]["digest"],
+            "verification SBOM root is not bound to the pinned image digest",
+        )
+        root_reference = component.get("bom-ref")
+        _require(
+            isinstance(root_reference, str) and bool(root_reference),
+            "candidate SBOM root reference is missing",
+        )
+        _require(root_reference not in component_refs, "candidate SBOM root reference is duplicated")
+        all_references = component_refs | {root_reference}
+        dependencies = value.get("dependencies", [])
+        _require(
+            isinstance(dependencies, list) and len(dependencies) <= MAX_SBOM_DEPENDENCIES,
+            "candidate SBOM dependencies changed",
+        )
+        dependency_roots: set[str] = set()
+        for dependency in dependencies:
+            _require(isinstance(dependency, dict), "candidate SBOM dependency changed")
+            reference = dependency.get("ref")
+            depends_on = dependency.get("dependsOn")
+            _require(
+                isinstance(reference, str) and reference in all_references and reference not in dependency_roots,
+                "candidate SBOM dependency reference changed",
+            )
+            _require(
+                isinstance(depends_on, list)
+                and all(isinstance(item, str) and item in all_references for item in depends_on),
+                "candidate SBOM dependency edge changed",
+            )
+            dependency_roots.add(reference)
+        _require(
+            not ({"purl", "cpe", "hashes", "properties", "swid"} & set(component)),
+            "candidate SBOM root identity is contradictory",
+        )
+        properties = metadata.get("properties")
+        _require(
+            isinstance(properties, list) and len(properties) <= MAX_SBOM_PROPERTIES,
+            "candidate SBOM image labels are missing",
+        )
+        property_values: dict[str, str] = {}
+        for item in properties:
+            _require(isinstance(item, dict), "candidate SBOM image property changed")
+            name = item.get("name")
+            property_value = item.get("value")
+            _require(
+                isinstance(name, str) and isinstance(property_value, str),
+                "candidate SBOM image property changed",
+            )
+            _require(name not in property_values, "candidate SBOM image property is duplicated")
+            property_values[name] = property_value
+        expected_labels = {
+            "syft:image:labels:org.opencontainers.image.source": "https://github.com/ElevenID/marty-ui",
+            "syft:image:labels:org.opencontainers.image.revision": pin["commit"],
+            "syft:image:labels:org.opencontainers.image.version": pin["version"],
+        }
+        _require(
+            all(property_values.get(name) == expected for name, expected in expected_labels.items()),
+            "candidate SBOM image labels changed",
         )
     else:
         _require(value.get("bomFormat") == "CycloneDX", "verification SBOM must use CycloneDX")
@@ -803,15 +2138,7 @@ def _http_status(method: str, url: str) -> int:
 
 
 def _assert_compatibility_routes_absent(base_url: str) -> None:
-    routes = (
-        ("GET", "/v1/verification/health"),
-        ("POST", "/v1/verification/sessions"),
-        ("GET", "/v1/verification/sessions/A"),
-        ("POST", "/v1/verification/sessions/A/submit"),
-        ("POST", "/v1/verification/verify"),
-        ("POST", "/v1/verification/verify/vds-nc"),
-    )
-    for method, path in routes:
+    for method, path in COMPATIBILITY_OPERATIONS:
         _require(
             _http_status(method, f"{base_url}{path}") == 404,
             f"credentials compatibility route was active by default: {method} {path}",
@@ -1158,8 +2485,31 @@ def _migration_command(
     return command
 
 
-def _migration_version(postgres: str) -> str:
-    value = _run(
+def _verification_database_snapshot(postgres: str) -> str:
+    dump = _run(
+        [
+            "docker",
+            "exec",
+            postgres,
+            "pg_dump",
+            "-U",
+            "postgres",
+            "-d",
+            "verifier",
+            "--no-owner",
+            "--no-privileges",
+            "--no-comments",
+            "--no-security-labels",
+        ],
+        label="snapshot verification database",
+    )
+    # PostgreSQL 17 emits a fresh psql safety token on each invocation. It is
+    # transport metadata, not database state, so normalize only those two lines.
+    return "\n".join(line for line in dump.splitlines() if not line.startswith(("\\restrict ", "\\unrestrict ")))
+
+
+def _verification_migration_heads(postgres: str) -> list[str]:
+    output = _run(
         [
             "docker",
             "exec",
@@ -1170,12 +2520,11 @@ def _migration_version(postgres: str) -> str:
             "-d",
             "verifier",
             "-tAc",
-            "SELECT version_num FROM verification_service.alembic_version",
+            ("SELECT version_num FROM verification_service.alembic_version ORDER BY version_num"),
         ],
-        label="read verification migration version",
+        label="read verification migration heads",
     )
-    _require(bool(re.fullmatch(r"[0-9A-Za-z_.-]+", value)), "verification migration version is invalid")
-    return value
+    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 def _start_service(
@@ -1193,7 +2542,10 @@ def _start_service(
         _assert_health(health, target)
     else:
         _require(target is RUST_TARGET, "only the Rust service has a compatibility switch")
-        _require(isinstance(health, dict), "native Rust health response was not an object")
+        _require(health.get("status") == "healthy", "default-disabled service is unhealthy")
+        _require(health.get("service") == "verification", "default-disabled service identity changed")
+        _require(isinstance(health.get("components"), dict), "default-disabled health components changed")
+        _require("native_backend" not in health, "compatibility health leaked while disabled")
         _assert_compatibility_routes_absent(base_url)
         return base_url
     compatibility_health = _http_json(
@@ -1317,12 +2669,25 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
     target = artifact_target(pin)
     postgres_image = load_postgres_image()
     reference = image_reference(pin)
+    if pin["schema"] == CANDIDATE_PIN_SCHEMA:
+        inspected = json.loads(
+            _run(
+                ["docker", "image", "inspect", reference, "--format", "{{json .}}"],
+                label="inspect loaded candidate image",
+            )
+        )
+        exported_config_digest = _exported_candidate_config_digest(reference, pin, inspected)
+        _assert_loaded_candidate_inspection(
+            inspected,
+            pin,
+            exported_config_digest=exported_config_digest,
+        )
     suffix = uuid.uuid4().hex[:12]
     network = f"marty-verifier-{suffix}"
     postgres = f"marty-verifier-db-{suffix}"
     service = f"marty-verifier-api-{suffix}"
-    disabled_service = f"marty-verifier-native-{suffix}"
     invalid_service = f"marty-verifier-invalid-{suffix}"
+    disabled_service = f"marty-verifier-disabled-{suffix}"
     database_password = secrets.token_urlsafe(32)
     api_key = secrets.token_urlsafe(32)
     vds_only_api_key = secrets.token_urlsafe(32)
@@ -1353,6 +2718,7 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
         method_id=method_id,
         public_jwk=public_jwk,
     )
+    harness = harness_subject()
     started = datetime.now(UTC)
 
     try:
@@ -1379,42 +2745,23 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
         _wait_for_postgres(postgres)
         completed_checks.append("postgres.ready")
 
-        _run(
-            _migration_command(reference, target, network, database_url),
-            label="apply released verification migrations",
-            timeout=180,
-        )
-        first_migration_version = _migration_version(postgres)
-        _run(
-            _migration_command(reference, target, network, database_url),
-            label="reapply released verification migrations",
-            timeout=180,
+        migration_command = _migration_command(reference, target, network, database_url)
+        _run(migration_command, label="apply verification migrations first pass", timeout=180)
+        first_database = _verification_database_snapshot(postgres)
+        first_heads = _verification_migration_heads(postgres)
+        _require(first_heads == [EXPECTED_MIGRATION_HEAD], "first migration application reached an unexpected head")
+        completed_checks.append("migrations.applied")
+        _run(migration_command, label="apply verification migrations second pass", timeout=180)
+        second_database = _verification_database_snapshot(postgres)
+        second_heads = _verification_migration_heads(postgres)
+        _require(
+            first_database == second_database,
+            "second migration application changed the verification database",
         )
         _require(
-            _migration_version(postgres) == first_migration_version,
-            "verification migration head changed after idempotent reapplication",
+            second_heads == [EXPECTED_MIGRATION_HEAD],
+            "second migration application reached an unexpected head",
         )
-        migration_table_count = _run(
-            [
-                "docker",
-                "exec",
-                postgres,
-                "psql",
-                "-U",
-                "postgres",
-                "-d",
-                "verifier",
-                "-tAc",
-                (
-                    "SELECT count(*) FROM information_schema.tables "
-                    "WHERE table_schema='verification_service' "
-                    "AND table_name='alembic_version'"
-                ),
-            ],
-            label="verify migration version table",
-        )
-        _require(migration_table_count == "1", "verification migration version table is missing")
-        completed_checks.append("migrations.applied")
         completed_checks.append("migrations.idempotent-reapplication")
 
         if target is RUST_TARGET:
@@ -2126,16 +3473,15 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
             completed_checks.append("canonical.malformed-evidence-fail")
 
         evidence = {
-            "schema": target.evidence_schema,
+            "schema": (CANDIDATE_EVIDENCE_SCHEMA if pin["schema"] == CANDIDATE_PIN_SCHEMA else target.evidence_schema),
             "classification": "ElevenID-owned artifact integration",
             "official_suite_invoked": False,
             "official_suite_source_modified": False,
-            "status": (
-                "ineligible" if KNOWN_INELIGIBLE_FAILURE_ID in documented_differences else "passed"
-            ),
+            "status": ("ineligible" if KNOWN_INELIGIBLE_FAILURE_ID in documented_differences else "passed"),
             "release_clearance": RELEASE_CLEARANCE_BLOCKED,
             "blockers": [OID4VP_POSITIVE_RUNTIME_BLOCKER],
             "subject": evidence_subject(pin),
+            "harness": harness,
             "checks": completed_checks,
             "safe_session_selection": _session_selection_evidence(
                 session_resample_reason,
@@ -2149,8 +3495,7 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         _require(
-            documented_differences
-            <= DOCUMENTED_TARGET_DIFFERENCES | {KNOWN_INELIGIBLE_FAILURE_ID},
+            documented_differences <= DOCUMENTED_TARGET_DIFFERENCES | {KNOWN_INELIGIBLE_FAILURE_ID},
             "artifact produced an undocumented language-neutral difference",
         )
         if KNOWN_INELIGIBLE_FAILURE_ID in documented_differences:
@@ -2179,6 +3524,7 @@ def run_expected_failure(
     provenance_verified: bool,
 ) -> dict[str, Any]:
     expected = pin["expected_failure"]
+    harness = harness_subject()
     started = datetime.now(UTC)
     evidence_path.unlink(missing_ok=True)
     selection = _session_selection_evidence(
@@ -2208,8 +3554,7 @@ def run_expected_failure(
         "negative-control observation omitted the positive-runtime release blocker",
     )
     _require(
-        set(runtime_observation.get("documented_differences", []))
-        == DOCUMENTED_TARGET_DIFFERENCES | {expected["id"]},
+        set(runtime_observation.get("documented_differences", [])) == DOCUMENTED_TARGET_DIFFERENCES | {expected["id"]},
         "negative-control observation contained an undocumented difference",
     )
     _require(
@@ -2226,6 +3571,7 @@ def run_expected_failure(
         "release_clearance": RELEASE_CLEARANCE_BLOCKED,
         "blockers": [OID4VP_POSITIVE_RUNTIME_BLOCKER],
         "subject": evidence_subject(pin),
+        "harness": harness,
         "failure_id": expected["id"],
         "safe_session_selection": selection,
         "checks": runtime_observation["checks"],
@@ -2305,8 +3651,7 @@ def compare_artifact_evidence(
         "candidate_only_checks": sorted(candidate_raw_checks - oracle_raw_checks),
         "documented_differences": candidate["documented_differences"],
         "documented_difference_details": {
-            difference: DOCUMENTED_DIFFERENCE_DETAILS[difference]
-            for difference in candidate["documented_differences"]
+            difference: DOCUMENTED_DIFFERENCE_DETAILS[difference] for difference in candidate["documented_differences"]
         },
     }
 
@@ -2321,6 +3666,12 @@ def parser() -> argparse.ArgumentParser:
     sbom.add_argument("--pin", type=Path, default=DEFAULT_PIN)
     sbom.add_argument("--state", choices=("ready", "ineligible"), default="ready")
     sbom.add_argument("--sbom", type=Path, required=True)
+    candidate = commands.add_parser("validate-candidate")
+    candidate.add_argument("--pin", type=Path, required=True)
+    candidate.add_argument("--archive", type=Path, required=True)
+    candidate.add_argument("--sbom", type=Path, required=True)
+    candidate.add_argument("--metadata", type=Path, required=True)
+    candidate.add_argument("--provenance", type=Path, required=True)
     run = commands.add_parser("run")
     run.add_argument("--pin", type=Path, default=DEFAULT_PIN)
     run.add_argument("--evidence", type=Path, required=True)
@@ -2333,11 +3684,32 @@ def parser() -> argparse.ArgumentParser:
     comparison.add_argument("--oracle", type=Path, required=True)
     comparison.add_argument("--candidate", type=Path, required=True)
     comparison.add_argument("--evidence", type=Path, required=True)
+    candidate_run = commands.add_parser("run-candidate")
+    candidate_run.add_argument("--pin", type=Path, required=True)
+    candidate_run.add_argument("--archive", type=Path, required=True)
+    candidate_run.add_argument("--sbom", type=Path, required=True)
+    candidate_run.add_argument("--metadata", type=Path, required=True)
+    candidate_run.add_argument("--provenance", type=Path, required=True)
+    candidate_run.add_argument("--evidence", type=Path, required=True)
+    candidate_comparison = commands.add_parser("compare-candidate-evidence")
+    candidate_comparison.add_argument("--oracle", type=Path, required=True)
+    candidate_comparison.add_argument("--candidate", type=Path, required=True)
+    candidate_comparison.add_argument("--oracle-pin", type=Path, required=True)
+    candidate_comparison.add_argument("--candidate-pin", type=Path, required=True)
+    candidate_comparison.add_argument("--evidence", type=Path, required=True)
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command in {
+        "compare-evidence",
+        "compare-candidate-evidence",
+        "run",
+        "run-expected-failure",
+        "run-candidate",
+    }:
+        args.evidence.resolve().unlink(missing_ok=True)
     if args.command == "compare-evidence":
         oracle = json.loads(args.oracle.resolve().read_text(encoding="utf-8"))
         candidate = json.loads(args.candidate.resolve().read_text(encoding="utf-8"))
@@ -2349,7 +3721,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(evidence, sort_keys=True))
         return 0
-    expected_state = "ineligible" if args.command == "run-expected-failure" else getattr(args, "state", "ready")
+    if args.command == "compare-candidate-evidence":
+        oracle_pin = load_pin(args.oracle_pin.resolve())
+        candidate_pin = load_pin(args.candidate_pin.resolve(), expected_state="candidate")
+        evidence = compare_oracle_candidate_evidence(
+            args.oracle.resolve(),
+            args.candidate.resolve(),
+            oracle_pin,
+            candidate_pin,
+        )
+        args.evidence.resolve().parent.mkdir(parents=True, exist_ok=True)
+        args.evidence.resolve().write_text(
+            json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(evidence, sort_keys=True))
+        return 0
+    if args.command in {"validate-candidate", "run-candidate"}:
+        expected_state = "candidate"
+    elif args.command == "run-expected-failure":
+        expected_state = "ineligible"
+    else:
+        expected_state = getattr(args, "state", "ready")
     pin = load_pin(args.pin.resolve(), expected_state=expected_state)
     if args.command == "validate-pin":
         print(json.dumps(pin, indent=2, sort_keys=True))
@@ -2363,6 +3756,47 @@ def main(argv: list[str] | None = None) -> int:
             else {"name": value["metadata"]["component"]["name"], "format": value["specVersion"]}
         )
         print(json.dumps(summary, sort_keys=True))
+        return 0
+    if args.command == "validate-candidate":
+        provenance = validate_candidate_inputs(
+            pin,
+            archive_path=args.archive.resolve(),
+            sbom_path=args.sbom.resolve(),
+            metadata_path=args.metadata.resolve(),
+            provenance_path=args.provenance.resolve(),
+        )
+        print(
+            json.dumps(
+                {
+                    "schema": provenance["schema"],
+                    "archive_digest": pin["archive"]["digest"],
+                    "image_config_digest": pin["image"]["config_digest"],
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    if args.command == "run-candidate":
+        validate_candidate_inputs(
+            pin,
+            archive_path=args.archive.resolve(),
+            sbom_path=args.sbom.resolve(),
+            metadata_path=args.metadata.resolve(),
+            provenance_path=args.provenance.resolve(),
+        )
+        verify_candidate_attestations(
+            pin,
+            args.pin.resolve(),
+            args.archive.resolve(),
+        )
+        with stage_candidate_archive(pin, args.archive.resolve()) as staged_archive:
+            load_candidate_archive(pin, staged_archive)
+        evidence = run_artifact_test(
+            pin,
+            args.evidence.resolve(),
+            provenance_verified=True,
+        )
+        print(json.dumps(evidence, sort_keys=True))
         return 0
     runner = run_expected_failure if args.command == "run-expected-failure" else run_artifact_test
     evidence = runner(pin, args.evidence.resolve(), provenance_verified=args.provenance_verified)

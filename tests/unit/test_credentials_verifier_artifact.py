@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import base64
+import copy
+import gzip
+import hashlib
 import importlib.util
+import io
 import json
+import os
+import tarfile
+from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -58,6 +66,46 @@ def valid_rust_pin() -> dict[str, object]:
     }
 
 
+def valid_candidate_pin() -> dict[str, object]:
+    commit = "a" * 40
+    return {
+        "schema": artifact.CANDIDATE_PIN_SCHEMA,
+        "state": "candidate",
+        "repository": artifact.RUST_REPOSITORY,
+        "version": f"0.0.0-candidate.{commit[:12]}",
+        "commit": commit,
+        "source_ref": "refs/heads/main",
+        "run": {
+            "repository": artifact.RUST_REPOSITORY,
+            "workflow": artifact.CANDIDATE_BUILD_WORKFLOW,
+            "id": "123456789",
+            "attempt": 1,
+        },
+        "archive": {
+            "asset": "marty-ui-services.oci.tar",
+            "digest": "sha256:" + "d" * 64,
+        },
+        "image": {
+            "uri": artifact.RUST_IMAGE_URI,
+            "digest": "sha256:" + "b" * 64,
+            "config_digest": "sha256:" + "e" * 64,
+            "archive_tag": "candidate-" + commit,
+        },
+        "sbom": {
+            "asset": "marty-ui-services-sbom.cdx.json",
+            "digest": "sha256:" + "c" * 64,
+        },
+        "metadata": {
+            "asset": "marty-ui-services-build-metadata.json",
+            "digest": "sha256:" + "1" * 64,
+        },
+        "provenance": {
+            "asset": "marty-ui-services-provenance.json",
+            "digest": "sha256:" + "f" * 64,
+        },
+    }
+
+
 def known_ineligible_failure() -> dict[str, object]:
     return {
         "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
@@ -85,18 +133,38 @@ def valid_sbom() -> dict[str, object]:
     }
 
 
-def valid_rust_sbom() -> dict[str, object]:
+def valid_rust_sbom(pin: dict[str, object] | None = None) -> dict[str, object]:
+    pin = pin or valid_rust_pin()
+    root_ref = "urn:elevenid:services-image"
+    component_ref = "pkg:cargo/marty-verification@1"
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.6",
         "metadata": {
+            "tools": {"components": [{"type": "application", "name": "syft", "version": "1.0"}]},
             "component": {
                 "type": "container",
                 "name": artifact.RUST_IMAGE_URI,
-                "version": "sha256:" + "b" * 64,
-            }
+                "version": pin["image"]["digest"],  # type: ignore[index]
+                "bom-ref": root_ref,
+            },
+            "properties": [
+                {
+                    "name": "syft:image:labels:org.opencontainers.image.source",
+                    "value": "https://github.com/ElevenID/marty-ui",
+                },
+                {
+                    "name": "syft:image:labels:org.opencontainers.image.revision",
+                    "value": pin["commit"],
+                },
+                {
+                    "name": "syft:image:labels:org.opencontainers.image.version",
+                    "value": pin["version"],
+                },
+            ],
         },
-        "components": [],
+        "components": [{"type": "library", "name": "marty-verification", "bom-ref": component_ref}],
+        "dependencies": [{"ref": root_ref, "dependsOn": [component_ref]}],
     }
 
 
@@ -174,6 +242,1496 @@ def test_rust_pin_and_cyclonedx_sbom_are_bound_to_canonical_services_image(tmp_p
     assert artifact.artifact_target(pin) is artifact.RUST_TARGET
     assert artifact.image_reference(pin) == artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64
     assert value["metadata"]["component"]["version"] == pin["image"]["digest"]
+
+
+def test_candidate_pin_is_non_release_and_runs_by_commit_bound_local_reference(tmp_path: Path) -> None:
+    candidate = valid_candidate_pin()
+    pin = artifact.load_pin(
+        write_pin(tmp_path / "candidate.json", candidate),
+        expected_state="candidate",
+    )
+
+    assert "release_tag" not in pin
+    assert artifact.artifact_target(pin) is artifact.RUST_TARGET
+    assert artifact.image_reference(pin) == (artifact.CANDIDATE_LOCAL_IMAGE_REPOSITORY + ":verified-" + "a" * 40)
+    assert artifact.evidence_subject(pin) == {
+        "repository": artifact.RUST_REPOSITORY,
+        "commit": "a" * 40,
+        "source_ref": "refs/heads/main",
+        "version": "0.0.0-candidate." + "a" * 12,
+        "run": candidate["run"],
+        "archive": candidate["archive"],
+        "image": candidate["image"],
+        "sbom": candidate["sbom"],
+        "metadata": candidate["metadata"],
+        "provenance": candidate["provenance"],
+        "provenance_verified": True,
+    }
+
+
+def _descriptor(value: bytes, media_type: str, **extra: object) -> dict[str, object]:
+    return {
+        "mediaType": media_type,
+        "digest": f"sha256:{hashlib.sha256(value).hexdigest()}",
+        "size": len(value),
+        **extra,
+    }
+
+
+def rewrite_tar_end(raw: bytes, *, eoa_blocks: int = 2, trailer: bytes = b"") -> bytes:
+    zero_pair = bytes(artifact.TAR_BLOCK_BYTES * 2)
+    offset = next(
+        position
+        for position in range(0, len(raw), artifact.TAR_BLOCK_BYTES)
+        if raw[position : position + len(zero_pair)] == zero_pair
+    )
+    return raw[:offset] + bytes(artifact.TAR_BLOCK_BYTES * eoa_blocks) + trailer
+
+
+def write_oci_archive(
+    path: Path,
+    pin: dict[str, object],
+    *,
+    revision: str | None = None,
+    platform: dict[str, str] | None = None,
+    corrupt_layer_digest: bool = False,
+    config_media_type: str = "application/vnd.oci.image.config.v1+json",
+    compressed_outer: bool = False,
+    uncompressed_layer_override: bytes | None = None,
+    outer_eoa_blocks: int = 2,
+    outer_trailer: bytes = b"",
+    layer_eoa_blocks: int = 2,
+    layer_trailer: bytes = b"",
+    directories: tuple[str, ...] = (),
+    unreferenced_regular: bool = False,
+) -> None:
+    labels = {
+        "org.opencontainers.image.source": "https://github.com/ElevenID/marty-ui",
+        "org.opencontainers.image.revision": revision or str(pin["commit"]),
+        "org.opencontainers.image.version": str(pin["version"]),
+    }
+    layer_tar = io.BytesIO()
+    with tarfile.open(fileobj=layer_tar, mode="w") as layer_archive:
+        layer_member = tarfile.TarInfo("candidate.txt")
+        layer_content = b"candidate layer"
+        layer_member.size = len(layer_content)
+        layer_archive.addfile(layer_member, io.BytesIO(layer_content))
+    uncompressed_layer = uncompressed_layer_override or rewrite_tar_end(
+        layer_tar.getvalue(),
+        eoa_blocks=layer_eoa_blocks,
+        trailer=layer_trailer,
+    )
+    layer = gzip.compress(uncompressed_layer, mtime=0)
+    config = artifact.canonical_json(
+        {
+            "architecture": "amd64",
+            "os": "linux",
+            "config": {
+                "Env": [
+                    "SERVICE_NAME=verification",
+                    f"MARTY_RELEASE_VERSION={pin['version']}",
+                    f"MARTY_UI_SHA={pin['commit']}",
+                ],
+                "Labels": labels,
+            },
+            "rootfs": {
+                "type": "layers",
+                "diff_ids": [f"sha256:{hashlib.sha256(uncompressed_layer).hexdigest()}"],
+            },
+        }
+    )
+    config_descriptor = _descriptor(config, config_media_type)
+    layer_descriptor = _descriptor(layer, artifact.OCI_GZIP_LAYER)
+    if corrupt_layer_digest:
+        layer_descriptor["digest"] = "sha256:" + "9" * 64
+    manifest = artifact.canonical_json(
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": config_descriptor,
+            "layers": [layer_descriptor],
+        }
+    )
+    manifest_descriptor = _descriptor(
+        manifest,
+        "application/vnd.oci.image.manifest.v1+json",
+        platform=platform or {"architecture": "amd64", "os": "linux"},
+        annotations={
+            "org.opencontainers.image.ref.name": pin["image"]["archive_tag"]  # type: ignore[index]
+        },
+    )
+    index = artifact.canonical_json({"schemaVersion": 2, "manifests": [manifest_descriptor]})
+    layout = artifact.canonical_json({"imageLayoutVersion": "1.0.0"})
+    members = {
+        "oci-layout": layout,
+        "index.json": index,
+        f"blobs/sha256/{config_descriptor['digest'].split(':', 1)[1]}": config,
+        f"blobs/sha256/{manifest_descriptor['digest'].split(':', 1)[1]}": manifest,
+        f"blobs/sha256/{hashlib.sha256(layer).hexdigest()}": layer,
+    }
+    if unreferenced_regular:
+        members["unreferenced.txt"] = b"not reachable"
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w") as archive:
+        for name in directories:
+            member = tarfile.TarInfo(name)
+            member.type = tarfile.DIRTYPE
+            archive.addfile(member)
+        for name, content in members.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+    raw_archive = rewrite_tar_end(
+        archive_buffer.getvalue(),
+        eoa_blocks=outer_eoa_blocks,
+        trailer=outer_trailer,
+    )
+    path.write_bytes(gzip.compress(raw_archive, mtime=0) if compressed_outer else raw_archive)
+    pin["image"]["digest"] = manifest_descriptor["digest"]  # type: ignore[index]
+    pin["image"]["config_digest"] = config_descriptor["digest"]  # type: ignore[index]
+
+
+def write_candidate_bundle(tmp_path: Path) -> tuple[dict[str, object], dict[str, Path]]:
+    pin = valid_candidate_pin()
+    paths = {
+        "archive": tmp_path / "marty-ui-services.oci.tar",
+        "sbom": tmp_path / "marty-ui-services-sbom.cdx.json",
+        "metadata": tmp_path / "marty-ui-services-build-metadata.json",
+        "provenance": tmp_path / "marty-ui-services-provenance.json",
+    }
+    write_oci_archive(paths["archive"], pin)
+    pin["archive"]["digest"] = artifact.file_digest(paths["archive"])  # type: ignore[index]
+    sbom = valid_rust_sbom(pin)
+    paths["sbom"].write_text(json.dumps(sbom), encoding="utf-8")
+    pin["sbom"]["digest"] = artifact.file_digest(paths["sbom"])  # type: ignore[index]
+    metadata = {
+        "schema": artifact.CANDIDATE_METADATA_SCHEMA,
+        "source": {
+            "repository": pin["repository"],
+            "commit": pin["commit"],
+            "ref": pin["source_ref"],
+        },
+        "builder": pin["run"],
+        "build": {
+            "context": ".",
+            "dockerfile": "services/Dockerfile",
+            "dockerfile_digest": "sha256:" + "9" * 64,
+            "platform": "linux/amd64",
+            "version": pin["version"],
+            "arguments": {
+                "SERVICE_NAME": "verification",
+                "MARTY_RELEASE_VERSION": pin["version"],
+                "MARTY_UI_SHA": pin["commit"],
+            },
+        },
+        "image": pin["image"],
+    }
+    paths["metadata"].write_text(json.dumps(metadata), encoding="utf-8")
+    pin["metadata"]["digest"] = artifact.file_digest(paths["metadata"])  # type: ignore[index]
+    provenance = {
+        "schema": artifact.CANDIDATE_PROVENANCE_SCHEMA,
+        "source": metadata["source"],
+        "builder": pin["run"],
+        "subjects": {
+            "archive": pin["archive"],
+            "image": pin["image"],
+            "sbom": pin["sbom"],
+            "metadata": pin["metadata"],
+        },
+    }
+    paths["provenance"].write_text(json.dumps(provenance), encoding="utf-8")
+    pin["provenance"]["digest"] = artifact.file_digest(paths["provenance"])  # type: ignore[index]
+    return pin, paths
+
+
+def valid_candidate_attestation(pin: dict[str, object]) -> list[dict[str, object]]:
+    run = pin["run"]
+    return [
+        {
+            "verificationResult": {
+                "statement": {
+                    "predicate": {
+                        "buildDefinition": {
+                            "externalParameters": {
+                                "workflow": {
+                                    "ref": pin["source_ref"],
+                                    "repository": f"https://github.com/{artifact.RUST_REPOSITORY}",
+                                    "path": artifact.CANDIDATE_BUILD_WORKFLOW,
+                                }
+                            },
+                            "resolvedDependencies": [
+                                {
+                                    "uri": (f"git+https://github.com/{artifact.RUST_REPOSITORY}@{pin['source_ref']}"),
+                                    "digest": {"gitCommit": pin["commit"]},
+                                }
+                            ],
+                        },
+                        "runDetails": {
+                            "builder": {
+                                "id": (
+                                    f"https://github.com/{artifact.RUST_REPOSITORY}/"
+                                    f"{artifact.CANDIDATE_BUILD_WORKFLOW}@{pin['source_ref']}"
+                                )
+                            },
+                            "metadata": {
+                                "invocationId": (
+                                    f"https://github.com/{artifact.RUST_REPOSITORY}/actions/runs/"
+                                    f"{run['id']}/attempts/{run['attempt']}"  # type: ignore[index]
+                                )
+                            },
+                        },
+                    }
+                }
+            }
+        }
+    ]
+
+
+def valid_candidate_run_record(pin: dict[str, object]) -> dict[str, object]:
+    return {
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": pin["commit"],
+        "head_branch": "main",
+        "event": "workflow_dispatch",
+        "run_attempt": pin["run"]["attempt"],  # type: ignore[index]
+        "path": artifact.CANDIDATE_BUILD_WORKFLOW,
+    }
+
+
+def valid_candidate_inspection(pin: dict[str, object]) -> dict[str, object]:
+    return {
+        "Id": pin["image"]["config_digest"],  # type: ignore[index]
+        "Descriptor": {"digest": pin["image"]["digest"]},  # type: ignore[index]
+        "Os": "linux",
+        "Architecture": "amd64",
+        "Config": {
+            "Env": [
+                "SERVICE_NAME=verification",
+                f"MARTY_RELEASE_VERSION={pin['version']}",
+                f"MARTY_UI_SHA={pin['commit']}",
+            ],
+            "Labels": {
+                "org.opencontainers.image.source": "https://github.com/ElevenID/marty-ui",
+                "org.opencontainers.image.revision": pin["commit"],
+                "org.opencontainers.image.version": pin["version"],
+            },
+        },
+    }
+
+
+def leaf_paths(value: object, path: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
+    if isinstance(value, dict):
+        return [nested for key, item in value.items() for nested in leaf_paths(item, (*path, key))]
+    if isinstance(value, list):
+        return [nested for index, item in enumerate(value) for nested in leaf_paths(item, (*path, index))]
+    return [path]
+
+
+def replace_path(value: object, path: tuple[object, ...], replacement: object) -> None:
+    cursor = value
+    for key in path[:-1]:
+        cursor = cursor[key]  # type: ignore[index]
+    cursor[path[-1]] = replacement  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda value: value.update(release_tag="v1.2.3"), "must not reserve"),
+        (lambda value: value.update(version="0.0.0-candidate.bbbbbbbbbbbb"), "must agree"),
+        (lambda value: value.update(source_ref="refs/pull/1/head"), "protected main"),
+        (lambda value: value["run"].update(workflow=".github/workflows/release.yml"), "workflow changed"),
+        (lambda value: value["run"].update(id="0"), "run ID"),
+        (lambda value: value["run"].update(attempt=0), "run attempt"),
+        (lambda value: value["image"].update(config_digest="sha256:" + "E" * 64), "config digest"),
+        (lambda value: value["archive"].update(asset="services.tar"), "archive asset"),
+    ],
+)
+def test_candidate_pin_rejects_release_or_mutable_coordinates(
+    tmp_path: Path,
+    mutate: object,
+    message: str,
+) -> None:
+    pin = valid_candidate_pin()
+    mutate(pin)  # type: ignore[operator]
+
+    with pytest.raises(ValueError, match=message):
+        artifact.load_pin(
+            write_pin(tmp_path / "candidate.json", pin),
+            expected_state="candidate",
+        )
+
+
+def test_candidate_inputs_bind_archive_sbom_and_provenance(tmp_path: Path) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    loaded = artifact.load_pin(
+        write_pin(tmp_path / "candidate.json", pin),
+        expected_state="candidate",
+    )
+
+    assert (
+        artifact.validate_candidate_inputs(
+            loaded,
+            archive_path=paths["archive"],
+            sbom_path=paths["sbom"],
+            metadata_path=paths["metadata"],
+            provenance_path=paths["provenance"],
+        )["subjects"]
+        == json.loads(paths["provenance"].read_text(encoding="utf-8"))["subjects"]
+    )
+
+    paths["archive"].write_bytes(b"changed")
+    with pytest.raises(ValueError, match="archive digest changed"):
+        artifact.validate_candidate_inputs(
+            loaded,
+            archive_path=paths["archive"],
+            sbom_path=paths["sbom"],
+            metadata_path=paths["metadata"],
+            provenance_path=paths["provenance"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("archive_options", "message"),
+    [
+        ({"revision": "b" * 40}, "source labels changed"),
+        ({"platform": {"architecture": "arm64", "os": "linux"}}, "platform changed"),
+        ({"corrupt_layer_digest": True}, "archive member is missing"),
+        ({"config_media_type": "application/json"}, "config media type changed"),
+        ({"compressed_outer": True}, "not a readable OCI archive"),
+    ],
+)
+def test_oci_archive_rejects_rebound_or_incomplete_images(
+    tmp_path: Path,
+    archive_options: dict[str, object],
+    message: str,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(archive_path, pin, **archive_options)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=message):
+        artifact.inspect_oci_archive(archive_path, pin)
+
+
+@pytest.mark.parametrize(
+    ("archive_options", "message"),
+    [
+        ({"outer_eoa_blocks": 0}, "missing the canonical tar end-of-archive"),
+        ({"outer_eoa_blocks": 1}, "missing the canonical tar end-of-archive"),
+        ({"outer_trailer": b"x" + bytes(511)}, "non-zero data after its end-of-archive"),
+        ({"layer_eoa_blocks": 0}, "missing the canonical tar end-of-archive"),
+        ({"layer_eoa_blocks": 1}, "missing the canonical tar end-of-archive"),
+        ({"layer_trailer": b"x" + bytes(511)}, "non-zero data after its end-of-archive"),
+        ({"unreferenced_regular": True}, "unreferenced regular member"),
+        ({"directories": ("unreferenced",)}, "unreferenced directory member"),
+    ],
+)
+def test_oci_archive_rejects_noncanonical_ends_and_unreachable_members(
+    tmp_path: Path,
+    archive_options: dict[str, object],
+    message: str,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(archive_path, pin, **archive_options)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=message):
+        artifact.inspect_oci_archive(archive_path, pin)
+
+
+def test_oci_archive_accepts_only_reachable_buildx_directories(tmp_path: Path) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(archive_path, pin, directories=("blobs", "blobs/sha256"))
+
+    artifact.inspect_oci_archive(archive_path, pin)
+
+
+@pytest.mark.parametrize(
+    ("limit", "message"),
+    [
+        ("MAX_ARCHIVE_MEMBERS", "too many members"),
+        ("MAX_ARCHIVE_REGULAR_MEMBERS", "too many regular members"),
+        ("MAX_LAYERS", "too many layers"),
+        ("MAX_COMPRESSED_LAYER_BYTES", "compressed layer is too large"),
+        ("MAX_TOTAL_COMPRESSED_LAYER_BYTES", "aggregate compressed layers are too large"),
+        ("MAX_EXPANDED_LAYER_BYTES", "expanded layer is too large"),
+        ("MAX_TOTAL_EXPANDED_LAYER_BYTES", "aggregate expanded layers are too large"),
+        ("MAX_LAYER_MEMBERS", "layer contains too many members"),
+        ("MAX_TOTAL_LAYER_MEMBERS", "aggregate layer members are too large"),
+    ],
+)
+def test_candidate_archive_resource_limits_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit: str,
+    message: str,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(archive_path, pin)
+    monkeypatch.setattr(artifact, limit, 0 if limit.endswith(("MEMBERS", "LAYERS")) else 1)
+
+    with pytest.raises(ValueError, match=message):
+        artifact.inspect_oci_archive(archive_path, pin)
+
+
+def test_candidate_archive_size_fails_before_archive_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_path = tmp_path / "candidate.oci.tar"
+    archive_path.write_bytes(b"oversized")
+    monkeypatch.setattr(artifact, "MAX_ARCHIVE_BYTES", 1)
+    monkeypatch.setattr(
+        artifact.tarfile,
+        "open",
+        lambda *_args, **_kwargs: pytest.fail("oversized archive was read"),
+    )
+
+    with pytest.raises(ValueError, match="archive is too large"):
+        artifact.inspect_oci_archive(archive_path, valid_candidate_pin())
+
+
+def test_candidate_archive_never_collects_tar_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(archive_path, pin)
+    monkeypatch.setattr(
+        tarfile.TarFile,
+        "getmembers",
+        lambda *_args, **_kwargs: pytest.fail("tar members were collected"),
+    )
+
+    artifact.inspect_oci_archive(archive_path, pin)
+
+
+def special_tar_header(typeflag: bytes, size: int, payload: bytes = b"") -> bytes:
+    member = tarfile.TarInfo("special-header")
+    member.type = typeflag
+    member.size = size
+    header = member.tobuf(format=tarfile.GNU_FORMAT)
+    padding = bytes((-len(payload)) % artifact.TAR_BLOCK_BYTES)
+    return header + payload + padding + bytes(artifact.TAR_BLOCK_BYTES * 2)
+
+
+@pytest.mark.parametrize(
+    "typeflag",
+    [
+        tarfile.XHDTYPE,
+        tarfile.XGLTYPE,
+        tarfile.SOLARIS_XHDTYPE,
+        tarfile.GNUTYPE_LONGNAME,
+        tarfile.GNUTYPE_LONGLINK,
+    ],
+)
+def test_tar_scan_rejects_oversized_special_headers_before_payload_read(typeflag: bytes) -> None:
+    content = special_tar_header(typeflag, artifact.MAX_TAR_SPECIAL_HEADER_BYTES + 1)
+
+    with pytest.raises(ValueError, match="special tar header is too large"):
+        artifact._scan_tar_headers(
+            io.BytesIO(content),
+            stream_bytes=len(content),
+            maximum_members=artifact.MAX_ARCHIVE_MEMBERS,
+            label="test archive",
+        )
+
+
+def test_outer_archive_rejects_oversized_special_header_before_tarfile_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_path = tmp_path / "candidate.oci.tar"
+    archive_path.write_bytes(special_tar_header(tarfile.XHDTYPE, artifact.MAX_TAR_SPECIAL_HEADER_BYTES + 1))
+    monkeypatch.setattr(
+        artifact.tarfile,
+        "open",
+        lambda *_args, **_kwargs: pytest.fail("outer tarfile iteration began before the raw scan"),
+    )
+
+    with pytest.raises(ValueError, match="special tar header is too large"):
+        artifact.inspect_oci_archive(archive_path, valid_candidate_pin())
+
+
+def test_inner_layer_rejects_oversized_special_header_before_tarfile_iteration(tmp_path: Path) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(
+        archive_path,
+        pin,
+        uncompressed_layer_override=special_tar_header(
+            tarfile.GNUTYPE_LONGNAME,
+            artifact.MAX_TAR_SPECIAL_HEADER_BYTES + 1,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="OCI layer special tar header is too large"):
+        artifact.inspect_oci_archive(archive_path, pin)
+
+
+@pytest.mark.parametrize("document_name", ["metadata", "provenance"])
+def test_candidate_inputs_reject_every_metadata_and_provenance_leaf_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    document_name: str,
+) -> None:
+    original_pin, paths = write_candidate_bundle(tmp_path)
+    original_document = json.loads(paths[document_name].read_text(encoding="utf-8"))
+    monkeypatch.setattr(artifact, "inspect_oci_archive", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(artifact, "validate_sbom", lambda *_args, **_kwargs: {})
+
+    for path in leaf_paths(original_document):
+        pin = copy.deepcopy(original_pin)
+        document = copy.deepcopy(original_document)
+        replace_path(document, path, None)
+        paths[document_name].write_text(json.dumps(document), encoding="utf-8")
+        pin[document_name]["digest"] = artifact.file_digest(paths[document_name])  # type: ignore[index]
+        with pytest.raises(ValueError, match=r".+"):
+            artifact.validate_candidate_inputs(
+                pin,
+                archive_path=paths["archive"],
+                sbom_path=paths["sbom"],
+                metadata_path=paths["metadata"],
+                provenance_path=paths["provenance"],
+            )
+        paths[document_name].write_text(json.dumps(original_document), encoding="utf-8")
+
+
+def test_tar_scan_rejects_malformed_pax_metadata() -> None:
+    payload = b"12 path=bad"
+    content = special_tar_header(tarfile.XHDTYPE, len(payload), payload)
+
+    with pytest.raises(ValueError, match="malformed PAX metadata"):
+        artifact._scan_tar_headers(
+            io.BytesIO(content),
+            stream_bytes=len(content),
+            maximum_members=artifact.MAX_ARCHIVE_MEMBERS,
+            label="test archive",
+        )
+
+
+def test_tar_scan_accepts_bounded_real_pax_long_paths() -> None:
+    content = io.BytesIO()
+    with tarfile.open(fileobj=content, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        member = tarfile.TarInfo("nested/" + "a" * 150)
+        member.size = 1
+        archive.addfile(member, io.BytesIO(b"x"))
+
+    artifact._scan_tar_headers(
+        content,
+        stream_bytes=len(content.getvalue()),
+        maximum_members=artifact.MAX_LAYER_MEMBERS,
+        label="test layer",
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda value: value.update(components=[]), "components are missing"),
+        (lambda value: value["components"][0].update(type="unknown"), "component type changed"),
+        (lambda value: value["components"][0].update(name=" "), "component name is missing"),
+        (
+            lambda value: value["components"].append(copy.deepcopy(value["components"][0])),
+            "component reference is duplicated",
+        ),
+        (lambda value: value["metadata"].update(tools={"components": []}), "not generated by Syft"),
+        (lambda value: value["metadata"]["component"].update(type="library"), "root is not a container"),
+        (
+            lambda value: value["metadata"]["component"].__setitem__("bom-ref", value["components"][0]["bom-ref"]),
+            "root reference is duplicated",
+        ),
+        (lambda value: value.update(dependencies=[{"ref": "unknown", "dependsOn": []}]), "dependency reference"),
+        (
+            lambda value: value.update(
+                dependencies=[
+                    value["dependencies"][0],
+                    copy.deepcopy(value["dependencies"][0]),
+                ]
+            ),
+            "dependency reference",
+        ),
+        (
+            lambda value: value.update(
+                dependencies=[{"ref": value["dependencies"][0]["ref"], "dependsOn": ["unknown"]}]
+            ),
+            "dependency edge",
+        ),
+        (lambda value: value["metadata"]["component"].update(purl="pkg:generic/rebound"), "identity is contradictory"),
+        (lambda value: value["metadata"].update(properties=[]), "image labels changed"),
+        (
+            lambda value: value["metadata"]["properties"].append(copy.deepcopy(value["metadata"]["properties"][0])),
+            "property is duplicated",
+        ),
+        (lambda value: value["metadata"]["properties"][0].update(value="rebound"), "image labels changed"),
+    ],
+)
+def test_candidate_sbom_rejects_semantic_mutations(
+    tmp_path: Path,
+    mutate: Callable[[dict[str, object]], object],
+    message: str,
+) -> None:
+    pin = valid_candidate_pin()
+    sbom = valid_rust_sbom(pin)
+    mutate(sbom)
+    path = tmp_path / "candidate.cdx.json"
+    path.write_text(json.dumps(sbom), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        artifact.validate_sbom(path, pin)
+
+
+@pytest.mark.parametrize(
+    ("limit", "message"),
+    [
+        ("MAX_SBOM_TOP_LEVEL_KEYS", "top-level fields"),
+        ("MAX_SBOM_COMPONENTS", "components are missing"),
+        ("MAX_SBOM_DEPENDENCIES", "dependencies changed"),
+        ("MAX_SBOM_PROPERTIES", "image labels are missing"),
+        ("MAX_SBOM_SCANNER_COMPONENTS", "not generated by Syft"),
+    ],
+)
+def test_candidate_sbom_collection_limits_are_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit: str,
+    message: str,
+) -> None:
+    pin = valid_candidate_pin()
+    path = tmp_path / "candidate.cdx.json"
+    path.write_text(json.dumps(valid_rust_sbom(pin)), encoding="utf-8")
+    monkeypatch.setattr(artifact, limit, 0)
+
+    with pytest.raises(ValueError, match=message):
+        artifact.validate_sbom(path, pin)
+
+
+@pytest.mark.parametrize(
+    ("input_name", "limit_name", "message"),
+    [
+        ("archive", "MAX_ARCHIVE_BYTES", "OCI archive is too large"),
+        ("sbom", "MAX_SBOM_BYTES", "candidate SBOM is too large"),
+        ("metadata", "MAX_CANDIDATE_METADATA_BYTES", "candidate metadata is too large"),
+        ("provenance", "MAX_CANDIDATE_PROVENANCE_BYTES", "candidate provenance is too large"),
+    ],
+)
+def test_candidate_inputs_preflight_every_file_before_any_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    input_name: str,
+    limit_name: str,
+    message: str,
+) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    assert paths[input_name].stat().st_size > 1
+    monkeypatch.setattr(artifact, limit_name, 1)
+    monkeypatch.setattr(
+        artifact,
+        "file_digest",
+        lambda *_args, **_kwargs: pytest.fail("candidate input was hashed before all preflights"),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        artifact.validate_candidate_inputs(
+            pin,
+            archive_path=paths["archive"],
+            sbom_path=paths["sbom"],
+            metadata_path=paths["metadata"],
+            provenance_path=paths["provenance"],
+        )
+
+
+@pytest.mark.parametrize("input_name", ["archive", "sbom", "metadata", "provenance"])
+def test_candidate_inputs_reject_non_regular_files_before_any_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    input_name: str,
+) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    replacement = tmp_path / f"{input_name}-directory"
+    replacement.mkdir()
+    paths[input_name] = replacement
+    monkeypatch.setattr(
+        artifact,
+        "file_digest",
+        lambda *_args, **_kwargs: pytest.fail("non-regular candidate input was hashed"),
+    )
+
+    with pytest.raises(ValueError, match="must be a regular file"):
+        artifact.validate_candidate_inputs(
+            pin,
+            archive_path=paths["archive"],
+            sbom_path=paths["sbom"],
+            metadata_path=paths["metadata"],
+            provenance_path=paths["provenance"],
+        )
+
+
+def test_candidate_entrypoint_rejects_oversized_archive_before_any_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    archive_path.write_bytes(b"oversized")
+    untouched = tmp_path / "untouched"
+    untouched.write_bytes(b"")
+    monkeypatch.setattr(artifact, "MAX_ARCHIVE_BYTES", 1)
+    monkeypatch.setattr(
+        artifact,
+        "file_digest",
+        lambda *_args, **_kwargs: pytest.fail("candidate input was hashed"),
+    )
+    monkeypatch.setattr(
+        artifact,
+        "inspect_oci_archive",
+        lambda *_args, **_kwargs: pytest.fail("candidate archive was inspected"),
+    )
+
+    with pytest.raises(ValueError, match="archive is too large"):
+        artifact.validate_candidate_inputs(
+            pin,
+            archive_path=archive_path,
+            sbom_path=untouched,
+            metadata_path=untouched,
+            provenance_path=untouched,
+        )
+
+
+def test_candidate_attestation_binds_exact_successful_producer_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    calls: list[list[str]] = []
+    attestation = valid_candidate_attestation(pin)
+    run_record = valid_candidate_run_record(pin)
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        calls.append(command)
+        return json.dumps(attestation if command[1:3] == ["attestation", "verify"] else run_record)
+
+    monkeypatch.setattr(artifact, "_run", run)
+
+    assert artifact.verify_candidate_attestations(pin, tmp_path / "candidate.json", archive_path) == {
+        "pin": attestation[0],
+        "archive": attestation[0],
+    }
+    assert calls[0][:3] == ["gh", "attestation", "verify"]
+    assert ["--signer-digest", pin["commit"]] == calls[0][calls[0].index("--signer-digest") :][:2]
+    assert "--deny-self-hosted-runners" in calls[0]
+    assert calls[1][:3] == ["gh", "attestation", "verify"]
+    assert calls[2] == [
+        "gh",
+        "api",
+        (
+            f"repos/{artifact.RUST_REPOSITORY}/actions/runs/{pin['run']['id']}"  # type: ignore[index]
+            f"/attempts/{pin['run']['attempt']}"  # type: ignore[index]
+        ),
+    ]
+
+
+def test_candidate_attestation_rejects_missing_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: "[]")
+
+    with pytest.raises(ValueError, match="returned no result"):
+        artifact.verify_candidate_attestations(
+            pin,
+            tmp_path / "candidate.json",
+            tmp_path / "candidate.oci.tar",
+        )
+
+
+def test_candidate_attestation_rejects_a_failed_producer_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    attestation = valid_candidate_attestation(pin)
+    run_record = {**valid_candidate_run_record(pin), "conclusion": "failure"}
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        return json.dumps(attestation if command[1:3] == ["attestation", "verify"] else run_record)
+
+    monkeypatch.setattr(artifact, "_run", run)
+
+    with pytest.raises(ValueError, match="completed successfully"):
+        artifact.verify_candidate_attestations(
+            pin,
+            tmp_path / "candidate.json",
+            tmp_path / "candidate.oci.tar",
+        )
+
+
+def test_candidate_attestation_rejects_an_in_progress_same_run_consumer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    attestation = valid_candidate_attestation(pin)
+    run_record = {**valid_candidate_run_record(pin), "status": "in_progress", "conclusion": None}
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        return json.dumps(attestation if command[1:3] == ["attestation", "verify"] else run_record)
+
+    monkeypatch.setattr(artifact, "_run", run)
+    with pytest.raises(ValueError, match="completed successfully"):
+        artifact.verify_candidate_attestations(
+            pin,
+            tmp_path / "candidate.json",
+            tmp_path / "candidate.oci.tar",
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "workflow.ref",
+        "workflow.repository",
+        "workflow.path",
+        "dependency.uri",
+        "dependency.digest",
+        "builder.id",
+        "metadata.invocationId",
+        "duplicate",
+        "run.status",
+        "run.conclusion",
+        "run.head_sha",
+        "run.head_branch",
+        "run.event",
+        "run.run_attempt",
+        "run.path",
+    ],
+)
+def test_candidate_attestation_rejects_every_producer_binding_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    pin = valid_candidate_pin()
+    attestation = copy.deepcopy(valid_candidate_attestation(pin))
+    run_record = valid_candidate_run_record(pin)
+    if field == "duplicate":
+        attestation.append(copy.deepcopy(attestation[0]))
+    elif field.startswith("run."):
+        run_record[field.removeprefix("run.")] = "mutated"
+    else:
+        predicate = attestation[0]["verificationResult"]["statement"]["predicate"]
+        locations = {
+            "workflow.ref": predicate["buildDefinition"]["externalParameters"]["workflow"],
+            "workflow.repository": predicate["buildDefinition"]["externalParameters"]["workflow"],
+            "workflow.path": predicate["buildDefinition"]["externalParameters"]["workflow"],
+            "dependency.uri": predicate["buildDefinition"]["resolvedDependencies"][0],
+            "dependency.digest": predicate["buildDefinition"]["resolvedDependencies"][0]["digest"],
+            "builder.id": predicate["runDetails"]["builder"],
+            "metadata.invocationId": predicate["runDetails"]["metadata"],
+        }
+        locations[field][field.rsplit(".", 1)[1]] = "mutated"
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        return json.dumps(attestation if command[1:3] == ["attestation", "verify"] else run_record)
+
+    monkeypatch.setattr(artifact, "_run", run)
+    with pytest.raises(ValueError, match="exact producer run|identity or conclusion changed|completed successfully"):
+        artifact.verify_candidate_attestations(
+            pin,
+            tmp_path / "candidate.json",
+            tmp_path / "candidate.oci.tar",
+        )
+
+
+def test_run_candidate_is_one_fail_closed_validation_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    pin_path = write_pin(tmp_path / "candidate.json", pin)
+    paths = {name: tmp_path / f"{name}.json" for name in ("archive", "sbom", "metadata", "provenance")}
+    evidence = tmp_path / "evidence.json"
+    calls: list[str] = []
+    monkeypatch.setattr(
+        artifact,
+        "validate_candidate_inputs",
+        lambda *_args, **_kwargs: calls.append("validate") or {},
+    )
+    monkeypatch.setattr(
+        artifact,
+        "verify_candidate_attestations",
+        lambda *_args, **_kwargs: calls.append("attest") or {},
+    )
+    monkeypatch.setattr(
+        artifact,
+        "load_candidate_archive",
+        lambda *_args, **_kwargs: calls.append("load"),
+    )
+
+    @contextmanager
+    def staged(*_args: object, **_kwargs: object) -> object:
+        calls.append("stage")
+        yield paths["archive"]
+
+    monkeypatch.setattr(artifact, "stage_candidate_archive", staged)
+    monkeypatch.setattr(
+        artifact,
+        "run_artifact_test",
+        lambda *_args, **kwargs: calls.append(f"run:{kwargs['provenance_verified']}") or {"status": "passed"},
+    )
+
+    assert (
+        artifact.main(
+            [
+                "run-candidate",
+                "--pin",
+                str(pin_path),
+                "--archive",
+                str(paths["archive"]),
+                "--sbom",
+                str(paths["sbom"]),
+                "--metadata",
+                str(paths["metadata"]),
+                "--provenance",
+                str(paths["provenance"]),
+                "--evidence",
+                str(evidence),
+            ]
+        )
+        == 0
+    )
+    assert calls == ["validate", "attest", "stage", "load", "run:True"]
+    candidate_options = {
+        option
+        for action in artifact.parser()._subparsers._group_actions[0].choices["run-candidate"]._actions
+        for option in action.option_strings
+    }
+    assert "--provenance-verified" not in candidate_options
+
+
+@pytest.mark.parametrize("failing_stage", ["validate", "attest", "stage", "load"])
+def test_run_candidate_removes_stale_evidence_before_early_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failing_stage: str,
+) -> None:
+    pin_path = write_pin(tmp_path / "candidate.json", valid_candidate_pin())
+    paths = {name: tmp_path / f"{name}.json" for name in ("archive", "sbom", "metadata", "provenance")}
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text('{"status":"stale"}\n', encoding="utf-8")
+
+    def stage(name: str) -> Callable[..., object]:
+        def run(*_args: object, **_kwargs: object) -> object:
+            if name == failing_stage:
+                raise ValueError(f"{name} failed")
+            return {}
+
+        return run
+
+    monkeypatch.setattr(artifact, "validate_candidate_inputs", stage("validate"))
+    monkeypatch.setattr(artifact, "verify_candidate_attestations", stage("attest"))
+    monkeypatch.setattr(artifact, "load_candidate_archive", stage("load"))
+
+    @contextmanager
+    def staged(*_args: object, **_kwargs: object) -> object:
+        if failing_stage == "stage":
+            raise ValueError("stage failed")
+        yield paths["archive"]
+
+    monkeypatch.setattr(artifact, "stage_candidate_archive", staged)
+    monkeypatch.setattr(artifact, "run_artifact_test", lambda *_args, **_kwargs: {"status": "passed"})
+
+    with pytest.raises(ValueError, match=f"{failing_stage} failed"):
+        artifact.main(
+            [
+                "run-candidate",
+                "--pin",
+                str(pin_path),
+                "--archive",
+                str(paths["archive"]),
+                "--sbom",
+                str(paths["sbom"]),
+                "--metadata",
+                str(paths["metadata"]),
+                "--provenance",
+                str(paths["provenance"]),
+                "--evidence",
+                str(evidence),
+            ]
+        )
+    assert not evidence.exists()
+
+
+def test_candidate_comparison_removes_stale_evidence_before_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = tmp_path / "comparison.json"
+    evidence.write_text('{"status":"stale"}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        artifact,
+        "load_pin",
+        lambda *_args, expected_state="ready": (
+            valid_candidate_pin() if expected_state == "candidate" else artifact.FROZEN_LEGACY_SAFE_SESSION_PIN
+        ),
+    )
+    monkeypatch.setattr(
+        artifact,
+        "compare_oracle_candidate_evidence",
+        lambda *_args: (_ for _ in ()).throw(ValueError("comparison failed")),
+    )
+
+    with pytest.raises(ValueError, match="comparison failed"):
+        artifact.main(
+            [
+                "compare-candidate-evidence",
+                "--oracle",
+                str(tmp_path / "oracle.json"),
+                "--candidate",
+                str(tmp_path / "candidate.json"),
+                "--oracle-pin",
+                str(tmp_path / "oracle-pin.json"),
+                "--candidate-pin",
+                str(tmp_path / "candidate-pin.json"),
+                "--evidence",
+                str(evidence),
+            ]
+        )
+    assert not evidence.exists()
+
+
+def test_candidate_archive_is_privately_staged_rehashed_and_reverified(tmp_path: Path) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    staged_path: Path | None = None
+
+    with artifact.stage_candidate_archive(pin, paths["archive"]) as staged:
+        staged_path = staged
+        assert staged != paths["archive"]
+        assert staged.is_file()
+        assert artifact.file_digest(staged) == pin["archive"]["digest"]  # type: ignore[index]
+        assert staged.read_bytes() == paths["archive"].read_bytes()
+
+    assert staged_path is not None
+    assert not staged_path.exists()
+
+
+def test_candidate_archive_private_staging_rejects_wrong_digest(tmp_path: Path) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    pin["archive"]["digest"] = "sha256:" + "0" * 64  # type: ignore[index]
+
+    with (
+        pytest.raises(ValueError, match="digest changed during private staging"),
+        artifact.stage_candidate_archive(pin, paths["archive"]),
+    ):
+        pytest.fail("wrong-digest archive was staged")
+
+
+def test_candidate_archive_private_staging_rejects_lstat_open_toctou(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    original_fstat = artifact.os.fstat
+
+    def changed_fstat(descriptor: int) -> object:
+        opened = original_fstat(descriptor)
+        fields = list(opened)
+        fields[1] += 1
+        return artifact.os.stat_result(fields)
+
+    monkeypatch.setattr(artifact.os, "fstat", changed_fstat)
+    with (
+        pytest.raises(ValueError, match="changed before private staging"),
+        artifact.stage_candidate_archive(pin, paths["archive"]),
+    ):
+        pytest.fail("TOCTOU-mutated archive was staged")
+
+
+def test_candidate_runtime_rejects_an_unloaded_or_rebound_config_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    inspection = {
+        "Id": "sha256:" + "f" * 64,
+        "Os": "linux",
+        "Architecture": "amd64",
+        "Config": {
+            "Env": [
+                "SERVICE_NAME=verification",
+                f"MARTY_RELEASE_VERSION={pin['version']}",
+                f"MARTY_UI_SHA={pin['commit']}",
+            ],
+            "Labels": {
+                "org.opencontainers.image.source": "https://github.com/ElevenID/marty-ui",
+                "org.opencontainers.image.revision": pin["commit"],
+                "org.opencontainers.image.version": pin["version"],
+            },
+        },
+    }
+    monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: json.dumps(inspection))
+
+    with pytest.raises(ValueError, match="loaded candidate image identity changed"):
+        artifact.run_artifact_test(pin, tmp_path / "evidence.json", provenance_verified=True)
+
+
+def test_candidate_archive_load_rechecks_exact_config_platform_and_labels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    calls: list[list[str]] = []
+    inspection = {
+        "Id": pin["image"]["config_digest"],  # type: ignore[index]
+        "Descriptor": {"digest": pin["image"]["digest"]},  # type: ignore[index]
+        "Os": "linux",
+        "Architecture": "amd64",
+        "Config": {
+            "Env": [
+                "SERVICE_NAME=verification",
+                f"MARTY_RELEASE_VERSION={pin['version']}",
+                f"MARTY_UI_SHA={pin['commit']}",
+            ],
+            "Labels": {
+                "org.opencontainers.image.source": "https://github.com/ElevenID/marty-ui",
+                "org.opencontainers.image.revision": pin["commit"],
+                "org.opencontainers.image.version": pin["version"],
+            },
+        },
+    }
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        calls.append(command)
+        return f"Loaded image: {pin['image']['archive_tag']}:latest" if command[1] == "load" else ""
+
+    monkeypatch.setattr(artifact, "_run", run)
+    inspections = iter([None, None, inspection, inspection])
+    monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: next(inspections))
+    monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
+    monkeypatch.setattr(artifact, "_remove_candidate_image", lambda *_args: None)
+
+    artifact.load_candidate_archive(pin, archive_path)
+
+    assert calls == [
+        ["docker", "load", "--input", str(archive_path)],
+        [
+            "docker",
+            "image",
+            "tag",
+            f"{pin['image']['archive_tag']}@{pin['image']['digest']}",  # type: ignore[index]
+            artifact.image_reference(pin),
+        ],
+    ]
+
+
+@pytest.mark.parametrize("preexisting", ["archive", "verified"])
+def test_candidate_archive_load_rejects_preexisting_local_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    preexisting: str,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "private.oci.tar"
+    inspection = valid_candidate_inspection(pin)
+    results = [inspection] if preexisting == "archive" else [None, inspection]
+    monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
+    monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: results.pop(0))
+    monkeypatch.setattr(
+        artifact,
+        "_run",
+        lambda *_args, **_kwargs: pytest.fail("pre-existing image was accepted for candidate load"),
+    )
+
+    with pytest.raises(ValueError, match="already exists locally"):
+        artifact.load_candidate_archive(pin, archive_path)
+
+
+@pytest.mark.parametrize("identity", ["manifest", "config"])
+def test_candidate_archive_load_requires_both_manifest_and_config_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity: str,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "private.oci.tar"
+    inspection = valid_candidate_inspection(pin)
+    if identity == "manifest":
+        inspection["Descriptor"] = {"digest": "sha256:" + "0" * 64}
+    else:
+        inspection["Id"] = "sha256:" + "0" * 64
+    inspections = iter([None, None, inspection])
+    monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
+    monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: next(inspections))
+    monkeypatch.setattr(artifact, "_remove_candidate_image", lambda *_args: None)
+    monkeypatch.setattr(
+        artifact,
+        "_run",
+        lambda command, **_kwargs: (
+            f"Loaded image: {pin['image']['archive_tag']}:latest" if command[1] == "load" else ""
+        ),
+    )
+
+    with pytest.raises(ValueError, match="loaded candidate image identity changed"):
+        artifact.load_candidate_archive(pin, archive_path)
+
+
+def test_candidate_archive_load_requires_useful_exact_tag_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    inspections = iter([None, None])
+    monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
+    monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: next(inspections))
+    monkeypatch.setattr(artifact, "_remove_candidate_image", lambda *_args: None)
+    monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: "Loaded image ID: sha256:rebound")
+
+    with pytest.raises(ValueError, match="did not report the expected image tag"):
+        artifact.load_candidate_archive(pin, tmp_path / "private.oci.tar")
+
+
+@pytest.mark.skipif(
+    os.getenv("RUN_CANDIDATE_DOCKER_TESTS") != "true",
+    reason="set RUN_CANDIDATE_DOCKER_TESTS=true for the disposable containerd load contract",
+)
+def test_candidate_archive_disposable_containerd_load_contract(tmp_path: Path) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    expected_reference = f"{pin['image']['archive_tag']}:latest"  # type: ignore[index]
+    exact_archive_reference = f"{pin['image']['archive_tag']}@{pin['image']['digest']}"  # type: ignore[index]
+    verified_reference = artifact.image_reference(pin)
+    artifact._remove_candidate_image(expected_reference)
+    artifact._remove_candidate_image(exact_archive_reference)
+    artifact._remove_candidate_image(verified_reference)
+    try:
+        with artifact.stage_candidate_archive(pin, paths["archive"]) as staged:
+            assert artifact.load_candidate_archive(pin, staged) == verified_reference
+        inspected = json.loads(
+            artifact._run(
+                ["docker", "image", "inspect", verified_reference, "--format", "{{json .}}"],
+                label="inspect disposable candidate",
+            )
+        )
+        exported_config_digest = artifact._exported_candidate_config_digest(verified_reference, pin, inspected)
+        artifact._assert_loaded_candidate_inspection(
+            inspected,
+            pin,
+            exported_config_digest=exported_config_digest,
+        )
+    finally:
+        artifact._remove_candidate_image(expected_reference)
+        artifact._remove_candidate_image(exact_archive_reference)
+        artifact._remove_candidate_image(verified_reference)
+
+
+def test_oracle_candidate_evidence_comparison_allows_only_documented_runtime_difference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = {
+        "repository": artifact.INTEGRATION_REPOSITORY,
+        "commit": "f" * 40,
+        "hardened_floor": artifact.HARDENED_HARNESS_FLOOR,
+    }
+    monkeypatch.setattr(artifact, "harness_subject", lambda: harness)
+    oracle_pin = artifact.FROZEN_LEGACY_SAFE_SESSION_PIN
+    candidate_pin = valid_candidate_pin()
+    common = {
+        "classification": "ElevenID-owned artifact integration",
+        "official_suite_invoked": False,
+        "official_suite_source_modified": False,
+        "status": "passed",
+        "release_clearance": artifact.RELEASE_CLEARANCE_BLOCKED,
+        "blockers": [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "resolver_request_count": 2,
+        "harness": harness,
+        "started_at": "2026-08-31T00:00:00Z",
+        "completed_at": "2026-08-31T00:01:00Z",
+    }
+    oracle = {
+        **common,
+        "schema": artifact.EVIDENCE_SCHEMA,
+        "subject": artifact.evidence_subject(oracle_pin),
+        "checks": sorted(artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS),
+        "safe_session_selection": {
+            "reason": "frozen_python_v0.1.71_invalid_leading_identifier",
+            "resampled_unsafe_ids": 1,
+        },
+        "documented_differences": [],
+    }
+    candidate = {
+        **common,
+        "schema": artifact.CANDIDATE_EVIDENCE_SCHEMA,
+        "subject": artifact.evidence_subject(candidate_pin),
+        "checks": sorted(artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS | artifact.RUST_ONLY_CHECKS),
+        "safe_session_selection": {
+            "reason": "not_allowlisted_no_resampling",
+            "resampled_unsafe_ids": 0,
+        },
+        "documented_differences": sorted(artifact.DOCUMENTED_TARGET_DIFFERENCES),
+    }
+    oracle_path = tmp_path / "oracle.json"
+    candidate_path = tmp_path / "candidate.json"
+    oracle_path.write_text(json.dumps(oracle), encoding="utf-8")
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    comparison = artifact.compare_oracle_candidate_evidence(
+        oracle_path,
+        candidate_path,
+        oracle_pin,
+        candidate_pin,
+    )
+
+    assert comparison == {
+        "schema": "elevenid.credentials-verifier-candidate-comparison/v1",
+        "status": "matched_with_runtime_blocker",
+        "release_clearance": artifact.RELEASE_CLEARANCE_BLOCKED,
+        "blockers": [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "language_neutral_checks": sorted(artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS),
+        "candidate_only_checks": sorted(artifact.RUST_ONLY_CHECKS),
+        "documented_differences": sorted(artifact.DOCUMENTED_TARGET_DIFFERENCES),
+    }
+
+    for label, original in (("oracle", oracle), ("candidate", candidate)):
+        for field in original:
+            changed_oracle = copy.deepcopy(oracle)
+            changed_candidate = copy.deepcopy(candidate)
+            target = changed_oracle if label == "oracle" else changed_candidate
+            target[field] = None
+            oracle_path.write_text(json.dumps(changed_oracle), encoding="utf-8")
+            candidate_path.write_text(json.dumps(changed_candidate), encoding="utf-8")
+            with pytest.raises(ValueError, match=r".+"):
+                artifact.compare_oracle_candidate_evidence(
+                    oracle_path,
+                    candidate_path,
+                    oracle_pin,
+                    candidate_pin,
+                )
+
+
+def test_default_disabled_start_requires_native_health_without_compatibility_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    absent_probes: list[str] = []
+    monkeypatch.setattr(
+        artifact,
+        "_run",
+        lambda command, **_kwargs: commands.append(command) or "",
+    )
+    monkeypatch.setattr(artifact, "_service_port", lambda *_args: 43123)
+    monkeypatch.setattr(
+        artifact,
+        "_wait_for_health",
+        lambda *_args: {"status": "healthy", "service": "verification", "components": {}},
+    )
+    monkeypatch.setattr(
+        artifact,
+        "_assert_compatibility_routes_absent",
+        lambda url: absent_probes.append(url),
+    )
+
+    base_url = artifact._start_service(
+        ["docker", "run", "candidate"],
+        "disabled-service",
+        artifact.RUST_TARGET,
+        label="start disabled",
+        compatibility_enabled=False,
+    )
+
+    assert commands == [["docker", "run", "candidate"]]
+    assert base_url == "http://127.0.0.1:43123"
+    assert absent_probes == [base_url]
+
+
+def test_verification_database_snapshot_is_stable_and_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        captured.extend(command)
+        return "header\n\\restrict token-one\nCREATE TABLE verification_service.a ();\n\\unrestrict token-one"
+
+    monkeypatch.setattr(artifact, "_run", run)
+
+    assert artifact._verification_database_snapshot("postgres-test") == (
+        "header\nCREATE TABLE verification_service.a ();"
+    )
+    assert "postgres-test" in captured
+    assert "--no-owner" in captured
+    assert not any(value.startswith("--schema") for value in captured)
+    assert "--schema-only" not in captured
+
+
+def test_verification_migration_heads_are_exact_and_ordered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        captured.extend(command)
+        return f"{artifact.EXPECTED_MIGRATION_HEAD}\n"
+
+    monkeypatch.setattr(artifact, "_run", run)
+
+    assert artifact._verification_migration_heads("postgres-test") == [artifact.EXPECTED_MIGRATION_HEAD]
+    assert "verification_service.alembic_version" in captured[-1]
+    assert "ORDER BY version_num" in captured[-1]
+
+
+def test_harness_subject_binds_current_commit_and_hardened_ancestry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit = "f" * 40
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        calls.append(command)
+        return commit if "rev-parse" in command else ""
+
+    monkeypatch.setattr(artifact, "_run", run)
+
+    assert artifact.harness_subject() == {
+        "repository": artifact.INTEGRATION_REPOSITORY,
+        "commit": commit,
+        "hardened_floor": artifact.HARDENED_HARNESS_FLOOR,
+        "script": {
+            "path": "scripts/credentials_verifier_artifact.py",
+            "digest": artifact.file_digest(Path(artifact.__file__).resolve()),
+        },
+    }
+    assert calls[0][-3:] == ["--quiet", "--ignore-submodules", "--"]
+    assert calls[1][-4:] == ["--cached", "--quiet", "--ignore-submodules", "--"]
+    assert calls[2][:3] == ["git", "-C", str(artifact.ROOT)]
+    assert calls[3][-3:] == ["--is-ancestor", artifact.HARDENED_HARNESS_FLOOR, commit]
+
+
+@pytest.mark.parametrize("dirty_mode", ["worktree", "index"])
+def test_harness_subject_rejects_tracked_modifications(
+    monkeypatch: pytest.MonkeyPatch,
+    dirty_mode: str,
+) -> None:
+    call = 0
+
+    def run(_command: list[str], **_kwargs: object) -> str:
+        nonlocal call
+        call += 1
+        if (dirty_mode == "worktree" and call == 1) or (dirty_mode == "index" and call == 2):
+            raise artifact.ArtifactRuntimeError("tracked harness changes")
+        return ""
+
+    monkeypatch.setattr(artifact, "_run", run)
+
+    with pytest.raises(artifact.ArtifactRuntimeError, match="tracked harness changes"):
+        artifact.harness_subject()
 
 
 def test_migration_commands_preserve_each_images_runtime_contract() -> None:
@@ -784,6 +2342,19 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
         )
 
     monkeypatch.setattr(artifact, "run_artifact_test", reject)
+    monkeypatch.setattr(
+        artifact,
+        "harness_subject",
+        lambda: {
+            "repository": artifact.INTEGRATION_REPOSITORY,
+            "commit": "f" * 40,
+            "hardened_floor": artifact.HARDENED_HARNESS_FLOOR,
+            "script": {
+                "path": "scripts/credentials_verifier_artifact.py",
+                "digest": "sha256:" + "e" * 64,
+            },
+        },
+    )
     evidence = artifact.run_expected_failure(
         pin,
         evidence_path,
