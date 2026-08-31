@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 from pathlib import Path
@@ -98,6 +99,57 @@ def test_repository_pin_is_ready_exact_and_immutable(tmp_path: Path) -> None:
     assert artifact.image_reference(pin) == (artifact.EXPECTED_IMAGE_URI + "@sha256:" + "b" * 64)
     assert pin["release_tag"] == "v1.2.3"
     assert pin["commit"] == "a" * 40
+
+
+def test_default_pin_preserves_oracle_and_stale_rust_candidate_is_ineligible() -> None:
+    oracle = artifact.load_pin()
+
+    assert artifact.DEFAULT_PIN.name == "credentials-verifier-oracle.json"
+    assert oracle["release_tag"] == "v0.1.71"
+    assert oracle["commit"] == "94f19ad369e7e41883f2aa3d77656ce561bb6534"
+    assert oracle["image"]["digest"] == ("sha256:fcec33e259c2d7856606f434e5c9830e392e820a548ab7a6ff4bd4afb3395b3b")
+
+    with pytest.raises(ValueError, match="artifact pin must be ready"):
+        artifact.load_pin(ROOT / "config" / "credentials-verifier-under-test.json")
+
+    rejected = artifact.load_pin(
+        ROOT / "config" / "credentials-verifier-under-test.json",
+        expected_state="ineligible",
+    )
+    assert rejected["release_tag"] == "v1.1.208"
+    assert rejected["commit"] == "7c8fa31500acd8f2ec589781232c444fe81dd22e"
+    assert rejected["expected_failure"] == {
+        "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
+        "message": artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+    }
+
+
+def test_ineligible_pin_still_validates_every_immutable_coordinate(tmp_path: Path) -> None:
+    pin = valid_rust_pin()
+    pin["state"] = "ineligible"
+    pin["expected_failure"] = {
+        "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
+        "message": artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+    }
+    pin["image"]["digest"] = "mutable"  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="image digest"):
+        artifact.load_pin(
+            write_pin(tmp_path / "rejected.json", pin),
+            expected_state="ineligible",
+        )
+
+
+def test_workflow_runs_oracle_and_exact_known_negative_control() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "credentials-verifier-artifact.yml").read_text(encoding="utf-8")
+
+    assert "pin: config/credentials-verifier-oracle.json" in workflow
+    assert "pin: config/credentials-verifier-under-test.json" in workflow
+    assert "state: ineligible" in workflow
+    assert "mode: expected-failure" in workflow
+    assert 'validate-pin --pin "$PIN_FILE" --state "$PIN_STATE"' in workflow
+    assert "run-expected-failure" in workflow
+    assert workflow.count('--pin "$PIN_FILE"') == 4
 
 
 def test_sbom_is_bound_to_pinned_image_and_native_packages(tmp_path: Path) -> None:
@@ -215,6 +267,8 @@ def test_governance_binds_key_to_exact_org_profiles_and_artifact() -> None:
         "ephemeral-api-key",
         "123e4567-e89b-42d3-a456-426614174000",
         "did:web:issuer.integration.invalid",
+        vds_only_api_key="vds-only-api-key",
+        oid4vp_only_api_key="oid4vp-only-api-key",
     )
 
     assert governance["component"] == {
@@ -228,11 +282,28 @@ def test_governance_binds_key_to_exact_org_profiles_and_artifact() -> None:
         "credential.proof",
         "issuer.trust",
     ]
+    assert governance["policies"][1]["content"] == {
+        "verifier_id": "did:web:verifier.integration.invalid",
+        "presentation_definition_digest": artifact.canonical_digest(artifact.presentation_definition()),
+        "required_checks": artifact.OID4VP_REQUIRED_CHECKS,
+    }
     assert governance["trust_profiles"][0]["content"] == {
         "trusted_issuers": ["did:web:issuer.integration.invalid"],
         "allow_public_did_fallback": False,
     }
+    assert set(governance["clients"][0]["purposes"]) == {
+        artifact.SESSION_PURPOSE,
+        artifact.DIRECT_PURPOSE,
+        artifact.VDS_PURPOSE,
+    }
+    assert set(governance["clients"][1]["purposes"]) == {artifact.VDS_PURPOSE}
+    assert set(governance["clients"][2]["purposes"]) == {
+        artifact.SESSION_PURPOSE,
+        artifact.DIRECT_PURPOSE,
+    }
     assert "ephemeral-api-key" not in json.dumps(governance)
+    assert "vds-only-api-key" not in json.dumps(governance)
+    assert "oid4vp-only-api-key" not in json.dumps(governance)
 
 
 def test_missing_required_check_fixture_is_self_consistent() -> None:
@@ -261,15 +332,31 @@ def test_vds_fixture_uses_public_jwk_and_separate_private_key() -> None:
     )
 
 
+def test_oid4vp_fixture_is_nonce_audience_bound_and_contains_no_private_jwk() -> None:
+    token = artifact.make_oid4vp_jwt("n" * 43, "did:web:verifier.integration.invalid")
+    header_segment, payload_segment, signature_segment = token.split(".")
+    header = json.loads(base64.urlsafe_b64decode(header_segment + "=="))
+    payload = json.loads(base64.urlsafe_b64decode(payload_segment + "=="))
+
+    assert header["alg"] == "ES256"
+    assert set(header["jwk"]) == {"kty", "crv", "x", "y"}
+    assert payload["nonce"] == "n" * 43
+    assert payload["aud"] == "did:web:verifier.integration.invalid"
+    assert payload["exp"] > payload["iat"]
+    assert len(base64.urlsafe_b64decode(signature_segment + "==")) == 64
+
+
 def test_canonical_projection_requires_exact_vds_check_floor() -> None:
     value = {
         "decision": "PASS",
         "overall_result": "PASS",
         "valid": True,
         "canonical_result": {
+            "verification_id": "verification:fixture",
             "decision": "PASS",
             "valid": True,
             "processing_status": "COMPLETED",
+            "context": {"transaction_id": "transaction:fixture"},
             "checks": [
                 {"check_id": "credential.proof", "outcome": "PASSED"},
                 {"check_id": "issuer.trust", "outcome": "PASSED"},
@@ -279,16 +366,18 @@ def test_canonical_projection_requires_exact_vds_check_floor() -> None:
     assert artifact._assert_canonical(value, decision="PASS") == value["canonical_result"]
 
     value["canonical_result"]["checks"].pop()
-    with pytest.raises(ValueError, match="exactly two checks"):
+    with pytest.raises(ValueError, match="canonical check count changed"):
         artifact._assert_canonical(value, decision="PASS")
 
     value["decision"] = "FAIL"
     value["overall_result"] = "FAIL"
     value["valid"] = False
     value["canonical_result"] = {
+        "verification_id": "verification:fixture",
         "decision": "FAIL",
         "valid": False,
         "processing_status": "COMPLETED",
+        "context": {"transaction_id": "transaction:fixture"},
         "checks": [
             {"check_id": "credential.proof", "outcome": "PASSED"},
             {"check_id": "issuer.trust", "outcome": "PASSED"},
@@ -299,6 +388,118 @@ def test_canonical_projection_requires_exact_vds_check_floor() -> None:
 
     value["canonical_result"]["checks"][0]["outcome"] = "FAILED"
     assert artifact._assert_canonical(value, decision="FAIL") == value["canonical_result"]
+
+    value["decision"] = "INDETERMINATE"
+    value["overall_result"] = "INDETERMINATE"
+    value["canonical_result"]["decision"] = "INDETERMINATE"
+    value["canonical_result"]["checks"][0]["outcome"] = "PASSED"
+    assert (
+        artifact._assert_canonical(
+            value,
+            decision="INDETERMINATE",
+            expected_passed_checks={"credential.proof", "issuer.trust"},
+        )
+        == value["canonical_result"]
+    )
+
+
+def test_session_projection_requires_exact_shape_binding_and_nonce_lifecycle() -> None:
+    value = {
+        "id": "session-1",
+        "organization_id": "org-1",
+        "verifier_did": "did:web:verifier.integration.invalid",
+        "status": "pending",
+        "request_uri": "oid4vp://request?session_id=session-1",
+        "nonce": "n" * 43,
+        "expires_at": "2026-08-31T15:00:00+00:00",
+        "created_at": "2026-08-31T14:50:00+00:00",
+    }
+
+    artifact._assert_session(
+        value,
+        organization_id="org-1",
+        expected_status="pending",
+        nonce_present=True,
+    )
+
+    value["status"] = "failed"
+    value["nonce"] = ""
+    artifact._assert_session(
+        value,
+        organization_id="org-1",
+        expected_status="failed",
+        nonce_present=False,
+    )
+
+    value["unexpected"] = True
+    with pytest.raises(ValueError, match="session response shape changed"):
+        artifact._assert_session(
+            value,
+            organization_id="org-1",
+            expected_status="failed",
+            nonce_present=False,
+        )
+
+
+def test_session_result_limits_legacy_transaction_id_to_the_frozen_oracle() -> None:
+    value = {
+        "decision": "FAIL",
+        "overall_result": "FAIL",
+        "valid": False,
+        "canonical_result": {
+            "verification_id": "verification:session-1",
+            "decision": "FAIL",
+            "valid": False,
+            "processing_status": "COMPLETED",
+            "context": {"transaction_id": "session-1"},
+            "checks": [{"check_id": check, "outcome": "FAILED"} for check in artifact.OID4VP_REQUIRED_CHECKS],
+        },
+    }
+
+    artifact._assert_session_result(value, "session-1", artifact.LEGACY_TARGET)
+    with pytest.raises(ValueError, match="approved compatibility correction"):
+        artifact._assert_session_result(value, "session-1", artifact.RUST_TARGET)
+
+    value["canonical_result"]["context"]["transaction_id"] = "transaction:session-1"
+    artifact._assert_session_result(value, "session-1", artifact.RUST_TARGET)
+
+
+def test_expected_failure_runner_accepts_only_the_bound_regression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_rust_pin()
+    pin["state"] = "ineligible"
+    pin["expected_failure"] = {
+        "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
+        "message": artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+    }
+    evidence_path = tmp_path / "negative-control.json"
+
+    def reject(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE)
+
+    monkeypatch.setattr(artifact, "run_artifact_test", reject)
+    evidence = artifact.run_expected_failure(
+        pin,
+        evidence_path,
+        provenance_verified=True,
+    )
+
+    assert evidence["status"] == "expected_failure_observed"
+    assert evidence["failure_id"] == artifact.KNOWN_INELIGIBLE_FAILURE_ID
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == evidence
+
+    def wrong_failure(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("different failure")
+
+    monkeypatch.setattr(artifact, "run_artifact_test", wrong_failure)
+    with pytest.raises(ValueError, match="unexpected reason"):
+        artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
+
+    monkeypatch.setattr(artifact, "run_artifact_test", lambda *_args, **_kwargs: {})
+    with pytest.raises(ValueError, match="unexpectedly passed"):
+        artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
 
 
 def test_health_requires_the_real_native_diagnostic_contract() -> None:

@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PIN = ROOT / "config" / "credentials-verifier-under-test.json"
+DEFAULT_PIN = ROOT / "config" / "credentials-verifier-oracle.json"
 BASE_IMAGES = ROOT / "config" / "base-images.json"
 PIN_SCHEMA = "elevenid.credentials-verifier-artifact-pin/v1"
 RUST_PIN_SCHEMA = "elevenid.credentials-verifier-artifact-pin/v2"
@@ -41,7 +41,21 @@ RUST_IMAGE_URI = "ghcr.io/elevenid/marty-ui-oss/services"
 EXPECTED_COMPONENT_ID = "marty-credentials"
 EXPECTED_ADAPTER_ID = "verification-service"
 EXPECTED_SBOM_PACKAGES = {"marty-rs", "marty-verification-py"}
+SESSION_PURPOSE = "verification.session.create"
+DIRECT_PURPOSE = "verification.direct"
 VDS_PURPOSE = "verification.vds-nc"
+OID4VP_REQUIRED_CHECKS = [
+    "presentation.structure",
+    "presentation.proof",
+    "credential.proof",
+    "issuer.trust",
+    "credential.status",
+    "holder.binding",
+    "transaction.binding",
+    "claim.constraints",
+]
+KNOWN_INELIGIBLE_FAILURE_ID = "session.transaction-id-unscoped"
+KNOWN_INELIGIBLE_FAILURE_MESSAGE = "session transaction ID changed outside the approved compatibility correction"
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SEMVER_TAG = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
@@ -113,10 +127,11 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def load_pin(path: Path = DEFAULT_PIN) -> dict[str, Any]:
+def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict[str, Any]:
+    _require(expected_state in {"ready", "ineligible"}, "unsupported artifact pin state")
     value = json.loads(path.read_text(encoding="utf-8"))
     target = artifact_target(value)
-    _require(value.get("state") == "ready", "artifact pin must be ready")
+    _require(value.get("state") == expected_state, f"artifact pin must be {expected_state}")
     _require(value.get("repository") == target.repository, "artifact repository does not match its schema")
     _require(bool(SEMVER_TAG.fullmatch(str(value.get("release_tag", "")))), "release_tag must be stable SemVer")
     _require(bool(VERSION.fullmatch(str(value.get("version", "")))), "version must be stable SemVer")
@@ -141,11 +156,35 @@ def load_pin(path: Path = DEFAULT_PIN) -> dict[str, Any]:
     _require(isinstance(sbom, dict), "SBOM pin is required")
     _require(sbom.get("asset") == target.sbom_asset, "unexpected verification SBOM asset")
     _require(bool(SHA256.fullmatch(str(sbom.get("digest", "")))), "SBOM digest must be sha256:<64 lowercase hex>")
+    expected_failure = value.get("expected_failure")
+    if expected_state == "ineligible":
+        _require(
+            expected_failure
+            == {
+                "id": KNOWN_INELIGIBLE_FAILURE_ID,
+                "message": KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+            },
+            "ineligible artifact pin must bind the known expected failure",
+        )
+    else:
+        _require(expected_failure is None, "ready artifact pin must not declare an expected failure")
     return value
 
 
 def image_reference(pin: dict[str, Any]) -> str:
     return f"{pin['image']['uri']}@{pin['image']['digest']}"
+
+
+def evidence_subject(pin: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "repository": pin["repository"],
+        "release_tag": pin["release_tag"],
+        "version": pin["version"],
+        "commit": pin["commit"],
+        "image_reference": image_reference(pin),
+        "sbom_digest": pin["sbom"]["digest"],
+        "provenance_verified": True,
+    }
 
 
 def validate_sbom(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
@@ -194,16 +233,74 @@ def load_postgres_image(path: Path = BASE_IMAGES) -> str:
     return value
 
 
-def build_governance(pin: dict[str, Any], api_key: str, organization_id: str, issuer_did: str) -> dict[str, Any]:
-    policy_content = {
+def presentation_definition() -> dict[str, Any]:
+    return {"id": "artifact-differential", "input_descriptors": []}
+
+
+def build_governance(
+    pin: dict[str, Any],
+    api_key: str,
+    organization_id: str,
+    issuer_did: str,
+    *,
+    vds_only_api_key: str | None = None,
+    oid4vp_only_api_key: str | None = None,
+) -> dict[str, Any]:
+    vds_policy_content = {
         "verifier_id": "did:web:vds-verifier.integration.invalid",
         "presentation_definition_digest": pin["image"]["digest"],
         "required_checks": ["credential.proof", "issuer.trust"],
+    }
+    oid4vp_policy_content = {
+        "verifier_id": "did:web:verifier.integration.invalid",
+        "presentation_definition_digest": canonical_digest(presentation_definition()),
+        "required_checks": OID4VP_REQUIRED_CHECKS,
     }
     trust_content = {
         "trusted_issuers": [issuer_did],
         "allow_public_did_fallback": False,
     }
+    trust_binding = {"trust_profile_id": "trust:vds-artifact-integration"}
+    all_purposes = {
+        SESSION_PURPOSE: {
+            "policy_id": "policy:oid4vp-artifact-integration",
+            **trust_binding,
+        },
+        DIRECT_PURPOSE: {
+            "policy_id": "policy:oid4vp-artifact-integration",
+            **trust_binding,
+        },
+        VDS_PURPOSE: {
+            "policy_id": "policy:vds-artifact-integration",
+            **trust_binding,
+        },
+    }
+    clients = [
+        {
+            "client_id": "artifact-integration-client",
+            "api_key_sha256": hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
+            "organization_id": organization_id,
+            "purposes": all_purposes,
+        }
+    ]
+    if vds_only_api_key is not None:
+        clients.append(
+            {
+                "client_id": "artifact-integration-vds-only",
+                "api_key_sha256": hashlib.sha256(vds_only_api_key.encode("utf-8")).hexdigest(),
+                "organization_id": organization_id,
+                "purposes": {VDS_PURPOSE: all_purposes[VDS_PURPOSE]},
+            }
+        )
+    if oid4vp_only_api_key is not None:
+        clients.append(
+            {
+                "client_id": "artifact-integration-oid4vp-only",
+                "api_key_sha256": hashlib.sha256(oid4vp_only_api_key.encode("utf-8")).hexdigest(),
+                "organization_id": organization_id,
+                "purposes": {purpose: all_purposes[purpose] for purpose in (SESSION_PURPOSE, DIRECT_PURPOSE)},
+            }
+        )
     return {
         "component": {
             "component_id": EXPECTED_COMPONENT_ID,
@@ -217,9 +314,16 @@ def build_governance(pin: dict[str, Any], api_key: str, organization_id: str, is
                 "organization_id": organization_id,
                 "id": "policy:vds-artifact-integration",
                 "version": "1.0.0",
-                "content_digest": canonical_digest(policy_content),
-                "content": policy_content,
-            }
+                "content_digest": canonical_digest(vds_policy_content),
+                "content": vds_policy_content,
+            },
+            {
+                "organization_id": organization_id,
+                "id": "policy:oid4vp-artifact-integration",
+                "version": "1.0.0",
+                "content_digest": canonical_digest(oid4vp_policy_content),
+                "content": oid4vp_policy_content,
+            },
         ],
         "trust_profiles": [
             {
@@ -230,19 +334,7 @@ def build_governance(pin: dict[str, Any], api_key: str, organization_id: str, is
                 "content": trust_content,
             }
         ],
-        "clients": [
-            {
-                "client_id": "artifact-integration-client",
-                "api_key_sha256": hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
-                "organization_id": organization_id,
-                "purposes": {
-                    VDS_PURPOSE: {
-                        "policy_id": "policy:vds-artifact-integration",
-                        "trust_profile_id": "trust:vds-artifact-integration",
-                    }
-                },
-            }
-        ],
+        "clients": clients,
     }
 
 
@@ -273,6 +365,53 @@ def make_vds_key_material(
         "kid": method_id,
     }
     return private_key, jwk, method_id
+
+
+def make_oid4vp_jwt(nonce: str, audience: str) -> str:
+    """Create a valid holder-signed proof whose embedded credential remains unverified.
+
+    The frozen compatibility service intentionally treats a presentation proof
+    as insufficient for a final PASS until issuer proof, trust, status, holder,
+    and claim checks are independently established.
+    """
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public = private_key.public_key().public_numbers()
+    header = {
+        "alg": "ES256",
+        "typ": "JWT",
+        "jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": _b64url(public.x.to_bytes(32, "big")),
+            "y": _b64url(public.y.to_bytes(32, "big")),
+        },
+    }
+    now = int(time.time())
+    payload = {
+        "iss": "did:example:artifact-holder",
+        "sub": "did:example:artifact-holder",
+        "aud": audience,
+        "iat": now,
+        "exp": now + 300,
+        "nonce": nonce,
+        "vp": {
+            "@context": ["https://www.w3.org/2018/credentials/v1"],
+            "type": ["VerifiablePresentation"],
+            "verifiableCredential": [
+                {
+                    "type": ["VerifiableCredential"],
+                    "credentialSubject": {"artifact_marker": "sensitive-holder-claim"},
+                }
+            ],
+        },
+    }
+    encoded_header = _b64url(canonical_json(header))
+    encoded_payload = _b64url(canonical_json(payload))
+    signing_input = f"{encoded_header}.{encoded_payload}"
+    der = private_key.sign(signing_input.encode("ascii"), ec.ECDSA(hashes.SHA256()))
+    r_value, s_value = decode_dss_signature(der)
+    signature = r_value.to_bytes(32, "big") + s_value.to_bytes(32, "big")
+    return f"{signing_input}.{_b64url(signature)}"
 
 
 def make_vds_barcode(
@@ -329,6 +468,7 @@ class ResolverState:
         self.method_id = method_id
         self.public_jwk = public_jwk
         self.request_count = 0
+        self.return_usable_jwk = True
 
     def response(self) -> dict[str, Any]:
         method = {
@@ -337,7 +477,7 @@ class ResolverState:
             "type": "JsonWebKey2020",
             "publicKeyJwk": self.public_jwk,
         }
-        return {
+        response = {
             "ok": True,
             "organization_id": self.organization_id,
             "issuer_did": self.issuer_did,
@@ -354,6 +494,9 @@ class ResolverState:
                 "public_fallback_used": False,
             },
         }
+        if not self.return_usable_jwk:
+            response.pop("public_jwk")
+        return response
 
 
 def _resolver_handler(state: ResolverState) -> type[BaseHTTPRequestHandler]:
@@ -482,6 +625,23 @@ def _http_json(
     return value
 
 
+def _assert_error(value: dict[str, Any], detail: str) -> None:
+    _require(value == {"detail": detail}, "verification error response contract changed")
+
+
+def _assert_extra_field_error(value: dict[str, Any], field: str) -> None:
+    details = value.get("detail")
+    _require(isinstance(details, list) and len(details) == 1, "validation error shape changed")
+    error = details[0]
+    _require(isinstance(error, dict), "validation error entry changed")
+    location = error.get("loc")
+    _require(
+        isinstance(location, list) and location[-1:] == [field],
+        "validation error field binding changed",
+    )
+    _require(error.get("type") == "extra_forbidden", "validation error category changed")
+
+
 def _wait_for_health(base_url: str, container: str) -> dict[str, Any]:
     for _ in range(90):
         running = _run(
@@ -518,24 +678,124 @@ def _assert_health(value: dict[str, Any], target: ArtifactTarget) -> None:
     _require(backend.get("error") is None, "verification native diagnostic reported an error")
 
 
-def _assert_canonical(value: dict[str, Any], *, decision: str) -> dict[str, Any]:
+def _assert_canonical(
+    value: dict[str, Any],
+    *,
+    decision: str,
+    expected_checks: set[str] | None = None,
+    expected_transaction_id: str | None = None,
+    expected_passed_checks: set[str] | None = None,
+    transaction_error: str = "canonical transaction ID changed",
+) -> dict[str, Any]:
     canonical = value.get("canonical_result")
     _require(isinstance(canonical, dict), "verification response omitted canonical_result")
-    _require(canonical.get("decision") == decision, f"canonical decision was not {decision}")
+    actual_decision = canonical.get("decision")
+    _require(
+        actual_decision == decision,
+        f"canonical decision was not {decision} (got {actual_decision})",
+    )
     _require(value.get("decision") == decision, "legacy decision projection diverged")
     _require(value.get("overall_result") == decision, "overall_result projection diverged")
     _require(value.get("valid") is (decision == "PASS"), "valid projection diverged")
     _require(canonical.get("valid") is (decision == "PASS"), "canonical valid diverged")
     _require(canonical.get("processing_status") == "COMPLETED", "canonical processing did not complete")
+    _require(
+        bool(re.fullmatch(r"verification:[A-Za-z0-9_-]+", str(canonical.get("verification_id", "")))),
+        "canonical verification ID is not scoped",
+    )
+    context = canonical.get("context")
+    _require(isinstance(context, dict), "canonical context is missing")
+    transaction_id = context.get("transaction_id")
+    if expected_transaction_id is None:
+        _require(
+            bool(re.fullmatch(r"transaction:[A-Za-z0-9_-]+", str(transaction_id or ""))),
+            "canonical transaction ID is not scoped",
+        )
+    else:
+        _require(transaction_id == expected_transaction_id, transaction_error)
     checks = canonical.get("checks")
-    _require(isinstance(checks, list) and len(checks) == 2, "VDS canonical result must contain exactly two checks")
+    expected = {"credential.proof", "issuer.trust"} if expected_checks is None else expected_checks
+    _require(isinstance(checks, list) and len(checks) == len(expected), "canonical check count changed")
     ids = {check.get("check_id") for check in checks if isinstance(check, dict)}
-    _require(ids == {"credential.proof", "issuer.trust"}, "VDS canonical check floor changed")
+    _require(ids == expected, "canonical check floor changed")
     if decision == "PASS":
         _require(all(check.get("outcome") == "PASSED" for check in checks), "PASS contained a non-passing check")
-    else:
+    elif decision == "FAIL":
         _require(any(check.get("outcome") == "FAILED" for check in checks), "FAIL contained no failing check")
+    else:
+        _require(
+            decision == "INDETERMINATE" and not any(check.get("outcome") == "FAILED" for check in checks),
+            "INDETERMINATE contained a failed check",
+        )
+    if expected_passed_checks is not None:
+        passed = {
+            check.get("check_id") for check in checks if isinstance(check, dict) and check.get("outcome") == "PASSED"
+        }
+        _require(passed == expected_passed_checks, "canonical passing-check projection changed")
     return canonical
+
+
+def _assert_session(
+    value: dict[str, Any],
+    *,
+    organization_id: str,
+    expected_status: str,
+    nonce_present: bool,
+) -> None:
+    _require(
+        set(value)
+        == {
+            "id",
+            "organization_id",
+            "verifier_did",
+            "status",
+            "request_uri",
+            "nonce",
+            "expires_at",
+            "created_at",
+        },
+        "session response shape changed",
+    )
+    _require(isinstance(value["id"], str) and value["id"], "session ID is missing")
+    _require(value["organization_id"] == organization_id, "session organization binding changed")
+    _require(
+        value["verifier_did"] == "did:web:verifier.integration.invalid",
+        "session verifier binding changed",
+    )
+    _require(value["status"] == expected_status, "session status changed")
+    _require(isinstance(value["request_uri"], str) and value["request_uri"], "session request URI is missing")
+    nonce = value["nonce"]
+    _require(isinstance(nonce, str), "session nonce is not a string")
+    _require((len(nonce) > 40) if nonce_present else nonce == "", "session nonce lifecycle changed")
+    for field in ("expires_at", "created_at"):
+        _require(isinstance(value[field], str) and value[field], f"session {field} is missing")
+        datetime.fromisoformat(value[field].replace("Z", "+00:00"))
+
+
+def _assert_session_result(
+    value: dict[str, Any],
+    session_id: str,
+    target: ArtifactTarget,
+    *,
+    expected_decision: str = "FAIL",
+    expected_passed_checks: set[str] | None = None,
+) -> None:
+    expected_transaction_id = session_id if target is LEGACY_TARGET else f"transaction:{session_id}"
+    canonical = _assert_canonical(
+        value,
+        decision=expected_decision,
+        expected_checks=set(OID4VP_REQUIRED_CHECKS),
+        expected_transaction_id=expected_transaction_id,
+        expected_passed_checks=expected_passed_checks,
+        transaction_error=KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+    )
+    _require(
+        canonical.get("verification_id") == f"verification:{session_id}",
+        "session verification ID is not scoped to the session",
+    )
+    # The canonical Rust owner deliberately scopes this identifier before it
+    # crosses the Core boundary. The frozen Python oracle is retained exactly
+    # as released, including its unscoped legacy projection.
 
 
 def _assert_private_material_absent(value: dict[str, Any], prohibited: list[str]) -> None:
@@ -580,6 +840,111 @@ def _migration_command(
     return command
 
 
+def _start_service(
+    command: list[str],
+    service: str,
+    target: ArtifactTarget,
+    *,
+    label: str,
+) -> str:
+    _run(command, label=label)
+    base_url = f"http://127.0.0.1:{_service_port(service, target)}"
+    _assert_health(_wait_for_health(base_url, service), target)
+    compatibility_health = _http_json(
+        "GET",
+        f"{base_url}/v1/verification/health",
+        expected_status=200,
+    )
+    _require(
+        compatibility_health == {"status": "healthy"},
+        "compatibility health contract changed",
+    )
+    return base_url
+
+
+def _session_row(postgres: str, session_id: str) -> dict[str, Any]:
+    _require(
+        bool(re.fullmatch(r"[A-Za-z0-9_-]{32,64}", session_id)),
+        "session ID is unsafe for the persistence assertion",
+    )
+    query = (
+        "SELECT json_build_object("
+        "'status', lower(status),"
+        "'presentation_data', presentation_data,"
+        "'verified_claims', verified_claims,"
+        "'verification_evidence', verification_evidence,"
+        "'nonce', nonce,"
+        "'submission_sha256', submission_sha256,"
+        "'processing_token_sha256', processing_token_sha256,"
+        "'processing_started_at', processing_started_at,"
+        "'processing_expires_at', processing_expires_at"
+        f") FROM public.verification_sessions WHERE id='{session_id}'"
+    )
+    output = _run(
+        ["docker", "exec", postgres, "psql", "-U", "postgres", "-d", "verifier", "-tAc", query],
+        label="read minimized verification session",
+    )
+    try:
+        value = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise ArtifactRuntimeError("verification session row was not valid JSON") from exc
+    _require(isinstance(value, dict), "verification session row is missing")
+    return value
+
+
+def _expire_session(postgres: str, session_id: str) -> None:
+    _require(
+        bool(re.fullmatch(r"[A-Za-z0-9_-]{32,64}", session_id)),
+        "session ID is unsafe for the expiry assertion",
+    )
+    result = _run(
+        [
+            "docker",
+            "exec",
+            postgres,
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "verifier",
+            "-tAc",
+            (
+                "UPDATE public.verification_sessions "
+                "SET expires_at=clock_timestamp() - interval '1 second' "
+                f"WHERE id='{session_id}'"
+            ),
+        ],
+        label="expire verification session",
+    )
+    _require(result == "UPDATE 1", "verification session expiry fixture did not update one row")
+
+
+def _assert_terminal_row_minimized(
+    postgres: str,
+    session_id: str,
+    presentation: str,
+    prohibited: list[str],
+) -> None:
+    row = _session_row(postgres, session_id)
+    presentation_digest = hashlib.sha256(presentation.encode("utf-8")).hexdigest()
+    _require(row["status"] == "failed", "terminal database status changed")
+    _require(row["presentation_data"] is None, "raw presentation was persisted")
+    _require(row["verified_claims"] in (None, {}), "raw verified claims were persisted")
+    _require(row["nonce"] is None, "terminal nonce was not cleared")
+    _require(row["submission_sha256"] == presentation_digest, "submission digest changed")
+    for field in (
+        "processing_token_sha256",
+        "processing_started_at",
+        "processing_expires_at",
+    ):
+        _require(row[field] is None, f"terminal {field} was not cleared")
+    _require(
+        presentation_digest in json.dumps(row["verification_evidence"], sort_keys=True),
+        "terminal evidence omitted the submission digest",
+    )
+    _assert_private_material_absent(row, prohibited)
+
+
 def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_verified: bool) -> dict[str, Any]:
     _require(provenance_verified, "artifact provenance must be verified before runtime testing")
     target = artifact_target(pin)
@@ -592,12 +957,22 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
     invalid_service = f"marty-verifier-invalid-{suffix}"
     database_password = secrets.token_urlsafe(32)
     api_key = secrets.token_urlsafe(32)
+    vds_only_api_key = secrets.token_urlsafe(32)
+    oid4vp_only_api_key = secrets.token_urlsafe(32)
     resolver_key = secrets.token_urlsafe(32)
+    private_material = [api_key, vds_only_api_key, oid4vp_only_api_key, resolver_key]
     organization_id = str(uuid.uuid4())
     issuer_did = "did:web:vds-issuer.integration.invalid"
     private_key, public_jwk, method_id = make_vds_key_material(issuer_did)
     barcode = make_vds_barcode(issuer_did, method_id, private_key)
-    governance = build_governance(pin, api_key, organization_id, issuer_did)
+    governance = build_governance(
+        pin,
+        api_key,
+        organization_id,
+        issuer_did,
+        vds_only_api_key=vds_only_api_key,
+        oid4vp_only_api_key=oid4vp_only_api_key,
+    )
     database_url = f"postgresql+asyncpg://postgres:{database_password}@{postgres}:5432/verifier"
     completed_checks: list[str] = []
     state = ResolverState(
@@ -746,20 +1121,233 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                     ]
                 )
             service_command.append(reference)
-            _run(
+            base_url = _start_service(
                 service_command,
+                service,
+                target,
                 label="start released verification image",
             )
-            base_url = f"http://127.0.0.1:{_service_port(service, target)}"
-            health = _wait_for_health(base_url, service)
-            _assert_health(health, target)
-            compatibility_health = _http_json(
-                "GET",
-                f"{base_url}/v1/verification/health",
+            completed_checks.append("health.native-capabilities")
+
+            definition = presentation_definition()
+            session_body = {
+                "verifier_did": "did:web:verifier.integration.invalid",
+                "presentation_definition": definition,
+                "session_duration_seconds": 600,
+            }
+            missing_auth = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body=session_body,
+                expected_status=401,
+            )
+            _assert_error(missing_auth, "X-API-Key header is missing")
+            wrong_purpose = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body=session_body,
+                api_key=vds_only_api_key,
+                expected_status=401,
+            )
+            _assert_error(wrong_purpose, "Invalid or unauthorized API key")
+            policy_mismatch = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body={**session_body, "verifier_did": "did:web:wrong-verifier.integration.invalid"},
+                api_key=api_key,
+                expected_status=422,
+            )
+            _assert_error(policy_mismatch, "Verification request does not match its governed policy")
+            session = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body=session_body,
+                api_key=api_key,
                 expected_status=200,
             )
-            _require(compatibility_health == {"status": "healthy"}, "compatibility health contract changed")
-            completed_checks.append("health.native-capabilities")
+            _assert_session(
+                session,
+                organization_id=organization_id,
+                expected_status="pending",
+                nonce_present=True,
+            )
+            session_id = session["id"]
+            pending = _http_json(
+                "GET",
+                f"{base_url}/v1/verification/sessions/{session_id}",
+                expected_status=200,
+            )
+            _require(pending == session, "created and retrieved pending sessions diverged")
+            session_nonce = session["nonce"]
+            signed_presentation = make_oid4vp_jwt(
+                session_nonce,
+                "did:web:verifier.integration.invalid",
+            )
+            completed_checks.append("session.create-auth-policy-and-reload-parity")
+
+            submitted = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions/{session_id}/submit",
+                body={"presentation": signed_presentation},
+                expected_status=200,
+            )
+            _assert_session_result(
+                submitted,
+                session_id,
+                target,
+                expected_decision="INDETERMINATE",
+                expected_passed_checks={"presentation.proof", "transaction.binding"},
+            )
+            _assert_private_material_absent(
+                submitted,
+                private_material + [signed_presentation, session_nonce, "sensitive-holder-claim"],
+            )
+            _assert_terminal_row_minimized(
+                postgres,
+                session_id,
+                signed_presentation,
+                private_material + [signed_presentation, session_nonce, "sensitive-holder-claim"],
+            )
+
+            _docker_remove("container", service)
+            base_url = _start_service(
+                service_command,
+                service,
+                target,
+                label="restart released verification image",
+            )
+            terminal = _http_json(
+                "GET",
+                f"{base_url}/v1/verification/sessions/{session_id}",
+                expected_status=200,
+            )
+            _assert_session(
+                terminal,
+                organization_id=organization_id,
+                expected_status="failed",
+                nonce_present=False,
+            )
+            _require(terminal["id"] == session_id, "terminal reload returned a different session")
+            replay = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions/{session_id}/submit",
+                body={"presentation": signed_presentation},
+                expected_status=200,
+            )
+            _require(replay == submitted, "same-digest terminal retry changed the frozen decision")
+            conflict = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions/{session_id}/submit",
+                body={"presentation": "header.payload.signature"},
+                expected_status=409,
+            )
+            _assert_error(conflict, "Verification session submission conflicts")
+            completed_checks.append("session.postgres-restart-minimization-and-replay-parity")
+
+            missing_session = "A" * 43
+            not_found = _http_json(
+                "GET",
+                f"{base_url}/v1/verification/sessions/{missing_session}",
+                expected_status=404,
+            )
+            _assert_error(not_found, "Session not found")
+            submit_not_found = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions/{missing_session}/submit",
+                body={"presentation": signed_presentation},
+                expected_status=404,
+            )
+            _assert_error(submit_not_found, "Verification session not found")
+
+            expiring = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body=session_body,
+                api_key=oid4vp_only_api_key,
+                expected_status=200,
+            )
+            expiring_id = expiring["id"]
+            expiring_presentation = make_oid4vp_jwt(
+                expiring["nonce"],
+                "did:web:verifier.integration.invalid",
+            )
+            _expire_session(postgres, expiring_id)
+            expired = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions/{expiring_id}/submit",
+                body={"presentation": expiring_presentation},
+                expected_status=410,
+            )
+            _assert_error(expired, "Verification session has expired")
+            expired_row = _session_row(postgres, expiring_id)
+            _require(expired_row["status"] == "expired", "expired session status was not persisted")
+            _require(expired_row["nonce"] is None, "expired session nonce was retained")
+            completed_checks.append("session.not-found-expiry-and-conflict-errors")
+
+            malformed_session = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body=session_body,
+                api_key=api_key,
+                expected_status=200,
+            )
+            malformed_result = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions/{malformed_session['id']}/submit",
+                body={"presentation": "header.payload.signature"},
+                expected_status=200,
+            )
+            _assert_session_result(malformed_result, malformed_session["id"], target)
+            completed_checks.append("session.malformed-presentation-fails-closed")
+
+            direct_body = {
+                "presentation": "header.payload.signature",
+                "presentation_definition": definition,
+                "verifier_did": "did:web:verifier.integration.invalid",
+            }
+            direct_missing = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/verify",
+                body=direct_body,
+                expected_status=401,
+            )
+            _assert_error(direct_missing, "X-API-Key header is missing")
+            direct_wrong_purpose = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/verify",
+                body=direct_body,
+                api_key=vds_only_api_key,
+                expected_status=401,
+            )
+            _assert_error(direct_wrong_purpose, "Invalid or unauthorized API key")
+            direct_policy_mismatch = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/verify",
+                body={**direct_body, "verifier_did": "did:web:wrong-verifier.integration.invalid"},
+                api_key=api_key,
+                expected_status=422,
+            )
+            _assert_error(
+                direct_policy_mismatch,
+                "Verification request does not match its governed policy",
+            )
+            direct = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/verify",
+                body=direct_body,
+                api_key=api_key,
+                expected_status=200,
+            )
+            _assert_canonical(
+                direct,
+                decision="FAIL",
+                expected_checks=set(OID4VP_REQUIRED_CHECKS),
+            )
+            _assert_private_material_absent(
+                direct,
+                private_material + ["header.payload.signature"],
+            )
+            completed_checks.append("direct.auth-policy-malformed-and-scoped-fail-closed")
 
             endpoint = f"{base_url}/v1/verification/verify/vds-nc"
             request_body = {
@@ -768,30 +1356,86 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 "verification_method_id": method_id,
                 "algorithm": "ES256",
             }
-            _http_json("POST", endpoint, body=request_body, expected_status=401)
-            _http_json("POST", endpoint, body=request_body, api_key="invalid", expected_status=401)
-            completed_checks.append("authorization.missing-and-invalid-rejected")
+            vds_missing = _http_json("POST", endpoint, body=request_body, expected_status=401)
+            _assert_error(vds_missing, "X-API-Key header is missing")
+            vds_invalid = _http_json(
+                "POST",
+                endpoint,
+                body=request_body,
+                api_key="invalid",
+                expected_status=401,
+            )
+            _assert_error(vds_invalid, "Invalid or unauthorized API key")
+            vds_wrong_purpose = _http_json(
+                "POST",
+                endpoint,
+                body=request_body,
+                api_key=oid4vp_only_api_key,
+                expected_status=401,
+            )
+            _assert_error(vds_wrong_purpose, "Invalid or unauthorized API key")
+            completed_checks.append("authorization.missing-invalid-and-wrong-purpose-rejected")
 
             caller_selected = {**request_body, "organization_id": organization_id}
-            _http_json("POST", endpoint, body=caller_selected, api_key=api_key, expected_status=422)
+            caller_rejected = _http_json(
+                "POST",
+                endpoint,
+                body=caller_selected,
+                api_key=api_key,
+                expected_status=422,
+            )
+            _assert_extra_field_error(caller_rejected, "organization_id")
             completed_checks.append("authority.caller-selection-rejected")
 
             resolver_before = state.request_count
             untrusted = {**request_body, "issuer_did": "did:web:attacker.integration.invalid"}
-            _http_json("POST", endpoint, body=untrusted, api_key=api_key, expected_status=500)
+            untrusted_result = _http_json(
+                "POST",
+                endpoint,
+                body=untrusted,
+                api_key=api_key,
+                expected_status=500,
+            )
+            _assert_error(untrusted_result, "VDS-NC verification failed")
             _require(state.request_count == resolver_before, "untrusted issuer reached the internal resolver")
             completed_checks.append("trust.unregistered-issuer-rejected-before-resolution")
 
-            positive = _http_json("POST", endpoint, body=request_body, api_key=api_key, expected_status=200)
+            state.return_usable_jwk = False
+            try:
+                unusable_jwk = _http_json(
+                    "POST",
+                    endpoint,
+                    body=request_body,
+                    api_key=api_key,
+                    expected_status=500,
+                )
+            finally:
+                state.return_usable_jwk = True
+            _assert_error(unusable_jwk, "VDS-NC verification failed")
+            completed_checks.append("resolver.unusable-jwk-fails-closed")
+
+            positive = _http_json(
+                "POST",
+                endpoint,
+                body=request_body,
+                api_key=vds_only_api_key,
+                expected_status=200,
+            )
             _assert_canonical(positive, decision="PASS")
-            _assert_private_material_absent(positive, [api_key, resolver_key, barcode])
+            _assert_private_material_absent(
+                positive,
+                private_material + [barcode],
+            )
             completed_checks.append("canonical.vds-positive-pass")
 
             tampered_signature = base64.b64encode(bytes(64)).decode("ascii")
             tampered = {**request_body, "barcode": barcode.rsplit("~", 1)[0] + "~" + tampered_signature}
             rejected = _http_json("POST", endpoint, body=tampered, api_key=api_key, expected_status=200)
             _assert_canonical(rejected, decision="FAIL")
-            _assert_private_material_absent(rejected, [api_key, resolver_key, barcode])
+            _assert_private_material_absent(
+                rejected,
+                private_material + [barcode],
+            )
             completed_checks.append("canonical.tampered-signature-fail")
 
             malformed = {**request_body, "barcode": "DC03USA~{}~not-base64"}
@@ -799,7 +1443,7 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             _assert_canonical(malformed_result, decision="FAIL")
             _assert_private_material_absent(
                 malformed_result,
-                [api_key, resolver_key, malformed["barcode"]],
+                private_material + [malformed["barcode"]],
             )
             completed_checks.append("canonical.malformed-evidence-fail")
 
@@ -809,15 +1453,7 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             "official_suite_invoked": False,
             "official_suite_source_modified": False,
             "status": "passed",
-            "subject": {
-                "repository": pin["repository"],
-                "release_tag": pin["release_tag"],
-                "version": pin["version"],
-                "commit": pin["commit"],
-                "image_reference": reference,
-                "sbom_digest": pin["sbom"]["digest"],
-                "provenance_verified": True,
-            },
+            "subject": evidence_subject(pin),
             "checks": completed_checks,
             "resolver_request_count": state.request_count,
             "started_at": started.isoformat().replace("+00:00", "Z"),
@@ -833,24 +1469,65 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
         _docker_remove("network", network)
 
 
+def run_expected_failure(
+    pin: dict[str, Any],
+    evidence_path: Path,
+    *,
+    provenance_verified: bool,
+) -> dict[str, Any]:
+    expected = pin["expected_failure"]
+    started = datetime.now(UTC)
+    try:
+        run_artifact_test(pin, evidence_path, provenance_verified=provenance_verified)
+    except (ArtifactRuntimeError, ValueError) as exc:
+        _require(
+            str(exc) == expected["message"],
+            "ineligible artifact failed for an unexpected reason",
+        )
+    else:
+        raise ValueError("known-ineligible artifact unexpectedly passed")
+
+    evidence = {
+        "schema": RUST_EVIDENCE_SCHEMA,
+        "classification": "ElevenID-owned artifact negative control",
+        "official_suite_invoked": False,
+        "official_suite_source_modified": False,
+        "status": "expected_failure_observed",
+        "subject": evidence_subject(pin),
+        "failure_id": expected["id"],
+        "started_at": started.isoformat().replace("+00:00", "Z"),
+        "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return evidence
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate-pin")
     validate.add_argument("--pin", type=Path, default=DEFAULT_PIN)
+    validate.add_argument("--state", choices=("ready", "ineligible"), default="ready")
     sbom = commands.add_parser("validate-sbom")
     sbom.add_argument("--pin", type=Path, default=DEFAULT_PIN)
+    sbom.add_argument("--state", choices=("ready", "ineligible"), default="ready")
     sbom.add_argument("--sbom", type=Path, required=True)
     run = commands.add_parser("run")
     run.add_argument("--pin", type=Path, default=DEFAULT_PIN)
     run.add_argument("--evidence", type=Path, required=True)
     run.add_argument("--provenance-verified", action="store_true", required=True)
+    rejected = commands.add_parser("run-expected-failure")
+    rejected.add_argument("--pin", type=Path, required=True)
+    rejected.add_argument("--evidence", type=Path, required=True)
+    rejected.add_argument("--provenance-verified", action="store_true", required=True)
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    pin = load_pin(args.pin.resolve())
+    expected_state = "ineligible" if args.command == "run-expected-failure" else getattr(args, "state", "ready")
+    pin = load_pin(args.pin.resolve(), expected_state=expected_state)
     if args.command == "validate-pin":
         print(json.dumps(pin, indent=2, sort_keys=True))
         return 0
@@ -864,11 +1541,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(summary, sort_keys=True))
         return 0
-    evidence = run_artifact_test(
-        pin,
-        args.evidence.resolve(),
-        provenance_verified=args.provenance_verified,
-    )
+    runner = run_expected_failure if args.command == "run-expected-failure" else run_artifact_test
+    evidence = runner(pin, args.evidence.resolve(), provenance_verified=args.provenance_verified)
     print(json.dumps(evidence, sort_keys=True))
     return 0
 

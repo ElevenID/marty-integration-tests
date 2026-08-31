@@ -11,7 +11,10 @@ This repository verifies the public Marty credential stack using only released, 
 - Headless-wallet and interoperability flows
 - Browser contracts against the released Marty UI
 - Upgrade and rollback manifest compatibility
-- The governed Credentials compatibility surface in the canonical Rust services image
+- The governed Credentials compatibility surface, retaining released Credentials `v0.1.71` as
+  the artifact oracle until a corrected canonical Rust services image passes the same matrix;
+  exact Rust `v1.1.208` remains a provenance-verified negative control that must fail only on
+  its known unscoped session transaction ID
 
 Billing, Square, subscription plans, and product-catalog tests live in the private commerce overlay and are intentionally excluded.
 
