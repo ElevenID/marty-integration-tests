@@ -122,6 +122,36 @@ def test_rust_pin_and_cyclonedx_sbom_are_bound_to_canonical_services_image(tmp_p
     assert value["metadata"]["component"]["version"] == pin["image"]["digest"]
 
 
+def test_migration_commands_preserve_each_images_runtime_contract() -> None:
+    rust = artifact._migration_command(
+        "rust-image@sha256:digest",
+        artifact.RUST_TARGET,
+        "verification-network",
+        "postgresql://database",
+    )
+    legacy = artifact._migration_command(
+        "python-image@sha256:digest",
+        artifact.LEGACY_TARGET,
+        "verification-network",
+        "postgresql://database",
+    )
+
+    assert rust[-4:] == [
+        "--entrypoint",
+        "/app/services/entrypoint.sh",
+        "rust-image@sha256:digest",
+        "migrate",
+    ]
+    assert "SERVICE_NAME=verification" in rust
+    assert legacy[-4:] == [
+        "python-image@sha256:digest",
+        "python",
+        "manage_migrations.py",
+        "upgrade",
+    ]
+    assert "--entrypoint" not in legacy
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
