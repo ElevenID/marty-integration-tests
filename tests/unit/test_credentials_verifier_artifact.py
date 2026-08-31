@@ -688,6 +688,9 @@ def test_expired_terminal_row_requires_complete_minimization(monkeypatch: pytest
         ("nonce", "retained-nonce", "nonce was retained"),
         ("submission_sha256", "unexpected-digest", "rejected submission digest"),
         ("processing_token_sha256", "unexpected-token", "processing_token_sha256 was not cleared"),
+        ("processing_started_at", "2026-08-31T00:00:00Z", "processing_started_at was not cleared"),
+        ("processing_expires_at", "2026-08-31T00:01:00Z", "processing_expires_at was not cleared"),
+        ("verification_evidence", {"raw": "sensitive-holder-claim"}, "retained private"),
     ):
         original = row[field]
         row[field] = retained
