@@ -46,6 +46,29 @@ EXPECTED_SBOM_PACKAGES = {"marty-rs", "marty-verification-py"}
 SESSION_PURPOSE = "verification.session.create"
 DIRECT_PURPOSE = "verification.direct"
 VDS_PURPOSE = "verification.vds-nc"
+VDS_PASS_CHECK_PROJECTION = {
+    "credential.proof": ("PASSED", "CREDENTIAL_PROOFS_VALID"),
+    "issuer.trust": ("PASSED", "ISSUER_TRUST_VALID"),
+}
+VDS_FAIL_CHECK_PROJECTION = {
+    "credential.proof": ("FAILED", "CREDENTIAL_PROOFS_INVALID"),
+    "issuer.trust": ("PASSED", "ISSUER_TRUST_VALID"),
+}
+VDS_SENSITIVE_SENTINELS = [
+    "dateOfBirth",
+    "dateOfExpiry",
+    "dateOfIssue",
+    "documentNumber",
+    "gender",
+    "givenNames",
+    "issuingCountry",
+    "nationality",
+    "surname",
+    "19900102",
+    "X123456",
+    "ADA",
+    "EXAMPLE",
+]
 OID4VP_REQUIRED_CHECKS = [
     "presentation.structure",
     "presentation.proof",
@@ -887,6 +910,10 @@ def _assert_private_material_absent(value: dict[str, Any], prohibited: list[str]
         _require(item not in serialized, "canonical response retained private test material")
 
 
+def _vds_private_material(submitted_barcode: str) -> list[str]:
+    return [submitted_barcode, *VDS_SENSITIVE_SENTINELS]
+
+
 def _service_port(container: str, target: ArtifactTarget) -> int:
     output = _run(
         ["docker", "port", container, f"{target.service_port}/tcp"],
@@ -1025,6 +1052,22 @@ def _assert_terminal_row_minimized(
         presentation_digest in json.dumps(row["verification_evidence"], sort_keys=True),
         "terminal evidence omitted the submission digest",
     )
+    _assert_private_material_absent(row, prohibited)
+
+
+def _assert_expired_row_minimized(postgres: str, session_id: str, prohibited: list[str]) -> None:
+    row = _session_row(postgres, session_id)
+    _require(row["status"] == "expired", "expired session status was not persisted")
+    _require(row["presentation_data"] is None, "expired session retained raw presentation")
+    _require(row["verified_claims"] in (None, {}), "expired session retained raw verified claims")
+    _require(row["nonce"] is None, "expired session nonce was retained")
+    _require(row["submission_sha256"] is None, "expired session retained a rejected submission digest")
+    for field in (
+        "processing_token_sha256",
+        "processing_started_at",
+        "processing_expires_at",
+    ):
+        _require(row[field] is None, f"expired session {field} was not cleared")
     _assert_private_material_absent(row, prohibited)
 
 
@@ -1255,6 +1298,12 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 expected_status=200,
             )
             _assert_session_result(malformed_result, malformed_session["id"], target)
+            _assert_terminal_row_minimized(
+                postgres,
+                malformed_session["id"],
+                "header.payload.signature",
+                private_material + ["header.payload.signature"],
+            )
             completed_checks.append("session.malformed-presentation-fails-closed")
 
             session = _http_json(
@@ -1378,9 +1427,11 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 expected_status=410,
             )
             _assert_error(expired, "Verification session has expired")
-            expired_row = _session_row(postgres, expiring_id)
-            _require(expired_row["status"] == "expired", "expired session status was not persisted")
-            _require(expired_row["nonce"] is None, "expired session nonce was retained")
+            _assert_expired_row_minimized(
+                postgres,
+                expiring_id,
+                private_material + [expiring_presentation, expiring["nonce"], "sensitive-holder-claim"],
+            )
             completed_checks.append("session.not-found-expiry-and-conflict-errors")
 
             same_digest_session = _http_json(
@@ -1727,29 +1778,41 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 api_key=vds_only_api_key,
                 expected_status=200,
             )
-            _assert_canonical(positive, decision="PASS")
+            _assert_canonical(
+                positive,
+                decision="PASS",
+                expected_check_projection=VDS_PASS_CHECK_PROJECTION,
+            )
             _assert_private_material_absent(
                 positive,
-                private_material + [barcode],
+                private_material + _vds_private_material(barcode),
             )
             completed_checks.append("canonical.vds-positive-pass")
 
             tampered_signature = base64.b64encode(bytes(64)).decode("ascii")
             tampered = {**request_body, "barcode": barcode.rsplit("~", 1)[0] + "~" + tampered_signature}
             rejected = _http_json("POST", endpoint, body=tampered, api_key=api_key, expected_status=200)
-            _assert_canonical(rejected, decision="FAIL")
+            _assert_canonical(
+                rejected,
+                decision="FAIL",
+                expected_check_projection=VDS_FAIL_CHECK_PROJECTION,
+            )
             _assert_private_material_absent(
                 rejected,
-                private_material + [barcode],
+                private_material + _vds_private_material(tampered["barcode"]),
             )
             completed_checks.append("canonical.tampered-signature-fail")
 
             malformed = {**request_body, "barcode": "DC03USA~{}~not-base64"}
             malformed_result = _http_json("POST", endpoint, body=malformed, api_key=api_key, expected_status=200)
-            _assert_canonical(malformed_result, decision="FAIL")
+            _assert_canonical(
+                malformed_result,
+                decision="FAIL",
+                expected_check_projection=VDS_FAIL_CHECK_PROJECTION,
+            )
             _assert_private_material_absent(
                 malformed_result,
-                private_material + [malformed["barcode"]],
+                private_material + _vds_private_material(malformed["barcode"]),
             )
             completed_checks.append("canonical.malformed-evidence-fail")
 

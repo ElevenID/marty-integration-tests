@@ -433,6 +433,41 @@ def test_canonical_projection_requires_exact_vds_check_floor() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("decision", "projection"),
+    [
+        ("PASS", artifact.VDS_PASS_CHECK_PROJECTION),
+        ("FAIL", artifact.VDS_FAIL_CHECK_PROJECTION),
+    ],
+)
+def test_vds_projection_requires_exact_outcomes_and_codes(
+    decision: str,
+    projection: dict[str, tuple[str, str]],
+) -> None:
+    value = {
+        "decision": decision,
+        "overall_result": decision,
+        "valid": decision == "PASS",
+        "canonical_result": {
+            "verification_id": "verification:fixture",
+            "decision": decision,
+            "valid": decision == "PASS",
+            "processing_status": "COMPLETED",
+            "context": {"transaction_id": "transaction:fixture"},
+            "checks": [
+                {"check_id": check_id, "outcome": outcome, "code": code}
+                for check_id, (outcome, code) in projection.items()
+            ],
+        },
+    }
+
+    artifact._assert_canonical(value, decision=decision, expected_check_projection=projection)
+
+    value["canonical_result"]["checks"][0]["code"] = "WRONG_FAILURE_CATEGORY"
+    with pytest.raises(ValueError, match="canonical check projection changed"):
+        artifact._assert_canonical(value, decision=decision, expected_check_projection=projection)
+
+
 def test_session_projection_requires_exact_shape_binding_and_nonce_lifecycle() -> None:
     value = {
         "id": "session-1",
@@ -611,6 +646,80 @@ def test_vds_fixture_is_language_neutral_and_uses_standard_signature_base64() ->
     }
     assert artifact.canonical_json(payload).decode("utf-8") == payload_json
     assert len(__import__("base64").b64decode(signature, validate=True)) == 64
+
+
+def test_vds_private_material_covers_submitted_barcode_and_decoded_claim_sentinels() -> None:
+    issuer = "did:web:issuer.integration.invalid"
+    private_key, _jwk, method_id = artifact.make_vds_key_material(issuer)
+    barcode = artifact.make_vds_barcode(issuer, method_id, private_key)
+    tampered = barcode.rsplit("~", 1)[0] + "~" + base64.b64encode(bytes(64)).decode("ascii")
+
+    material = artifact._vds_private_material(tampered)
+
+    assert material[0] == tampered
+    assert barcode not in material
+    for sentinel in ("dateOfBirth", "documentNumber", "givenNames", "surname", "19900102", "X123456", "ADA", "EXAMPLE"):
+        assert sentinel in material
+        with pytest.raises(ValueError, match="retained private"):
+            artifact._assert_private_material_absent({"decoded": sentinel}, material)
+    with pytest.raises(ValueError, match="retained private"):
+        artifact._assert_private_material_absent({"submitted": tampered}, material)
+
+
+def test_expired_terminal_row_requires_complete_minimization(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = {
+        "status": "expired",
+        "presentation_data": None,
+        "verified_claims": None,
+        "verification_evidence": {"policy": "fixture"},
+        "nonce": None,
+        "submission_sha256": None,
+        "processing_token_sha256": None,
+        "processing_started_at": None,
+        "processing_expires_at": None,
+    }
+    monkeypatch.setattr(artifact, "_session_row", lambda _postgres, _session_id: row)
+
+    artifact._assert_expired_row_minimized("postgres", "session", ["sensitive-holder-claim"])
+
+    for field, retained, message in (
+        ("presentation_data", "sensitive-holder-claim", "retained raw presentation"),
+        ("verified_claims", {"claim": "sensitive-holder-claim"}, "retained raw verified claims"),
+        ("nonce", "retained-nonce", "nonce was retained"),
+        ("submission_sha256", "unexpected-digest", "rejected submission digest"),
+        ("processing_token_sha256", "unexpected-token", "processing_token_sha256 was not cleared"),
+        ("processing_started_at", "2026-08-31T00:00:00Z", "processing_started_at was not cleared"),
+        ("processing_expires_at", "2026-08-31T00:01:00Z", "processing_expires_at was not cleared"),
+        ("verification_evidence", {"raw": "sensitive-holder-claim"}, "retained private"),
+    ):
+        original = row[field]
+        row[field] = retained
+        with pytest.raises(ValueError, match=message):
+            artifact._assert_expired_row_minimized("postgres", "session", ["sensitive-holder-claim"])
+        row[field] = original
+
+
+def test_malformed_terminal_row_rejects_raw_submission_retention(monkeypatch: pytest.MonkeyPatch) -> None:
+    presentation = "header.payload.signature"
+    digest = __import__("hashlib").sha256(presentation.encode("utf-8")).hexdigest()
+    row = {
+        "status": "failed",
+        "presentation_data": None,
+        "verified_claims": {},
+        "verification_evidence": {"submission_sha256": digest},
+        "nonce": None,
+        "submission_sha256": digest,
+        "processing_token_sha256": None,
+        "processing_started_at": None,
+        "processing_expires_at": None,
+    }
+    monkeypatch.setattr(artifact, "_session_row", lambda _postgres, _session_id: row)
+
+    artifact._assert_terminal_row_minimized("postgres", "session", presentation, [presentation])
+
+    row["verification_evidence"]["raw_submission"] = presentation
+    with pytest.raises(ValueError, match="retained private"):
+        artifact._assert_terminal_row_minimized("postgres", "session", presentation, [presentation])
 
 
 def test_private_material_guard_rejects_retention() -> None:
