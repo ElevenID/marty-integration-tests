@@ -81,12 +81,49 @@ OID4VP_REQUIRED_CHECKS = [
 ]
 KNOWN_INELIGIBLE_FAILURE_ID = "session.transaction-id-unscoped"
 KNOWN_INELIGIBLE_FAILURE_MESSAGE = "session transaction ID changed outside the approved compatibility correction"
-KNOWN_INELIGIBLE_TRANSIENT_MESSAGE = "verification response omitted canonical_result"
-KNOWN_INELIGIBLE_MAX_ATTEMPTS = 3
+SAFE_SESSION_MAX_CREATIONS = 8
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SEMVER_TAG = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 VERSION = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+FROZEN_LEGACY_SAFE_SESSION_PIN = {
+    "schema": PIN_SCHEMA,
+    "state": "ready",
+    "repository": EXPECTED_REPOSITORY,
+    "release_tag": "v0.1.71",
+    "version": "0.1.71",
+    "commit": "94f19ad369e7e41883f2aa3d77656ce561bb6534",
+    "source_ref": "refs/heads/main",
+    "image": {
+        "uri": EXPECTED_IMAGE_URI,
+        "digest": "sha256:fcec33e259c2d7856606f434e5c9830e392e820a548ab7a6ff4bd4afb3395b3b",
+    },
+    "sbom": {
+        "asset": "marty-credentials-verification.spdx.json",
+        "digest": "sha256:0eda6aecc2791e9bfa5fff5c47f0cbd98fdffdacf3594ed06041b83e71c6b91d",
+    },
+}
+REJECTED_RUST_SAFE_SESSION_PIN = {
+    "schema": RUST_PIN_SCHEMA,
+    "state": "ineligible",
+    "repository": RUST_REPOSITORY,
+    "release_tag": "v1.1.208",
+    "version": "1.1.208",
+    "commit": "7c8fa31500acd8f2ec589781232c444fe81dd22e",
+    "source_ref": "refs/tags/v1.1.208",
+    "image": {
+        "uri": RUST_IMAGE_URI,
+        "digest": "sha256:ec38eda3dacb3e2f86238f6dd35e3485dd3689a5c76ec13fe896136826db3ff5",
+    },
+    "sbom": {
+        "asset": "marty-ui-services-sbom.cdx.json",
+        "digest": "sha256:aa898add22bd0e5e13e7e5fc6a93a35dffda44794855a9757f2ec16aca30d198",
+    },
+    "expected_failure": {
+        "id": KNOWN_INELIGIBLE_FAILURE_ID,
+        "message": KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+    },
+}
 
 
 class ArtifactTarget(NamedTuple):
@@ -133,6 +170,14 @@ def artifact_target(pin: dict[str, Any]) -> ArtifactTarget:
 
 class ArtifactRuntimeError(RuntimeError):
     """A fixed-category artifact test failure that never includes test secrets."""
+
+
+class ArtifactRunError(ValueError):
+    """An artifact failure carrying only sanitized output-boundary metadata."""
+
+    def __init__(self, message: str, safe_session_selection: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.safe_session_selection = safe_session_selection
 
 
 def canonical_json(value: Any) -> bytes:
@@ -190,10 +235,6 @@ def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict
             == {
                 "id": KNOWN_INELIGIBLE_FAILURE_ID,
                 "message": KNOWN_INELIGIBLE_FAILURE_MESSAGE,
-                "transient_retry": {
-                    "message": KNOWN_INELIGIBLE_TRANSIENT_MESSAGE,
-                    "max_attempts": KNOWN_INELIGIBLE_MAX_ATTEMPTS,
-                },
             },
             "ineligible artifact pin must bind the known expected failure",
         )
@@ -871,6 +912,52 @@ def _assert_session(
         datetime.fromisoformat(value[field].replace("Z", "+00:00"))
 
 
+def _safe_session_resample_reason(pin: dict[str, Any]) -> str | None:
+    if pin == FROZEN_LEGACY_SAFE_SESSION_PIN:
+        return "frozen_python_v0.1.71_invalid_leading_identifier"
+    if pin == REJECTED_RUST_SAFE_SESSION_PIN:
+        return "rejected_rust_v1.1.208_invalid_leading_identifier"
+    return None
+
+
+def _create_safe_session(
+    base_url: str,
+    session_body: dict[str, Any],
+    api_key: str,
+    pin: dict[str, Any],
+    organization_id: str,
+    *,
+    max_creations: int = SAFE_SESSION_MAX_CREATIONS,
+) -> tuple[dict[str, Any], int, str]:
+    reason = _safe_session_resample_reason(pin)
+    _require(max_creations > 0, "safe session creation bound must be positive")
+    for creation in range(1, max_creations + 1):
+        session = _http_json(
+            "POST",
+            f"{base_url}/v1/verification/sessions",
+            body=session_body,
+            api_key=api_key,
+            expected_status=200,
+        )
+        _assert_session(
+            session,
+            organization_id=organization_id,
+            expected_status="pending",
+            nonce_present=True,
+        )
+        if reason is None or session["id"][:1] not in {"-", "_"}:
+            return session, creation - 1, reason or "not_allowlisted_no_resampling"
+    raise ValueError("safe session creation exhausted its bounded artifact-specific resampling")
+
+
+def _session_selection_evidence(reason: str, resampled_unsafe_ids: int) -> dict[str, Any]:
+    _require(resampled_unsafe_ids >= 0, "safe session resample count was negative")
+    return {
+        "reason": reason,
+        "resampled_unsafe_ids": resampled_unsafe_ids,
+    }
+
+
 def _assert_session_result(
     value: dict[str, Any],
     session_id: str,
@@ -1072,6 +1159,11 @@ def _assert_expired_row_minimized(postgres: str, session_id: str, prohibited: li
 
 
 def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_verified: bool) -> dict[str, Any]:
+    evidence_path.unlink(missing_ok=True)
+    return _run_artifact_test(pin, evidence_path, provenance_verified=provenance_verified)
+
+
+def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_verified: bool) -> dict[str, Any]:
     _require(provenance_verified, "artifact provenance must be verified before runtime testing")
     target = artifact_target(pin)
     postgres_image = load_postgres_image()
@@ -1101,6 +1193,8 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
     )
     database_url = f"postgresql+asyncpg://postgres:{database_password}@{postgres}:5432/verifier"
     completed_checks: list[str] = []
+    session_resample_count = 0
+    session_resample_reason = _safe_session_resample_reason(pin) or "not_allowlisted_no_resampling"
     state = ResolverState(
         api_key=resolver_key,
         organization_id=organization_id,
@@ -1284,13 +1378,14 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 expected_status=422,
             )
             _assert_error(policy_mismatch, "Verification request does not match its governed policy")
-            malformed_session = _http_json(
-                "POST",
-                f"{base_url}/v1/verification/sessions",
-                body=session_body,
-                api_key=api_key,
-                expected_status=200,
+            malformed_session, resampled, _reason = _create_safe_session(
+                base_url,
+                session_body,
+                api_key,
+                pin,
+                organization_id,
             )
+            session_resample_count += resampled
             malformed_result = _http_json(
                 "POST",
                 f"{base_url}/v1/verification/sessions/{malformed_session['id']}/submit",
@@ -1306,19 +1401,14 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             )
             completed_checks.append("session.malformed-presentation-fails-closed")
 
-            session = _http_json(
-                "POST",
-                f"{base_url}/v1/verification/sessions",
-                body=session_body,
-                api_key=api_key,
-                expected_status=200,
+            session, resampled, _reason = _create_safe_session(
+                base_url,
+                session_body,
+                api_key,
+                pin,
+                organization_id,
             )
-            _assert_session(
-                session,
-                organization_id=organization_id,
-                expected_status="pending",
-                nonce_present=True,
-            )
+            session_resample_count += resampled
             session_id = session["id"]
             pending = _http_json(
                 "GET",
@@ -1407,13 +1497,14 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             )
             _assert_error(submit_not_found, "Verification session not found")
 
-            expiring = _http_json(
-                "POST",
-                f"{base_url}/v1/verification/sessions",
-                body=session_body,
-                api_key=oid4vp_only_api_key,
-                expected_status=200,
+            expiring, resampled, _reason = _create_safe_session(
+                base_url,
+                session_body,
+                oid4vp_only_api_key,
+                pin,
+                organization_id,
             )
+            session_resample_count += resampled
             expiring_id = expiring["id"]
             expiring_presentation = make_oid4vp_jwt(
                 expiring["nonce"],
@@ -1434,13 +1525,14 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             )
             completed_checks.append("session.not-found-expiry-and-conflict-errors")
 
-            same_digest_session = _http_json(
-                "POST",
-                f"{base_url}/v1/verification/sessions",
-                body=session_body,
-                api_key=oid4vp_only_api_key,
-                expected_status=200,
+            same_digest_session, resampled, _reason = _create_safe_session(
+                base_url,
+                session_body,
+                oid4vp_only_api_key,
+                pin,
+                organization_id,
             )
+            session_resample_count += resampled
             same_digest_presentation = make_oid4vp_jwt(
                 same_digest_session["nonce"],
                 "did:web:verifier.integration.invalid",
@@ -1483,13 +1575,14 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 private_material + [same_digest_presentation, same_digest_session["nonce"]],
             )
 
-            different_digest_session = _http_json(
-                "POST",
-                f"{base_url}/v1/verification/sessions",
-                body=session_body,
-                api_key=oid4vp_only_api_key,
-                expected_status=200,
+            different_digest_session, resampled, _reason = _create_safe_session(
+                base_url,
+                session_body,
+                oid4vp_only_api_key,
+                pin,
+                organization_id,
             )
+            session_resample_count += resampled
             competing_presentations = [
                 make_oid4vp_jwt(
                     different_digest_session["nonce"],
@@ -1824,6 +1917,10 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             "status": "passed",
             "subject": evidence_subject(pin),
             "checks": completed_checks,
+            "safe_session_selection": _session_selection_evidence(
+                session_resample_reason,
+                session_resample_count,
+            ),
             "resolver_request_count": state.request_count,
             "started_at": started.isoformat().replace("+00:00", "Z"),
             "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -1831,6 +1928,14 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return evidence
+    except (ArtifactRuntimeError, ValueError) as exc:
+        raise ArtifactRunError(
+            str(exc),
+            _session_selection_evidence(
+                session_resample_reason,
+                session_resample_count,
+            ),
+        ) from exc
     finally:
         _docker_remove("container", invalid_service)
         _docker_remove("container", service)
@@ -1845,30 +1950,23 @@ def run_expected_failure(
     provenance_verified: bool,
 ) -> dict[str, Any]:
     expected = pin["expected_failure"]
-    transient = expected["transient_retry"]
     started = datetime.now(UTC)
     evidence_path.unlink(missing_ok=True)
-    transient_count = 0
-    expected_failure_observed = False
+    selection = _session_selection_evidence(
+        _safe_session_resample_reason(pin) or "not_allowlisted_no_resampling",
+        0,
+    )
     with tempfile.TemporaryDirectory(prefix="marty-verifier-negative-") as temporary_directory:
-        for attempt in range(1, transient["max_attempts"] + 1):
-            private_evidence = Path(temporary_directory) / f"attempt-{attempt}.json"
-            try:
-                run_artifact_test(pin, private_evidence, provenance_verified=provenance_verified)
-            except (ArtifactRuntimeError, ValueError) as exc:
-                message = str(exc)
-                if message == expected["message"]:
-                    expected_failure_observed = True
-                    break
-                if message == transient["message"] and attempt < transient["max_attempts"]:
-                    transient_count += 1
-                    continue
-                if message == transient["message"]:
-                    raise ValueError("ineligible artifact exhausted bounded readiness retries") from exc
+        private_evidence = Path(temporary_directory) / "artifact.json"
+        try:
+            run_artifact_test(pin, private_evidence, provenance_verified=provenance_verified)
+        except (ArtifactRuntimeError, ValueError) as exc:
+            if str(exc) != expected["message"]:
                 raise ValueError("ineligible artifact failed for an unexpected reason") from exc
-            else:
-                raise ValueError("known-ineligible artifact unexpectedly passed")
-    _require(expected_failure_observed, "known ineligible failure was not observed")
+            if isinstance(exc, ArtifactRunError):
+                selection = exc.safe_session_selection
+        else:
+            raise ValueError("known-ineligible artifact unexpectedly passed")
 
     evidence = {
         "schema": RUST_EVIDENCE_SCHEMA,
@@ -1878,8 +1976,8 @@ def run_expected_failure(
         "status": "expected_failure_observed",
         "subject": evidence_subject(pin),
         "failure_id": expected["id"],
-        "attempts": transient_count + 1,
-        "transient_readiness_failures": transient_count,
+        "attempts": 1,
+        "safe_session_selection": selection,
         "started_at": started.isoformat().replace("+00:00", "Z"),
         "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
