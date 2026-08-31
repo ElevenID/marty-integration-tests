@@ -463,6 +463,11 @@ def test_session_result_limits_legacy_transaction_id_to_the_frozen_oracle() -> N
     value["canonical_result"]["context"]["transaction_id"] = "transaction:session-1"
     artifact._assert_session_result(value, "session-1", artifact.RUST_TARGET)
 
+    value["canonical_result"]["context"]["transaction_id"] = "transaction:unrelated"
+    with pytest.raises(ValueError, match="canonical transaction ID changed") as error:
+        artifact._assert_session_result(value, "session-1", artifact.RUST_TARGET)
+    assert str(error.value) != artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE
+
 
 def test_expected_failure_runner_accepts_only_the_bound_regression(
     tmp_path: Path,
@@ -497,9 +502,14 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
     with pytest.raises(ValueError, match="unexpected reason"):
         artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
 
-    monkeypatch.setattr(artifact, "run_artifact_test", lambda *_args, **_kwargs: {})
+    def unexpected_pass(_pin: object, private_path: Path, **_kwargs: object) -> dict[str, str]:
+        private_path.write_text('{"status":"passed"}\n', encoding="utf-8")
+        return {"status": "passed"}
+
+    monkeypatch.setattr(artifact, "run_artifact_test", unexpected_pass)
     with pytest.raises(ValueError, match="unexpectedly passed"):
         artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
+    assert not evidence_path.exists()
 
 
 def test_health_requires_the_real_native_diagnostic_contract() -> None:

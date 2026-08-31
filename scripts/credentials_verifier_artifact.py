@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import hashlib
 import json
 import re
 import secrets
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -495,7 +497,7 @@ class ResolverState:
             },
         }
         if not self.return_usable_jwk:
-            response.pop("public_jwk")
+            response["public_jwk"] = {}
         return response
 
 
@@ -589,14 +591,13 @@ def _wait_for_postgres(container: str) -> None:
     raise ArtifactRuntimeError("postgres readiness timed out")
 
 
-def _http_json(
+def _request_json(
     method: str,
     url: str,
     *,
     body: dict[str, Any] | None = None,
     api_key: str | None = None,
-    expected_status: int,
-) -> dict[str, Any]:
+) -> tuple[int, dict[str, Any]]:
     headers = {"Accept": "application/json"}
     data = None
     if body is not None:
@@ -614,15 +615,61 @@ def _http_json(
         payload = error.read()
     except OSError as exc:
         raise ArtifactRuntimeError("verification service request failed") from exc
-    if status != expected_status:
-        raise ArtifactRuntimeError(f"verification service returned unexpected HTTP status for {method}")
     try:
         value = json.loads(payload) if payload else {}
     except json.JSONDecodeError as exc:
         raise ArtifactRuntimeError("verification service returned malformed JSON") from exc
     if not isinstance(value, dict):
         raise ArtifactRuntimeError("verification service returned a non-object response")
+    return status, value
+
+
+def _http_json(
+    method: str,
+    url: str,
+    *,
+    body: dict[str, Any] | None = None,
+    api_key: str | None = None,
+    expected_status: int,
+) -> dict[str, Any]:
+    status, value = _request_json(method, url, body=body, api_key=api_key)
+    if status != expected_status:
+        raise ArtifactRuntimeError(f"verification service returned unexpected HTTP status for {method}")
     return value
+
+
+def _parallel_submissions(
+    base_url: str,
+    session_id: str,
+    presentations: list[str],
+) -> list[tuple[int, dict[str, Any]]]:
+    barrier = threading.Barrier(len(presentations))
+
+    def submit(presentation: str) -> tuple[int, dict[str, Any]]:
+        barrier.wait(timeout=10)
+        return _request_json(
+            "POST",
+            f"{base_url}/v1/verification/sessions/{session_id}/submit",
+            body={"presentation": presentation},
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(presentations)) as executor:
+        futures = [executor.submit(submit, presentation) for presentation in presentations]
+        return [future.result(timeout=30) for future in futures]
+
+
+def _partition_submission_outcomes(
+    outcomes: list[tuple[int, dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    _require(
+        all(status in {200, 409} for status, _value in outcomes),
+        "parallel submission returned an unexpected status",
+    )
+    accepted = [value for status, value in outcomes if status == 200]
+    conflicts = [value for status, value in outcomes if status == 409]
+    for conflict in conflicts:
+        _assert_error(conflict, "Verification session submission conflicts")
+    return accepted, conflicts
 
 
 def _assert_error(value: dict[str, Any], detail: str) -> None:
@@ -685,6 +732,7 @@ def _assert_canonical(
     expected_checks: set[str] | None = None,
     expected_transaction_id: str | None = None,
     expected_passed_checks: set[str] | None = None,
+    expected_check_projection: dict[str, tuple[str, str]] | None = None,
     transaction_error: str = "canonical transaction ID changed",
 ) -> dict[str, Any]:
     canonical = value.get("canonical_result")
@@ -731,7 +779,18 @@ def _assert_canonical(
         passed = {
             check.get("check_id") for check in checks if isinstance(check, dict) and check.get("outcome") == "PASSED"
         }
-        _require(passed == expected_passed_checks, "canonical passing-check projection changed")
+        _require(
+            passed == expected_passed_checks,
+            "canonical passing-check projection changed "
+            f"(got {[(check.get('check_id'), check.get('outcome'), check.get('code')) for check in checks]})",
+        )
+    if expected_check_projection is not None:
+        projection = {
+            str(check.get("check_id")): (str(check.get("outcome")), str(check.get("code")))
+            for check in checks
+            if isinstance(check, dict)
+        }
+        _require(projection == expected_check_projection, "canonical check projection changed")
     return canonical
 
 
@@ -780,19 +839,26 @@ def _assert_session_result(
     expected_decision: str = "FAIL",
     expected_passed_checks: set[str] | None = None,
 ) -> None:
-    expected_transaction_id = session_id if target is LEGACY_TARGET else f"transaction:{session_id}"
+    candidate = value.get("canonical_result")
+    candidate_context = candidate.get("context") if isinstance(candidate, dict) else None
+    observed_transaction_id = candidate_context.get("transaction_id") if isinstance(candidate_context, dict) else None
+    known_unscoped_rust_id = target is RUST_TARGET and observed_transaction_id == session_id
+    expected_transaction_id = (
+        session_id if target is LEGACY_TARGET or known_unscoped_rust_id else f"transaction:{session_id}"
+    )
     canonical = _assert_canonical(
         value,
         decision=expected_decision,
         expected_checks=set(OID4VP_REQUIRED_CHECKS),
         expected_transaction_id=expected_transaction_id,
         expected_passed_checks=expected_passed_checks,
-        transaction_error=KNOWN_INELIGIBLE_FAILURE_MESSAGE,
     )
     _require(
         canonical.get("verification_id") == f"verification:{session_id}",
         "session verification ID is not scoped to the session",
     )
+    if known_unscoped_rust_id:
+        raise ValueError(KNOWN_INELIGIBLE_FAILURE_MESSAGE)
     # The canonical Rust owner deliberately scopes this identifier before it
     # crosses the Core boundary. The frozen Python oracle is retained exactly
     # as released, including its unscoped legacy projection.
@@ -1284,6 +1350,110 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             _require(expired_row["nonce"] is None, "expired session nonce was retained")
             completed_checks.append("session.not-found-expiry-and-conflict-errors")
 
+            same_digest_session = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body=session_body,
+                api_key=oid4vp_only_api_key,
+                expected_status=200,
+            )
+            same_digest_presentation = make_oid4vp_jwt(
+                same_digest_session["nonce"],
+                "did:web:verifier.integration.invalid",
+            )
+            same_accepted, same_conflicts = _partition_submission_outcomes(
+                _parallel_submissions(
+                    base_url,
+                    same_digest_session["id"],
+                    [same_digest_presentation, same_digest_presentation],
+                )
+            )
+            _require(same_accepted, "same-digest race produced no terminal result")
+            _require(
+                len(same_accepted) + len(same_conflicts) == 2,
+                "same-digest race lost an outcome",
+            )
+            for accepted in same_accepted:
+                _assert_session_result(
+                    accepted,
+                    same_digest_session["id"],
+                    target,
+                    expected_decision="INDETERMINATE",
+                    expected_passed_checks={"presentation.proof", "transaction.binding"},
+                )
+            _require(
+                all(value == same_accepted[0] for value in same_accepted),
+                "same-digest race produced divergent terminal decisions",
+            )
+            same_retry = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions/{same_digest_session['id']}/submit",
+                body={"presentation": same_digest_presentation},
+                expected_status=200,
+            )
+            _require(same_retry == same_accepted[0], "same-digest retry changed the race decision")
+            _assert_terminal_row_minimized(
+                postgres,
+                same_digest_session["id"],
+                same_digest_presentation,
+                private_material + [same_digest_presentation, same_digest_session["nonce"]],
+            )
+
+            different_digest_session = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body=session_body,
+                api_key=oid4vp_only_api_key,
+                expected_status=200,
+            )
+            competing_presentations = [
+                make_oid4vp_jwt(
+                    different_digest_session["nonce"],
+                    "did:web:verifier.integration.invalid",
+                )
+                for _ in range(2)
+            ]
+            different_accepted, different_conflicts = _partition_submission_outcomes(
+                _parallel_submissions(
+                    base_url,
+                    different_digest_session["id"],
+                    competing_presentations,
+                )
+            )
+            _require(
+                len(different_accepted) == 1 and len(different_conflicts) == 1,
+                "different-digest race did not produce one decision and one conflict",
+            )
+            winner = different_accepted[0]
+            _assert_session_result(
+                winner,
+                different_digest_session["id"],
+                target,
+                expected_decision="INDETERMINATE",
+                expected_passed_checks={"presentation.proof", "transaction.binding"},
+            )
+            winning_presentations = []
+            for presentation in competing_presentations:
+                status, value = _request_json(
+                    "POST",
+                    f"{base_url}/v1/verification/sessions/{different_digest_session['id']}/submit",
+                    body={"presentation": presentation},
+                )
+                if status == 200:
+                    _require(value == winner, "winning digest retry changed the race decision")
+                    winning_presentations.append(presentation)
+                else:
+                    _require(status == 409, "losing digest retry returned an unexpected status")
+                    _assert_error(value, "Verification session submission conflicts")
+            _require(len(winning_presentations) == 1, "race winner digest was not deterministic")
+            _assert_terminal_row_minimized(
+                postgres,
+                different_digest_session["id"],
+                winning_presentations[0],
+                private_material + competing_presentations + [different_digest_session["nonce"]],
+            )
+            completed_checks.append("session.concurrent-claim-and-fencing-parity")
+
             malformed_session = _http_json(
                 "POST",
                 f"{base_url}/v1/verification/sessions",
@@ -1347,7 +1517,56 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 direct,
                 private_material + ["header.payload.signature"],
             )
-            completed_checks.append("direct.auth-policy-malformed-and-scoped-fail-closed")
+            direct_signed_presentation = make_oid4vp_jwt(
+                "direct-artifact-nonce",
+                "did:web:verifier.integration.invalid",
+            )
+            direct_signed = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/verify",
+                body={**direct_body, "presentation": direct_signed_presentation},
+                api_key=oid4vp_only_api_key,
+                expected_status=200,
+            )
+            _assert_canonical(
+                direct_signed,
+                decision="FAIL",
+                expected_checks=set(OID4VP_REQUIRED_CHECKS),
+                expected_passed_checks=set(),
+                expected_check_projection={
+                    "presentation.structure": (
+                        "NOT_PERFORMED",
+                        "PRESENTATION_STRUCTURE_NOT_PERFORMED",
+                    ),
+                    "presentation.proof": (
+                        "NOT_PERFORMED",
+                        "PRESENTATION_PROOF_NOT_PERFORMED",
+                    ),
+                    "credential.proof": (
+                        "NOT_PERFORMED",
+                        "CREDENTIAL_PROOF_NOT_PERFORMED",
+                    ),
+                    "issuer.trust": ("NOT_PERFORMED", "ISSUER_TRUST_NOT_PERFORMED"),
+                    "credential.status": (
+                        "NOT_PERFORMED",
+                        "CREDENTIAL_STATUS_NOT_CHECKED",
+                    ),
+                    "holder.binding": (
+                        "NOT_PERFORMED",
+                        "HOLDER_BINDING_NOT_PERFORMED",
+                    ),
+                    "transaction.binding": ("FAILED", "TRANSACTION_BINDING_INVALID"),
+                    "claim.constraints": (
+                        "NOT_PERFORMED",
+                        "CLAIM_CONSTRAINTS_NOT_PERFORMED",
+                    ),
+                },
+            )
+            _assert_private_material_absent(
+                direct_signed,
+                private_material + [direct_signed_presentation, "sensitive-holder-claim"],
+            )
+            completed_checks.append("direct.auth-policy-signed-no-nonce-and-malformed-fail-closed")
 
             endpoint = f"{base_url}/v1/verification/verify/vds-nc"
             request_body = {
@@ -1401,17 +1620,23 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             completed_checks.append("trust.unregistered-issuer-rejected-before-resolution")
 
             state.return_usable_jwk = False
+            unusable_status = 500 if target is LEGACY_TARGET else 422
             try:
                 unusable_jwk = _http_json(
                     "POST",
                     endpoint,
                     body=request_body,
                     api_key=api_key,
-                    expected_status=500,
+                    expected_status=unusable_status,
                 )
             finally:
                 state.return_usable_jwk = True
-            _assert_error(unusable_jwk, "VDS-NC verification failed")
+            unusable_detail = (
+                "VDS-NC verification failed"
+                if target is LEGACY_TARGET
+                else "issuer_did did not resolve to a usable public JWK"
+            )
+            _assert_error(unusable_jwk, unusable_detail)
             completed_checks.append("resolver.unusable-jwk-fails-closed")
 
             positive = _http_json(
@@ -1477,15 +1702,18 @@ def run_expected_failure(
 ) -> dict[str, Any]:
     expected = pin["expected_failure"]
     started = datetime.now(UTC)
-    try:
-        run_artifact_test(pin, evidence_path, provenance_verified=provenance_verified)
-    except (ArtifactRuntimeError, ValueError) as exc:
-        _require(
-            str(exc) == expected["message"],
-            "ineligible artifact failed for an unexpected reason",
-        )
-    else:
-        raise ValueError("known-ineligible artifact unexpectedly passed")
+    evidence_path.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix="marty-verifier-negative-") as temporary_directory:
+        private_evidence = Path(temporary_directory) / "unexpected-pass.json"
+        try:
+            run_artifact_test(pin, private_evidence, provenance_verified=provenance_verified)
+        except (ArtifactRuntimeError, ValueError) as exc:
+            _require(
+                str(exc) == expected["message"],
+                "ineligible artifact failed for an unexpected reason",
+            )
+        else:
+            raise ValueError("known-ineligible artifact unexpectedly passed")
 
     evidence = {
         "schema": RUST_EVIDENCE_SCHEMA,
