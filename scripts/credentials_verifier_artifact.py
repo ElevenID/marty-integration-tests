@@ -79,9 +79,57 @@ OID4VP_REQUIRED_CHECKS = [
     "transaction.binding",
     "claim.constraints",
 ]
+OID4VP_PASS_CHECK_PROJECTION = {
+    "presentation.structure": ("PASSED", "PRESENTATION_STRUCTURE_VALID"),
+    "presentation.proof": ("PASSED", "PRESENTATION_PROOF_VALID"),
+    "credential.proof": ("PASSED", "CREDENTIAL_PROOFS_VALID"),
+    "issuer.trust": ("PASSED", "ISSUER_TRUST_VALID"),
+    "credential.status": ("PASSED", "CREDENTIAL_STATUS_VALID"),
+    "holder.binding": ("PASSED", "HOLDER_BINDING_VALID"),
+    "transaction.binding": ("PASSED", "TRANSACTION_BINDING_VALID"),
+    "claim.constraints": ("PASSED", "CLAIM_CONSTRAINTS_SATISFIED"),
+}
 KNOWN_INELIGIBLE_FAILURE_ID = "session.transaction-id-unscoped"
 KNOWN_INELIGIBLE_FAILURE_MESSAGE = "session transaction ID changed outside the approved compatibility correction"
 SAFE_SESSION_MAX_CREATIONS = 8
+OID4VP_POSITIVE_RUNTIME_BLOCKER = "canonical.oid4vp-positive-runtime-not-exercised"
+RELEASE_CLEARANCE_BLOCKED = "blocked"
+VALIDATION_PRIVACY_DIFFERENCE_ID = "validation.unknown-field-detail-minimized"
+DOCUMENTED_DIFFERENCE_DETAILS = {
+    KNOWN_INELIGIBLE_FAILURE_ID: (
+        "Rejected Rust v1.1.208 leaves the session transaction ID unscoped; "
+        "an eligible Rust candidate must use transaction:<session-id>."
+    ),
+    VALIDATION_PRIVACY_DIFFERENCE_ID: (
+        "Both targets reject caller-selected authority with HTTP 422; Rust deliberately "
+        "minimizes the response detail instead of echoing the rejected field name."
+    ),
+}
+DOCUMENTED_TARGET_DIFFERENCES = frozenset({VALIDATION_PRIVACY_DIFFERENCE_ID})
+RUST_ONLY_CHECKS = frozenset({"compatibility.default-disabled-routes-absent"})
+EXPECTED_LANGUAGE_NEUTRAL_CHECKS = frozenset(
+    {
+        "postgres.ready",
+        "migrations.applied",
+        "migrations.idempotent-reapplication",
+        "governance.missing-required-check-rejected",
+        "health.native-capabilities",
+        "compatibility.adapter-enabled",
+        "session.malformed-presentation-fails-closed",
+        "session.create-auth-policy-and-reload-parity",
+        "session.postgres-restart-minimization-and-replay-parity",
+        "session.not-found-expiry-and-conflict-errors",
+        "session.concurrent-claim-and-fencing-parity",
+        "direct.auth-policy-jwt-no-nonce-structured-and-malformed-fail-closed",
+        "authorization.missing-invalid-and-wrong-purpose-rejected",
+        "authority.caller-selection-rejected",
+        "trust.unregistered-issuer-rejected-before-resolution",
+        "resolver.unusable-jwk-fails-closed",
+        "canonical.vds-positive-pass",
+        "canonical.tampered-signature-fail",
+        "canonical.malformed-evidence-fail",
+    }
+)
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SEMVER_TAG = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
@@ -488,6 +536,39 @@ def make_oid4vp_jwt(nonce: str | None, audience: str, *, fixture_id: str = "prim
     return f"{signing_input}.{_b64url(signature)}"
 
 
+def trusted_oid4vp_pass_fixture() -> dict[str, Any]:
+    """Return the language-neutral projection required from a trusted adapter.
+
+    This fixture is deliberately an adapter-result contract, not fabricated
+    runtime evidence. The released oracle has no path that authenticates every
+    OID4VP check, so the artifact runner must not report this fixture as an
+    exercised runtime gate until a released adapter can produce it.
+    """
+    checks = [
+        {"check_id": check_id, "outcome": outcome, "code": code}
+        for check_id, (outcome, code) in OID4VP_PASS_CHECK_PROJECTION.items()
+    ]
+    return {
+        "processing_status": "COMPLETED",
+        "decision": "PASS",
+        "decision_code": "ALL_REQUIRED_CHECKS_PASSED",
+        "valid": True,
+        "overall_result": "PASS",
+        "verification_method": "jwt_vp",
+        "verified_claims": None,
+        "claim_results": [],
+        "canonical_result": {
+            "verification_id": "verification:trusted-oid4vp-fixture",
+            "decision": "PASS",
+            "valid": True,
+            "processing_status": "COMPLETED",
+            "input_digest": "sha256:" + "a" * 64,
+            "context": {"transaction_id": "transaction:trusted-oid4vp-fixture"},
+            "checks": checks,
+        },
+    }
+
+
 def make_vds_barcode(
     issuer_did: str,
     method_id: str,
@@ -710,6 +791,33 @@ def _http_json(
     return value
 
 
+def _http_status(method: str, url: str) -> int:
+    request = urllib.request.Request(url, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        raise ArtifactRuntimeError("verification HTTP request failed") from exc
+
+
+def _assert_compatibility_routes_absent(base_url: str) -> None:
+    routes = (
+        ("GET", "/v1/verification/health"),
+        ("POST", "/v1/verification/sessions"),
+        ("GET", "/v1/verification/sessions/A"),
+        ("POST", "/v1/verification/sessions/A/submit"),
+        ("POST", "/v1/verification/verify"),
+        ("POST", "/v1/verification/verify/vds-nc"),
+    )
+    for method, path in routes:
+        _require(
+            _http_status(method, f"{base_url}{path}") == 404,
+            f"credentials compatibility route was active by default: {method} {path}",
+        )
+
+
 def _parallel_submissions(
     base_url: str,
     session_id: str,
@@ -748,8 +856,16 @@ def _assert_error(value: dict[str, Any], detail: str) -> None:
     _require(value == {"detail": detail}, "verification error response contract changed")
 
 
-def _assert_extra_field_error(value: dict[str, Any], field: str) -> None:
+def _assert_extra_field_error(
+    value: dict[str, Any],
+    field: str,
+    *,
+    allow_minimized_detail: bool = False,
+) -> str | None:
     details = value.get("detail")
+    if allow_minimized_detail and details == "Request validation failed":
+        _require(field not in json.dumps(value), "minimized validation response disclosed the rejected field")
+        return VALIDATION_PRIVACY_DIFFERENCE_ID
     _require(isinstance(details, list) and len(details) == 1, "validation error shape changed")
     error = details[0]
     _require(isinstance(error, dict), "validation error entry changed")
@@ -759,6 +875,7 @@ def _assert_extra_field_error(value: dict[str, Any], field: str) -> None:
         "validation error field binding changed",
     )
     _require(error.get("type") == "extra_forbidden", "validation error category changed")
+    return None
 
 
 def _wait_for_health(base_url: str, container: str) -> dict[str, Any]:
@@ -965,7 +1082,8 @@ def _assert_session_result(
     *,
     expected_decision: str = "FAIL",
     expected_passed_checks: set[str] | None = None,
-) -> None:
+    defer_known_difference: bool = False,
+) -> str | None:
     candidate = value.get("canonical_result")
     candidate_context = candidate.get("context") if isinstance(candidate, dict) else None
     observed_transaction_id = candidate_context.get("transaction_id") if isinstance(candidate_context, dict) else None
@@ -985,10 +1103,13 @@ def _assert_session_result(
         "session verification ID is not scoped to the session",
     )
     if known_unscoped_rust_id:
+        if defer_known_difference:
+            return KNOWN_INELIGIBLE_FAILURE_ID
         raise ValueError(KNOWN_INELIGIBLE_FAILURE_MESSAGE)
     # The canonical Rust owner deliberately scopes this identifier before it
     # crosses the Core boundary. The frozen Python oracle is retained exactly
     # as released, including its unscoped legacy projection.
+    return None
 
 
 def _assert_private_material_absent(value: dict[str, Any], prohibited: list[str]) -> None:
@@ -1037,16 +1158,44 @@ def _migration_command(
     return command
 
 
+def _migration_version(postgres: str) -> str:
+    value = _run(
+        [
+            "docker",
+            "exec",
+            postgres,
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "verifier",
+            "-tAc",
+            "SELECT version_num FROM verification_service.alembic_version",
+        ],
+        label="read verification migration version",
+    )
+    _require(bool(re.fullmatch(r"[0-9A-Za-z_.-]+", value)), "verification migration version is invalid")
+    return value
+
+
 def _start_service(
     command: list[str],
     service: str,
     target: ArtifactTarget,
     *,
     label: str,
+    compatibility_enabled: bool = True,
 ) -> str:
     _run(command, label=label)
     base_url = f"http://127.0.0.1:{_service_port(service, target)}"
-    _assert_health(_wait_for_health(base_url, service), target)
+    health = _wait_for_health(base_url, service)
+    if compatibility_enabled:
+        _assert_health(health, target)
+    else:
+        _require(target is RUST_TARGET, "only the Rust service has a compatibility switch")
+        _require(isinstance(health, dict), "native Rust health response was not an object")
+        _assert_compatibility_routes_absent(base_url)
+        return base_url
     compatibility_health = _http_json(
         "GET",
         f"{base_url}/v1/verification/health",
@@ -1172,6 +1321,7 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
     network = f"marty-verifier-{suffix}"
     postgres = f"marty-verifier-db-{suffix}"
     service = f"marty-verifier-api-{suffix}"
+    disabled_service = f"marty-verifier-native-{suffix}"
     invalid_service = f"marty-verifier-invalid-{suffix}"
     database_password = secrets.token_urlsafe(32)
     api_key = secrets.token_urlsafe(32)
@@ -1195,6 +1345,7 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
     completed_checks: list[str] = []
     session_resample_count = 0
     session_resample_reason = _safe_session_resample_reason(pin) or "not_allowlisted_no_resampling"
+    documented_differences: set[str] = set()
     state = ResolverState(
         api_key=resolver_key,
         organization_id=organization_id,
@@ -1233,6 +1384,16 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
             label="apply released verification migrations",
             timeout=180,
         )
+        first_migration_version = _migration_version(postgres)
+        _run(
+            _migration_command(reference, target, network, database_url),
+            label="reapply released verification migrations",
+            timeout=180,
+        )
+        _require(
+            _migration_version(postgres) == first_migration_version,
+            "verification migration head changed after idempotent reapplication",
+        )
         migration_table_count = _run(
             [
                 "docker",
@@ -1254,6 +1415,38 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
         )
         _require(migration_table_count == "1", "verification migration version table is missing")
         completed_checks.append("migrations.applied")
+        completed_checks.append("migrations.idempotent-reapplication")
+
+        if target is RUST_TARGET:
+            disabled_command = [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                disabled_service,
+                "--network",
+                network,
+                "-p",
+                f"127.0.0.1::{target.service_port}",
+                "-e",
+                f"SERVICE_NAME={target.service_name}",
+                "-e",
+                "ENVIRONMENT=test",
+                reference,
+            ]
+            disabled_base_url = _start_service(
+                disabled_command,
+                disabled_service,
+                target,
+                label="start Rust verification image with compatibility default disabled",
+                compatibility_enabled=False,
+            )
+            _require(
+                _http_status("GET", f"{disabled_base_url}/v1/verify/health") == 200,
+                "native Rust verification routes were unavailable with compatibility disabled",
+            )
+            completed_checks.append("compatibility.default-disabled-routes-absent")
+            _docker_remove("container", disabled_service)
 
         invalid_governance = invalid_governance_missing_required_check(governance)
         invalid_command = [
@@ -1348,6 +1541,7 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
                 label="start released verification image",
             )
             completed_checks.append("health.native-capabilities")
+            completed_checks.append("compatibility.adapter-enabled")
 
             definition = presentation_definition()
             session_body = {
@@ -1392,7 +1586,14 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
                 body={"presentation": "header.payload.signature"},
                 expected_status=200,
             )
-            _assert_session_result(malformed_result, malformed_session["id"], target)
+            difference = _assert_session_result(
+                malformed_result,
+                malformed_session["id"],
+                target,
+                defer_known_difference=True,
+            )
+            if difference is not None:
+                documented_differences.add(difference)
             _assert_terminal_row_minimized(
                 postgres,
                 malformed_session["id"],
@@ -1429,13 +1630,16 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
                 body={"presentation": signed_presentation},
                 expected_status=200,
             )
-            _assert_session_result(
+            difference = _assert_session_result(
                 submitted,
                 session_id,
                 target,
                 expected_decision="INDETERMINATE",
                 expected_passed_checks={"presentation.proof", "transaction.binding"},
+                defer_known_difference=True,
             )
+            if difference is not None:
+                documented_differences.add(difference)
             _assert_private_material_absent(
                 submitted,
                 private_material + [signed_presentation, session_nonce, "sensitive-holder-claim"],
@@ -1550,13 +1754,16 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
                 "same-digest race lost an outcome",
             )
             for accepted in same_accepted:
-                _assert_session_result(
+                difference = _assert_session_result(
                     accepted,
                     same_digest_session["id"],
                     target,
                     expected_decision="INDETERMINATE",
                     expected_passed_checks={"presentation.proof", "transaction.binding"},
+                    defer_known_difference=True,
                 )
+                if difference is not None:
+                    documented_differences.add(difference)
             _require(
                 all(value == same_accepted[0] for value in same_accepted),
                 "same-digest race produced divergent terminal decisions",
@@ -1603,13 +1810,16 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
                 "different-digest race did not produce one decision and one conflict",
             )
             winner = different_accepted[0]
-            _assert_session_result(
+            difference = _assert_session_result(
                 winner,
                 different_digest_session["id"],
                 target,
                 expected_decision="INDETERMINATE",
                 expected_passed_checks={"presentation.proof", "transaction.binding"},
+                defer_known_difference=True,
             )
+            if difference is not None:
+                documented_differences.add(difference)
             winning_presentations = []
             for presentation in competing_presentations:
                 status, value = _request_json(
@@ -1828,7 +2038,13 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
                 api_key=api_key,
                 expected_status=422,
             )
-            _assert_extra_field_error(caller_rejected, "organization_id")
+            difference = _assert_extra_field_error(
+                caller_rejected,
+                "organization_id",
+                allow_minimized_detail=target is RUST_TARGET,
+            )
+            if difference is not None:
+                documented_differences.add(difference)
             completed_checks.append("authority.caller-selection-rejected")
 
             resolver_before = state.request_count
@@ -1914,19 +2130,31 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
             "classification": "ElevenID-owned artifact integration",
             "official_suite_invoked": False,
             "official_suite_source_modified": False,
-            "status": "passed",
+            "status": (
+                "ineligible" if KNOWN_INELIGIBLE_FAILURE_ID in documented_differences else "passed"
+            ),
+            "release_clearance": RELEASE_CLEARANCE_BLOCKED,
+            "blockers": [OID4VP_POSITIVE_RUNTIME_BLOCKER],
             "subject": evidence_subject(pin),
             "checks": completed_checks,
             "safe_session_selection": _session_selection_evidence(
                 session_resample_reason,
                 session_resample_count,
             ),
+            "documented_differences": sorted(documented_differences),
             "resolver_request_count": state.request_count,
             "started_at": started.isoformat().replace("+00:00", "Z"),
             "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _require(
+            documented_differences
+            <= DOCUMENTED_TARGET_DIFFERENCES | {KNOWN_INELIGIBLE_FAILURE_ID},
+            "artifact produced an undocumented language-neutral difference",
+        )
+        if KNOWN_INELIGIBLE_FAILURE_ID in documented_differences:
+            raise ValueError(KNOWN_INELIGIBLE_FAILURE_MESSAGE)
         return evidence
     except (ArtifactRuntimeError, ValueError) as exc:
         raise ArtifactRunError(
@@ -1937,6 +2165,7 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
             ),
         ) from exc
     finally:
+        _docker_remove("container", disabled_service)
         _docker_remove("container", invalid_service)
         _docker_remove("container", service)
         _docker_remove("container", postgres)
@@ -1956,6 +2185,7 @@ def run_expected_failure(
         _safe_session_resample_reason(pin) or "not_allowlisted_no_resampling",
         0,
     )
+    runtime_observation: dict[str, Any] | None = None
     with tempfile.TemporaryDirectory(prefix="marty-verifier-negative-") as temporary_directory:
         private_evidence = Path(temporary_directory) / "artifact.json"
         try:
@@ -1965,8 +2195,27 @@ def run_expected_failure(
                 raise ValueError("ineligible artifact failed for an unexpected reason") from exc
             if isinstance(exc, ArtifactRunError):
                 selection = exc.safe_session_selection
+            if private_evidence.exists():
+                candidate = json.loads(private_evidence.read_text(encoding="utf-8"))
+                _require(isinstance(candidate, dict), "negative-control observation was invalid")
+                runtime_observation = candidate
         else:
             raise ValueError("known-ineligible artifact unexpectedly passed")
+    _require(runtime_observation is not None, "known failure omitted its sanitized runtime observation")
+    _require(
+        runtime_observation.get("release_clearance") == RELEASE_CLEARANCE_BLOCKED
+        and runtime_observation.get("blockers") == [OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "negative-control observation omitted the positive-runtime release blocker",
+    )
+    _require(
+        set(runtime_observation.get("documented_differences", []))
+        == DOCUMENTED_TARGET_DIFFERENCES | {expected["id"]},
+        "negative-control observation contained an undocumented difference",
+    )
+    _require(
+        runtime_observation.get("safe_session_selection") == selection,
+        "negative-control observation changed safe session selection evidence",
+    )
 
     evidence = {
         "schema": RUST_EVIDENCE_SCHEMA,
@@ -1974,16 +2223,92 @@ def run_expected_failure(
         "official_suite_invoked": False,
         "official_suite_source_modified": False,
         "status": "expected_failure_observed",
+        "release_clearance": RELEASE_CLEARANCE_BLOCKED,
+        "blockers": [OID4VP_POSITIVE_RUNTIME_BLOCKER],
         "subject": evidence_subject(pin),
         "failure_id": expected["id"],
-        "attempts": 1,
         "safe_session_selection": selection,
+        "checks": runtime_observation["checks"],
+        "documented_differences": runtime_observation["documented_differences"],
+        "resolver_request_count": runtime_observation["resolver_request_count"],
+        "attempts": 1,
         "started_at": started.isoformat().replace("+00:00", "Z"),
         "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return evidence
+
+
+def _check_set(evidence: dict[str, Any]) -> frozenset[str]:
+    checks = evidence.get("checks")
+    _require(
+        isinstance(checks, list) and all(isinstance(check, str) for check in checks),
+        "artifact evidence checks were invalid",
+    )
+    _require(len(checks) == len(set(checks)), "artifact evidence repeated a check")
+    return frozenset(checks)
+
+
+def compare_artifact_evidence(
+    oracle: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare only portable behavioral coverage from two artifact runs."""
+    _require(oracle.get("status") == "passed", "oracle artifact evidence did not pass")
+    _require(
+        candidate.get("status") == "expected_failure_observed",
+        "candidate evidence was not the bound negative control",
+    )
+    _require(
+        candidate.get("failure_id") == KNOWN_INELIGIBLE_FAILURE_ID,
+        "candidate failed for an undocumented reason",
+    )
+    _require(
+        set(candidate.get("documented_differences", []))
+        == DOCUMENTED_TARGET_DIFFERENCES | {KNOWN_INELIGIBLE_FAILURE_ID},
+        "candidate evidence contained undocumented differences",
+    )
+    _require(
+        oracle.get("documented_differences") == [],
+        "oracle evidence contained a behavioral difference",
+    )
+    for label, evidence in (("oracle", oracle), ("candidate", candidate)):
+        _require(
+            evidence.get("release_clearance") == RELEASE_CLEARANCE_BLOCKED,
+            f"{label} evidence did not block release clearance",
+        )
+        _require(
+            evidence.get("blockers") == [OID4VP_POSITIVE_RUNTIME_BLOCKER],
+            f"{label} evidence omitted the positive-runtime blocker",
+        )
+    oracle_raw_checks = _check_set(oracle)
+    candidate_raw_checks = _check_set(candidate)
+    _require(
+        oracle_raw_checks == EXPECTED_LANGUAGE_NEUTRAL_CHECKS,
+        "oracle raw check set diverged",
+    )
+    _require(
+        candidate_raw_checks == EXPECTED_LANGUAGE_NEUTRAL_CHECKS | RUST_ONLY_CHECKS,
+        "candidate raw check set diverged",
+    )
+    _require(
+        candidate.get("resolver_request_count") == oracle.get("resolver_request_count"),
+        "candidate and oracle resolver evidence counts diverged",
+    )
+    return {
+        "schema": "elevenid.credentials-verifier-artifact-comparison/v1",
+        "status": "matched_with_documented_negative_control",
+        "release_clearance": RELEASE_CLEARANCE_BLOCKED,
+        "blockers": [OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "language_neutral_checks": sorted(oracle_raw_checks),
+        "candidate_only_checks": sorted(candidate_raw_checks - oracle_raw_checks),
+        "documented_differences": candidate["documented_differences"],
+        "documented_difference_details": {
+            difference: DOCUMENTED_DIFFERENCE_DETAILS[difference]
+            for difference in candidate["documented_differences"]
+        },
+    }
 
 
 def parser() -> argparse.ArgumentParser:
@@ -2004,11 +2329,26 @@ def parser() -> argparse.ArgumentParser:
     rejected.add_argument("--pin", type=Path, required=True)
     rejected.add_argument("--evidence", type=Path, required=True)
     rejected.add_argument("--provenance-verified", action="store_true", required=True)
+    comparison = commands.add_parser("compare-evidence")
+    comparison.add_argument("--oracle", type=Path, required=True)
+    comparison.add_argument("--candidate", type=Path, required=True)
+    comparison.add_argument("--evidence", type=Path, required=True)
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "compare-evidence":
+        oracle = json.loads(args.oracle.resolve().read_text(encoding="utf-8"))
+        candidate = json.loads(args.candidate.resolve().read_text(encoding="utf-8"))
+        evidence = compare_artifact_evidence(oracle, candidate)
+        args.evidence.resolve().parent.mkdir(parents=True, exist_ok=True)
+        args.evidence.resolve().write_text(
+            json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(evidence, sort_keys=True))
+        return 0
     expected_state = "ineligible" if args.command == "run-expected-failure" else getattr(args, "state", "ready")
     pin = load_pin(args.pin.resolve(), expected_state=expected_state)
     if args.command == "validate-pin":
