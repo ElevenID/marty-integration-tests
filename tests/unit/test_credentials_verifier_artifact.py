@@ -37,6 +37,26 @@ def valid_pin() -> dict[str, object]:
     }
 
 
+def valid_rust_pin() -> dict[str, object]:
+    return {
+        "schema": artifact.RUST_PIN_SCHEMA,
+        "state": "ready",
+        "repository": artifact.RUST_REPOSITORY,
+        "release_tag": "v1.2.3",
+        "version": "1.2.3",
+        "commit": "a" * 40,
+        "source_ref": "refs/tags/v1.2.3",
+        "image": {
+            "uri": artifact.RUST_IMAGE_URI,
+            "digest": "sha256:" + "b" * 64,
+        },
+        "sbom": {
+            "asset": "marty-ui-services-sbom.cdx.json",
+            "digest": "sha256:" + "c" * 64,
+        },
+    }
+
+
 def write_pin(path: Path, value: dict[str, object] | None = None) -> Path:
     path.write_text(json.dumps(value or valid_pin()), encoding="utf-8")
     return path
@@ -57,6 +77,21 @@ def valid_sbom() -> dict[str, object]:
     }
 
 
+def valid_rust_sbom() -> dict[str, object]:
+    return {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "metadata": {
+            "component": {
+                "type": "container",
+                "name": artifact.RUST_IMAGE_URI,
+                "version": "sha256:" + "b" * 64,
+            }
+        },
+        "components": [],
+    }
+
+
 def test_repository_pin_is_ready_exact_and_immutable(tmp_path: Path) -> None:
     pin = artifact.load_pin(write_pin(tmp_path / "pin.json"))
 
@@ -72,6 +107,19 @@ def test_sbom_is_bound_to_pinned_image_and_native_packages(tmp_path: Path) -> No
     value = artifact.validate_sbom(path, valid_pin())
 
     assert value["name"] == artifact.EXPECTED_IMAGE_URI
+
+
+def test_rust_pin_and_cyclonedx_sbom_are_bound_to_canonical_services_image(tmp_path: Path) -> None:
+    pin_path = write_pin(tmp_path / "rust-pin.json", valid_rust_pin())
+    pin = artifact.load_pin(pin_path)
+    sbom_path = tmp_path / "services.cdx.json"
+    sbom_path.write_text(json.dumps(valid_rust_sbom()), encoding="utf-8")
+
+    value = artifact.validate_sbom(sbom_path, pin)
+
+    assert artifact.artifact_target(pin) is artifact.RUST_TARGET
+    assert artifact.image_reference(pin) == artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64
+    assert value["metadata"]["component"]["version"] == pin["image"]["digest"]
 
 
 @pytest.mark.parametrize(
@@ -106,9 +154,9 @@ def test_sbom_rejects_wrong_subject_or_missing_native_package(
     ("path", "value", "message"),
     [
         (("state",), "awaiting_release", "must be ready"),
-        (("repository",), "attacker/example", "not Marty Credentials"),
+        (("repository",), "attacker/example", "does not match its schema"),
         (("release_tag",), "v1.2.3-rc.1", "stable SemVer"),
-        (("source_ref",), "refs/tags/v1.2.3", "reviewed main"),
+        (("source_ref",), "refs/tags/v1.2.3", "attested release source"),
         (("image", "uri"), artifact.EXPECTED_IMAGE_URI + ":latest", "unexpected verification image URI"),
         (("image", "digest"), "sha256:" + "B" * 64, "image digest"),
         (("sbom", "digest"), "sha256:" + "d" * 63, "SBOM digest"),
@@ -235,11 +283,51 @@ def test_health_requires_the_real_native_diagnostic_contract() -> None:
         },
     }
 
-    artifact._assert_health(value)
+    artifact._assert_health(value, artifact.LEGACY_TARGET)
 
     value["native_backend"]["missing_capabilities"] = ["vds_nc_verify"]
     with pytest.raises(ValueError, match="missing required native capabilities"):
-        artifact._assert_health(value)
+        artifact._assert_health(value, artifact.LEGACY_TARGET)
+
+
+def test_rust_health_requires_canonical_backend_identity() -> None:
+    value = {
+        "status": "healthy",
+        "service": "verification",
+        "native_backend": {
+            "available": True,
+            "module": "marty-verification-service",
+            "version": "1.2.3",
+            "missing_capabilities": [],
+            "error": None,
+        },
+    }
+
+    artifact._assert_health(value, artifact.RUST_TARGET)
+
+    value["native_backend"]["module"] = "_marty_rs"
+    with pytest.raises(ValueError, match="canonical Rust service"):
+        artifact._assert_health(value, artifact.RUST_TARGET)
+
+
+def test_vds_fixture_is_language_neutral_and_uses_standard_signature_base64() -> None:
+    issuer = "did:web:issuer.integration.invalid"
+    private_key, _jwk, method_id = artifact.make_vds_key_material(issuer)
+
+    barcode = artifact.make_vds_barcode(issuer, method_id, private_key)
+    header, payload_json, signature = barcode.split("~")
+    payload = json.loads(payload_json)
+
+    assert header == "DC03USA"
+    assert payload["_vds"] == {
+        "version": "1.0",
+        "documentType": "CMC",
+        "issuerId": issuer,
+        "keyId": method_id,
+        "algorithm": "ES256",
+    }
+    assert artifact.canonical_json(payload).decode("utf-8") == payload_json
+    assert len(__import__("base64").b64decode(signature, validate=True)) == 64
 
 
 def test_private_material_guard_rejects_retention() -> None:

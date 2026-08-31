@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -31,9 +31,13 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PIN = ROOT / "config" / "credentials-verifier-under-test.json"
 BASE_IMAGES = ROOT / "config" / "base-images.json"
 PIN_SCHEMA = "elevenid.credentials-verifier-artifact-pin/v1"
+RUST_PIN_SCHEMA = "elevenid.credentials-verifier-artifact-pin/v2"
 EVIDENCE_SCHEMA = "elevenid.credentials-verifier-artifact-evidence/v1"
+RUST_EVIDENCE_SCHEMA = "elevenid.credentials-verifier-artifact-evidence/v2"
 EXPECTED_REPOSITORY = "ElevenID/marty-credentials"
 EXPECTED_IMAGE_URI = "ghcr.io/elevenid/marty-credentials-verification"
+RUST_REPOSITORY = "ElevenID/marty-ui"
+RUST_IMAGE_URI = "ghcr.io/elevenid/marty-ui-oss/services"
 EXPECTED_COMPONENT_ID = "marty-credentials"
 EXPECTED_ADAPTER_ID = "verification-service"
 EXPECTED_SBOM_PACKAGES = {"marty-rs", "marty-verification-py"}
@@ -42,6 +46,42 @@ SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SEMVER_TAG = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 VERSION = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+
+
+class ArtifactTarget(NamedTuple):
+    repository: str
+    image_uri: str
+    sbom_asset: str
+    service_port: int
+    service_name: str | None
+    evidence_schema: str
+
+
+LEGACY_TARGET = ArtifactTarget(
+    repository=EXPECTED_REPOSITORY,
+    image_uri=EXPECTED_IMAGE_URI,
+    sbom_asset="marty-credentials-verification.spdx.json",
+    service_port=8006,
+    service_name=None,
+    evidence_schema=EVIDENCE_SCHEMA,
+)
+RUST_TARGET = ArtifactTarget(
+    repository=RUST_REPOSITORY,
+    image_uri=RUST_IMAGE_URI,
+    sbom_asset="marty-ui-services-sbom.cdx.json",
+    service_port=8012,
+    service_name="verification",
+    evidence_schema=RUST_EVIDENCE_SCHEMA,
+)
+
+
+def artifact_target(pin: dict[str, Any]) -> ArtifactTarget:
+    schema = pin.get("schema")
+    if schema == PIN_SCHEMA:
+        return LEGACY_TARGET
+    if schema == RUST_PIN_SCHEMA:
+        return RUST_TARGET
+    raise ValueError(f"artifact pin must use {PIN_SCHEMA} or {RUST_PIN_SCHEMA}")
 
 
 class ArtifactRuntimeError(RuntimeError):
@@ -69,18 +109,22 @@ def _require(condition: bool, message: str) -> None:
 
 def load_pin(path: Path = DEFAULT_PIN) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    _require(value.get("schema") == PIN_SCHEMA, f"artifact pin must use {PIN_SCHEMA}")
+    target = artifact_target(value)
     _require(value.get("state") == "ready", "artifact pin must be ready")
-    _require(value.get("repository") == EXPECTED_REPOSITORY, "artifact repository is not Marty Credentials")
+    _require(value.get("repository") == target.repository, "artifact repository does not match its schema")
     _require(bool(SEMVER_TAG.fullmatch(str(value.get("release_tag", "")))), "release_tag must be stable SemVer")
     _require(bool(VERSION.fullmatch(str(value.get("version", "")))), "version must be stable SemVer")
     _require(value["release_tag"] == f"v{value['version']}", "release_tag and version must agree")
     _require(bool(COMMIT.fullmatch(str(value.get("commit", "")))), "commit must be a full lowercase SHA")
-    _require(value.get("source_ref") == "refs/heads/main", "source_ref must identify reviewed main")
+    expected_source_ref = "refs/heads/main" if target is LEGACY_TARGET else f"refs/tags/{value['release_tag']}"
+    _require(
+        value.get("source_ref") == expected_source_ref,
+        "source_ref must identify the attested release source",
+    )
 
     image = value.get("image")
     _require(isinstance(image, dict), "image pin is required")
-    _require(image.get("uri") == EXPECTED_IMAGE_URI, "unexpected verification image URI")
+    _require(image.get("uri") == target.image_uri, "unexpected verification image URI")
     _require(
         "@" not in image["uri"] and ":" not in image["uri"].split("/", 1)[1],
         "image URI must not contain a mutable tag",
@@ -89,7 +133,7 @@ def load_pin(path: Path = DEFAULT_PIN) -> dict[str, Any]:
 
     sbom = value.get("sbom")
     _require(isinstance(sbom, dict), "SBOM pin is required")
-    _require(sbom.get("asset") == "marty-credentials-verification.spdx.json", "unexpected verification SBOM asset")
+    _require(sbom.get("asset") == target.sbom_asset, "unexpected verification SBOM asset")
     _require(bool(SHA256.fullmatch(str(sbom.get("digest", "")))), "SBOM digest must be sha256:<64 lowercase hex>")
     return value
 
@@ -101,23 +145,36 @@ def image_reference(pin: dict[str, Any]) -> str:
 def validate_sbom(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     _require(isinstance(value, dict), "verification SBOM must be a JSON object")
-    _require(value.get("spdxVersion") == "SPDX-2.3", "verification SBOM must use SPDX 2.3")
-    _require(value.get("name") == EXPECTED_IMAGE_URI, "verification SBOM describes an unexpected image")
-
-    packages = value.get("packages")
-    _require(isinstance(packages, list), "verification SBOM packages are required")
-    package_objects = [package for package in packages if isinstance(package, dict)]
-    roots = [package for package in package_objects if package.get("name") == EXPECTED_IMAGE_URI]
-    _require(len(roots) == 1, "verification SBOM must contain exactly one image root package")
-    _require(
-        roots[0].get("versionInfo") == pin["image"]["digest"],
-        "verification SBOM root is not bound to the pinned image digest",
-    )
-    package_names = {str(package.get("name")) for package in package_objects}
-    _require(
-        EXPECTED_SBOM_PACKAGES.issubset(package_names),
-        "verification SBOM is missing required native Marty packages",
-    )
+    target = artifact_target(pin)
+    if target is LEGACY_TARGET:
+        _require(value.get("spdxVersion") == "SPDX-2.3", "verification SBOM must use SPDX 2.3")
+        _require(value.get("name") == target.image_uri, "verification SBOM describes an unexpected image")
+        packages = value.get("packages")
+        _require(isinstance(packages, list), "verification SBOM packages are required")
+        package_objects = [package for package in packages if isinstance(package, dict)]
+        roots = [package for package in package_objects if package.get("name") == target.image_uri]
+        _require(len(roots) == 1, "verification SBOM must contain exactly one image root package")
+        _require(
+            roots[0].get("versionInfo") == pin["image"]["digest"],
+            "verification SBOM root is not bound to the pinned image digest",
+        )
+        package_names = {str(package.get("name")) for package in package_objects}
+        _require(
+            EXPECTED_SBOM_PACKAGES.issubset(package_names),
+            "verification SBOM is missing required native Marty packages",
+        )
+    else:
+        _require(value.get("bomFormat") == "CycloneDX", "verification SBOM must use CycloneDX")
+        _require(value.get("specVersion") == "1.6", "verification SBOM must use CycloneDX 1.6")
+        metadata = value.get("metadata")
+        _require(isinstance(metadata, dict), "verification SBOM metadata is required")
+        component = metadata.get("component")
+        _require(isinstance(component, dict), "verification SBOM image component is required")
+        _require(component.get("name") == target.image_uri, "verification SBOM describes an unexpected image")
+        _require(
+            component.get("version") == pin["image"]["digest"],
+            "verification SBOM root is not bound to the pinned image digest",
+        )
     return value
 
 
@@ -213,8 +270,8 @@ def make_vds_key_material(
 
 
 def make_vds_barcode(
-    reference: str,
     issuer_did: str,
+    method_id: str,
     private_key: ec.EllipticCurvePrivateKey,
 ) -> str:
     today = datetime.now(UTC).date()
@@ -230,64 +287,24 @@ def make_vds_barcode(
         "nationality": "USA",
         "surname": "EXAMPLE",
     }
-    prepared_output = _run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-e",
-            f"VDS_ISSUER_ID={issuer_did}",
-            "-e",
-            f"VDS_CLAIMS_JSON={json.dumps(claims, separators=(',', ':'))}",
-            reference,
-            "python",
-            "-c",
-            (
-                "import json,os,_marty_rs; "
-                "value=_marty_rs.oid4vci_prepare_credential("
-                "os.environ['VDS_ISSUER_ID'],'ES256',None,'CMC',"
-                "os.environ['VDS_CLAIMS_JSON'],None,'vds_nc',[],'w3c_vcdm_v2_sd_jwt',[],[]); "
-                "print(json.dumps({'signing_input':value[0],'credential_id':value[1],'format':value[2]}))"
-            ),
-        ],
-        label="prepare canonical VDS-NC with released native owner",
-    )
-    prepared = json.loads(prepared_output)
-    _require(isinstance(prepared, dict), "native VDS-NC preparation returned a non-object")
-    _require(prepared.get("format") == "vds_nc", "native VDS-NC preparation returned the wrong format")
-    signing_input = prepared.get("signing_input")
-    credential_id = prepared.get("credential_id")
-    _require(isinstance(signing_input, str) and signing_input, "native VDS-NC signing input is missing")
-    _require(isinstance(credential_id, str) and credential_id, "native VDS-NC credential ID is missing")
+    payload = {
+        **claims,
+        "_vds": {
+            "version": "1.0",
+            "documentType": "CMC",
+            "issuerId": issuer_did,
+            "keyId": method_id,
+            "algorithm": "ES256",
+        },
+    }
+    signing_input = f"DC03{claims['issuingCountry']}~{canonical_json(payload).decode('utf-8')}"
 
     der = private_key.sign(signing_input.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
     r_value, s_value = decode_dss_signature(der)
     raw_signature = r_value.to_bytes(32, "big") + s_value.to_bytes(32, "big")
-    assembled = _run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-e",
-            f"VDS_SIGNING_INPUT={signing_input}",
-            "-e",
-            f"VDS_SIGNATURE={_b64url(raw_signature)}",
-            "-e",
-            f"VDS_CREDENTIAL_ID={credential_id}",
-            reference,
-            "python",
-            "-c",
-            (
-                "import os,_marty_rs; "
-                "value=_marty_rs.oid4vci_assemble_credential("
-                "os.environ['VDS_SIGNING_INPUT'],os.environ['VDS_SIGNATURE'],"
-                "os.environ['VDS_CREDENTIAL_ID'],'vds_nc'); print(value[0])"
-            ),
-        ],
-        label="assemble canonical VDS-NC with released native owner",
-    )
-    _require(assembled.count("~") == 2, "native VDS-NC assembly returned a malformed barcode")
-    return assembled
+    barcode = f"{signing_input}~{base64.b64encode(raw_signature).decode('ascii')}"
+    _require(barcode.count("~") == 2, "VDS-NC fixture assembly returned a malformed barcode")
+    return barcode
 
 
 class ResolverState:
@@ -474,9 +491,20 @@ def _wait_for_health(base_url: str, container: str) -> dict[str, Any]:
     raise ArtifactRuntimeError("verification service health timed out")
 
 
-def _assert_health(value: dict[str, Any]) -> None:
-    backend = value.get("native_backend")
+def _assert_health(value: dict[str, Any], target: ArtifactTarget) -> None:
     _require(value.get("status") == "healthy", "verification health is not healthy")
+    backend = value.get("native_backend")
+    if target is RUST_TARGET:
+        _require(value.get("service") == "verification", "verification health reported the wrong service")
+        _require(isinstance(backend, dict) and backend.get("available") is True, "Rust backend is unavailable")
+        _require(
+            backend.get("module") == "marty-verification-service",
+            "verification health did not report the canonical Rust service",
+        )
+        _require(bool(VERSION.fullmatch(str(backend.get("version", "")))), "Rust verification version is invalid")
+        _require(backend.get("missing_capabilities") == [], "Rust verification capabilities are incomplete")
+        _require(backend.get("error") is None, "Rust verification diagnostic reported an error")
+        return
     _require(isinstance(backend, dict) and backend.get("available") is True, "native backend is unavailable")
     _require(backend.get("module") == "_marty_rs", "verification health reported an unexpected native module")
     _require(bool(VERSION.fullmatch(str(backend.get("version", "")))), "native backend version is invalid")
@@ -510,8 +538,11 @@ def _assert_private_material_absent(value: dict[str, Any], prohibited: list[str]
         _require(item not in serialized, "canonical response retained private test material")
 
 
-def _service_port(container: str) -> int:
-    output = _run(["docker", "port", container, "8006/tcp"], label="resolve service port")
+def _service_port(container: str, target: ArtifactTarget) -> int:
+    output = _run(
+        ["docker", "port", container, f"{target.service_port}/tcp"],
+        label="resolve service port",
+    )
     line = output.splitlines()[0]
     try:
         return int(line.rsplit(":", 1)[1])
@@ -521,19 +552,21 @@ def _service_port(container: str) -> int:
 
 def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_verified: bool) -> dict[str, Any]:
     _require(provenance_verified, "artifact provenance must be verified before runtime testing")
+    target = artifact_target(pin)
     postgres_image = load_postgres_image()
     reference = image_reference(pin)
     suffix = uuid.uuid4().hex[:12]
     network = f"marty-verifier-{suffix}"
     postgres = f"marty-verifier-db-{suffix}"
     service = f"marty-verifier-api-{suffix}"
+    invalid_service = f"marty-verifier-invalid-{suffix}"
     database_password = secrets.token_urlsafe(32)
     api_key = secrets.token_urlsafe(32)
     resolver_key = secrets.token_urlsafe(32)
     organization_id = str(uuid.uuid4())
     issuer_did = "did:web:vds-issuer.integration.invalid"
     private_key, public_jwk, method_id = make_vds_key_material(issuer_did)
-    barcode = make_vds_barcode(reference, issuer_did, private_key)
+    barcode = make_vds_barcode(issuer_did, method_id, private_key)
     governance = build_governance(pin, api_key, organization_id, issuer_did)
     database_url = f"postgresql+asyncpg://postgres:{database_password}@{postgres}:5432/verifier"
     completed_checks: list[str] = []
@@ -570,20 +603,23 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
         _wait_for_postgres(postgres)
         completed_checks.append("postgres.ready")
 
+        migration_command = [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            network,
+            "-e",
+            f"DATABASE_URL={database_url}",
+        ]
+        if target.service_name is not None:
+            migration_command.extend(["-e", f"SERVICE_NAME={target.service_name}"])
+        migration_command.append(reference)
+        migration_command.extend(
+            ["migrate"] if target is RUST_TARGET else ["python", "manage_migrations.py", "upgrade"]
+        )
         _run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                network,
-                "-e",
-                f"DATABASE_URL={database_url}",
-                reference,
-                "python",
-                "manage_migrations.py",
-                "upgrade",
-            ],
+            migration_command,
             label="apply released verification migrations",
             timeout=180,
         )
@@ -608,57 +644,104 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
         completed_checks.append("migrations.applied")
 
         invalid_governance = invalid_governance_missing_required_check(governance)
-        invalid = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-e",
-                f"VERIFICATION_GOVERNANCE_JSON={json.dumps(invalid_governance, separators=(',', ':'))}",
-                reference,
-                "python",
-                "-c",
-                "from verification.application.governance import load_governance; load_governance()",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        _require(invalid.returncode != 0, "governance missing mandatory checks was accepted")
-        completed_checks.append("governance.missing-required-check-rejected")
-
-        with resolver_server(state) as resolver_port:
-            _run(
+        invalid_command = [
+            "docker",
+            "run",
+            "--rm",
+            "--name",
+            invalid_service,
+            "-e",
+            f"VERIFICATION_GOVERNANCE_JSON={json.dumps(invalid_governance, separators=(',', ':'))}",
+        ]
+        if target is RUST_TARGET:
+            invalid_command.extend(
                 [
-                    "docker",
-                    "run",
-                    "-d",
-                    "--name",
-                    service,
                     "--network",
                     network,
-                    "--add-host",
-                    "host.docker.internal:host-gateway",
-                    "-p",
-                    "127.0.0.1::8006",
+                    "-e",
+                    f"SERVICE_NAME={target.service_name}",
+                    "-e",
+                    "VERIFICATION_CREDENTIALS_COMPAT_ENABLED=true",
                     "-e",
                     f"DATABASE_URL={database_url}",
-                    "-e",
-                    f"VERIFICATION_GOVERNANCE_JSON={json.dumps(governance, separators=(',', ':'))}",
-                    "-e",
-                    f"SIGNING_KEYS_INTERNAL_URL=http://host.docker.internal:{resolver_port}/internal/signing-keys",
                     "-e",
                     f"SIGNING_KEYS_INTERNAL_API_KEY={resolver_key}",
                     "-e",
                     "ENVIRONMENT=test",
                     reference,
-                ],
+                ]
+            )
+        else:
+            invalid_command.extend(
+                [
+                    reference,
+                    "python",
+                    "-c",
+                    "from verification.application.governance import load_governance; load_governance()",
+                ]
+            )
+        try:
+            invalid = subprocess.run(
+                invalid_command,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ArtifactRuntimeError("invalid governance was not rejected at startup") from exc
+        finally:
+            _docker_remove("container", invalid_service)
+        _require(invalid.returncode != 0, "governance missing mandatory checks was accepted")
+        completed_checks.append("governance.missing-required-check-rejected")
+
+        with resolver_server(state) as resolver_port:
+            service_command = [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                service,
+                "--network",
+                network,
+                "--add-host",
+                "host.docker.internal:host-gateway",
+                "-p",
+                f"127.0.0.1::{target.service_port}",
+                "-e",
+                f"DATABASE_URL={database_url}",
+                "-e",
+                f"VERIFICATION_GOVERNANCE_JSON={json.dumps(governance, separators=(',', ':'))}",
+                "-e",
+                f"SIGNING_KEYS_INTERNAL_URL=http://host.docker.internal:{resolver_port}/internal/signing-keys",
+                "-e",
+                f"SIGNING_KEYS_INTERNAL_API_KEY={resolver_key}",
+                "-e",
+                "ENVIRONMENT=test",
+            ]
+            if target.service_name is not None:
+                service_command.extend(
+                    [
+                        "-e",
+                        f"SERVICE_NAME={target.service_name}",
+                        "-e",
+                        "VERIFICATION_CREDENTIALS_COMPAT_ENABLED=true",
+                    ]
+                )
+            service_command.append(reference)
+            _run(
+                service_command,
                 label="start released verification image",
             )
-            base_url = f"http://127.0.0.1:{_service_port(service)}"
+            base_url = f"http://127.0.0.1:{_service_port(service, target)}"
             health = _wait_for_health(base_url, service)
-            _assert_health(health)
+            _assert_health(health, target)
+            compatibility_health = _http_json(
+                "GET",
+                f"{base_url}/v1/verification/health",
+                expected_status=200,
+            )
+            _require(compatibility_health == {"status": "healthy"}, "compatibility health contract changed")
             completed_checks.append("health.native-capabilities")
 
             endpoint = f"{base_url}/v1/verification/verify/vds-nc"
@@ -704,7 +787,7 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
             completed_checks.append("canonical.malformed-evidence-fail")
 
         evidence = {
-            "schema": EVIDENCE_SCHEMA,
+            "schema": target.evidence_schema,
             "classification": "ElevenID-owned artifact integration",
             "official_suite_invoked": False,
             "official_suite_source_modified": False,
@@ -727,6 +810,7 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return evidence
     finally:
+        _docker_remove("container", invalid_service)
         _docker_remove("container", service)
         _docker_remove("container", postgres)
         _docker_remove("network", network)
@@ -755,7 +839,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "validate-sbom":
         value = validate_sbom(args.sbom.resolve(), pin)
-        print(json.dumps({"name": value["name"], "spdxVersion": value["spdxVersion"]}, sort_keys=True))
+        target = artifact_target(pin)
+        summary = (
+            {"name": value["name"], "format": value["spdxVersion"]}
+            if target is LEGACY_TARGET
+            else {"name": value["metadata"]["component"]["name"], "format": value["specVersion"]}
+        )
+        print(json.dumps(summary, sort_keys=True))
         return 0
     evidence = run_artifact_test(
         pin,
