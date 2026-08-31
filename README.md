@@ -11,7 +11,7 @@ This repository verifies the public Marty credential stack using only released, 
 - Headless-wallet and interoperability flows
 - Browser contracts against the released Marty UI
 - Upgrade and rollback manifest compatibility
-- The separately packaged, governed Credentials verification service image
+- The governed Credentials compatibility surface in the canonical Rust services image
 
 Billing, Square, subscription plans, and product-catalog tests live in the private commerce overlay and are intentionally excluded.
 

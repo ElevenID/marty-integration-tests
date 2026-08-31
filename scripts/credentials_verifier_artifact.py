@@ -54,6 +54,8 @@ class ArtifactTarget(NamedTuple):
     sbom_asset: str
     service_port: int
     service_name: str | None
+    migration_entrypoint: str | None
+    migration_args: tuple[str, ...]
     evidence_schema: str
 
 
@@ -63,6 +65,8 @@ LEGACY_TARGET = ArtifactTarget(
     sbom_asset="marty-credentials-verification.spdx.json",
     service_port=8006,
     service_name=None,
+    migration_entrypoint=None,
+    migration_args=("python", "manage_migrations.py", "upgrade"),
     evidence_schema=EVIDENCE_SCHEMA,
 )
 RUST_TARGET = ArtifactTarget(
@@ -71,6 +75,8 @@ RUST_TARGET = ArtifactTarget(
     sbom_asset="marty-ui-services-sbom.cdx.json",
     service_port=8012,
     service_name="verification",
+    migration_entrypoint="/app/services/entrypoint.sh",
+    migration_args=("migrate",),
     evidence_schema=RUST_EVIDENCE_SCHEMA,
 )
 
@@ -550,6 +556,30 @@ def _service_port(container: str, target: ArtifactTarget) -> int:
         raise ArtifactRuntimeError("verification service port mapping was invalid") from exc
 
 
+def _migration_command(
+    reference: str,
+    target: ArtifactTarget,
+    network: str,
+    database_url: str,
+) -> list[str]:
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        network,
+        "-e",
+        f"DATABASE_URL={database_url}",
+    ]
+    if target.service_name is not None:
+        command.extend(["-e", f"SERVICE_NAME={target.service_name}"])
+    if target.migration_entrypoint is not None:
+        command.extend(["--entrypoint", target.migration_entrypoint])
+    command.append(reference)
+    command.extend(target.migration_args)
+    return command
+
+
 def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_verified: bool) -> dict[str, Any]:
     _require(provenance_verified, "artifact provenance must be verified before runtime testing")
     target = artifact_target(pin)
@@ -603,23 +633,8 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
         _wait_for_postgres(postgres)
         completed_checks.append("postgres.ready")
 
-        migration_command = [
-            "docker",
-            "run",
-            "--rm",
-            "--network",
-            network,
-            "-e",
-            f"DATABASE_URL={database_url}",
-        ]
-        if target.service_name is not None:
-            migration_command.extend(["-e", f"SERVICE_NAME={target.service_name}"])
-        migration_command.append(reference)
-        migration_command.extend(
-            ["migrate"] if target is RUST_TARGET else ["python", "manage_migrations.py", "upgrade"]
-        )
         _run(
-            migration_command,
+            _migration_command(reference, target, network, database_url),
             label="apply released verification migrations",
             timeout=180,
         )
@@ -634,9 +649,11 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 "-d",
                 "verifier",
                 "-tAc",
-                "SELECT count(*) FROM information_schema.tables "
-                "WHERE table_schema='verification_service' "
-                "AND table_name='alembic_version'",
+                (
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_schema='verification_service' "
+                    "AND table_name='alembic_version'"
+                ),
             ],
             label="verify migration version table",
         )
