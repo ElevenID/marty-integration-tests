@@ -25,8 +25,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +58,8 @@ OID4VP_REQUIRED_CHECKS = [
 ]
 KNOWN_INELIGIBLE_FAILURE_ID = "session.transaction-id-unscoped"
 KNOWN_INELIGIBLE_FAILURE_MESSAGE = "session transaction ID changed outside the approved compatibility correction"
+KNOWN_INELIGIBLE_TRANSIENT_MESSAGE = "verification response omitted canonical_result"
+KNOWN_INELIGIBLE_MAX_ATTEMPTS = 3
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SEMVER_TAG = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
@@ -165,6 +167,10 @@ def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict
             == {
                 "id": KNOWN_INELIGIBLE_FAILURE_ID,
                 "message": KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+                "transient_retry": {
+                    "message": KNOWN_INELIGIBLE_TRANSIENT_MESSAGE,
+                    "max_attempts": KNOWN_INELIGIBLE_MAX_ATTEMPTS,
+                },
             },
             "ineligible artifact pin must bind the known expected failure",
         )
@@ -369,33 +375,35 @@ def make_vds_key_material(
     return private_key, jwk, method_id
 
 
-def make_oid4vp_jwt(nonce: str, audience: str) -> str:
+def make_oid4vp_jwt(nonce: str | None, audience: str, *, fixture_id: str = "primary") -> str:
     """Create a valid holder-signed proof whose embedded credential remains unverified.
 
     The frozen compatibility service intentionally treats a presentation proof
     as insufficient for a final PASS until issuer proof, trust, status, holder,
     and claim checks are independently established.
     """
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    public = private_key.public_key().public_numbers()
+    private_key = ed25519.Ed25519PrivateKey.from_private_bytes(bytes(range(1, 33)))
+    public = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
     header = {
-        "alg": "ES256",
+        "alg": "EdDSA",
         "typ": "JWT",
         "jwk": {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": _b64url(public.x.to_bytes(32, "big")),
-            "y": _b64url(public.y.to_bytes(32, "big")),
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": _b64url(public),
         },
     }
     now = int(time.time())
-    payload = {
+    payload: dict[str, Any] = {
         "iss": "did:example:artifact-holder",
         "sub": "did:example:artifact-holder",
         "aud": audience,
+        "jti": f"artifact-{fixture_id}",
         "iat": now,
         "exp": now + 300,
-        "nonce": nonce,
         "vp": {
             "@context": ["https://www.w3.org/2018/credentials/v1"],
             "type": ["VerifiablePresentation"],
@@ -407,12 +415,12 @@ def make_oid4vp_jwt(nonce: str, audience: str) -> str:
             ],
         },
     }
+    if nonce is not None:
+        payload["nonce"] = nonce
     encoded_header = _b64url(canonical_json(header))
     encoded_payload = _b64url(canonical_json(payload))
     signing_input = f"{encoded_header}.{encoded_payload}"
-    der = private_key.sign(signing_input.encode("ascii"), ec.ECDSA(hashes.SHA256()))
-    r_value, s_value = decode_dss_signature(der)
-    signature = r_value.to_bytes(32, "big") + s_value.to_bytes(32, "big")
+    signature = private_key.sign(signing_input.encode("ascii"))
     return f"{signing_input}.{_b64url(signature)}"
 
 
@@ -733,6 +741,8 @@ def _assert_canonical(
     expected_transaction_id: str | None = None,
     expected_passed_checks: set[str] | None = None,
     expected_check_projection: dict[str, tuple[str, str]] | None = None,
+    expected_input_digest: str | None = None,
+    expected_verification_method: str | None = None,
     transaction_error: str = "canonical transaction ID changed",
 ) -> dict[str, Any]:
     canonical = value.get("canonical_result")
@@ -745,6 +755,11 @@ def _assert_canonical(
     _require(value.get("decision") == decision, "legacy decision projection diverged")
     _require(value.get("overall_result") == decision, "overall_result projection diverged")
     _require(value.get("valid") is (decision == "PASS"), "valid projection diverged")
+    if expected_verification_method is not None:
+        _require(
+            value.get("verification_method") == expected_verification_method,
+            "verification method projection changed",
+        )
     _require(canonical.get("valid") is (decision == "PASS"), "canonical valid diverged")
     _require(canonical.get("processing_status") == "COMPLETED", "canonical processing did not complete")
     _require(
@@ -761,6 +776,8 @@ def _assert_canonical(
         )
     else:
         _require(transaction_id == expected_transaction_id, transaction_error)
+    if expected_input_digest is not None:
+        _require(canonical.get("input_digest") == expected_input_digest, "canonical input digest changed")
     checks = canonical.get("checks")
     expected = {"credential.proof", "issuer.trust"} if expected_checks is None else expected_checks
     _require(isinstance(checks, list) and len(checks) == len(expected), "canonical check count changed")
@@ -1224,6 +1241,22 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 expected_status=422,
             )
             _assert_error(policy_mismatch, "Verification request does not match its governed policy")
+            malformed_session = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions",
+                body=session_body,
+                api_key=api_key,
+                expected_status=200,
+            )
+            malformed_result = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/sessions/{malformed_session['id']}/submit",
+                body={"presentation": "header.payload.signature"},
+                expected_status=200,
+            )
+            _assert_session_result(malformed_result, malformed_session["id"], target)
+            completed_checks.append("session.malformed-presentation-fails-closed")
+
             session = _http_json(
                 "POST",
                 f"{base_url}/v1/verification/sessions",
@@ -1410,8 +1443,9 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 make_oid4vp_jwt(
                     different_digest_session["nonce"],
                     "did:web:verifier.integration.invalid",
+                    fixture_id=f"competing-{index}",
                 )
-                for _ in range(2)
+                for index in range(2)
             ]
             different_accepted, different_conflicts = _partition_submission_outcomes(
                 _parallel_submissions(
@@ -1453,22 +1487,6 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 private_material + competing_presentations + [different_digest_session["nonce"]],
             )
             completed_checks.append("session.concurrent-claim-and-fencing-parity")
-
-            malformed_session = _http_json(
-                "POST",
-                f"{base_url}/v1/verification/sessions",
-                body=session_body,
-                api_key=api_key,
-                expected_status=200,
-            )
-            malformed_result = _http_json(
-                "POST",
-                f"{base_url}/v1/verification/sessions/{malformed_session['id']}/submit",
-                body={"presentation": "header.payload.signature"},
-                expected_status=200,
-            )
-            _assert_session_result(malformed_result, malformed_session["id"], target)
-            completed_checks.append("session.malformed-presentation-fails-closed")
 
             direct_body = {
                 "presentation": "header.payload.signature",
@@ -1517,10 +1535,7 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 direct,
                 private_material + ["header.payload.signature"],
             )
-            direct_signed_presentation = make_oid4vp_jwt(
-                "direct-artifact-nonce",
-                "did:web:verifier.integration.invalid",
-            )
+            direct_signed_presentation = make_oid4vp_jwt(None, "did:web:verifier.integration.invalid")
             direct_signed = _http_json(
                 "POST",
                 f"{base_url}/v1/verification/verify",
@@ -1533,6 +1548,10 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 decision="FAIL",
                 expected_checks=set(OID4VP_REQUIRED_CHECKS),
                 expected_passed_checks=set(),
+                expected_input_digest=(
+                    "sha256:" + hashlib.sha256(direct_signed_presentation.encode("utf-8")).hexdigest()
+                ),
+                expected_verification_method="jwt_vp",
                 expected_check_projection={
                     "presentation.structure": (
                         "NOT_PERFORMED",
@@ -1566,7 +1585,69 @@ def run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_ve
                 direct_signed,
                 private_material + [direct_signed_presentation, "sensitive-holder-claim"],
             )
-            completed_checks.append("direct.auth-policy-signed-no-nonce-and-malformed-fail-closed")
+
+            structured_presentation: dict[str, Any] = {}
+            direct_structured = _http_json(
+                "POST",
+                f"{base_url}/v1/verification/verify",
+                body={**direct_body, "presentation": structured_presentation},
+                api_key=oid4vp_only_api_key,
+                expected_status=200,
+            )
+            _assert_canonical(
+                direct_structured,
+                decision="FAIL",
+                expected_checks=set(OID4VP_REQUIRED_CHECKS),
+                expected_passed_checks=set(),
+                expected_input_digest="sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                expected_verification_method="w3c_vc",
+                expected_check_projection={
+                    "presentation.structure": (
+                        "NOT_PERFORMED",
+                        "PRESENTATION_STRUCTURE_NOT_PERFORMED",
+                    ),
+                    "presentation.proof": (
+                        "NOT_PERFORMED",
+                        "PRESENTATION_PROOF_NOT_PERFORMED",
+                    ),
+                    "credential.proof": ("FAILED", "CREDENTIAL_PROOFS_INVALID"),
+                    "issuer.trust": ("NOT_PERFORMED", "ISSUER_TRUST_NOT_PERFORMED"),
+                    "credential.status": (
+                        "NOT_PERFORMED",
+                        "CREDENTIAL_STATUS_NOT_CHECKED",
+                    ),
+                    "holder.binding": (
+                        "NOT_PERFORMED",
+                        "HOLDER_BINDING_NOT_PERFORMED",
+                    ),
+                    "transaction.binding": (
+                        "NOT_PERFORMED",
+                        "TRANSACTION_BINDING_NOT_PERFORMED",
+                    ),
+                    "claim.constraints": (
+                        "NOT_PERFORMED",
+                        "CLAIM_CONSTRAINTS_NOT_PERFORMED",
+                    ),
+                },
+            )
+            _require(
+                {
+                    "processing_status": direct_structured.get("processing_status"),
+                    "decision_code": direct_structured.get("decision_code"),
+                    "error": direct_structured.get("error"),
+                    "verified_claims": direct_structured.get("verified_claims"),
+                    "claim_results": direct_structured.get("claim_results"),
+                }
+                == {
+                    "processing_status": "COMPLETED",
+                    "decision_code": "REQUIRED_CHECK_FAILED",
+                    "error": "Canonical verification did not pass",
+                    "verified_claims": None,
+                    "claim_results": [],
+                },
+                "structured direct response projection changed",
+            )
+            completed_checks.append("direct.auth-policy-jwt-no-nonce-structured-and-malformed-fail-closed")
 
             endpoint = f"{base_url}/v1/verification/verify/vds-nc"
             request_body = {
@@ -1701,19 +1782,30 @@ def run_expected_failure(
     provenance_verified: bool,
 ) -> dict[str, Any]:
     expected = pin["expected_failure"]
+    transient = expected["transient_retry"]
     started = datetime.now(UTC)
     evidence_path.unlink(missing_ok=True)
+    transient_count = 0
+    expected_failure_observed = False
     with tempfile.TemporaryDirectory(prefix="marty-verifier-negative-") as temporary_directory:
-        private_evidence = Path(temporary_directory) / "unexpected-pass.json"
-        try:
-            run_artifact_test(pin, private_evidence, provenance_verified=provenance_verified)
-        except (ArtifactRuntimeError, ValueError) as exc:
-            _require(
-                str(exc) == expected["message"],
-                "ineligible artifact failed for an unexpected reason",
-            )
-        else:
-            raise ValueError("known-ineligible artifact unexpectedly passed")
+        for attempt in range(1, transient["max_attempts"] + 1):
+            private_evidence = Path(temporary_directory) / f"attempt-{attempt}.json"
+            try:
+                run_artifact_test(pin, private_evidence, provenance_verified=provenance_verified)
+            except (ArtifactRuntimeError, ValueError) as exc:
+                message = str(exc)
+                if message == expected["message"]:
+                    expected_failure_observed = True
+                    break
+                if message == transient["message"] and attempt < transient["max_attempts"]:
+                    transient_count += 1
+                    continue
+                if message == transient["message"]:
+                    raise ValueError("ineligible artifact exhausted bounded readiness retries") from exc
+                raise ValueError("ineligible artifact failed for an unexpected reason") from exc
+            else:
+                raise ValueError("known-ineligible artifact unexpectedly passed")
+    _require(expected_failure_observed, "known ineligible failure was not observed")
 
     evidence = {
         "schema": RUST_EVIDENCE_SCHEMA,
@@ -1723,6 +1815,8 @@ def run_expected_failure(
         "status": "expected_failure_observed",
         "subject": evidence_subject(pin),
         "failure_id": expected["id"],
+        "attempts": transient_count + 1,
+        "transient_readiness_failures": transient_count,
         "started_at": started.isoformat().replace("+00:00", "Z"),
         "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }

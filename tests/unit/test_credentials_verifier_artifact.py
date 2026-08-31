@@ -58,6 +58,17 @@ def valid_rust_pin() -> dict[str, object]:
     }
 
 
+def known_ineligible_failure() -> dict[str, object]:
+    return {
+        "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
+        "message": artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
+        "transient_retry": {
+            "message": artifact.KNOWN_INELIGIBLE_TRANSIENT_MESSAGE,
+            "max_attempts": artifact.KNOWN_INELIGIBLE_MAX_ATTEMPTS,
+        },
+    }
+
+
 def write_pin(path: Path, value: dict[str, object] | None = None) -> Path:
     path.write_text(json.dumps(value or valid_pin()), encoding="utf-8")
     return path
@@ -118,19 +129,13 @@ def test_default_pin_preserves_oracle_and_stale_rust_candidate_is_ineligible() -
     )
     assert rejected["release_tag"] == "v1.1.208"
     assert rejected["commit"] == "7c8fa31500acd8f2ec589781232c444fe81dd22e"
-    assert rejected["expected_failure"] == {
-        "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
-        "message": artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
-    }
+    assert rejected["expected_failure"] == known_ineligible_failure()
 
 
 def test_ineligible_pin_still_validates_every_immutable_coordinate(tmp_path: Path) -> None:
     pin = valid_rust_pin()
     pin["state"] = "ineligible"
-    pin["expected_failure"] = {
-        "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
-        "message": artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
-    }
+    pin["expected_failure"] = known_ineligible_failure()
     pin["image"]["digest"] = "mutable"  # type: ignore[index]
 
     with pytest.raises(ValueError, match="image digest"):
@@ -338,12 +343,17 @@ def test_oid4vp_fixture_is_nonce_audience_bound_and_contains_no_private_jwk() ->
     header = json.loads(base64.urlsafe_b64decode(header_segment + "=="))
     payload = json.loads(base64.urlsafe_b64decode(payload_segment + "=="))
 
-    assert header["alg"] == "ES256"
-    assert set(header["jwk"]) == {"kty", "crv", "x", "y"}
+    assert header["alg"] == "EdDSA"
+    assert set(header["jwk"]) == {"kty", "crv", "x"}
     assert payload["nonce"] == "n" * 43
     assert payload["aud"] == "did:web:verifier.integration.invalid"
     assert payload["exp"] > payload["iat"]
     assert len(base64.urlsafe_b64decode(signature_segment + "==")) == 64
+
+    nonce_less = artifact.make_oid4vp_jwt(None, "did:web:verifier.integration.invalid")
+    nonce_less_payload_segment = nonce_less.split(".")[1]
+    nonce_less_payload = json.loads(base64.urlsafe_b64decode(nonce_less_payload_segment + "=="))
+    assert "nonce" not in nonce_less_payload
 
 
 def test_canonical_projection_requires_exact_vds_check_floor() -> None:
@@ -363,7 +373,27 @@ def test_canonical_projection_requires_exact_vds_check_floor() -> None:
             ],
         },
     }
-    assert artifact._assert_canonical(value, decision="PASS") == value["canonical_result"]
+    value["verification_method"] = "w3c_vc"
+    value["canonical_result"]["input_digest"] = "sha256:" + "a" * 64
+    assert (
+        artifact._assert_canonical(
+            value,
+            decision="PASS",
+            expected_input_digest="sha256:" + "a" * 64,
+            expected_verification_method="w3c_vc",
+        )
+        == value["canonical_result"]
+    )
+
+    value["verification_method"] = "jwt_vp"
+    with pytest.raises(ValueError, match="verification method projection changed"):
+        artifact._assert_canonical(value, decision="PASS", expected_verification_method="w3c_vc")
+    value["verification_method"] = "w3c_vc"
+
+    value["canonical_result"]["input_digest"] = "sha256:" + "b" * 64
+    with pytest.raises(ValueError, match="canonical input digest changed"):
+        artifact._assert_canonical(value, decision="PASS", expected_input_digest="sha256:" + "a" * 64)
+    value["canonical_result"]["input_digest"] = "sha256:" + "a" * 64
 
     value["canonical_result"]["checks"].pop()
     with pytest.raises(ValueError, match="canonical check count changed"):
@@ -475,13 +505,15 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
 ) -> None:
     pin = valid_rust_pin()
     pin["state"] = "ineligible"
-    pin["expected_failure"] = {
-        "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
-        "message": artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
-    }
+    pin["expected_failure"] = known_ineligible_failure()
     evidence_path = tmp_path / "negative-control.json"
+    calls = 0
 
     def reject(*_args: object, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError(artifact.KNOWN_INELIGIBLE_TRANSIENT_MESSAGE)
         raise ValueError(artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE)
 
     monkeypatch.setattr(artifact, "run_artifact_test", reject)
@@ -493,6 +525,8 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
 
     assert evidence["status"] == "expected_failure_observed"
     assert evidence["failure_id"] == artifact.KNOWN_INELIGIBLE_FAILURE_ID
+    assert evidence["attempts"] == 2
+    assert evidence["transient_readiness_failures"] == 1
     assert json.loads(evidence_path.read_text(encoding="utf-8")) == evidence
 
     def wrong_failure(*_args: object, **_kwargs: object) -> None:
@@ -501,6 +535,14 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
     monkeypatch.setattr(artifact, "run_artifact_test", wrong_failure)
     with pytest.raises(ValueError, match="unexpected reason"):
         artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
+
+    def transient_failure(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(artifact.KNOWN_INELIGIBLE_TRANSIENT_MESSAGE)
+
+    monkeypatch.setattr(artifact, "run_artifact_test", transient_failure)
+    with pytest.raises(ValueError, match="exhausted bounded readiness retries"):
+        artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
+    assert not evidence_path.exists()
 
     def unexpected_pass(_pin: object, private_path: Path, **_kwargs: object) -> dict[str, str]:
         private_path.write_text('{"status":"passed"}\n', encoding="utf-8")
