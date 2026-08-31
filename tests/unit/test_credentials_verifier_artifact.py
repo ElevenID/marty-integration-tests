@@ -296,6 +296,14 @@ def write_oci_archive(
     platform: dict[str, str] | None = None,
     corrupt_layer_digest: bool = False,
     config_media_type: str = "application/vnd.oci.image.config.v1+json",
+    config_platform_qualifiers: dict[str, object] | None = None,
+    manifest_payload_media_type: str | None = artifact.OCI_MANIFEST,
+    omit_platform: bool = False,
+    nested_index: bool = False,
+    nested_index_schema_version: int = 2,
+    nested_index_payload_media_type: str | None = artifact.OCI_INDEX,
+    top_index_platform: dict[str, str] | None = None,
+    index_payload_media_type: str | None = None,
     compressed_outer: bool = False,
     uncompressed_layer_override: bytes | None = None,
     outer_eoa_blocks: int = 2,
@@ -322,45 +330,70 @@ def write_oci_archive(
         trailer=layer_trailer,
     )
     layer = gzip.compress(uncompressed_layer, mtime=0)
-    config = artifact.canonical_json(
-        {
-            "architecture": "amd64",
-            "os": "linux",
-            "config": {
-                "Env": [
-                    "SERVICE_NAME=verification",
-                    f"MARTY_RELEASE_VERSION={pin['version']}",
-                    f"MARTY_UI_SHA={pin['commit']}",
-                ],
-                "Labels": labels,
-            },
-            "rootfs": {
-                "type": "layers",
-                "diff_ids": [f"sha256:{hashlib.sha256(uncompressed_layer).hexdigest()}"],
-            },
-        }
-    )
+    config_value: dict[str, object] = {
+        "architecture": "amd64",
+        "os": "linux",
+        "config": {
+            "Env": [
+                "SERVICE_NAME=verification",
+                f"MARTY_RELEASE_VERSION={pin['version']}",
+                f"MARTY_UI_SHA={pin['commit']}",
+            ],
+            "Labels": labels,
+        },
+        "rootfs": {
+            "type": "layers",
+            "diff_ids": [f"sha256:{hashlib.sha256(uncompressed_layer).hexdigest()}"],
+        },
+    }
+    config_value.update(config_platform_qualifiers or {})
+    config = artifact.canonical_json(config_value)
     config_descriptor = _descriptor(config, config_media_type)
     layer_descriptor = _descriptor(layer, artifact.OCI_GZIP_LAYER)
     if corrupt_layer_digest:
         layer_descriptor["digest"] = "sha256:" + "9" * 64
-    manifest = artifact.canonical_json(
-        {
-            "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "config": config_descriptor,
-            "layers": [layer_descriptor],
-        }
-    )
-    manifest_descriptor = _descriptor(
-        manifest,
-        "application/vnd.oci.image.manifest.v1+json",
-        platform=platform or {"architecture": "amd64", "os": "linux"},
-        annotations={
+    manifest_value: dict[str, object] = {
+        "schemaVersion": 2,
+        "config": config_descriptor,
+        "layers": [layer_descriptor],
+    }
+    if manifest_payload_media_type is not None:
+        manifest_value["mediaType"] = manifest_payload_media_type
+    manifest = artifact.canonical_json(manifest_value)
+    manifest_fields: dict[str, object] = {
+        "annotations": {
             "org.opencontainers.image.ref.name": pin["image"]["archive_tag"]  # type: ignore[index]
-        },
-    )
-    index = artifact.canonical_json({"schemaVersion": 2, "manifests": [manifest_descriptor]})
+        }
+    }
+    if not omit_platform:
+        manifest_fields["platform"] = platform or {"architecture": "amd64", "os": "linux"}
+    manifest_descriptor = _descriptor(manifest, artifact.OCI_MANIFEST, **manifest_fields)
+    index_descriptor = manifest_descriptor
+    nested_member: tuple[str, bytes] | None = None
+    if nested_index:
+        nested_value: dict[str, object] = {
+            "schemaVersion": nested_index_schema_version,
+            "manifests": [manifest_descriptor],
+        }
+        if nested_index_payload_media_type is not None:
+            nested_value["mediaType"] = nested_index_payload_media_type
+        nested = artifact.canonical_json(nested_value)
+        nested_fields: dict[str, object] = {
+            "annotations": {
+                "org.opencontainers.image.ref.name": pin["image"]["archive_tag"]  # type: ignore[index]
+            }
+        }
+        if top_index_platform is not None:
+            nested_fields["platform"] = top_index_platform
+        index_descriptor = _descriptor(nested, artifact.OCI_INDEX, **nested_fields)
+        nested_member = (
+            f"blobs/sha256/{index_descriptor['digest'].split(':', 1)[1]}",
+            nested,
+        )
+    index_value: dict[str, object] = {"schemaVersion": 2, "manifests": [index_descriptor]}
+    if index_payload_media_type is not None:
+        index_value["mediaType"] = index_payload_media_type
+    index = artifact.canonical_json(index_value)
     layout = artifact.canonical_json({"imageLayoutVersion": "1.0.0"})
     members = {
         "oci-layout": layout,
@@ -369,6 +402,8 @@ def write_oci_archive(
         f"blobs/sha256/{manifest_descriptor['digest'].split(':', 1)[1]}": manifest,
         f"blobs/sha256/{hashlib.sha256(layer).hexdigest()}": layer,
     }
+    if nested_member is not None:
+        members[nested_member[0]] = nested_member[1]
     if unreferenced_regular:
         members["unreferenced.txt"] = b"not reachable"
     archive_buffer = io.BytesIO()
@@ -599,6 +634,19 @@ def test_candidate_inputs_bind_archive_sbom_and_provenance(tmp_path: Path) -> No
         ({"platform": {"architecture": "arm64", "os": "linux"}}, "platform changed"),
         ({"corrupt_layer_digest": True}, "archive member is missing"),
         ({"config_media_type": "application/json"}, "config media type changed"),
+        ({"omit_platform": True}, "platform changed"),
+        ({"index_payload_media_type": "application/json"}, "index media type changed"),
+        ({"manifest_payload_media_type": "application/json"}, "manifest media type changed"),
+        ({"nested_index": True, "nested_index_schema_version": 1}, "image index schema changed"),
+        (
+            {"nested_index": True, "nested_index_payload_media_type": "application/json"},
+            "image index media type changed",
+        ),
+        (
+            {"nested_index": True, "top_index_platform": {"architecture": "amd64", "os": "linux"}},
+            "index descriptor platform changed",
+        ),
+        ({"nested_index": True, "omit_platform": True}, "platform changed"),
         ({"compressed_outer": True}, "not a readable OCI archive"),
     ],
 )
@@ -613,6 +661,48 @@ def test_oci_archive_rejects_rebound_or_incomplete_images(
 
     with pytest.raises(ValueError, match=message):
         artifact.inspect_oci_archive(archive_path, pin)
+
+
+@pytest.mark.parametrize("nested_index", [False, True], ids=["direct", "nested-index"])
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("variant", "v1"),
+        ("variant", None),
+        ("os.version", "6.8"),
+        ("os.version", ""),
+        ("os.features", ["sse4"]),
+        ("os.features", []),
+    ],
+)
+def test_oci_archive_rejects_every_config_platform_qualifier(
+    tmp_path: Path,
+    nested_index: bool,
+    key: str,
+    value: object,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(
+        archive_path,
+        pin,
+        nested_index=nested_index,
+        config_platform_qualifiers={key: value},
+    )
+
+    with pytest.raises(ValueError, match="config platform changed"):
+        artifact.inspect_oci_archive(archive_path, pin)
+
+
+@pytest.mark.parametrize("nested_index", [False, True], ids=["direct", "nested-index"])
+def test_oci_archive_accepts_canonical_payload_and_unqualified_platform(
+    tmp_path: Path,
+    nested_index: bool,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(archive_path, pin, nested_index=nested_index)
+    artifact.inspect_oci_archive(archive_path, pin)
 
 
 @pytest.mark.parametrize(
@@ -911,6 +1001,53 @@ def test_candidate_sbom_collection_limits_are_bounded(
         artifact.validate_sbom(path, pin)
 
 
+def test_candidate_sbom_dependency_edges_accept_exact_and_reject_exact_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    sbom = valid_rust_sbom(pin)
+    path = tmp_path / "candidate.cdx.json"
+    monkeypatch.setattr(artifact, "MAX_SBOM_DEPENDENCY_EDGES_PER_ENTRY", 1)
+    path.write_text(json.dumps(sbom), encoding="utf-8")
+    artifact.validate_sbom(path, pin)
+    sbom["dependencies"][0]["dependsOn"].append(sbom["metadata"]["component"]["bom-ref"])  # type: ignore[index]
+    path.write_text(json.dumps(sbom), encoding="utf-8")
+    with pytest.raises(ValueError, match="fan-out is too large"):
+        artifact.validate_sbom(path, pin)
+
+
+def test_candidate_sbom_aggregate_edges_accept_exact_and_reject_exact_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    sbom = valid_rust_sbom(pin)
+    root = sbom["metadata"]["component"]["bom-ref"]  # type: ignore[index]
+    component = sbom["components"][0]["bom-ref"]  # type: ignore[index]
+    sbom["dependencies"] = [
+        {"ref": root, "dependsOn": [component]},
+        {"ref": component, "dependsOn": [root]},
+    ]
+    path = tmp_path / "candidate.cdx.json"
+    path.write_text(json.dumps(sbom), encoding="utf-8")
+    monkeypatch.setattr(artifact, "MAX_TOTAL_SBOM_DEPENDENCY_EDGES", 2)
+    artifact.validate_sbom(path, pin)
+    monkeypatch.setattr(artifact, "MAX_TOTAL_SBOM_DEPENDENCY_EDGES", 1)
+    with pytest.raises(ValueError, match="aggregate dependency edges"):
+        artifact.validate_sbom(path, pin)
+
+
+def test_candidate_sbom_rejects_duplicate_dependency_edges(tmp_path: Path) -> None:
+    pin = valid_candidate_pin()
+    sbom = valid_rust_sbom(pin)
+    sbom["dependencies"][0]["dependsOn"] *= 2  # type: ignore[index]
+    path = tmp_path / "candidate.cdx.json"
+    path.write_text(json.dumps(sbom), encoding="utf-8")
+    with pytest.raises(ValueError, match="dependency edge is duplicated"):
+        artifact.validate_sbom(path, pin)
+
+
 @pytest.mark.parametrize(
     ("input_name", "limit_name", "message"),
     [
@@ -1172,7 +1309,12 @@ def test_run_candidate_is_one_fail_closed_validation_transaction(
     monkeypatch.setattr(
         artifact,
         "load_candidate_archive",
-        lambda *_args, **_kwargs: calls.append("load"),
+        lambda *_args, **_kwargs: calls.append("load") or artifact.image_reference(pin),
+    )
+    monkeypatch.setattr(
+        artifact,
+        "_remove_candidate_image",
+        lambda reference: calls.append(f"remove:{reference}"),
     )
 
     @contextmanager
@@ -1207,7 +1349,15 @@ def test_run_candidate_is_one_fail_closed_validation_transaction(
         )
         == 0
     )
-    assert calls == ["validate", "attest", "stage", "load", "run:True"]
+    assert calls == [
+        "validate",
+        "attest",
+        "stage",
+        "load",
+        "run:True",
+        f"remove:{pin['image']['archive_tag']}:latest",  # type: ignore[index]
+        f"remove:{artifact.image_reference(pin)}",
+    ]
     candidate_options = {
         option
         for action in artifact.parser()._subparsers._group_actions[0].choices["run-candidate"]._actions
@@ -1267,6 +1417,54 @@ def test_run_candidate_removes_stale_evidence_before_early_failure(
             ]
         )
     assert not evidence.exists()
+
+
+def test_run_candidate_cleans_created_tags_when_runtime_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    pin_path = write_pin(tmp_path / "candidate.json", pin)
+    paths = {name: tmp_path / f"{name}.json" for name in ("archive", "sbom", "metadata", "provenance")}
+    removed: list[str] = []
+    monkeypatch.setattr(artifact, "validate_candidate_inputs", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(artifact, "verify_candidate_attestations", lambda *_args, **_kwargs: {})
+
+    @contextmanager
+    def staged(*_args: object, **_kwargs: object) -> object:
+        yield paths["archive"]
+
+    monkeypatch.setattr(artifact, "stage_candidate_archive", staged)
+    monkeypatch.setattr(artifact, "load_candidate_archive", lambda *_args: artifact.image_reference(pin))
+    monkeypatch.setattr(
+        artifact,
+        "run_artifact_test",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("runtime failed")),
+    )
+    monkeypatch.setattr(artifact, "_remove_candidate_image", removed.append)
+
+    with pytest.raises(ValueError, match="runtime failed"):
+        artifact.main(
+            [
+                "run-candidate",
+                "--pin",
+                str(pin_path),
+                "--archive",
+                str(paths["archive"]),
+                "--sbom",
+                str(paths["sbom"]),
+                "--metadata",
+                str(paths["metadata"]),
+                "--provenance",
+                str(paths["provenance"]),
+                "--evidence",
+                str(tmp_path / "evidence.json"),
+            ]
+        )
+    assert removed == [
+        f"{pin['image']['archive_tag']}:latest",  # type: ignore[index]
+        artifact.image_reference(pin),
+    ]
 
 
 def test_candidate_comparison_removes_stale_evidence_before_failure(
@@ -1413,7 +1611,7 @@ def test_candidate_archive_load_rechecks_exact_config_platform_and_labels(
         return f"Loaded image: {pin['image']['archive_tag']}:latest" if command[1] == "load" else ""
 
     monkeypatch.setattr(artifact, "_run", run)
-    inspections = iter([None, None, inspection, inspection])
+    inspections = iter([None, None, None, inspection, inspection])
     monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: next(inspections))
     monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
     monkeypatch.setattr(artifact, "_remove_candidate_image", lambda *_args: None)
@@ -1432,7 +1630,7 @@ def test_candidate_archive_load_rechecks_exact_config_platform_and_labels(
     ]
 
 
-@pytest.mark.parametrize("preexisting", ["archive", "verified"])
+@pytest.mark.parametrize("preexisting", ["archive", "digest", "verified"])
 def test_candidate_archive_load_rejects_preexisting_local_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1441,7 +1639,11 @@ def test_candidate_archive_load_rejects_preexisting_local_selection(
     pin = valid_candidate_pin()
     archive_path = tmp_path / "private.oci.tar"
     inspection = valid_candidate_inspection(pin)
-    results = [inspection] if preexisting == "archive" else [None, inspection]
+    results = {
+        "archive": [inspection],
+        "digest": [None, inspection],
+        "verified": [None, None, inspection],
+    }[preexisting]
     monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
     monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: results.pop(0))
     monkeypatch.setattr(
@@ -1467,7 +1669,7 @@ def test_candidate_archive_load_requires_both_manifest_and_config_identity(
         inspection["Descriptor"] = {"digest": "sha256:" + "0" * 64}
     else:
         inspection["Id"] = "sha256:" + "0" * 64
-    inspections = iter([None, None, inspection])
+    inspections = iter([None, None, None, inspection])
     monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
     monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: next(inspections))
     monkeypatch.setattr(artifact, "_remove_candidate_image", lambda *_args: None)
@@ -1488,7 +1690,7 @@ def test_candidate_archive_load_requires_useful_exact_tag_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pin = valid_candidate_pin()
-    inspections = iter([None, None])
+    inspections = iter([None, None, None])
     monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
     monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: next(inspections))
     monkeypatch.setattr(artifact, "_remove_candidate_image", lambda *_args: None)
@@ -1496,6 +1698,45 @@ def test_candidate_archive_load_requires_useful_exact_tag_result(
 
     with pytest.raises(ValueError, match="did not report the expected image tag"):
         artifact.load_candidate_archive(pin, tmp_path / "private.oci.tar")
+
+
+@pytest.mark.skipif(
+    os.getenv("RUN_CANDIDATE_DOCKER_TESTS") != "true",
+    reason="set RUN_CANDIDATE_DOCKER_TESTS=true for the disposable containerd load contract",
+)
+def test_candidate_archive_real_containerd_rejects_preexisting_wrong_literal_tag(
+    tmp_path: Path,
+) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    literal_reference = f"{pin['image']['archive_tag']}:latest"  # type: ignore[index]
+    verified_reference = artifact.image_reference(pin)
+    unrelated = tmp_path / "unrelated.tar"
+    with tarfile.open(unrelated, mode="w") as archive:
+        payload = b"unrelated local image"
+        member = tarfile.TarInfo("unrelated.txt")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+    artifact._remove_candidate_image(literal_reference)
+    artifact._remove_candidate_image(verified_reference)
+    try:
+        artifact._run(
+            ["docker", "image", "import", "--platform", "linux/amd64", str(unrelated), literal_reference],
+            label="create unrelated pre-existing candidate tag",
+        )
+        before = artifact._inspect_optional_docker_image(literal_reference)
+        assert before is not None
+        with (
+            artifact.stage_candidate_archive(pin, paths["archive"]) as staged,
+            pytest.raises(ValueError, match="archive tag already exists locally"),
+        ):
+            artifact.load_candidate_archive(pin, staged)
+        after = artifact._inspect_optional_docker_image(literal_reference)
+        assert after is not None
+        assert after["Id"] == before["Id"]
+        assert artifact._inspect_optional_docker_image(verified_reference) is None
+    finally:
+        artifact._remove_candidate_image(literal_reference)
+        artifact._remove_candidate_image(verified_reference)
 
 
 @pytest.mark.skipif(

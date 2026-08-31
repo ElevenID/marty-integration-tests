@@ -68,10 +68,16 @@ MAX_TAR_SPECIAL_HEADERS = 256
 MAX_SBOM_TOP_LEVEL_KEYS = 64
 MAX_SBOM_COMPONENTS = 100_000
 MAX_SBOM_DEPENDENCIES = 100_000
+MAX_SBOM_DEPENDENCY_EDGES_PER_ENTRY = 20_000
+MAX_TOTAL_SBOM_DEPENDENCY_EDGES = 100_000
 MAX_SBOM_PROPERTIES = 4_096
 MAX_SBOM_SCANNER_COMPONENTS = 64
 TAR_BLOCK_BYTES = 512
+OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
+OCI_INDEX = "application/vnd.oci.image.index.v1+json"
+OCI_CONFIG = "application/vnd.oci.image.config.v1+json"
 OCI_GZIP_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
+OCI_PLATFORM_QUALIFIER_KEYS = frozenset({"variant", "os.version", "os.features"})
 TAR_SPECIAL_HEADER_TYPES = frozenset(
     {
         tarfile.XHDTYPE,
@@ -777,6 +783,7 @@ def inspect_oci_archive(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
         _require(layout == {"imageLayoutVersion": "1.0.0"}, "OCI layout version changed")
         index = json.loads(read_member(archive, members, "index.json"))
         _require(isinstance(index, dict) and index.get("schemaVersion") == 2, "OCI index schema changed")
+        _require(index.get("mediaType", OCI_INDEX) == OCI_INDEX, "OCI index media type changed")
         descriptors = index.get("manifests")
         _require(isinstance(descriptors, list) and len(descriptors) == 1, "OCI archive must contain one image")
         descriptor = descriptors[0]
@@ -789,7 +796,10 @@ def inspect_oci_archive(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
         )
 
         descriptor_digest, value = read_descriptor(archive, members, descriptor)
-        if descriptor.get("mediaType") == "application/vnd.oci.image.index.v1+json":
+        if descriptor.get("mediaType") == OCI_INDEX:
+            _require("platform" not in descriptor, "OCI image index descriptor platform changed")
+            _require(value.get("schemaVersion") == 2, "OCI image index schema changed")
+            _require(value.get("mediaType", OCI_INDEX) == OCI_INDEX, "OCI image index media type changed")
             nested = value.get("manifests")
             _require(isinstance(nested, list) and len(nested) == 1, "OCI image index must contain one platform")
             descriptor = nested[0]
@@ -799,28 +809,31 @@ def inspect_oci_archive(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
                 "OCI candidate platform changed",
             )
             descriptor_digest, value = read_descriptor(archive, members, descriptor)
-        elif "platform" in descriptor:
+        else:
             _require(
                 descriptor.get("platform") == {"architecture": "amd64", "os": "linux"},
                 "OCI candidate platform changed",
             )
         _require(
-            descriptor.get("mediaType") == "application/vnd.oci.image.manifest.v1+json",
+            descriptor.get("mediaType") == OCI_MANIFEST,
             "OCI candidate descriptor is not an image manifest",
         )
         _require(value.get("schemaVersion") == 2, "OCI manifest schema changed")
+        _require(value.get("mediaType", OCI_MANIFEST) == OCI_MANIFEST, "OCI manifest media type changed")
         _require(descriptor_digest == pin["image"]["digest"], "OCI manifest digest does not match the candidate pin")
 
         config_descriptor = value.get("config")
         _require(isinstance(config_descriptor, dict), "OCI image config descriptor is missing")
         _require(
-            config_descriptor.get("mediaType") == "application/vnd.oci.image.config.v1+json",
+            config_descriptor.get("mediaType") == OCI_CONFIG,
             "OCI config media type changed",
         )
         config_digest, config = read_descriptor(archive, members, config_descriptor)
         _require(config_digest == pin["image"]["config_digest"], "OCI config digest does not match the candidate pin")
         _require(
-            config.get("architecture") == "amd64" and config.get("os") == "linux",
+            config.get("architecture") == "amd64"
+            and config.get("os") == "linux"
+            and OCI_PLATFORM_QUALIFIER_KEYS.isdisjoint(config),
             "OCI image config platform changed",
         )
         labels = _assert_candidate_runtime_config(config.get("config"), pin)
@@ -1235,13 +1248,21 @@ def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
     load_report_reference = f"{pin['image']['archive_tag']}:latest"
     expected_reference = f"{pin['image']['archive_tag']}@{pin['image']['digest']}"
     verified_reference = image_reference(pin)
-    _require(_inspect_optional_docker_image(expected_reference) is None, "candidate archive tag already exists locally")
+    _require(
+        _inspect_optional_docker_image(load_report_reference) is None,
+        "candidate archive tag already exists locally",
+    )
+    _require(
+        _inspect_optional_docker_image(expected_reference) is None,
+        "candidate archive digest selection already exists locally",
+    )
     _require(
         _inspect_optional_docker_image(verified_reference) is None, "verified candidate tag already exists locally"
     )
     loaded = False
     bound = False
     try:
+        loaded = True
         output = _run(
             ["docker", "load", "--input", str(archive_path)],
             label="load verified candidate archive",
@@ -1251,7 +1272,6 @@ def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
             f"Loaded image: {load_report_reference}" in {line.strip() for line in output.splitlines()},
             "candidate archive load did not report the expected image tag",
         )
-        loaded = True
         inspected = _inspect_optional_docker_image(expected_reference)
         _require(inspected is not None, "loaded candidate image could not be resolved by its new archive tag")
         exported_config_digest = _exported_candidate_config_digest(expected_reference, pin, inspected)
@@ -1272,12 +1292,14 @@ def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
             pin,
             exported_config_digest=exported_config_digest,
         )
+        _remove_candidate_image(load_report_reference)
         _remove_candidate_image(expected_reference)
         loaded = False
         bound = False
         return verified_reference
     finally:
         if loaded:
+            _remove_candidate_image(load_report_reference)
             _remove_candidate_image(expected_reference)
         if bound:
             _remove_candidate_image(verified_reference)
@@ -1620,6 +1642,7 @@ def validate_sbom(path: Path, pin: dict[str, Any], *, raw: bytes | None = None) 
             "candidate SBOM dependencies changed",
         )
         dependency_roots: set[str] = set()
+        total_dependency_edges = 0
         for dependency in dependencies:
             _require(isinstance(dependency, dict), "candidate SBOM dependency changed")
             reference = dependency.get("ref")
@@ -1628,10 +1651,20 @@ def validate_sbom(path: Path, pin: dict[str, Any], *, raw: bytes | None = None) 
                 isinstance(reference, str) and reference in all_references and reference not in dependency_roots,
                 "candidate SBOM dependency reference changed",
             )
+            _require(isinstance(depends_on, list), "candidate SBOM dependency edge changed")
             _require(
-                isinstance(depends_on, list)
-                and all(isinstance(item, str) and item in all_references for item in depends_on),
+                len(depends_on) <= MAX_SBOM_DEPENDENCY_EDGES_PER_ENTRY,
+                "candidate SBOM dependency fan-out is too large",
+            )
+            _require(
+                all(isinstance(item, str) and item in all_references for item in depends_on),
                 "candidate SBOM dependency edge changed",
+            )
+            _require(len(set(depends_on)) == len(depends_on), "candidate SBOM dependency edge is duplicated")
+            total_dependency_edges += len(depends_on)
+            _require(
+                total_dependency_edges <= MAX_TOTAL_SBOM_DEPENDENCY_EDGES,
+                "candidate SBOM aggregate dependency edges are too large",
             )
             dependency_roots.add(reference)
         _require(
@@ -3789,15 +3822,21 @@ def main(argv: list[str] | None = None) -> int:
             args.pin.resolve(),
             args.archive.resolve(),
         )
-        with stage_candidate_archive(pin, args.archive.resolve()) as staged_archive:
-            load_candidate_archive(pin, staged_archive)
-        evidence = run_artifact_test(
-            pin,
-            args.evidence.resolve(),
-            provenance_verified=True,
-        )
-        print(json.dumps(evidence, sort_keys=True))
-        return 0
+        loaded_reference: str | None = None
+        try:
+            with stage_candidate_archive(pin, args.archive.resolve()) as staged_archive:
+                loaded_reference = load_candidate_archive(pin, staged_archive)
+            evidence = run_artifact_test(
+                pin,
+                args.evidence.resolve(),
+                provenance_verified=True,
+            )
+            print(json.dumps(evidence, sort_keys=True))
+            return 0
+        finally:
+            if loaded_reference is not None:
+                _remove_candidate_image(f"{pin['image']['archive_tag']}:latest")
+                _remove_candidate_image(loaded_reference)
     runner = run_expected_failure if args.command == "run-expected-failure" else run_artifact_test
     evidence = runner(pin, args.evidence.resolve(), provenance_verified=args.provenance_verified)
     print(json.dumps(evidence, sort_keys=True))
