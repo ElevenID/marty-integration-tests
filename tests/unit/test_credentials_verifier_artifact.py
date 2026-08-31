@@ -150,6 +150,7 @@ def test_workflow_runs_oracle_and_exact_known_negative_control() -> None:
     assert "mode: expected-failure" in workflow
     assert 'validate-pin --pin "$PIN_FILE" --state "$PIN_STATE"' in workflow
     assert "run-expected-failure" in workflow
+    assert "compare-evidence" in workflow
     assert workflow.count('--pin "$PIN_FILE"') == 4
 
 
@@ -350,6 +351,30 @@ def test_oid4vp_fixture_is_nonce_audience_bound_and_contains_no_private_jwk() ->
     nonce_less_payload_segment = nonce_less.split(".")[1]
     nonce_less_payload = json.loads(base64.urlsafe_b64decode(nonce_less_payload_segment + "=="))
     assert "nonce" not in nonce_less_payload
+
+
+def test_trusted_oid4vp_pass_fixture_projects_all_claim_constraints() -> None:
+    value = artifact.trusted_oid4vp_pass_fixture()
+
+    assert value["processing_status"] == "COMPLETED"
+    assert value["decision_code"] == "ALL_REQUIRED_CHECKS_PASSED"
+
+    canonical = artifact._assert_canonical(
+        value,
+        decision="PASS",
+        expected_checks=set(artifact.OID4VP_REQUIRED_CHECKS),
+        expected_check_projection=artifact.OID4VP_PASS_CHECK_PROJECTION,
+        expected_input_digest="sha256:" + "a" * 64,
+        expected_verification_method="jwt_vp",
+    )
+
+    assert canonical["checks"][-1] == {
+        "check_id": "claim.constraints",
+        "outcome": "PASSED",
+        "code": "CLAIM_CONSTRAINTS_SATISFIED",
+    }
+    assert value["verified_claims"] is None
+    assert value["claim_results"] == []
 
 
 def test_canonical_projection_requires_exact_vds_check_floor() -> None:
@@ -705,6 +730,15 @@ def test_session_result_limits_legacy_transaction_id_to_the_frozen_oracle() -> N
     artifact._assert_session_result(value, "session-1", artifact.LEGACY_TARGET)
     with pytest.raises(ValueError, match="approved compatibility correction"):
         artifact._assert_session_result(value, "session-1", artifact.RUST_TARGET)
+    assert (
+        artifact._assert_session_result(
+            value,
+            "session-1",
+            artifact.RUST_TARGET,
+            defer_known_difference=True,
+        )
+        == artifact.KNOWN_INELIGIBLE_FAILURE_ID
+    )
 
     value["canonical_result"]["context"]["transaction_id"] = "transaction:session-1"
     artifact._assert_session_result(value, "session-1", artifact.RUST_TARGET)
@@ -724,13 +758,29 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
     pin["expected_failure"] = known_ineligible_failure()
     evidence_path = tmp_path / "negative-control.json"
 
-    def reject(*_args: object, **_kwargs: object) -> None:
+    def reject(_pin: object, private_path: Path, **_kwargs: object) -> None:
+        selection = {
+            "reason": "rejected_rust_v1.1.208_invalid_leading_identifier",
+            "resampled_unsafe_ids": 2,
+        }
+        private_path.write_text(
+            json.dumps(
+                {
+                    "checks": sorted(artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS | artifact.RUST_ONLY_CHECKS),
+                    "release_clearance": artifact.RELEASE_CLEARANCE_BLOCKED,
+                    "blockers": [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER],
+                    "documented_differences": sorted(
+                        artifact.DOCUMENTED_TARGET_DIFFERENCES | {artifact.KNOWN_INELIGIBLE_FAILURE_ID}
+                    ),
+                    "resolver_request_count": 4,
+                    "safe_session_selection": selection,
+                }
+            ),
+            encoding="utf-8",
+        )
         raise artifact.ArtifactRunError(
             artifact.KNOWN_INELIGIBLE_FAILURE_MESSAGE,
-            {
-                "reason": "rejected_rust_v1.1.208_invalid_leading_identifier",
-                "resampled_unsafe_ids": 2,
-            },
+            selection,
         )
 
     monkeypatch.setattr(artifact, "run_artifact_test", reject)
@@ -747,6 +797,9 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
         "reason": "rejected_rust_v1.1.208_invalid_leading_identifier",
         "resampled_unsafe_ids": 2,
     }
+    assert evidence["release_clearance"] == artifact.RELEASE_CLEARANCE_BLOCKED
+    assert evidence["blockers"] == [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER]
+    assert set(evidence["checks"]) == artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS | artifact.RUST_ONLY_CHECKS
     assert json.loads(evidence_path.read_text(encoding="utf-8")) == evidence
 
     def wrong_failure(*_args: object, **_kwargs: object) -> None:
@@ -777,6 +830,129 @@ def test_expected_failure_runner_accepts_only_the_bound_regression(
     with pytest.raises(ValueError, match="unexpectedly passed"):
         artifact.run_expected_failure(pin, evidence_path, provenance_verified=True)
     assert not evidence_path.exists()
+
+
+def test_artifact_evidence_comparison_allows_only_documented_target_difference() -> None:
+    oracle = {
+        "status": "passed",
+        "release_clearance": artifact.RELEASE_CLEARANCE_BLOCKED,
+        "blockers": [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "checks": sorted(artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS),
+        "documented_differences": [],
+        "resolver_request_count": 4,
+    }
+    candidate = {
+        "status": "expected_failure_observed",
+        "release_clearance": artifact.RELEASE_CLEARANCE_BLOCKED,
+        "blockers": [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "failure_id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
+        "checks": sorted(artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS | artifact.RUST_ONLY_CHECKS),
+        "documented_differences": sorted(
+            artifact.DOCUMENTED_TARGET_DIFFERENCES | {artifact.KNOWN_INELIGIBLE_FAILURE_ID}
+        ),
+        "resolver_request_count": 4,
+    }
+
+    result = artifact.compare_artifact_evidence(oracle, candidate)
+
+    assert result["status"] == "matched_with_documented_negative_control"
+    assert result["release_clearance"] == artifact.RELEASE_CLEARANCE_BLOCKED
+    assert result["blockers"] == [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER]
+    assert set(result["language_neutral_checks"]) == artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS
+    assert result["candidate_only_checks"] == sorted(artifact.RUST_ONLY_CHECKS)
+    assert set(result["documented_difference_details"]) == (
+        artifact.DOCUMENTED_TARGET_DIFFERENCES | {artifact.KNOWN_INELIGIBLE_FAILURE_ID}
+    )
+
+    candidate["checks"].remove("canonical.vds-positive-pass")
+    with pytest.raises(ValueError, match="candidate raw check set diverged"):
+        artifact.compare_artifact_evidence(oracle, candidate)
+
+    candidate["checks"].append("canonical.vds-positive-pass")
+    candidate["checks"].remove(next(iter(artifact.RUST_ONLY_CHECKS)))
+    with pytest.raises(ValueError, match="candidate raw check set diverged"):
+        artifact.compare_artifact_evidence(oracle, candidate)
+
+    candidate["checks"].extend(artifact.RUST_ONLY_CHECKS)
+    candidate["checks"].append("unexpected.check")
+    with pytest.raises(ValueError, match="candidate raw check set diverged"):
+        artifact.compare_artifact_evidence(oracle, candidate)
+
+    candidate["checks"].remove("unexpected.check")
+    oracle["checks"].append("unexpected.oracle-check")
+    with pytest.raises(ValueError, match="oracle raw check set diverged"):
+        artifact.compare_artifact_evidence(oracle, candidate)
+
+    oracle["checks"].remove("unexpected.oracle-check")
+    oracle["release_clearance"] = "eligible"
+    with pytest.raises(ValueError, match="oracle evidence did not block"):
+        artifact.compare_artifact_evidence(oracle, candidate)
+
+    oracle["release_clearance"] = artifact.RELEASE_CLEARANCE_BLOCKED
+    candidate["blockers"] = []
+    with pytest.raises(ValueError, match="candidate evidence omitted"):
+        artifact.compare_artifact_evidence(oracle, candidate)
+
+    candidate["blockers"] = [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER]
+    candidate["documented_differences"].append("undocumented")
+    with pytest.raises(ValueError, match="undocumented differences"):
+        artifact.compare_artifact_evidence(oracle, candidate)
+
+
+def test_unknown_field_projection_allows_only_the_documented_privacy_minimization() -> None:
+    legacy = {
+        "detail": [
+            {
+                "loc": ["body", "organization_id"],
+                "type": "extra_forbidden",
+            }
+        ]
+    }
+    assert artifact._assert_extra_field_error(legacy, "organization_id") is None
+    assert (
+        artifact._assert_extra_field_error(
+            {"detail": "Request validation failed"},
+            "organization_id",
+            allow_minimized_detail=True,
+        )
+        == artifact.VALIDATION_PRIVACY_DIFFERENCE_ID
+    )
+    with pytest.raises(ValueError, match="disclosed"):
+        artifact._assert_extra_field_error(
+            {"detail": "Request validation failed", "field": "organization_id"},
+            "organization_id",
+            allow_minimized_detail=True,
+        )
+
+
+def test_default_disabled_probe_covers_every_compatibility_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[str, str]] = []
+
+    def absent(method: str, url: str) -> int:
+        observed.append((method, url))
+        return 404
+
+    monkeypatch.setattr(artifact, "_http_status", absent)
+    artifact._assert_compatibility_routes_absent("http://verifier")
+
+    assert observed == [
+        ("GET", "http://verifier/v1/verification/health"),
+        ("POST", "http://verifier/v1/verification/sessions"),
+        ("GET", "http://verifier/v1/verification/sessions/A"),
+        ("POST", "http://verifier/v1/verification/sessions/A/submit"),
+        ("POST", "http://verifier/v1/verification/verify"),
+        ("POST", "http://verifier/v1/verification/verify/vds-nc"),
+    ]
+
+    monkeypatch.setattr(
+        artifact,
+        "_http_status",
+        lambda _method, url: 200 if url.endswith("/verify/vds-nc") else 404,
+    )
+    with pytest.raises(ValueError, match="POST /v1/verification/verify/vds-nc"):
+        artifact._assert_compatibility_routes_absent("http://verifier")
 
 
 def test_health_requires_the_real_native_diagnostic_contract() -> None:
