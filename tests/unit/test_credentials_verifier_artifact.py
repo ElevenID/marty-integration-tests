@@ -802,13 +802,65 @@ def test_candidate_archive_never_collects_tar_members(
     artifact.inspect_oci_archive(archive_path, pin)
 
 
-def special_tar_header(typeflag: bytes, size: int, payload: bytes = b"") -> bytes:
+def special_tar_record(typeflag: bytes, size: int, payload: bytes = b"") -> bytes:
     member = tarfile.TarInfo("special-header")
     member.type = typeflag
     member.size = size
     header = member.tobuf(format=tarfile.GNU_FORMAT)
     padding = bytes((-len(payload)) % artifact.TAR_BLOCK_BYTES)
-    return header + payload + padding + bytes(artifact.TAR_BLOCK_BYTES * 2)
+    return header + payload + padding
+
+
+def special_tar_header(typeflag: bytes, size: int, payload: bytes = b"") -> bytes:
+    return special_tar_record(typeflag, size, payload) + bytes(artifact.TAR_BLOCK_BYTES * 2)
+
+
+def pax_record(key: bytes, value: bytes) -> bytes:
+    body = key + b"=" + value + b"\n"
+    length = len(body) + 2
+    while True:
+        record = str(length).encode("ascii") + b" " + body
+        if len(record) == length:
+            return record
+        length = len(record)
+
+
+def oversized_longname_record() -> bytes:
+    payload = b"x" * (artifact.MAX_TAR_SPECIAL_HEADER_BYTES + 1)
+    return special_tar_record(tarfile.GNUTYPE_LONGNAME, len(payload), payload)
+
+
+def non_data_size_offset_bypass(typeflag: bytes = tarfile.DIRTYPE) -> bytes:
+    hidden = oversized_longname_record()
+    return special_tar_record(typeflag, len(hidden)) + hidden + bytes(artifact.TAR_BLOCK_BYTES * 2)
+
+
+def pax_size_offset_bypass(*, global_header: bool) -> bytes:
+    hidden = oversized_longname_record()
+    payload = pax_record(b"size", str(len(hidden)).encode("ascii"))
+    return (
+        special_tar_record(
+            tarfile.XGLTYPE if global_header else tarfile.XHDTYPE,
+            len(payload),
+            payload,
+        )
+        + special_tar_record(tarfile.DIRTYPE, 0)
+        + hidden
+        + bytes(artifact.TAR_BLOCK_BYTES * 2)
+    )
+
+
+def stacked_local_pax_size_offset_bypass() -> bytes:
+    hidden = oversized_longname_record()
+    outer = pax_record(b"size", b"0")
+    inner = pax_record(b"size", str(len(hidden)).encode("ascii"))
+    return (
+        special_tar_record(tarfile.XHDTYPE, len(outer), outer)
+        + special_tar_record(tarfile.XHDTYPE, len(inner), inner)
+        + special_tar_record(tarfile.DIRTYPE, 0)
+        + hidden
+        + bytes(artifact.TAR_BLOCK_BYTES * 2)
+    )
 
 
 @pytest.mark.parametrize(
@@ -833,6 +885,50 @@ def test_tar_scan_rejects_oversized_special_headers_before_payload_read(typeflag
         )
 
 
+@pytest.mark.parametrize(
+    "typeflag",
+    [
+        tarfile.LNKTYPE,
+        tarfile.SYMTYPE,
+        tarfile.CHRTYPE,
+        tarfile.BLKTYPE,
+        tarfile.DIRTYPE,
+        tarfile.FIFOTYPE,
+    ],
+)
+def test_tar_scan_rejects_declared_payload_on_supported_non_data_member(
+    typeflag: bytes,
+) -> None:
+    content = non_data_size_offset_bypass(typeflag)
+
+    with pytest.raises(ValueError, match="non-data tar member declares a payload"):
+        artifact._scan_tar_headers(
+            io.BytesIO(content),
+            stream_bytes=len(content),
+            maximum_members=artifact.MAX_ARCHIVE_MEMBERS,
+            label="test archive",
+        )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pax_size_offset_bypass(global_header=True),
+        pax_size_offset_bypass(global_header=False),
+        stacked_local_pax_size_offset_bypass(),
+    ],
+    ids=["global", "local", "stacked-local"],
+)
+def test_tar_scan_rejects_pax_size_offset_ambiguity(content: bytes) -> None:
+    with pytest.raises(ValueError, match="unsupported PAX size metadata"):
+        artifact._scan_tar_headers(
+            io.BytesIO(content),
+            stream_bytes=len(content),
+            maximum_members=artifact.MAX_ARCHIVE_MEMBERS,
+            label="test archive",
+        )
+
+
 def test_outer_archive_rejects_oversized_special_header_before_tarfile_iteration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -846,6 +942,22 @@ def test_outer_archive_rejects_oversized_special_header_before_tarfile_iteration
     )
 
     with pytest.raises(ValueError, match="special tar header is too large"):
+        artifact.inspect_oci_archive(archive_path, valid_candidate_pin())
+
+
+def test_outer_archive_rejects_non_data_size_offset_bypass_before_tarfile_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_path = tmp_path / "candidate.oci.tar"
+    archive_path.write_bytes(non_data_size_offset_bypass())
+    monkeypatch.setattr(
+        artifact.tarfile,
+        "open",
+        lambda *_args, **_kwargs: pytest.fail("outer tarfile iteration began before the raw scan"),
+    )
+
+    with pytest.raises(ValueError, match="non-data tar member declares a payload"):
         artifact.inspect_oci_archive(archive_path, valid_candidate_pin())
 
 
@@ -863,6 +975,57 @@ def test_inner_layer_rejects_oversized_special_header_before_tarfile_iteration(t
 
     with pytest.raises(ValueError, match="OCI layer special tar header is too large"):
         artifact.inspect_oci_archive(archive_path, pin)
+
+
+@pytest.mark.parametrize(
+    "layer",
+    [
+        pax_size_offset_bypass(global_header=True),
+        stacked_local_pax_size_offset_bypass(),
+    ],
+    ids=["global-pax", "stacked-local-pax"],
+)
+def test_inner_layer_rejects_pax_size_offset_bypass(
+    tmp_path: Path,
+    layer: bytes,
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(
+        archive_path,
+        pin,
+        uncompressed_layer_override=layer,
+    )
+
+    with pytest.raises(ValueError, match="OCI layer contains unsupported PAX size"):
+        artifact.inspect_oci_archive(archive_path, pin)
+
+
+@pytest.mark.parametrize(
+    ("exported", "message"),
+    [
+        (non_data_size_offset_bypass(), "non-data tar member declares a payload"),
+        (stacked_local_pax_size_offset_bypass(), "unsupported PAX size metadata"),
+    ],
+    ids=["non-data", "stacked-local-pax"],
+)
+def test_exported_image_reinspection_rejects_tar_offset_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+    exported: bytes,
+    message: str,
+) -> None:
+    pin = valid_candidate_pin()
+    inspected = valid_candidate_inspection(pin)
+    inspected["Id"] = pin["image"]["digest"]  # type: ignore[index]
+
+    def export(command: list[str], **_kwargs: object) -> str:
+        Path(command[4]).write_bytes(exported)
+        return ""
+
+    monkeypatch.setattr(artifact, "_run", export)
+
+    with pytest.raises(ValueError, match=message):
+        artifact._exported_candidate_config_digest("candidate", pin, inspected)
 
 
 @pytest.mark.parametrize("document_name", ["metadata", "provenance"])
