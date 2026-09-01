@@ -2113,6 +2113,52 @@ def test_candidate_archive_private_staging_rejects_growth_without_chasing_it(
     assert sum(read_sizes) == initial_size + 1
 
 
+def test_candidate_archive_private_staging_rejects_truncation_during_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    archive_path = paths["archive"]
+    original_open = Path.open
+    truncated = False
+
+    class TruncatingReader:
+        def __init__(self, handle: object) -> None:
+            self.handle = handle
+
+        def __enter__(self) -> TruncatingReader:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.handle.close()  # type: ignore[attr-defined]
+
+        def fileno(self) -> int:
+            return self.handle.fileno()  # type: ignore[attr-defined,no-any-return]
+
+        def read(self, size: int = -1) -> bytes:
+            nonlocal truncated
+            if not truncated:
+                truncated = True
+                with original_open(archive_path, "r+b") as writer:
+                    writer.truncate(0)
+            return self.handle.read(size)  # type: ignore[attr-defined,no-any-return]
+
+    def truncating_open(self: Path, *args: object, **kwargs: object) -> object:
+        handle = original_open(self, *args, **kwargs)  # type: ignore[arg-type]
+        if self == archive_path and args and args[0] == "rb":
+            return TruncatingReader(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", truncating_open)
+
+    with (
+        pytest.raises(ValueError, match="changed during private staging"),
+        artifact.stage_candidate_archive(pin, archive_path),
+    ):
+        pytest.fail("truncated archive was staged")
+    assert truncated
+
+
 def test_candidate_runtime_rejects_an_unloaded_or_rebound_config_digest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
