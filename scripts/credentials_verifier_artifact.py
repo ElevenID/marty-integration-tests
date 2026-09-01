@@ -44,12 +44,15 @@ RUST_EVIDENCE_SCHEMA = "elevenid.credentials-verifier-artifact-evidence/v2"
 CANDIDATE_EVIDENCE_SCHEMA = "elevenid.credentials-verifier-candidate-evidence/v1"
 CANDIDATE_PROVENANCE_SCHEMA = "elevenid.marty-ui.services-candidate-provenance/v1"
 CANDIDATE_METADATA_SCHEMA = "elevenid.marty-ui.services-candidate-build-metadata/v1"
+IN_TOTO_STATEMENT_V1 = "https://in-toto.io/Statement/v1"
+SLSA_PROVENANCE_V1 = "https://slsa.dev/provenance/v1"
 EXPECTED_REPOSITORY = "ElevenID/marty-credentials"
 EXPECTED_IMAGE_URI = "ghcr.io/elevenid/marty-credentials-verification"
 RUST_REPOSITORY = "ElevenID/marty-ui"
 RUST_IMAGE_URI = "ghcr.io/elevenid/marty-ui-oss/services"
 CANDIDATE_LOCAL_IMAGE_REPOSITORY = "docker.io/elevenid/marty-ui-verification-candidate"
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+MAX_PIN_BYTES = 4 * 1024 * 1024
 MAX_SBOM_BYTES = 128 * 1024 * 1024
 MAX_CANDIDATE_METADATA_BYTES = 4 * 1024 * 1024
 MAX_CANDIDATE_PROVENANCE_BYTES = 4 * 1024 * 1024
@@ -411,9 +414,14 @@ def _validate_candidate_pin(value: dict[str, Any]) -> None:
     _require(value.get("expected_failure") is None, "candidate pin must not declare an expected failure")
 
 
-def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict[str, Any]:
+def _parse_pin(raw: bytes, *, expected_state: str) -> dict[str, Any]:
     _require(expected_state in {"ready", "ineligible", "candidate"}, "unsupported artifact pin state")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("artifact pin must be UTF-8 JSON") from exc
+    value = json.loads(text)
+    _require(isinstance(value, dict), "artifact pin must be a JSON object")
     target = artifact_target(value)
     _require(value.get("state") == expected_state, f"artifact pin must be {expected_state}")
     _require(value.get("repository") == target.repository, "artifact repository does not match its schema")
@@ -460,6 +468,24 @@ def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict
         )
     else:
         _require(expected_failure is None, "ready artifact pin must not declare an expected failure")
+    return value
+
+
+def load_pin_snapshot(
+    path: Path = DEFAULT_PIN,
+    *,
+    expected_state: str = "ready",
+) -> tuple[dict[str, Any], bytes]:
+    raw = _read_bounded_regular_file(
+        path,
+        label="artifact pin",
+        maximum_bytes=MAX_PIN_BYTES,
+    )
+    return _parse_pin(raw, expected_state=expected_state), raw
+
+
+def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict[str, Any]:
+    value, _raw = load_pin_snapshot(path, expected_state=expected_state)
     return value
 
 
@@ -527,9 +553,74 @@ def _read_bounded_regular_file(path: Path, *, label: str, maximum_bytes: int) ->
             and opened.st_size == metadata.st_size,
             f"{label} changed before it was read",
         )
-        raw = handle.read(maximum_bytes + 1)
-    _require(len(raw) == metadata.st_size, f"{label} size changed while it was read")
+        chunks: list[bytes] = []
+        remaining = metadata.st_size
+        while remaining:
+            chunk = handle.read(min(1024 * 1024, remaining))
+            _require(bool(chunk), f"{label} changed while it was read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        _require(handle.read(1) == b"", f"{label} changed while it was read")
+        after = os.fstat(handle.fileno())
+        current = path.lstat()
+    raw = b"".join(chunks)
+    _require(
+        len(raw) == metadata.st_size
+        and stat.S_ISREG(after.st_mode)
+        and after.st_dev == opened.st_dev
+        and after.st_ino == opened.st_ino
+        and after.st_size == opened.st_size
+        and after.st_mtime_ns == opened.st_mtime_ns
+        and stat.S_ISREG(current.st_mode)
+        and current.st_dev == opened.st_dev
+        and current.st_ino == opened.st_ino
+        and current.st_size == opened.st_size
+        and current.st_mtime_ns == opened.st_mtime_ns,
+        f"{label} changed while it was read",
+    )
     return raw
+
+
+def _digest_bounded_regular_file(path: Path, *, label: str, maximum_bytes: int) -> str:
+    metadata = path.lstat()
+    _require(stat.S_ISREG(metadata.st_mode), f"{label} must be a regular file")
+    _require(0 < metadata.st_size <= maximum_bytes, f"{label} is too large or empty")
+    digest = hashlib.sha256()
+    copied = 0
+    with path.open("rb") as handle:
+        opened = os.fstat(handle.fileno())
+        _require(
+            stat.S_ISREG(opened.st_mode)
+            and opened.st_dev == metadata.st_dev
+            and opened.st_ino == metadata.st_ino
+            and opened.st_size == metadata.st_size,
+            f"{label} changed before it was hashed",
+        )
+        remaining = metadata.st_size
+        while remaining:
+            chunk = handle.read(min(1024 * 1024, remaining))
+            _require(bool(chunk), f"{label} changed while it was hashed")
+            copied += len(chunk)
+            remaining -= len(chunk)
+            digest.update(chunk)
+        _require(handle.read(1) == b"", f"{label} changed while it was hashed")
+        after = os.fstat(handle.fileno())
+        current = path.lstat()
+    _require(
+        copied == metadata.st_size
+        and stat.S_ISREG(after.st_mode)
+        and after.st_dev == opened.st_dev
+        and after.st_ino == opened.st_ino
+        and after.st_size == opened.st_size
+        and after.st_mtime_ns == opened.st_mtime_ns
+        and stat.S_ISREG(current.st_mode)
+        and current.st_dev == opened.st_dev
+        and current.st_ino == opened.st_ino
+        and current.st_size == opened.st_size
+        and current.st_mtime_ns == opened.st_mtime_ns,
+        f"{label} changed while it was hashed",
+    )
+    return f"sha256:{digest.hexdigest()}"
 
 
 def _tar_number(field: bytes, *, label: str) -> int:
@@ -939,8 +1030,33 @@ def verify_candidate_attestations(
     run = pin["run"]
     expected_invocation = f"https://github.com/{RUST_REPOSITORY}/actions/runs/{run['id']}/attempts/{run['attempt']}"
     expected_builder = f"https://github.com/{RUST_REPOSITORY}/{CANDIDATE_BUILD_WORKFLOW}@{pin['source_ref']}"
+    pin_raw = _read_bounded_regular_file(
+        pin_path,
+        label="staged candidate pin",
+        maximum_bytes=MAX_PIN_BYTES,
+    )
+    _require(
+        _parse_pin(pin_raw, expected_state="candidate") == pin,
+        "staged candidate pin does not match the validated pin",
+    )
+    pin_digest = _bytes_digest(pin_raw)
+    archive_digest = _digest_bounded_regular_file(
+        archive_path,
+        label="staged candidate archive",
+        maximum_bytes=MAX_ARCHIVE_BYTES,
+    )
+    _require(
+        archive_digest == pin["archive"]["digest"],
+        "staged candidate archive digest changed before attestation",
+    )
 
-    def verify_subject(path: Path, label: str) -> dict[str, Any]:
+    def verify_subject(
+        path: Path,
+        label: str,
+        *,
+        subject_name: str,
+        subject_digest: str,
+    ) -> dict[str, Any]:
         verification = json.loads(
             _run(
                 [
@@ -979,6 +1095,18 @@ def verify_candidate_attestations(
             statement = verification_result.get("statement")
             if not isinstance(statement, dict):
                 continue
+            if (
+                statement.get("_type") != IN_TOTO_STATEMENT_V1
+                or statement.get("predicateType") != SLSA_PROVENANCE_V1
+                or statement.get("subject")
+                != [
+                    {
+                        "name": subject_name,
+                        "digest": {"sha256": subject_digest.removeprefix("sha256:")},
+                    }
+                ]
+            ):
+                continue
             predicate = statement.get("predicate")
             if not isinstance(predicate, dict):
                 continue
@@ -1012,13 +1140,23 @@ def verify_candidate_attestations(
                 accepted.append(item)
         _require(
             len(accepted) == 1,
-            f"candidate {label} attestation did not bind the exact producer run",
+            f"candidate {label} attestation did not bind the exact attested subject and producer run",
         )
         return accepted[0]
 
     accepted = {
-        "pin": verify_subject(pin_path, "pin"),
-        "archive": verify_subject(archive_path, "archive"),
+        "pin": verify_subject(
+            pin_path,
+            "pin",
+            subject_name="verification-candidate.json",
+            subject_digest=pin_digest,
+        ),
+        "archive": verify_subject(
+            archive_path,
+            "archive",
+            subject_name=pin["archive"]["asset"],
+            subject_digest=archive_digest,
+        ),
     }
 
     run_record = json.loads(
@@ -1166,7 +1304,15 @@ def _verify_staged_candidate_archive(pin: dict[str, Any], archive_path: Path) ->
         getuid = getattr(os, "getuid", None)
         if getuid is not None:
             _require(metadata.st_uid == getuid(), "staged candidate archive is not owned by this user")
-    _require(file_digest(archive_path) == pin["archive"]["digest"], "staged candidate archive digest changed")
+    _require(
+        _digest_bounded_regular_file(
+            archive_path,
+            label="staged candidate archive",
+            maximum_bytes=MAX_ARCHIVE_BYTES,
+        )
+        == pin["archive"]["digest"],
+        "staged candidate archive digest changed",
+    )
     inspect_oci_archive(archive_path, pin)
 
 
@@ -1179,7 +1325,7 @@ def stage_candidate_archive(pin: dict[str, Any], archive_path: Path) -> Iterator
         directory = Path(temporary)
         if os.name != "nt":
             directory.chmod(0o700)
-        staged = directory / "candidate.oci.tar"
+        staged = directory / pin["archive"]["asset"]
         digest = hashlib.sha256()
         copied = 0
         descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -1194,11 +1340,30 @@ def stage_candidate_archive(pin: dict[str, Any], archive_path: Path) -> Iterator
                     and opened.st_size == source_metadata.st_size,
                     "candidate archive changed before private staging",
                 )
-                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                remaining = source_metadata.st_size
+                while remaining:
+                    chunk = source.read(min(1024 * 1024, remaining))
+                    _require(bool(chunk), "candidate archive changed during private staging")
                     copied += len(chunk)
-                    _require(copied <= MAX_ARCHIVE_BYTES, "OCI archive is too large or empty")
+                    remaining -= len(chunk)
                     digest.update(chunk)
                     destination.write(chunk)
+                _require(source.read(1) == b"", "candidate archive changed during private staging")
+                after = os.fstat(source.fileno())
+                current = archive_path.lstat()
+                _require(
+                    stat.S_ISREG(after.st_mode)
+                    and after.st_dev == opened.st_dev
+                    and after.st_ino == opened.st_ino
+                    and after.st_size == opened.st_size
+                    and after.st_mtime_ns == opened.st_mtime_ns
+                    and stat.S_ISREG(current.st_mode)
+                    and current.st_dev == opened.st_dev
+                    and current.st_ino == opened.st_ino
+                    and current.st_size == opened.st_size
+                    and current.st_mtime_ns == opened.st_mtime_ns,
+                    "candidate archive changed during private staging",
+                )
                 destination.flush()
                 os.fsync(destination.fileno())
         finally:
@@ -1212,6 +1377,39 @@ def stage_candidate_archive(pin: dict[str, Any], archive_path: Path) -> Iterator
         if os.name != "nt":
             staged.chmod(0o600)
         _verify_staged_candidate_archive(pin, staged)
+        yield staged
+
+
+@contextmanager
+def stage_candidate_pin(pin: dict[str, Any], raw: bytes) -> Iterator[Path]:
+    _require(0 < len(raw) <= MAX_PIN_BYTES, "candidate pin is too large or empty")
+    _require(
+        _parse_pin(raw, expected_state="candidate") == pin,
+        "candidate pin snapshot does not match the validated pin",
+    )
+    with tempfile.TemporaryDirectory(prefix="marty-candidate-pin-") as temporary:
+        directory = Path(temporary)
+        if os.name != "nt":
+            directory.chmod(0o700)
+        staged = directory / "verification-candidate.json"
+        descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb") as destination:
+                descriptor = -1
+                destination.write(raw)
+                destination.flush()
+                os.fsync(destination.fileno())
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        if os.name != "nt":
+            staged.chmod(0o600)
+        staged_raw = _read_bounded_regular_file(
+            staged,
+            label="staged candidate pin",
+            maximum_bytes=MAX_PIN_BYTES,
+        )
+        _require(staged_raw == raw, "candidate pin changed during private staging")
         yield staged
 
 
@@ -1344,7 +1542,15 @@ def validate_candidate_inputs(
         (provenance_path, "candidate provenance", MAX_CANDIDATE_PROVENANCE_BYTES),
     ):
         _preflight_regular_file(path, label=label, maximum_bytes=maximum_bytes)
-    _require(file_digest(archive_path) == pin["archive"]["digest"], "candidate archive digest changed")
+    _require(
+        _digest_bounded_regular_file(
+            archive_path,
+            label="candidate archive",
+            maximum_bytes=MAX_ARCHIVE_BYTES,
+        )
+        == pin["archive"]["digest"],
+        "candidate archive digest changed",
+    )
     sbom_raw = _read_bounded_regular_file(
         sbom_path,
         label="candidate SBOM",
@@ -3814,7 +4020,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_state = "ineligible"
     else:
         expected_state = getattr(args, "state", "ready")
-    pin = load_pin(args.pin.resolve(), expected_state=expected_state)
+    pin, pin_raw = load_pin_snapshot(args.pin.resolve(), expected_state=expected_state)
     if args.command == "validate-pin":
         print(json.dumps(pin, indent=2, sort_keys=True))
         return 0
@@ -3829,13 +4035,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(summary, sort_keys=True))
         return 0
     if args.command == "validate-candidate":
-        provenance = validate_candidate_inputs(
-            pin,
-            archive_path=args.archive.resolve(),
-            sbom_path=args.sbom.resolve(),
-            metadata_path=args.metadata.resolve(),
-            provenance_path=args.provenance.resolve(),
-        )
+        with stage_candidate_archive(pin, args.archive.resolve()) as staged_archive:
+            provenance = validate_candidate_inputs(
+                pin,
+                archive_path=staged_archive,
+                sbom_path=args.sbom.resolve(),
+                metadata_path=args.metadata.resolve(),
+                provenance_path=args.provenance.resolve(),
+            )
         print(
             json.dumps(
                 {
@@ -3848,21 +4055,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "run-candidate":
-        validate_candidate_inputs(
-            pin,
-            archive_path=args.archive.resolve(),
-            sbom_path=args.sbom.resolve(),
-            metadata_path=args.metadata.resolve(),
-            provenance_path=args.provenance.resolve(),
-        )
-        verify_candidate_attestations(
-            pin,
-            args.pin.resolve(),
-            args.archive.resolve(),
-        )
         loaded_reference: str | None = None
         try:
             with stage_candidate_archive(pin, args.archive.resolve()) as staged_archive:
+                validate_candidate_inputs(
+                    pin,
+                    archive_path=staged_archive,
+                    sbom_path=args.sbom.resolve(),
+                    metadata_path=args.metadata.resolve(),
+                    provenance_path=args.provenance.resolve(),
+                )
+                with stage_candidate_pin(pin, pin_raw) as staged_pin:
+                    verify_candidate_attestations(
+                        pin,
+                        staged_pin,
+                        staged_archive,
+                    )
                 loaded_reference = load_candidate_archive(pin, staged_archive)
             evidence = run_artifact_test(
                 pin,
