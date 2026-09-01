@@ -1630,6 +1630,106 @@ def test_candidate_archive_load_rechecks_exact_config_platform_and_labels(
     ]
 
 
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_candidate_image_removal_accepts_only_verified_absence(
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+) -> None:
+    reference = "ghcr.io/elevenid/marty-ui-verification-candidate:cleanup"
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> object:
+        commands.append(command)
+        return artifact.subprocess.CompletedProcess(command, returncode, stdout="", stderr="private")
+
+    monkeypatch.setattr(artifact.subprocess, "run", run)
+    monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: None)
+
+    artifact._remove_candidate_image(reference)
+
+    assert commands == [["docker", "image", "rm", "-f", reference]]
+
+
+def test_candidate_image_removal_rejects_a_still_present_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "ghcr.io/elevenid/marty-ui-verification-candidate:cleanup"
+    monkeypatch.setattr(
+        artifact.subprocess,
+        "run",
+        lambda command, **_kwargs: artifact.subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: {"Id": "private"})
+
+    with pytest.raises(
+        artifact.ArtifactRuntimeError,
+        match="remove candidate image did not remove its scoped reference",
+    ):
+        artifact._remove_candidate_image(reference)
+
+
+def test_candidate_image_removal_sanitizes_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "ghcr.io/elevenid/marty-ui-verification-candidate:cleanup"
+
+    def timeout(command: list[str], **_kwargs: object) -> object:
+        raise artifact.subprocess.TimeoutExpired(command, 30, output="private cleanup output")
+
+    monkeypatch.setattr(artifact.subprocess, "run", timeout)
+
+    with pytest.raises(
+        artifact.ArtifactRuntimeError,
+        match="^remove candidate image could not complete$",
+    ) as raised:
+        artifact._remove_candidate_image(reference)
+    assert "private cleanup output" not in str(raised.value)
+
+
+def test_candidate_image_inspection_sanitizes_invalid_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = "ghcr.io/elevenid/marty-ui-verification-candidate:cleanup"
+    monkeypatch.setattr(
+        artifact.subprocess,
+        "run",
+        lambda command, **_kwargs: artifact.subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="private invalid output",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(
+        artifact.ArtifactRuntimeError,
+        match="^inspect candidate image returned invalid output$",
+    ) as raised:
+        artifact._inspect_optional_docker_image(reference)
+    assert "private invalid output" not in str(raised.value)
+
+
+def test_candidate_image_cleanup_attempts_every_unique_scoped_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def remove(reference: str) -> None:
+        calls.append(reference)
+        if reference == "failed":
+            raise artifact.ArtifactRuntimeError("private failure")
+
+    monkeypatch.setattr(artifact, "_remove_candidate_image", remove)
+
+    with pytest.raises(
+        artifact.ArtifactRuntimeError,
+        match="^candidate image cleanup did not remove every scoped reference$",
+    ) as raised:
+        artifact._remove_candidate_images("failed", "removed", "failed")
+    assert calls == ["failed", "removed"]
+    assert "private failure" not in str(raised.value)
+
+
 @pytest.mark.parametrize("preexisting", ["archive", "digest", "verified"])
 def test_candidate_archive_load_rejects_preexisting_local_selection(
     tmp_path: Path,

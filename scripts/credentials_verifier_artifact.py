@@ -1228,19 +1228,39 @@ def _inspect_optional_docker_image(reference: str) -> dict[str, Any] | None:
         if re.search(r"No such (?:image|object)", completed.stderr, flags=re.IGNORECASE):
             return None
         raise ArtifactRuntimeError(f"inspect candidate image failed with exit code {completed.returncode}")
-    inspected = json.loads(completed.stdout)
-    _require(isinstance(inspected, dict), "candidate image inspection changed")
+    try:
+        inspected = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ArtifactRuntimeError("inspect candidate image returned invalid output") from exc
+    if not isinstance(inspected, dict):
+        raise ArtifactRuntimeError("inspect candidate image returned invalid output")
     return inspected
 
 
 def _remove_candidate_image(reference: str) -> None:
-    subprocess.run(
-        ["docker", "image", "rm", "-f", reference],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    try:
+        subprocess.run(
+            ["docker", "image", "rm", "-f", reference],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ArtifactRuntimeError("remove candidate image could not complete") from exc
+    if _inspect_optional_docker_image(reference) is not None:
+        raise ArtifactRuntimeError("remove candidate image did not remove its scoped reference")
+
+
+def _remove_candidate_images(*references: str) -> None:
+    failures = 0
+    for reference in dict.fromkeys(references):
+        try:
+            _remove_candidate_image(reference)
+        except ArtifactRuntimeError:
+            failures += 1
+    if failures:
+        raise ArtifactRuntimeError("candidate image cleanup did not remove every scoped reference")
 
 
 def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
@@ -1292,17 +1312,18 @@ def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
             pin,
             exported_config_digest=exported_config_digest,
         )
-        _remove_candidate_image(load_report_reference)
-        _remove_candidate_image(expected_reference)
+        _remove_candidate_images(load_report_reference, expected_reference)
         loaded = False
         bound = False
         return verified_reference
     finally:
+        cleanup_references = []
         if loaded:
-            _remove_candidate_image(load_report_reference)
-            _remove_candidate_image(expected_reference)
+            cleanup_references.extend((load_report_reference, expected_reference))
         if bound:
-            _remove_candidate_image(verified_reference)
+            cleanup_references.append(verified_reference)
+        if cleanup_references:
+            _remove_candidate_images(*cleanup_references)
 
 
 def validate_candidate_inputs(
@@ -3835,8 +3856,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         finally:
             if loaded_reference is not None:
-                _remove_candidate_image(f"{pin['image']['archive_tag']}:latest")
-                _remove_candidate_image(loaded_reference)
+                _remove_candidate_images(
+                    f"{pin['image']['archive_tag']}:latest",
+                    loaded_reference,
+                )
     runner = run_expected_failure if args.command == "run-expected-failure" else run_artifact_test
     evidence = runner(pin, args.evidence.resolve(), provenance_verified=args.provenance_verified)
     print(json.dumps(evidence, sort_keys=True))
