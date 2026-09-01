@@ -467,10 +467,14 @@ def write_oci_archive(
         layer_content = b"candidate layer"
         layer_member.size = len(layer_content)
         layer_archive.addfile(layer_member, io.BytesIO(layer_content))
-    uncompressed_layer = uncompressed_layer_override or rewrite_tar_end(
-        layer_tar.getvalue(),
-        eoa_blocks=layer_eoa_blocks,
-        trailer=layer_trailer,
+    uncompressed_layer = (
+        uncompressed_layer_override
+        if uncompressed_layer_override is not None
+        else rewrite_tar_end(
+            layer_tar.getvalue(),
+            eoa_blocks=layer_eoa_blocks,
+            trailer=layer_trailer,
+        )
     )
     layer = gzip.compress(uncompressed_layer, mtime=0)
     config_value: dict[str, object] = {
@@ -859,6 +863,27 @@ def test_oci_archive_accepts_canonical_payload_and_unqualified_platform(
     archive_path = tmp_path / "candidate.oci.tar"
     write_oci_archive(archive_path, pin, nested_index=nested_index)
     artifact.inspect_oci_archive(archive_path, pin)
+
+
+def test_oci_archive_accepts_canonical_empty_layer(tmp_path: Path) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(
+        archive_path,
+        pin,
+        uncompressed_layer_override=bytes(artifact.TAR_BLOCK_BYTES * 2),
+    )
+
+    artifact.inspect_oci_archive(archive_path, pin)
+
+
+def test_oci_archive_rejects_zero_byte_layer(tmp_path: Path) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(archive_path, pin, uncompressed_layer_override=b"")
+
+    with pytest.raises(ValueError, match="missing the canonical tar end-of-archive"):
+        artifact.inspect_oci_archive(archive_path, pin)
 
 
 @pytest.mark.parametrize(
