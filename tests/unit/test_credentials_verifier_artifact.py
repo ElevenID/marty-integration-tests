@@ -223,6 +223,19 @@ def test_workflow_runs_oracle_and_exact_known_negative_control() -> None:
     assert workflow.count('--pin "$PIN_FILE"') == 4
 
 
+def test_workflow_runs_candidate_archive_load_on_pinned_containerd() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "credentials-verifier-artifact.yml").read_text(encoding="utf-8")
+
+    assert "candidate-containerd-load:" in workflow
+    assert "name: Candidate containerd load contract" in workflow
+    assert 'RUN_CANDIDATE_DOCKER_TESTS: "true"' in workflow
+    assert workflow.count("docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1") == 1
+    assert "version: v29.7.2" in workflow
+    assert '"containerd-snapshotter": true' in workflow
+    assert "test_candidate_archive_real_containerd_rejects_preexisting_wrong_literal_tag" in workflow
+    assert "test_candidate_archive_disposable_containerd_load_contract" in workflow
+
+
 def test_sbom_is_bound_to_pinned_image_and_native_packages(tmp_path: Path) -> None:
     path = tmp_path / "verification.spdx.json"
     path.write_text(json.dumps(valid_sbom()), encoding="utf-8")
