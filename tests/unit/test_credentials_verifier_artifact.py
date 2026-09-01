@@ -106,6 +106,26 @@ def valid_candidate_pin() -> dict[str, object]:
     }
 
 
+def valid_transaction_pin() -> dict[str, object]:
+    return {
+        "schema": artifact.TRANSACTION_PIN_SCHEMA,
+        "state": "transaction",
+        "repository": artifact.RUST_REPOSITORY,
+        "transaction_id": "1" * 64,
+        "version": "1.2.4",
+        "commit": "a" * 40,
+        "source_ref": "refs/heads/main",
+        "image": {
+            "uri": artifact.RUST_IMAGE_URI,
+            "digest": "sha256:" + "b" * 64,
+        },
+        "sbom": {
+            "asset": "marty-ui-services-sbom.cdx.json",
+            "digest": "sha256:" + "c" * 64,
+        },
+    }
+
+
 def known_ineligible_failure() -> dict[str, object]:
     return {
         "id": artifact.KNOWN_INELIGIBLE_FAILURE_ID,
@@ -256,6 +276,159 @@ def test_rust_pin_and_cyclonedx_sbom_are_bound_to_canonical_services_image(tmp_p
     assert artifact.artifact_target(pin) is artifact.RUST_TARGET
     assert artifact.image_reference(pin) == artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64
     assert value["metadata"]["component"]["version"] == pin["image"]["digest"]
+
+
+def test_transaction_pin_binds_unpublished_exact_digest_without_claiming_a_tag(tmp_path: Path) -> None:
+    pin = artifact.load_pin(
+        write_pin(tmp_path / "transaction.json", valid_transaction_pin()),
+        expected_state="transaction",
+    )
+
+    assert "release_tag" not in pin
+    assert artifact.image_reference(pin) == artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64
+    assert artifact.evidence_subject(pin) == {
+        "repository": artifact.RUST_REPOSITORY,
+        "transaction_id": "1" * 64,
+        "version": "1.2.4",
+        "commit": "a" * 40,
+        "source_ref": "refs/heads/main",
+        "image_reference": artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64,
+        "sbom_digest": "sha256:" + "c" * 64,
+        "provenance_verified": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda pin: pin.update(transaction_id="A" * 64), "transaction ID"),
+        (lambda pin: pin.update(version="v1.2.4"), "stable SemVer"),
+        (lambda pin: pin.update(source_ref="refs/tags/v1.2.4"), "protected main"),
+        (lambda pin: pin.update(release_tag="v1.2.4"), "must not claim"),
+        (lambda pin: pin.update(extra=True), "shape changed"),
+    ],
+)
+def test_transaction_pin_rejects_mutable_or_ambiguous_identity(
+    tmp_path: Path,
+    mutation: Callable[[dict[str, object]], None],
+    message: str,
+) -> None:
+    pin = valid_transaction_pin()
+    mutation(pin)
+
+    with pytest.raises(ValueError, match=message):
+        artifact.load_pin(
+            write_pin(tmp_path / "transaction.json", pin),
+            expected_state="transaction",
+        )
+
+
+def test_create_transaction_pin_validates_and_hashes_exact_sbom_snapshot(tmp_path: Path) -> None:
+    sbom_path = tmp_path / "services.cdx.json"
+    sbom_path.write_text(json.dumps(valid_rust_sbom(valid_transaction_pin())), encoding="utf-8")
+    pin_path = tmp_path / "transaction.json"
+
+    assert (
+        artifact.main(
+            [
+                "create-transaction-pin",
+                "--transaction-id",
+                "1" * 64,
+                "--version",
+                "1.2.4",
+                "--commit",
+                "a" * 40,
+                "--image-digest",
+                "sha256:" + "b" * 64,
+                "--sbom",
+                str(sbom_path),
+                "--pin",
+                str(pin_path),
+            ]
+        )
+        == 0
+    )
+    pin = artifact.load_pin(pin_path, expected_state="transaction")
+    assert pin["sbom"]["digest"] == artifact.file_digest(sbom_path)
+    assert pin_path.read_bytes() == artifact.canonical_json(pin) + b"\n"
+
+    invalid_sbom = valid_rust_sbom(valid_transaction_pin())
+    invalid_sbom["metadata"]["component"]["version"] = "sha256:" + "0" * 64  # type: ignore[index]
+    sbom_path.write_text(json.dumps(invalid_sbom), encoding="utf-8")
+    with pytest.raises(ValueError, match="root is not bound"):
+        artifact.create_transaction_pin(
+            transaction_id="1" * 64,
+            version="1.2.4",
+            commit="a" * 40,
+            image_digest="sha256:" + "b" * 64,
+            sbom_path=sbom_path,
+        )
+
+
+def test_create_transaction_pin_is_idempotent_but_never_replaces_conflicting_identity(
+    tmp_path: Path,
+) -> None:
+    sbom_path = tmp_path / "services.cdx.json"
+    sbom_path.write_text(json.dumps(valid_rust_sbom(valid_transaction_pin())), encoding="utf-8")
+    pin_path = tmp_path / "transaction.json"
+    command = [
+        "create-transaction-pin",
+        "--transaction-id",
+        "1" * 64,
+        "--version",
+        "1.2.4",
+        "--commit",
+        "a" * 40,
+        "--image-digest",
+        "sha256:" + "b" * 64,
+        "--sbom",
+        str(sbom_path),
+        "--pin",
+        str(pin_path),
+    ]
+
+    assert artifact.main(command) == 0
+    original = pin_path.read_bytes()
+    assert artifact.main(command) == 0
+    assert pin_path.read_bytes() == original
+
+    conflicting = copy.deepcopy(valid_transaction_pin())
+    conflicting["transaction_id"] = "2" * 64
+    pin_path.write_bytes(artifact.canonical_json(conflicting) + b"\n")
+    before = pin_path.read_bytes()
+    with pytest.raises(ValueError, match="conflicting content"):
+        artifact.main(command)
+    assert pin_path.read_bytes() == before
+
+
+def test_failed_transaction_pin_creation_preserves_existing_destination(tmp_path: Path) -> None:
+    pin_path = tmp_path / "transaction.json"
+    existing = b'{"owner":"pre-existing"}\n'
+    pin_path.write_bytes(existing)
+    sbom_path = tmp_path / "services.cdx.json"
+    invalid_sbom = valid_rust_sbom(valid_transaction_pin())
+    invalid_sbom["metadata"]["component"]["version"] = "sha256:" + "0" * 64  # type: ignore[index]
+    sbom_path.write_text(json.dumps(invalid_sbom), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="root is not bound"):
+        artifact.main(
+            [
+                "create-transaction-pin",
+                "--transaction-id",
+                "1" * 64,
+                "--version",
+                "1.2.4",
+                "--commit",
+                "a" * 40,
+                "--image-digest",
+                "sha256:" + "b" * 64,
+                "--sbom",
+                str(sbom_path),
+                "--pin",
+                str(pin_path),
+            ]
+        )
+    assert pin_path.read_bytes() == existing
 
 
 def test_candidate_pin_is_non_release_and_runs_by_commit_bound_local_reference(tmp_path: Path) -> None:
@@ -2810,6 +2983,179 @@ def test_oracle_candidate_evidence_comparison_allows_only_documented_runtime_dif
                     oracle_pin,
                     candidate_pin,
                 )
+
+
+def test_oracle_transaction_comparison_requires_real_positive_runtime_clearance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = {
+        "repository": artifact.INTEGRATION_REPOSITORY,
+        "commit": "f" * 40,
+        "hardened_floor": artifact.HARDENED_HARNESS_FLOOR,
+    }
+    monkeypatch.setattr(artifact, "harness_subject", lambda: harness)
+    oracle_pin = artifact.FROZEN_LEGACY_SAFE_SESSION_PIN
+    transaction_pin = valid_transaction_pin()
+    common = {
+        "classification": "ElevenID-owned artifact integration",
+        "official_suite_invoked": False,
+        "official_suite_source_modified": False,
+        "status": "passed",
+        "resolver_request_count": 2,
+        "harness": harness,
+        "started_at": "2026-09-01T00:00:00Z",
+        "completed_at": "2026-09-01T00:01:00Z",
+    }
+    oracle = {
+        **common,
+        "schema": artifact.EVIDENCE_SCHEMA,
+        "release_clearance": artifact.RELEASE_CLEARANCE_BLOCKED,
+        "blockers": [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "subject": artifact.evidence_subject(oracle_pin),
+        "checks": sorted(artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS),
+        "safe_session_selection": {
+            "reason": "frozen_python_v0.1.71_invalid_leading_identifier",
+            "resampled_unsafe_ids": 1,
+        },
+        "documented_differences": [],
+    }
+    transaction = {
+        **common,
+        "schema": artifact.TRANSACTION_EVIDENCE_SCHEMA,
+        "release_clearance": artifact.RELEASE_CLEARANCE_ELIGIBLE,
+        "blockers": [],
+        "subject": artifact.evidence_subject(transaction_pin),
+        "checks": sorted(artifact.CANDIDATE_REQUIRED_CHECKS),
+        "safe_session_selection": {
+            "reason": "not_allowlisted_no_resampling",
+            "resampled_unsafe_ids": 0,
+        },
+        "documented_differences": sorted(artifact.DOCUMENTED_TARGET_DIFFERENCES),
+    }
+    oracle_path = tmp_path / "oracle.json"
+    transaction_path = tmp_path / "transaction.json"
+    oracle_path.write_text(json.dumps(oracle), encoding="utf-8")
+    transaction_path.write_text(json.dumps(transaction), encoding="utf-8")
+
+    comparison = artifact.compare_oracle_transaction_evidence(
+        oracle_path,
+        transaction_path,
+        oracle_pin,
+        transaction_pin,
+    )
+
+    assert comparison == {
+        "schema": "elevenid.credentials-verifier-transaction-comparison/v1",
+        "status": "matched",
+        "release_clearance": artifact.RELEASE_CLEARANCE_ELIGIBLE,
+        "blockers": [],
+        "language_neutral_checks": sorted(artifact.EXPECTED_LANGUAGE_NEUTRAL_CHECKS),
+        "transaction_only_checks": sorted(
+            {artifact.POSITIVE_OID4VP_CHECK} | artifact.RUST_ONLY_CHECKS
+        ),
+        "documented_differences": sorted(artifact.DOCUMENTED_TARGET_DIFFERENCES),
+    }
+
+    for field, value, message in (
+        ("release_clearance", artifact.RELEASE_CLEARANCE_BLOCKED, "did not earn"),
+        ("blockers", [artifact.OID4VP_POSITIVE_RUNTIME_BLOCKER], "did not earn"),
+        ("checks", sorted(artifact.CANDIDATE_REQUIRED_CHECKS - {artifact.POSITIVE_OID4VP_CHECK}), "complete"),
+    ):
+        changed = copy.deepcopy(transaction)
+        changed[field] = value
+        transaction_path.write_text(json.dumps(changed), encoding="utf-8")
+        with pytest.raises(ValueError, match=message):
+            artifact.compare_oracle_transaction_evidence(
+                oracle_path,
+                transaction_path,
+                oracle_pin,
+                transaction_pin,
+            )
+
+
+def test_run_transaction_uses_transaction_state_and_removes_stale_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_transaction_pin()
+    pin_path = write_pin(tmp_path / "transaction-pin.json", pin)
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_text('{"status":"stale"}\n', encoding="utf-8")
+    observed: list[tuple[dict[str, object], bool]] = []
+
+    def run(
+        loaded_pin: dict[str, object],
+        destination: Path,
+        *,
+        provenance_verified: bool,
+    ) -> dict[str, object]:
+        assert not destination.exists()
+        observed.append((loaded_pin, provenance_verified))
+        return {"status": "passed"}
+
+    monkeypatch.setattr(artifact, "run_artifact_test", run)
+
+    assert (
+        artifact.main(
+            [
+                "run-transaction",
+                "--pin",
+                str(pin_path),
+                "--provenance-verified",
+                "--evidence",
+                str(evidence_path),
+            ]
+        )
+        == 0
+    )
+    assert observed == [(pin, True)]
+
+
+def test_exact_image_positive_oid4vp_gate_requires_complete_runtime_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], str, int]] = []
+    evidence = {
+        "schema": "elevenid.credentials-verifier-positive-runtime/v1",
+        "status": "passed",
+        "decision": "PASS",
+        "verified_claims": {"email": "runtime-gate@example.invalid"},
+        "checks": [
+            {"check_id": check_id, "outcome": outcome, "code": code}
+            for check_id, (outcome, code) in artifact.OID4VP_PASS_CHECK_PROJECTION.items()
+        ],
+    }
+
+    def run(command: list[str], *, label: str, timeout: int) -> str:
+        calls.append((command, label, timeout))
+        return json.dumps(evidence)
+
+    monkeypatch.setattr(artifact, "_run", run)
+    reference = artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64
+
+    assert artifact._run_positive_oid4vp_gate(reference) == evidence
+    assert calls == [
+        (
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                reference,
+                "/usr/local/bin/marty-verifier-positive-gate",
+            ],
+            "exercise exact-image positive OID4VP runtime gate",
+            120,
+        )
+    ]
+
+    changed = copy.deepcopy(evidence)
+    changed["checks"] = changed["checks"][:-1]
+    monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: json.dumps(changed))
+    with pytest.raises(ValueError, match="canonical check projection"):
+        artifact._run_positive_oid4vp_gate(reference)
 
 
 def test_default_disabled_start_requires_native_health_without_compatibility_leak(

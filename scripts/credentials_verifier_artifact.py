@@ -39,9 +39,11 @@ BASE_IMAGES = ROOT / "config" / "base-images.json"
 PIN_SCHEMA = "elevenid.credentials-verifier-artifact-pin/v1"
 RUST_PIN_SCHEMA = "elevenid.credentials-verifier-artifact-pin/v2"
 CANDIDATE_PIN_SCHEMA = "elevenid.credentials-verifier-candidate-pin/v1"
+TRANSACTION_PIN_SCHEMA = "elevenid.credentials-verifier-transaction-pin/v1"
 EVIDENCE_SCHEMA = "elevenid.credentials-verifier-artifact-evidence/v1"
 RUST_EVIDENCE_SCHEMA = "elevenid.credentials-verifier-artifact-evidence/v2"
 CANDIDATE_EVIDENCE_SCHEMA = "elevenid.credentials-verifier-candidate-evidence/v1"
+TRANSACTION_EVIDENCE_SCHEMA = "elevenid.credentials-verifier-transaction-evidence/v1"
 CANDIDATE_PROVENANCE_SCHEMA = "elevenid.marty-ui.services-candidate-provenance/v1"
 CANDIDATE_METADATA_SCHEMA = "elevenid.marty-ui.services-candidate-build-metadata/v1"
 IN_TOTO_STATEMENT_V1 = "https://in-toto.io/Statement/v1"
@@ -252,6 +254,7 @@ REJECTED_RUST_SAFE_SESSION_PIN = {
 }
 CANDIDATE_VERSION = re.compile(r"^0\.0\.0-candidate\.([0-9a-f]{12})$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
+TRANSACTION_ID = re.compile(r"^[0-9a-f]{64}$")
 CANDIDATE_BUILD_WORKFLOW = ".github/workflows/verification-candidate-build.yml"
 CANDIDATE_SIGNER_WORKFLOW = f"github.com/{RUST_REPOSITORY}/{CANDIDATE_BUILD_WORKFLOW}"
 INTEGRATION_REPOSITORY = "ElevenID/marty-integration-tests"
@@ -307,9 +310,12 @@ def artifact_target(pin: dict[str, Any]) -> ArtifactTarget:
     schema = pin.get("schema")
     if schema == PIN_SCHEMA:
         return LEGACY_TARGET
-    if schema in {RUST_PIN_SCHEMA, CANDIDATE_PIN_SCHEMA}:
+    if schema in {RUST_PIN_SCHEMA, CANDIDATE_PIN_SCHEMA, TRANSACTION_PIN_SCHEMA}:
         return RUST_TARGET
-    raise ValueError(f"artifact pin must use {PIN_SCHEMA}, {RUST_PIN_SCHEMA}, or {CANDIDATE_PIN_SCHEMA}")
+    raise ValueError(
+        f"artifact pin must use {PIN_SCHEMA}, {RUST_PIN_SCHEMA}, "
+        f"{CANDIDATE_PIN_SCHEMA}, or {TRANSACTION_PIN_SCHEMA}"
+    )
 
 
 class ArtifactRuntimeError(RuntimeError):
@@ -414,8 +420,37 @@ def _validate_candidate_pin(value: dict[str, Any]) -> None:
     _require(value.get("expected_failure") is None, "candidate pin must not declare an expected failure")
 
 
+def _validate_transaction_pin(value: dict[str, Any]) -> None:
+    _require("release_tag" not in value, "transaction pin must not claim an unpublished release tag")
+    _require(
+        set(value)
+        == {
+            "schema",
+            "state",
+            "repository",
+            "transaction_id",
+            "version",
+            "commit",
+            "source_ref",
+            "image",
+            "sbom",
+        },
+        "transaction pin shape changed",
+    )
+    _require(
+        bool(TRANSACTION_ID.fullmatch(str(value.get("transaction_id", "")))),
+        "transaction ID must be 64 lowercase hexadecimal characters",
+    )
+    _require(bool(VERSION.fullmatch(str(value.get("version", "")))), "version must be stable SemVer")
+    _require(value.get("source_ref") == "refs/heads/main", "transaction source_ref must identify protected main")
+    _require(value.get("expected_failure") is None, "transaction pin must not declare an expected failure")
+
+
 def _parse_pin(raw: bytes, *, expected_state: str) -> dict[str, Any]:
-    _require(expected_state in {"ready", "ineligible", "candidate"}, "unsupported artifact pin state")
+    _require(
+        expected_state in {"ready", "ineligible", "candidate", "transaction"},
+        "unsupported artifact pin state",
+    )
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -429,8 +464,13 @@ def _parse_pin(raw: bytes, *, expected_state: str) -> dict[str, Any]:
 
     if value["schema"] == CANDIDATE_PIN_SCHEMA:
         _require(expected_state == "candidate", "candidate pin must be validated as candidate")
+    elif value["schema"] == TRANSACTION_PIN_SCHEMA:
+        _require(expected_state == "transaction", "transaction pin must be validated as transaction")
     else:
-        _require(expected_state != "candidate", "release pin cannot be validated as candidate")
+        _require(
+            expected_state not in {"candidate", "transaction"},
+            "release pin must be validated as a release",
+        )
         _require(bool(SEMVER_TAG.fullmatch(str(value.get("release_tag", "")))), "release_tag must be stable SemVer")
         _require(bool(VERSION.fullmatch(str(value.get("version", "")))), "version must be stable SemVer")
         _require(value["release_tag"] == f"v{value['version']}", "release_tag and version must agree")
@@ -456,6 +496,9 @@ def _parse_pin(raw: bytes, *, expected_state: str) -> dict[str, Any]:
     if value["schema"] == CANDIDATE_PIN_SCHEMA:
         _validate_candidate_pin(value)
         return value
+    if value["schema"] == TRANSACTION_PIN_SCHEMA:
+        _validate_transaction_pin(value)
+        return value
     expected_failure = value.get("expected_failure")
     if expected_state == "ineligible":
         _require(
@@ -476,7 +519,10 @@ def load_pin_snapshot(
     *,
     expected_state: str = "ready",
 ) -> tuple[dict[str, Any], bytes]:
-    _require(expected_state in {"ready", "ineligible", "candidate"}, "unsupported artifact pin state")
+    _require(
+        expected_state in {"ready", "ineligible", "candidate", "transaction"},
+        "unsupported artifact pin state",
+    )
     raw = _read_bounded_regular_file(
         path,
         label="artifact pin",
@@ -519,6 +565,17 @@ def evidence_subject(pin: dict[str, Any]) -> dict[str, Any]:
             "provenance": pin["provenance"],
             "provenance_verified": True,
         }
+    if pin["schema"] == TRANSACTION_PIN_SCHEMA:
+        return {
+            "repository": pin["repository"],
+            "transaction_id": pin["transaction_id"],
+            "version": pin["version"],
+            "commit": pin["commit"],
+            "source_ref": pin["source_ref"],
+            "image_reference": image_reference(pin),
+            "sbom_digest": pin["sbom"]["digest"],
+            "provenance_verified": True,
+        }
     return {
         "repository": pin["repository"],
         "release_tag": pin["release_tag"],
@@ -536,6 +593,64 @@ def file_digest(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return f"sha256:{digest.hexdigest()}"
+
+
+def create_transaction_pin(
+    *,
+    transaction_id: str,
+    version: str,
+    commit: str,
+    image_digest: str,
+    sbom_path: Path,
+) -> dict[str, Any]:
+    sbom_raw = _read_bounded_regular_file(
+        sbom_path,
+        label="verification SBOM",
+        maximum_bytes=MAX_SBOM_BYTES,
+    )
+    value = {
+        "schema": TRANSACTION_PIN_SCHEMA,
+        "state": "transaction",
+        "repository": RUST_REPOSITORY,
+        "transaction_id": transaction_id,
+        "version": version,
+        "commit": commit,
+        "source_ref": "refs/heads/main",
+        "image": {
+            "uri": RUST_IMAGE_URI,
+            "digest": image_digest,
+        },
+        "sbom": {
+            "asset": RUST_TARGET.sbom_asset,
+            "digest": _bytes_digest(sbom_raw),
+        },
+    }
+    pin = _parse_pin(canonical_json(value), expected_state="transaction")
+    validate_sbom(sbom_path, pin, raw=sbom_raw)
+    return pin
+
+
+def write_immutable_pin(path: Path, pin: dict[str, Any]) -> None:
+    payload = canonical_json(pin) + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        existing = _read_bounded_regular_file(
+            path,
+            label="transaction pin",
+            maximum_bytes=MAX_PIN_BYTES,
+        )
+        _require(existing == payload, "transaction pin destination already contains conflicting content")
+        return
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _bytes_digest(raw: bytes) -> str:
@@ -1809,6 +1924,120 @@ def compare_oracle_candidate_evidence(
     }
 
 
+def compare_oracle_transaction_evidence(
+    oracle_path: Path,
+    transaction_path: Path,
+    oracle_pin: dict[str, Any],
+    transaction_pin: dict[str, Any],
+) -> dict[str, Any]:
+    """Authorize only a real, exact-digest Rust runtime with complete coverage."""
+    oracle = json.loads(oracle_path.read_text(encoding="utf-8"))
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    _require(oracle_pin == FROZEN_LEGACY_SAFE_SESSION_PIN, "oracle pin changed")
+    _require(transaction_pin.get("schema") == TRANSACTION_PIN_SCHEMA, "transaction pin changed")
+    _require(isinstance(oracle, dict) and isinstance(transaction, dict), "artifact evidence must be JSON objects")
+    _require(oracle.get("schema") == EVIDENCE_SCHEMA, "oracle evidence schema changed")
+    _require(
+        transaction.get("schema") == TRANSACTION_EVIDENCE_SCHEMA,
+        "transaction evidence schema changed",
+    )
+    evidence_shape = {
+        "schema",
+        "classification",
+        "official_suite_invoked",
+        "official_suite_source_modified",
+        "status",
+        "release_clearance",
+        "blockers",
+        "subject",
+        "harness",
+        "checks",
+        "safe_session_selection",
+        "documented_differences",
+        "resolver_request_count",
+        "started_at",
+        "completed_at",
+    }
+    _require(set(oracle) == evidence_shape, "oracle evidence shape changed")
+    _require(set(transaction) == evidence_shape, "transaction evidence shape changed")
+    _require(oracle.get("subject") == evidence_subject(oracle_pin), "oracle evidence subject changed")
+    _require(
+        transaction.get("subject") == evidence_subject(transaction_pin),
+        "transaction evidence subject changed",
+    )
+    current_harness = harness_subject()
+    _require(oracle.get("harness") == current_harness, "oracle evidence harness changed")
+    _require(transaction.get("harness") == current_harness, "transaction evidence harness changed")
+    for label, evidence in (("oracle", oracle), ("transaction", transaction)):
+        _require(
+            evidence.get("classification") == "ElevenID-owned artifact integration",
+            f"{label} evidence classification changed",
+        )
+        _require(evidence.get("official_suite_invoked") is False, f"{label} suite claim changed")
+        _require(
+            evidence.get("official_suite_source_modified") is False,
+            f"{label} suite-source claim changed",
+        )
+        _require(evidence.get("status") == "passed", f"{label} artifact evidence did not pass")
+        _require(
+            isinstance(evidence.get("started_at"), str) and isinstance(evidence.get("completed_at"), str),
+            f"{label} evidence timestamps changed",
+        )
+    _require(
+        oracle.get("release_clearance") == RELEASE_CLEARANCE_BLOCKED
+        and oracle.get("blockers") == [OID4VP_POSITIVE_RUNTIME_BLOCKER],
+        "oracle evidence did not retain its known positive-runtime limitation",
+    )
+    _require(
+        transaction.get("release_clearance") == RELEASE_CLEARANCE_ELIGIBLE
+        and transaction.get("blockers") == [],
+        "transaction evidence did not earn release clearance",
+    )
+    _require(oracle.get("documented_differences") == [], "oracle evidence contained a difference")
+    transaction_differences = transaction.get("documented_differences")
+    _require(
+        isinstance(transaction_differences, list)
+        and all(isinstance(difference, str) for difference in transaction_differences)
+        and len(transaction_differences) == len(set(transaction_differences))
+        and set(transaction_differences) == DOCUMENTED_TARGET_DIFFERENCES,
+        "transaction evidence contained an undocumented difference",
+    )
+    _require(
+        transaction.get("resolver_request_count") == oracle.get("resolver_request_count"),
+        "transaction and oracle resolver evidence counts diverged",
+    )
+    oracle_selection = oracle.get("safe_session_selection")
+    _require(
+        isinstance(oracle_selection, dict)
+        and set(oracle_selection) == {"reason", "resampled_unsafe_ids"}
+        and oracle_selection.get("reason") == "frozen_python_v0.1.71_invalid_leading_identifier"
+        and type(oracle_selection.get("resampled_unsafe_ids")) is int
+        and oracle_selection["resampled_unsafe_ids"] >= 0,
+        "oracle safe-session evidence changed",
+    )
+    _require(
+        transaction.get("safe_session_selection")
+        == {"reason": "not_allowlisted_no_resampling", "resampled_unsafe_ids": 0},
+        "transaction safe-session evidence changed",
+    )
+    oracle_checks = _check_set(oracle)
+    transaction_checks = _check_set(transaction)
+    _require(oracle_checks == EXPECTED_LANGUAGE_NEUTRAL_CHECKS, "frozen oracle evidence set changed")
+    _require(
+        transaction_checks == CANDIDATE_REQUIRED_CHECKS,
+        "transaction evidence did not exercise the complete frozen gate set",
+    )
+    return {
+        "schema": "elevenid.credentials-verifier-transaction-comparison/v1",
+        "status": "matched",
+        "release_clearance": RELEASE_CLEARANCE_ELIGIBLE,
+        "blockers": [],
+        "language_neutral_checks": sorted(oracle_checks),
+        "transaction_only_checks": sorted(transaction_checks - oracle_checks),
+        "documented_differences": sorted(DOCUMENTED_TARGET_DIFFERENCES),
+    }
+
+
 def validate_sbom(path: Path, pin: dict[str, Any], *, raw: bytes | None = None) -> dict[str, Any]:
     value = json.loads(
         raw
@@ -3018,6 +3247,9 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
     started = datetime.now(UTC)
 
     try:
+        if pin["schema"] == TRANSACTION_PIN_SCHEMA:
+            _run_positive_oid4vp_gate(reference)
+            completed_checks.append(POSITIVE_OID4VP_CHECK)
         _run(["docker", "network", "create", network], label="create isolated network")
         _run(
             [
@@ -3772,14 +4004,23 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
             )
             completed_checks.append("canonical.malformed-evidence-fail")
 
+        transaction_eligible = (
+            pin["schema"] == TRANSACTION_PIN_SCHEMA and POSITIVE_OID4VP_CHECK in completed_checks
+        )
+        evidence_schema = {
+            CANDIDATE_PIN_SCHEMA: CANDIDATE_EVIDENCE_SCHEMA,
+            TRANSACTION_PIN_SCHEMA: TRANSACTION_EVIDENCE_SCHEMA,
+        }.get(pin["schema"], target.evidence_schema)
         evidence = {
-            "schema": (CANDIDATE_EVIDENCE_SCHEMA if pin["schema"] == CANDIDATE_PIN_SCHEMA else target.evidence_schema),
+            "schema": evidence_schema,
             "classification": "ElevenID-owned artifact integration",
             "official_suite_invoked": False,
             "official_suite_source_modified": False,
             "status": ("ineligible" if KNOWN_INELIGIBLE_FAILURE_ID in documented_differences else "passed"),
-            "release_clearance": RELEASE_CLEARANCE_BLOCKED,
-            "blockers": [OID4VP_POSITIVE_RUNTIME_BLOCKER],
+            "release_clearance": (
+                RELEASE_CLEARANCE_ELIGIBLE if transaction_eligible else RELEASE_CLEARANCE_BLOCKED
+            ),
+            "blockers": [] if transaction_eligible else [OID4VP_POSITIVE_RUNTIME_BLOCKER],
             "subject": evidence_subject(pin),
             "harness": harness,
             "checks": completed_checks,
@@ -3815,6 +4056,47 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
         _docker_remove("container", service)
         _docker_remove("container", postgres)
         _docker_remove("network", network)
+
+
+def _run_positive_oid4vp_gate(reference: str) -> dict[str, Any]:
+    raw = _run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            reference,
+            "/usr/local/bin/marty-verifier-positive-gate",
+        ],
+        label="exercise exact-image positive OID4VP runtime gate",
+        timeout=120,
+    )
+    evidence = json.loads(raw)
+    _require(isinstance(evidence, dict), "positive OID4VP runtime evidence was not an object")
+    _require(
+        set(evidence) == {"schema", "status", "decision", "verified_claims", "checks"},
+        "positive OID4VP runtime evidence shape changed",
+    )
+    _require(
+        evidence.get("schema") == "elevenid.credentials-verifier-positive-runtime/v1",
+        "positive OID4VP runtime evidence schema changed",
+    )
+    _require(
+        evidence.get("status") == "passed" and evidence.get("decision") == "PASS",
+        "positive OID4VP runtime did not pass",
+    )
+    _require(
+        evidence.get("verified_claims") == {"email": "runtime-gate@example.invalid"},
+        "positive OID4VP verified claim projection changed",
+    )
+    checks = evidence.get("checks")
+    expected = [
+        {"check_id": check_id, "outcome": outcome, "code": code}
+        for check_id, (outcome, code) in OID4VP_PASS_CHECK_PROJECTION.items()
+    ]
+    _require(checks == expected, "positive OID4VP canonical check projection changed")
+    return evidence
 
 
 def run_expected_failure(
@@ -3961,10 +4243,10 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate-pin")
     validate.add_argument("--pin", type=Path, default=DEFAULT_PIN)
-    validate.add_argument("--state", choices=("ready", "ineligible"), default="ready")
+    validate.add_argument("--state", choices=("ready", "ineligible", "transaction"), default="ready")
     sbom = commands.add_parser("validate-sbom")
     sbom.add_argument("--pin", type=Path, default=DEFAULT_PIN)
-    sbom.add_argument("--state", choices=("ready", "ineligible"), default="ready")
+    sbom.add_argument("--state", choices=("ready", "ineligible", "transaction"), default="ready")
     sbom.add_argument("--sbom", type=Path, required=True)
     candidate = commands.add_parser("validate-candidate")
     candidate.add_argument("--pin", type=Path, required=True)
@@ -3997,6 +4279,23 @@ def parser() -> argparse.ArgumentParser:
     candidate_comparison.add_argument("--oracle-pin", type=Path, required=True)
     candidate_comparison.add_argument("--candidate-pin", type=Path, required=True)
     candidate_comparison.add_argument("--evidence", type=Path, required=True)
+    transaction_pin = commands.add_parser("create-transaction-pin")
+    transaction_pin.add_argument("--transaction-id", required=True)
+    transaction_pin.add_argument("--version", required=True)
+    transaction_pin.add_argument("--commit", required=True)
+    transaction_pin.add_argument("--image-digest", required=True)
+    transaction_pin.add_argument("--sbom", type=Path, required=True)
+    transaction_pin.add_argument("--pin", type=Path, required=True)
+    transaction_run = commands.add_parser("run-transaction")
+    transaction_run.add_argument("--pin", type=Path, required=True)
+    transaction_run.add_argument("--evidence", type=Path, required=True)
+    transaction_run.add_argument("--provenance-verified", action="store_true", required=True)
+    transaction_comparison = commands.add_parser("compare-transaction-evidence")
+    transaction_comparison.add_argument("--oracle", type=Path, required=True)
+    transaction_comparison.add_argument("--transaction", type=Path, required=True)
+    transaction_comparison.add_argument("--oracle-pin", type=Path, default=DEFAULT_PIN)
+    transaction_comparison.add_argument("--transaction-pin", type=Path, required=True)
+    transaction_comparison.add_argument("--evidence", type=Path, required=True)
     return result
 
 
@@ -4005,11 +4304,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {
         "compare-evidence",
         "compare-candidate-evidence",
+        "compare-transaction-evidence",
         "run",
         "run-expected-failure",
         "run-candidate",
+        "run-transaction",
     }:
         args.evidence.resolve().unlink(missing_ok=True)
+    if args.command == "create-transaction-pin":
+        destination = args.pin.resolve()
+        pin = create_transaction_pin(
+            transaction_id=args.transaction_id,
+            version=args.version,
+            commit=args.commit,
+            image_digest=args.image_digest,
+            sbom_path=args.sbom.resolve(),
+        )
+        write_immutable_pin(destination, pin)
+        print(json.dumps(pin, sort_keys=True))
+        return 0
     if args.command == "compare-evidence":
         oracle = json.loads(args.oracle.resolve().read_text(encoding="utf-8"))
         candidate = json.loads(args.candidate.resolve().read_text(encoding="utf-8"))
@@ -4037,8 +4350,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(evidence, sort_keys=True))
         return 0
+    if args.command == "compare-transaction-evidence":
+        oracle_pin = load_pin(args.oracle_pin.resolve())
+        transaction_pin = load_pin(args.transaction_pin.resolve(), expected_state="transaction")
+        evidence = compare_oracle_transaction_evidence(
+            args.oracle.resolve(),
+            args.transaction.resolve(),
+            oracle_pin,
+            transaction_pin,
+        )
+        args.evidence.resolve().parent.mkdir(parents=True, exist_ok=True)
+        args.evidence.resolve().write_text(
+            json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(evidence, sort_keys=True))
+        return 0
     if args.command in {"validate-candidate", "run-candidate"}:
         expected_state = "candidate"
+    elif args.command == "run-transaction":
+        expected_state = "transaction"
     elif args.command == "run-expected-failure":
         expected_state = "ineligible"
     else:
