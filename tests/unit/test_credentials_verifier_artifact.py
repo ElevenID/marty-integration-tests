@@ -1537,9 +1537,15 @@ def test_candidate_archive_private_staging_rejects_lstat_open_toctou(
 ) -> None:
     pin, paths = write_candidate_bundle(tmp_path)
     original_fstat = artifact.os.fstat
+    source_metadata = paths["archive"].lstat()
+    source_check_mutated = False
 
     def changed_fstat(descriptor: int) -> object:
+        nonlocal source_check_mutated
         opened = original_fstat(descriptor)
+        if opened.st_dev != source_metadata.st_dev or opened.st_ino != source_metadata.st_ino:
+            return opened
+        source_check_mutated = True
         fields = list(opened)
         fields[1] += 1
         return artifact.os.stat_result(fields)
@@ -1550,6 +1556,7 @@ def test_candidate_archive_private_staging_rejects_lstat_open_toctou(
         artifact.stage_candidate_archive(pin, paths["archive"]),
     ):
         pytest.fail("TOCTOU-mutated archive was staged")
+    assert source_check_mutated
 
 
 def test_candidate_runtime_rejects_an_unloaded_or_rebound_config_digest(
