@@ -989,9 +989,7 @@ def inspect_oci_archive(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
                 uncompressed.seek(0)
                 try:
                     with tarfile.open(fileobj=uncompressed, mode="r|") as layer_archive:
-                        layer_member_count = 0
-                        for _member in layer_archive:
-                            layer_member_count += 1
+                        for layer_member_count, _member in enumerate(layer_archive, start=1):
                             total_layer_members += 1
                             _require(
                                 layer_member_count <= MAX_LAYER_MEMBERS,
@@ -1001,7 +999,10 @@ def inspect_oci_archive(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
                                 total_layer_members <= MAX_TOTAL_LAYER_MEMBERS,
                                 "OCI aggregate layer members are too large",
                             )
-                        _require(layer_member_count > 0, "OCI layer tar is empty")
+                        # A filesystem changeset can validly contain no entries.
+                        # The raw scan above still requires the canonical two-block
+                        # end-of-archive marker and a zero-only tail, so accepting an
+                        # empty layer does not accept an empty or truncated blob.
                 except tarfile.TarError as exc:
                     raise ValueError("OCI layer is not a readable tar archive") from exc
         _require(
