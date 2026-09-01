@@ -267,6 +267,12 @@ def test_candidate_pin_is_non_release_and_runs_by_commit_bound_local_reference(t
 
     assert "release_tag" not in pin
     assert artifact.artifact_target(pin) is artifact.RUST_TARGET
+    assert artifact.candidate_archive_reference(pin) == (
+        artifact.CANDIDATE_LOCAL_IMAGE_REPOSITORY + ":candidate-" + "a" * 40
+    )
+    assert artifact.candidate_manifest_reference(pin) == (
+        artifact.CANDIDATE_LOCAL_IMAGE_REPOSITORY + "@sha256:" + "b" * 64
+    )
     assert artifact.image_reference(pin) == (artifact.CANDIDATE_LOCAL_IMAGE_REPOSITORY + ":verified-" + "a" * 40)
     assert artifact.evidence_subject(pin) == {
         "repository": artifact.RUST_REPOSITORY,
@@ -460,6 +466,8 @@ def write_oci_archive(
     nested_index_payload_media_type: str | None = artifact.OCI_INDEX,
     top_index_platform: dict[str, str] | None = None,
     index_payload_media_type: str | None = None,
+    containerd_image_name: str | None = None,
+    omit_containerd_image_name: bool = False,
     compressed_outer: bool = False,
     uncompressed_layer_override: bytes | None = None,
     outer_eoa_blocks: int = 2,
@@ -520,11 +528,14 @@ def write_oci_archive(
     if manifest_payload_media_type is not None:
         manifest_value["mediaType"] = manifest_payload_media_type
     manifest = artifact.canonical_json(manifest_value)
-    manifest_fields: dict[str, object] = {
-        "annotations": {
-            "org.opencontainers.image.ref.name": pin["image"]["archive_tag"]  # type: ignore[index]
-        }
+    archive_annotations = {
+        "org.opencontainers.image.ref.name": pin["image"]["archive_tag"],  # type: ignore[index]
     }
+    if not omit_containerd_image_name:
+        archive_annotations["io.containerd.image.name"] = containerd_image_name or artifact.candidate_archive_reference(
+            pin
+        )
+    manifest_fields: dict[str, object] = {"annotations": archive_annotations}
     if not omit_platform:
         manifest_fields["platform"] = platform or {"architecture": "amd64", "os": "linux"}
     manifest_descriptor = _descriptor(manifest, artifact.OCI_MANIFEST, **manifest_fields)
@@ -539,9 +550,7 @@ def write_oci_archive(
             nested_value["mediaType"] = nested_index_payload_media_type
         nested = artifact.canonical_json(nested_value)
         nested_fields: dict[str, object] = {
-            "annotations": {
-                "org.opencontainers.image.ref.name": pin["image"]["archive_tag"]  # type: ignore[index]
-            }
+            "annotations": archive_annotations,
         }
         if top_index_platform is not None:
             nested_fields["platform"] = top_index_platform
@@ -876,6 +885,25 @@ def test_oci_archive_accepts_canonical_payload_and_unqualified_platform(
     archive_path = tmp_path / "candidate.oci.tar"
     write_oci_archive(archive_path, pin, nested_index=nested_index)
     artifact.inspect_oci_archive(archive_path, pin)
+
+
+@pytest.mark.parametrize(
+    ("options"),
+    [
+        {"omit_containerd_image_name": True},
+        {"containerd_image_name": "docker.io/elevenid/unrelated:candidate"},
+    ],
+)
+def test_oci_archive_requires_exact_containerd_image_name(
+    tmp_path: Path,
+    options: dict[str, object],
+) -> None:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "candidate.oci.tar"
+    write_oci_archive(archive_path, pin, **options)
+
+    with pytest.raises(ValueError, match="OCI archive image name changed"):
+        artifact.inspect_oci_archive(archive_path, pin)
 
 
 def test_oci_archive_accepts_a_canonical_empty_filesystem_layer(tmp_path: Path) -> None:
@@ -1938,7 +1966,7 @@ def test_run_candidate_is_one_fail_closed_validation_transaction(
         "attest",
         "load",
         "run:True",
-        f"remove:{pin['image']['archive_tag']}:latest",  # type: ignore[index]
+        f"remove:{artifact.candidate_archive_reference(pin)}",
         f"remove:{artifact.image_reference(pin)}",
     ]
     candidate_options = {
@@ -2122,7 +2150,7 @@ def test_run_candidate_cleans_created_tags_when_runtime_fails(
             ]
         )
     assert removed == [
-        f"{pin['image']['archive_tag']}:latest",  # type: ignore[index]
+        artifact.candidate_archive_reference(pin),
         artifact.image_reference(pin),
     ]
 
@@ -2417,13 +2445,20 @@ def test_candidate_archive_load_rechecks_exact_config_platform_and_labels(
 
     def run(command: list[str], **_kwargs: object) -> str:
         calls.append(command)
-        return f"Loaded image: {pin['image']['archive_tag']}:latest" if command[1] == "load" else ""
+        return "Loaded image ID: sha256:display-output-is-not-authoritative" if command[1] == "load" else ""
 
     monkeypatch.setattr(artifact, "_run", run)
     inspections = iter([None, None, None, inspection, inspection])
-    monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: next(inspections))
+    inspected_references: list[str] = []
+
+    def inspect(reference: str) -> dict[str, object] | None:
+        inspected_references.append(reference)
+        return next(inspections)
+
+    monkeypatch.setattr(artifact, "_inspect_optional_docker_image", inspect)
     monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
-    monkeypatch.setattr(artifact, "_remove_candidate_image", lambda *_args: None)
+    removed: list[str] = []
+    monkeypatch.setattr(artifact, "_remove_candidate_image", removed.append)
 
     artifact.load_candidate_archive(pin, archive_path)
 
@@ -2433,10 +2468,20 @@ def test_candidate_archive_load_rechecks_exact_config_platform_and_labels(
             "docker",
             "image",
             "tag",
-            f"{pin['image']['archive_tag']}@{pin['image']['digest']}",  # type: ignore[index]
+            artifact.candidate_manifest_reference(pin),
             artifact.image_reference(pin),
         ],
     ]
+    archive_reference = artifact.candidate_archive_reference(pin)
+    exact_archive_reference = artifact.candidate_manifest_reference(pin)
+    assert inspected_references == [
+        archive_reference,
+        exact_archive_reference,
+        artifact.image_reference(pin),
+        exact_archive_reference,
+        artifact.image_reference(pin),
+    ]
+    assert removed == [artifact.candidate_archive_reference(pin)]
 
 
 @pytest.mark.parametrize("returncode", [0, 1])
@@ -2585,27 +2630,29 @@ def test_candidate_archive_load_requires_both_manifest_and_config_identity(
     monkeypatch.setattr(
         artifact,
         "_run",
-        lambda command, **_kwargs: (
-            f"Loaded image: {pin['image']['archive_tag']}:latest" if command[1] == "load" else ""
-        ),
+        lambda command, **_kwargs: "unstructured loader output" if command[1] == "load" else "",
     )
 
     with pytest.raises(ValueError, match="loaded candidate image identity changed"):
         artifact.load_candidate_archive(pin, archive_path)
 
 
-def test_candidate_archive_load_requires_useful_exact_tag_result(
+def test_candidate_archive_load_requires_exact_store_binding_after_loader_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pin = valid_candidate_pin()
-    inspections = iter([None, None, None])
+    inspections = iter([None, None, None, None])
     monkeypatch.setattr(artifact, "_verify_staged_candidate_archive", lambda *_args: None)
     monkeypatch.setattr(artifact, "_inspect_optional_docker_image", lambda *_args: next(inspections))
     monkeypatch.setattr(artifact, "_remove_candidate_image", lambda *_args: None)
-    monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: "Loaded image ID: sha256:rebound")
+    monkeypatch.setattr(
+        artifact,
+        "_run",
+        lambda *_args, **_kwargs: f"Loaded image: {artifact.candidate_archive_reference(pin)}",
+    )
 
-    with pytest.raises(ValueError, match="did not report the expected image tag"):
+    with pytest.raises(ValueError, match="could not be resolved by its new archive tag"):
         artifact.load_candidate_archive(pin, tmp_path / "private.oci.tar")
 
 
@@ -2617,7 +2664,7 @@ def test_candidate_archive_real_containerd_rejects_preexisting_wrong_literal_tag
     tmp_path: Path,
 ) -> None:
     pin, paths = write_candidate_bundle(tmp_path)
-    literal_reference = f"{pin['image']['archive_tag']}:latest"  # type: ignore[index]
+    literal_reference = artifact.candidate_archive_reference(pin)
     verified_reference = artifact.image_reference(pin)
     unrelated = tmp_path / "unrelated.tar"
     with tarfile.open(unrelated, mode="w") as archive:
@@ -2654,11 +2701,10 @@ def test_candidate_archive_real_containerd_rejects_preexisting_wrong_literal_tag
 )
 def test_candidate_archive_disposable_containerd_load_contract(tmp_path: Path) -> None:
     pin, paths = write_candidate_bundle(tmp_path)
-    expected_reference = f"{pin['image']['archive_tag']}:latest"  # type: ignore[index]
-    exact_archive_reference = f"{pin['image']['archive_tag']}@{pin['image']['digest']}"  # type: ignore[index]
+    expected_reference = artifact.candidate_archive_reference(pin)
+    exact_archive_reference = artifact.candidate_manifest_reference(pin)
     verified_reference = artifact.image_reference(pin)
     artifact._remove_candidate_image(expected_reference)
-    artifact._remove_candidate_image(exact_archive_reference)
     artifact._remove_candidate_image(verified_reference)
     try:
         with artifact.stage_candidate_archive(pin, paths["archive"]) as staged:
@@ -2675,9 +2721,9 @@ def test_candidate_archive_disposable_containerd_load_contract(tmp_path: Path) -
             pin,
             exported_config_digest=exported_config_digest,
         )
+        assert artifact._inspect_optional_docker_image(exact_archive_reference) is not None
     finally:
         artifact._remove_candidate_image(expected_reference)
-        artifact._remove_candidate_image(exact_archive_reference)
         artifact._remove_candidate_image(verified_reference)
 
 
