@@ -2597,7 +2597,6 @@ def _start_service(
     else:
         _require(target is RUST_TARGET, "only the Rust service has a compatibility switch")
         _require(health.get("status") == "healthy", "default-disabled service is unhealthy")
-        _require(health.get("service") == "verification", "default-disabled service identity changed")
         _require(isinstance(health.get("components"), dict), "default-disabled health components changed")
         _require("native_backend" not in health, "compatibility health leaked while disabled")
         _assert_compatibility_routes_absent(base_url)
@@ -2612,6 +2611,18 @@ def _start_service(
         "compatibility health contract changed",
     )
     return base_url
+
+
+def _assert_native_service_health(value: dict[str, Any], pin: dict[str, Any]) -> None:
+    _require(
+        set(value) == {"status", "service", "backend", "version", "build_revision"},
+        "native Rust verification health shape changed",
+    )
+    _require(value.get("status") == "healthy", "native Rust verification service is unhealthy")
+    _require(value.get("service") == "verification", "native Rust verification service identity changed")
+    _require(value.get("backend") == "rust", "native Rust verification backend identity changed")
+    _require(value.get("version") == pin["version"], "native Rust verification version changed")
+    _require(value.get("build_revision") == pin["commit"], "native Rust verification revision changed")
 
 
 def _session_row(postgres: str, session_id: str) -> dict[str, Any]:
@@ -2842,9 +2853,13 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
                 label="start Rust verification image with compatibility default disabled",
                 compatibility_enabled=False,
             )
-            _require(
-                _http_status("GET", f"{disabled_base_url}/v1/verify/health") == 200,
-                "native Rust verification routes were unavailable with compatibility disabled",
+            _assert_native_service_health(
+                _http_json(
+                    "GET",
+                    f"{disabled_base_url}/v1/verify/health",
+                    expected_status=200,
+                ),
+                pin,
             )
             completed_checks.append("compatibility.default-disabled-routes-absent")
             _docker_remove("container", disabled_service)

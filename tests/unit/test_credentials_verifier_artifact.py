@@ -1979,7 +1979,7 @@ def test_default_disabled_start_requires_native_health_without_compatibility_lea
     monkeypatch.setattr(
         artifact,
         "_wait_for_health",
-        lambda *_args: {"status": "healthy", "service": "verification", "components": {}},
+        lambda *_args: {"status": "healthy", "components": {}},
     )
     monkeypatch.setattr(
         artifact,
@@ -1998,6 +1998,28 @@ def test_default_disabled_start_requires_native_health_without_compatibility_lea
     assert commands == [["docker", "run", "candidate"]]
     assert base_url == "http://127.0.0.1:43123"
     assert absent_probes == [base_url]
+
+
+def test_native_service_health_binds_the_exact_artifact_identity() -> None:
+    pin = valid_rust_pin()
+    value = {
+        "status": "healthy",
+        "service": "verification",
+        "backend": "rust",
+        "version": pin["version"],
+        "build_revision": pin["commit"],
+    }
+
+    artifact._assert_native_service_health(value, pin)
+
+    for field in value:
+        changed = dict(value)
+        changed[field] = "changed"
+        with pytest.raises(ValueError, match=r".+"):
+            artifact._assert_native_service_health(changed, pin)
+
+    with pytest.raises(ValueError, match="shape changed"):
+        artifact._assert_native_service_health({**value, "unexpected": True}, pin)
 
 
 def test_verification_database_snapshot_is_stable_and_complete(
