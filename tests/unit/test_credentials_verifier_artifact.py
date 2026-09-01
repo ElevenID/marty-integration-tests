@@ -270,6 +270,130 @@ def test_candidate_pin_is_non_release_and_runs_by_commit_bound_local_reference(t
     }
 
 
+def test_candidate_pin_rejects_oversized_regular_file_before_parse(tmp_path: Path) -> None:
+    path = write_pin(tmp_path / "candidate.json", valid_candidate_pin())
+    path.write_bytes(path.read_bytes() + b" " * (4 * 1024 * 1024))
+
+    with pytest.raises(ValueError, match="artifact pin is too large"):
+        artifact.load_pin(path, expected_state="candidate")
+
+
+def test_candidate_pin_rejects_non_regular_input(tmp_path: Path) -> None:
+    path = tmp_path / "candidate.json"
+    path.mkdir()
+
+    with pytest.raises(ValueError, match="artifact pin must be a regular file"):
+        artifact.load_pin(path, expected_state="candidate")
+
+
+def test_candidate_pin_remains_utf8_only(tmp_path: Path) -> None:
+    path = tmp_path / "candidate.json"
+    path.write_bytes(json.dumps(valid_candidate_pin()).encode("utf-16"))
+
+    with pytest.raises(ValueError, match="artifact pin must be UTF-8 JSON"):
+        artifact.load_pin(path, expected_state="candidate")
+
+
+def test_candidate_pin_rejects_replacement_between_lstat_and_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = write_pin(tmp_path / "candidate.json", valid_candidate_pin())
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(path.read_bytes())
+    original_open = Path.open
+    replaced = False
+
+    def replacing_open(self: Path, *args: object, **kwargs: object) -> object:
+        nonlocal replaced
+        if self == path and args and args[0] == "rb" and not replaced:
+            replaced = True
+            replacement.replace(path)
+        return original_open(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", replacing_open)
+
+    with pytest.raises(ValueError, match="artifact pin changed before it was read"):
+        artifact.load_pin(path, expected_state="candidate")
+    assert replaced
+
+
+def test_candidate_pin_rejects_growth_during_bounded_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = write_pin(tmp_path / "candidate.json", valid_candidate_pin())
+    original_open = Path.open
+    grew = False
+
+    class GrowingReader:
+        def __init__(self, handle: object) -> None:
+            self.handle = handle
+
+        def __enter__(self) -> GrowingReader:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.handle.close()  # type: ignore[attr-defined]
+
+        def fileno(self) -> int:
+            return self.handle.fileno()  # type: ignore[attr-defined,no-any-return]
+
+        def read(self, size: int = -1) -> bytes:
+            nonlocal grew
+            if not grew:
+                grew = True
+                with original_open(path, "ab") as writer:
+                    writer.write(b" ")
+            return self.handle.read(size)  # type: ignore[attr-defined,no-any-return]
+
+    def growing_open(self: Path, *args: object, **kwargs: object) -> object:
+        handle = original_open(self, *args, **kwargs)  # type: ignore[arg-type]
+        if self == path and args and args[0] == "rb":
+            return GrowingReader(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", growing_open)
+
+    with pytest.raises(ValueError, match="artifact pin changed while it was read"):
+        artifact.load_pin(path, expected_state="candidate")
+    assert grew
+
+
+def test_candidate_pin_stages_exact_parsed_bytes_and_cleans_snapshot(tmp_path: Path) -> None:
+    path = tmp_path / "renamed-download.json"
+    path.write_text(json.dumps(valid_candidate_pin(), indent=2) + "\n", encoding="utf-8")
+    pin, raw = artifact.load_pin_snapshot(path, expected_state="candidate")
+    path.write_text("{}", encoding="utf-8")
+    staged_path: Path | None = None
+
+    with artifact.stage_candidate_pin(pin, raw) as staged:
+        staged_path = staged
+        assert staged.name == "verification-candidate.json"
+        assert staged.read_bytes() == raw
+
+    assert staged_path is not None
+    assert not staged_path.exists()
+
+
+def test_candidate_pin_snapshot_cleans_after_exception(tmp_path: Path) -> None:
+    path = write_pin(tmp_path / "candidate.json", valid_candidate_pin())
+    pin, raw = artifact.load_pin_snapshot(path, expected_state="candidate")
+    staged_path: Path | None = None
+
+    def fail_inside_snapshot() -> None:
+        nonlocal staged_path
+        with artifact.stage_candidate_pin(pin, raw) as staged:
+            staged_path = staged
+            raise RuntimeError("stop")
+
+    with pytest.raises(RuntimeError, match="stop"):
+        fail_inside_snapshot()
+
+    assert staged_path is not None
+    assert not staged_path.exists()
+
+
 def _descriptor(value: bytes, media_type: str, **extra: object) -> dict[str, object]:
     return {
         "mediaType": media_type,
@@ -480,12 +604,25 @@ def write_candidate_bundle(tmp_path: Path) -> tuple[dict[str, object], dict[str,
     return pin, paths
 
 
-def valid_candidate_attestation(pin: dict[str, object]) -> list[dict[str, object]]:
+def valid_candidate_attestation(
+    pin: dict[str, object],
+    *,
+    subject_name: str,
+    subject_digest: str,
+) -> list[dict[str, object]]:
     run = pin["run"]
     return [
         {
             "verificationResult": {
                 "statement": {
+                    "_type": artifact.IN_TOTO_STATEMENT_V1,
+                    "predicateType": artifact.SLSA_PROVENANCE_V1,
+                    "subject": [
+                        {
+                            "name": subject_name,
+                            "digest": {"sha256": subject_digest.removeprefix("sha256:")},
+                        }
+                    ],
                     "predicate": {
                         "buildDefinition": {
                             "externalParameters": {
@@ -516,7 +653,7 @@ def valid_candidate_attestation(pin: dict[str, object]) -> list[dict[str, object
                                 )
                             },
                         },
-                    }
+                    },
                 }
             }
         }
@@ -1308,21 +1445,22 @@ def test_candidate_attestation_binds_exact_successful_producer_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pin = valid_candidate_pin()
-    archive_path = tmp_path / "candidate.oci.tar"
+    pin, pin_path, archive_path, attestations = write_candidate_attestation_subjects(tmp_path)
     calls: list[list[str]] = []
-    attestation = valid_candidate_attestation(pin)
     run_record = valid_candidate_run_record(pin)
 
     def run(command: list[str], **_kwargs: object) -> str:
         calls.append(command)
-        return json.dumps(attestation if command[1:3] == ["attestation", "verify"] else run_record)
+        if command[1:3] == ["attestation", "verify"]:
+            label = "pin" if Path(command[3]) == pin_path else "archive"
+            return json.dumps(attestations[label])
+        return json.dumps(run_record)
 
     monkeypatch.setattr(artifact, "_run", run)
 
-    assert artifact.verify_candidate_attestations(pin, tmp_path / "candidate.json", archive_path) == {
-        "pin": attestation[0],
-        "archive": attestation[0],
+    assert artifact.verify_candidate_attestations(pin, pin_path, archive_path) == {
+        "pin": attestations["pin"][0],
+        "archive": attestations["archive"][0],
     }
     assert calls[0][:3] == ["gh", "attestation", "verify"]
     assert ["--signer-digest", pin["commit"]] == calls[0][calls[0].index("--signer-digest") :][:2]
@@ -1342,56 +1480,136 @@ def test_candidate_attestation_rejects_missing_verification(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pin = valid_candidate_pin()
+    pin, pin_path, archive_path, _attestations = write_candidate_attestation_subjects(tmp_path)
     monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: "[]")
 
     with pytest.raises(ValueError, match="returned no result"):
-        artifact.verify_candidate_attestations(
+        artifact.verify_candidate_attestations(pin, pin_path, archive_path)
+
+
+def write_candidate_attestation_subjects(
+    tmp_path: Path,
+) -> tuple[dict[str, object], Path, Path, dict[str, list[dict[str, object]]]]:
+    pin = valid_candidate_pin()
+    archive_path = tmp_path / "marty-ui-services.oci.tar"
+    archive_path.write_bytes(b"candidate archive")
+    pin["archive"]["digest"] = artifact.file_digest(archive_path)  # type: ignore[index]
+    pin_path = write_pin(tmp_path / "verification-candidate.json", pin)
+    attestations = {
+        "pin": valid_candidate_attestation(
             pin,
-            tmp_path / "candidate.json",
-            tmp_path / "candidate.oci.tar",
-        )
+            subject_name=pin_path.name,
+            subject_digest=artifact.file_digest(pin_path),
+        ),
+        "archive": valid_candidate_attestation(
+            pin,
+            subject_name=str(pin["archive"]["asset"]),  # type: ignore[index]
+            subject_digest=str(pin["archive"]["digest"]),  # type: ignore[index]
+        ),
+    }
+    return pin, pin_path, archive_path, attestations
+
+
+@pytest.mark.parametrize("label", ["pin", "archive"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "type",
+        "missing-type",
+        "predicate-type",
+        "missing-predicate-type",
+        "missing-subject",
+        "empty-subject",
+        "name",
+        "digest",
+        "algorithm",
+        "extra-digest",
+        "duplicate",
+        "extra",
+    ],
+)
+def test_candidate_attestation_rejects_wrong_statement_subject(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    field: str,
+) -> None:
+    pin, pin_path, archive_path, attestations = write_candidate_attestation_subjects(tmp_path)
+    statement = attestations[label][0]["verificationResult"]["statement"]  # type: ignore[index]
+    subject = statement["subject"][0]
+    if field == "type":
+        statement["_type"] = "https://in-toto.io/Statement/v0.1"
+    elif field == "missing-type":
+        statement.pop("_type")
+    elif field == "predicate-type":
+        statement["predicateType"] = "https://example.com/untrusted"
+    elif field == "missing-predicate-type":
+        statement.pop("predicateType")
+    elif field == "missing-subject":
+        statement.pop("subject")
+    elif field == "empty-subject":
+        statement["subject"] = []
+    elif field == "name":
+        subject["name"] = "wrong-name"
+    elif field == "digest":
+        subject["digest"]["sha256"] = "0" * 64
+    elif field == "algorithm":
+        subject["digest"] = {"sha512": "0" * 128}
+    elif field == "extra-digest":
+        subject["digest"]["sha512"] = "0" * 128
+    elif field == "duplicate":
+        statement["subject"].append(copy.deepcopy(subject))
+    else:
+        subject["extra"] = True
+    run_record = valid_candidate_run_record(pin)
+
+    def run(command: list[str], **_kwargs: object) -> str:
+        if command[1:3] == ["attestation", "verify"]:
+            command_label = "pin" if Path(command[3]) == pin_path else "archive"
+            return json.dumps(attestations[command_label])
+        return json.dumps(run_record)
+
+    monkeypatch.setattr(artifact, "_run", run)
+
+    with pytest.raises(ValueError, match="exact attested subject"):
+        artifact.verify_candidate_attestations(pin, pin_path, archive_path)
 
 
 def test_candidate_attestation_rejects_a_failed_producer_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pin = valid_candidate_pin()
-    attestation = valid_candidate_attestation(pin)
+    pin, pin_path, archive_path, attestations = write_candidate_attestation_subjects(tmp_path)
     run_record = {**valid_candidate_run_record(pin), "conclusion": "failure"}
 
     def run(command: list[str], **_kwargs: object) -> str:
-        return json.dumps(attestation if command[1:3] == ["attestation", "verify"] else run_record)
+        if command[1:3] == ["attestation", "verify"]:
+            label = "pin" if Path(command[3]) == pin_path else "archive"
+            return json.dumps(attestations[label])
+        return json.dumps(run_record)
 
     monkeypatch.setattr(artifact, "_run", run)
 
     with pytest.raises(ValueError, match="completed successfully"):
-        artifact.verify_candidate_attestations(
-            pin,
-            tmp_path / "candidate.json",
-            tmp_path / "candidate.oci.tar",
-        )
+        artifact.verify_candidate_attestations(pin, pin_path, archive_path)
 
 
 def test_candidate_attestation_rejects_an_in_progress_same_run_consumer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pin = valid_candidate_pin()
-    attestation = valid_candidate_attestation(pin)
+    pin, pin_path, archive_path, attestations = write_candidate_attestation_subjects(tmp_path)
     run_record = {**valid_candidate_run_record(pin), "status": "in_progress", "conclusion": None}
 
     def run(command: list[str], **_kwargs: object) -> str:
-        return json.dumps(attestation if command[1:3] == ["attestation", "verify"] else run_record)
+        if command[1:3] == ["attestation", "verify"]:
+            label = "pin" if Path(command[3]) == pin_path else "archive"
+            return json.dumps(attestations[label])
+        return json.dumps(run_record)
 
     monkeypatch.setattr(artifact, "_run", run)
     with pytest.raises(ValueError, match="completed successfully"):
-        artifact.verify_candidate_attestations(
-            pin,
-            tmp_path / "candidate.json",
-            tmp_path / "candidate.oci.tar",
-        )
+        artifact.verify_candidate_attestations(pin, pin_path, archive_path)
 
 
 @pytest.mark.parametrize(
@@ -1419,8 +1637,8 @@ def test_candidate_attestation_rejects_every_producer_binding_mutation(
     monkeypatch: pytest.MonkeyPatch,
     field: str,
 ) -> None:
-    pin = valid_candidate_pin()
-    attestation = copy.deepcopy(valid_candidate_attestation(pin))
+    pin, pin_path, archive_path, attestations = write_candidate_attestation_subjects(tmp_path)
+    attestation = copy.deepcopy(attestations["pin"])
     run_record = valid_candidate_run_record(pin)
     if field == "duplicate":
         attestation.append(copy.deepcopy(attestation[0]))
@@ -1440,15 +1658,16 @@ def test_candidate_attestation_rejects_every_producer_binding_mutation(
         locations[field][field.rsplit(".", 1)[1]] = "mutated"
 
     def run(command: list[str], **_kwargs: object) -> str:
-        return json.dumps(attestation if command[1:3] == ["attestation", "verify"] else run_record)
+        if command[1:3] == ["attestation", "verify"]:
+            return json.dumps(attestation if Path(command[3]) == pin_path else attestations["archive"])
+        return json.dumps(run_record)
 
     monkeypatch.setattr(artifact, "_run", run)
-    with pytest.raises(ValueError, match="exact producer run|identity or conclusion changed|completed successfully"):
-        artifact.verify_candidate_attestations(
-            pin,
-            tmp_path / "candidate.json",
-            tmp_path / "candidate.oci.tar",
-        )
+    with pytest.raises(
+        ValueError,
+        match="exact attested subject and producer run|identity or conclusion changed|completed successfully",
+    ):
+        artifact.verify_candidate_attestations(pin, pin_path, archive_path)
 
 
 def test_run_candidate_is_one_fail_closed_validation_transaction(
@@ -1482,11 +1701,17 @@ def test_run_candidate_is_one_fail_closed_validation_transaction(
     )
 
     @contextmanager
-    def staged(*_args: object, **_kwargs: object) -> object:
-        calls.append("stage")
+    def staged_archive(*_args: object, **_kwargs: object) -> object:
+        calls.append("stage-archive")
         yield paths["archive"]
 
-    monkeypatch.setattr(artifact, "stage_candidate_archive", staged)
+    @contextmanager
+    def staged_pin(*_args: object, **_kwargs: object) -> object:
+        calls.append("stage-pin")
+        yield pin_path
+
+    monkeypatch.setattr(artifact, "stage_candidate_archive", staged_archive)
+    monkeypatch.setattr(artifact, "stage_candidate_pin", staged_pin)
     monkeypatch.setattr(
         artifact,
         "run_artifact_test",
@@ -1514,9 +1739,10 @@ def test_run_candidate_is_one_fail_closed_validation_transaction(
         == 0
     )
     assert calls == [
+        "stage-archive",
         "validate",
+        "stage-pin",
         "attest",
-        "stage",
         "load",
         "run:True",
         f"remove:{pin['image']['archive_tag']}:latest",  # type: ignore[index]
@@ -1530,7 +1756,68 @@ def test_run_candidate_is_one_fail_closed_validation_transaction(
     assert "--provenance-verified" not in candidate_options
 
 
-@pytest.mark.parametrize("failing_stage", ["validate", "attest", "stage", "load"])
+def test_run_candidate_attests_and_loads_the_same_private_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin = valid_candidate_pin()
+    pin_path = write_pin(tmp_path / "candidate.json", pin)
+    paths = {name: tmp_path / f"{name}.json" for name in ("archive", "sbom", "metadata", "provenance")}
+    staged_archive = tmp_path / "private.oci.tar"
+    observed: dict[str, Path] = {}
+    monkeypatch.setattr(artifact, "validate_candidate_inputs", lambda *_args, **_kwargs: {})
+
+    def attest(_pin: object, staged_pin: Path, archive_path: Path) -> dict[str, object]:
+        observed["pin"] = staged_pin
+        observed["attest"] = archive_path
+        return {}
+
+    monkeypatch.setattr(artifact, "verify_candidate_attestations", attest)
+
+    @contextmanager
+    def staged(*_args: object, **_kwargs: object) -> object:
+        yield staged_archive
+
+    monkeypatch.setattr(artifact, "stage_candidate_archive", staged)
+
+    def load(_pin: object, archive_path: Path) -> str:
+        observed["load"] = archive_path
+        return artifact.image_reference(pin)
+
+    monkeypatch.setattr(artifact, "load_candidate_archive", load)
+    monkeypatch.setattr(artifact, "run_artifact_test", lambda *_args, **_kwargs: {"status": "passed"})
+    monkeypatch.setattr(artifact, "_remove_candidate_images", lambda *_args: None)
+
+    assert (
+        artifact.main(
+            [
+                "run-candidate",
+                "--pin",
+                str(pin_path),
+                "--archive",
+                str(paths["archive"]),
+                "--sbom",
+                str(paths["sbom"]),
+                "--metadata",
+                str(paths["metadata"]),
+                "--provenance",
+                str(paths["provenance"]),
+                "--evidence",
+                str(tmp_path / "evidence.json"),
+            ]
+        )
+        == 0
+    )
+    assert observed["attest"] == staged_archive
+    assert observed["load"] == staged_archive
+    assert observed["pin"].name == "verification-candidate.json"
+    assert not observed["pin"].exists()
+
+
+@pytest.mark.parametrize(
+    "failing_stage",
+    ["stage-archive", "validate", "stage-pin", "attest", "load"],
+)
 def test_run_candidate_removes_stale_evidence_before_early_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1554,12 +1841,19 @@ def test_run_candidate_removes_stale_evidence_before_early_failure(
     monkeypatch.setattr(artifact, "load_candidate_archive", stage("load"))
 
     @contextmanager
-    def staged(*_args: object, **_kwargs: object) -> object:
-        if failing_stage == "stage":
-            raise ValueError("stage failed")
+    def staged_archive(*_args: object, **_kwargs: object) -> object:
+        if failing_stage == "stage-archive":
+            raise ValueError("stage-archive failed")
         yield paths["archive"]
 
-    monkeypatch.setattr(artifact, "stage_candidate_archive", staged)
+    @contextmanager
+    def staged_pin(*_args: object, **_kwargs: object) -> object:
+        if failing_stage == "stage-pin":
+            raise ValueError("stage-pin failed")
+        yield pin_path
+
+    monkeypatch.setattr(artifact, "stage_candidate_archive", staged_archive)
+    monkeypatch.setattr(artifact, "stage_candidate_pin", staged_pin)
     monkeypatch.setattr(artifact, "run_artifact_test", lambda *_args, **_kwargs: {"status": "passed"})
 
     with pytest.raises(ValueError, match=f"{failing_stage} failed"):
@@ -1676,9 +1970,27 @@ def test_candidate_archive_is_privately_staged_rehashed_and_reverified(tmp_path:
     with artifact.stage_candidate_archive(pin, paths["archive"]) as staged:
         staged_path = staged
         assert staged != paths["archive"]
+        assert staged.name == pin["archive"]["asset"]  # type: ignore[index]
         assert staged.is_file()
         assert artifact.file_digest(staged) == pin["archive"]["digest"]  # type: ignore[index]
         assert staged.read_bytes() == paths["archive"].read_bytes()
+
+    assert staged_path is not None
+    assert not staged_path.exists()
+
+
+def test_candidate_archive_private_snapshot_cleans_after_exception(tmp_path: Path) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    staged_path: Path | None = None
+
+    def fail_inside_snapshot() -> None:
+        nonlocal staged_path
+        with artifact.stage_candidate_archive(pin, paths["archive"]) as staged:
+            staged_path = staged
+            raise RuntimeError("stop")
+
+    with pytest.raises(RuntimeError, match="stop"):
+        fail_inside_snapshot()
 
     assert staged_path is not None
     assert not staged_path.exists()
@@ -1721,6 +2033,84 @@ def test_candidate_archive_private_staging_rejects_lstat_open_toctou(
     ):
         pytest.fail("TOCTOU-mutated archive was staged")
     assert source_check_mutated
+
+
+def test_candidate_archive_private_staging_rejects_actual_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    archive_path = paths["archive"]
+    replacement = tmp_path / "replacement.oci.tar"
+    replacement.write_bytes(archive_path.read_bytes())
+    original_open = Path.open
+    replaced = False
+
+    def replacing_open(self: Path, *args: object, **kwargs: object) -> object:
+        nonlocal replaced
+        if self == archive_path and args and args[0] == "rb" and not replaced:
+            replaced = True
+            replacement.replace(archive_path)
+        return original_open(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", replacing_open)
+
+    with (
+        pytest.raises(ValueError, match="changed before private staging"),
+        artifact.stage_candidate_archive(pin, archive_path),
+    ):
+        pytest.fail("path-replaced archive was staged")
+    assert replaced
+
+
+def test_candidate_archive_private_staging_rejects_growth_without_chasing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin, paths = write_candidate_bundle(tmp_path)
+    archive_path = paths["archive"]
+    initial_size = archive_path.stat().st_size
+    original_open = Path.open
+    read_sizes: list[int] = []
+    grew = False
+
+    class GrowingReader:
+        def __init__(self, handle: object) -> None:
+            self.handle = handle
+
+        def __enter__(self) -> GrowingReader:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.handle.close()  # type: ignore[attr-defined]
+
+        def fileno(self) -> int:
+            return self.handle.fileno()  # type: ignore[attr-defined,no-any-return]
+
+        def read(self, size: int = -1) -> bytes:
+            nonlocal grew
+            read_sizes.append(size)
+            if not grew:
+                grew = True
+                with original_open(archive_path, "ab") as writer:
+                    writer.write(b"x" * 4096)
+            return self.handle.read(size)  # type: ignore[attr-defined,no-any-return]
+
+    def growing_open(self: Path, *args: object, **kwargs: object) -> object:
+        handle = original_open(self, *args, **kwargs)  # type: ignore[arg-type]
+        if self == archive_path and args and args[0] == "rb":
+            return GrowingReader(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", growing_open)
+
+    with (
+        pytest.raises(ValueError, match="changed during private staging"),
+        artifact.stage_candidate_archive(pin, archive_path),
+    ):
+        pytest.fail("growing archive was staged")
+    assert grew
+    assert sum(read_sizes) == initial_size + 1
 
 
 def test_candidate_runtime_rejects_an_unloaded_or_rebound_config_digest(
