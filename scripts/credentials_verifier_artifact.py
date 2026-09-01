@@ -490,6 +490,14 @@ def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict
     return value
 
 
+def candidate_archive_reference(pin: dict[str, Any]) -> str:
+    return f"{CANDIDATE_LOCAL_IMAGE_REPOSITORY}:{pin['image']['archive_tag']}"
+
+
+def candidate_manifest_reference(pin: dict[str, Any]) -> str:
+    return f"{CANDIDATE_LOCAL_IMAGE_REPOSITORY}@{pin['image']['digest']}"
+
+
 def image_reference(pin: dict[str, Any]) -> str:
     if pin["schema"] == CANDIDATE_PIN_SCHEMA:
         return f"{CANDIDATE_LOCAL_IMAGE_REPOSITORY}:verified-{pin['commit']}"
@@ -884,9 +892,16 @@ def inspect_oci_archive(path: Path, pin: dict[str, Any]) -> dict[str, Any]:
         _require(isinstance(descriptor, dict), "OCI image descriptor changed")
         annotations = descriptor.get("annotations")
         _require(
-            isinstance(annotations, dict)
-            and annotations.get("org.opencontainers.image.ref.name") == pin["image"]["archive_tag"],
+            isinstance(annotations, dict),
+            "OCI archive annotations changed",
+        )
+        _require(
+            annotations.get("org.opencontainers.image.ref.name") == pin["image"]["archive_tag"],
             "OCI archive tag changed",
+        )
+        _require(
+            annotations.get("io.containerd.image.name") == candidate_archive_reference(pin),
+            "OCI archive image name changed",
         )
 
         descriptor_digest, value = read_descriptor(archive, members, descriptor)
@@ -1474,11 +1489,11 @@ def _remove_candidate_images(*references: str) -> None:
 
 def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
     _verify_staged_candidate_archive(pin, archive_path)
-    load_report_reference = f"{pin['image']['archive_tag']}:latest"
-    expected_reference = f"{pin['image']['archive_tag']}@{pin['image']['digest']}"
+    archive_reference = candidate_archive_reference(pin)
+    expected_reference = candidate_manifest_reference(pin)
     verified_reference = image_reference(pin)
     _require(
-        _inspect_optional_docker_image(load_report_reference) is None,
+        _inspect_optional_docker_image(archive_reference) is None,
         "candidate archive tag already exists locally",
     )
     _require(
@@ -1492,14 +1507,10 @@ def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
     bound = False
     try:
         loaded = True
-        output = _run(
+        _run(
             ["docker", "load", "--input", str(archive_path)],
             label="load verified candidate archive",
             timeout=300,
-        )
-        _require(
-            f"Loaded image: {load_report_reference}" in {line.strip() for line in output.splitlines()},
-            "candidate archive load did not report the expected image tag",
         )
         inspected = _inspect_optional_docker_image(expected_reference)
         _require(inspected is not None, "loaded candidate image could not be resolved by its new archive tag")
@@ -1521,14 +1532,17 @@ def load_candidate_archive(pin: dict[str, Any], archive_path: Path) -> str:
             pin,
             exported_config_digest=exported_config_digest,
         )
-        _remove_candidate_images(load_report_reference, expected_reference)
+        # The digest-qualified form selects the loaded manifest; it is not an
+        # independently removable image reference. Removing the archive tag
+        # must make that selector unreachable while preserving the verified tag.
+        _remove_candidate_image(archive_reference)
         loaded = False
         bound = False
         return verified_reference
     finally:
         cleanup_references = []
         if loaded:
-            cleanup_references.extend((load_report_reference, expected_reference))
+            cleanup_references.append(archive_reference)
         if bound:
             cleanup_references.append(verified_reference)
         if cleanup_references:
@@ -4092,7 +4106,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if loaded_reference is not None:
                 _remove_candidate_images(
-                    f"{pin['image']['archive_tag']}:latest",
+                    candidate_archive_reference(pin),
                     loaded_reference,
                 )
     runner = run_expected_failure if args.command == "run-expected-failure" else run_artifact_test
