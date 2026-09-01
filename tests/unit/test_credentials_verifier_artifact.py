@@ -1576,6 +1576,11 @@ def test_candidate_attestation_binds_exact_successful_producer_run(
         "archive": attestations["archive"][0],
     }
     assert calls[0][:3] == ["gh", "attestation", "verify"]
+    assert calls[0][calls[0].index("--signer-workflow") :][:2] == [
+        "--signer-workflow",
+        artifact.CANDIDATE_SIGNER_WORKFLOW,
+    ]
+    assert artifact.CANDIDATE_SIGNER_WORKFLOW.startswith("github.com/")
     assert ["--signer-digest", pin["commit"]] == calls[0][calls[0].index("--signer-digest") :][:2]
     assert "--deny-self-hosted-runners" in calls[0]
     assert calls[1][:3] == ["gh", "attestation", "verify"]
