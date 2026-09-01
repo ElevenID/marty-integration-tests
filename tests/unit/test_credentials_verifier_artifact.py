@@ -219,6 +219,7 @@ def test_workflow_runs_oracle_and_exact_known_negative_control() -> None:
     assert 'validate-pin --pin "$PIN_FILE" --state "$PIN_STATE"' in workflow
     assert "run-expected-failure" in workflow
     assert "compare-evidence" in workflow
+    assert "fetch-depth: 0" in workflow
     assert workflow.count('--pin "$PIN_FILE"') == 4
 
 
