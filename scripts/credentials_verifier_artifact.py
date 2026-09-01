@@ -476,6 +476,7 @@ def load_pin_snapshot(
     *,
     expected_state: str = "ready",
 ) -> tuple[dict[str, Any], bytes]:
+    _require(expected_state in {"ready", "ineligible", "candidate"}, "unsupported artifact pin state")
     raw = _read_bounded_regular_file(
         path,
         label="artifact pin",
@@ -1026,18 +1027,25 @@ def verify_candidate_attestations(
     pin: dict[str, Any],
     pin_path: Path,
     archive_path: Path,
+    *,
+    pin_raw: bytes,
 ) -> dict[str, dict[str, Any]]:
     run = pin["run"]
     expected_invocation = f"https://github.com/{RUST_REPOSITORY}/actions/runs/{run['id']}/attempts/{run['attempt']}"
     expected_builder = f"https://github.com/{RUST_REPOSITORY}/{CANDIDATE_BUILD_WORKFLOW}@{pin['source_ref']}"
-    pin_raw = _read_bounded_regular_file(
+    _require(0 < len(pin_raw) <= MAX_PIN_BYTES, "candidate pin snapshot is too large or empty")
+    _require(
+        _parse_pin(pin_raw, expected_state="candidate") == pin,
+        "candidate pin snapshot does not match the validated pin",
+    )
+    staged_pin_raw = _read_bounded_regular_file(
         pin_path,
         label="staged candidate pin",
         maximum_bytes=MAX_PIN_BYTES,
     )
     _require(
-        _parse_pin(pin_raw, expected_state="candidate") == pin,
-        "staged candidate pin does not match the validated pin",
+        staged_pin_raw == pin_raw,
+        "staged candidate pin does not match the validated snapshot",
     )
     pin_digest = _bytes_digest(pin_raw)
     archive_digest = _digest_bounded_regular_file(
@@ -4070,6 +4078,7 @@ def main(argv: list[str] | None = None) -> int:
                         pin,
                         staged_pin,
                         staged_archive,
+                        pin_raw=pin_raw,
                     )
                 loaded_reference = load_candidate_archive(pin, staged_archive)
             evidence = run_artifact_test(
