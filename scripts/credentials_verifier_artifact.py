@@ -536,6 +536,46 @@ def load_pin(path: Path = DEFAULT_PIN, *, expected_state: str = "ready") -> dict
     return value
 
 
+def validate_published_transaction_metadata(pin: dict[str, Any], tag: object, release: object) -> None:
+    """Bind a static transaction pin to publication without changing provenance.
+
+    The caller obtains metadata from the pinned repository and separately
+    verifies the digest-pinned image and SBOM attestations. Publication does not
+    turn their original protected-main source ref into a tag source ref.
+    """
+    pin = _parse_pin(canonical_json(pin), expected_state="transaction")
+    expected_tag = f"v{pin['version']}"
+    _require(isinstance(tag, dict), "published tag metadata must be an object")
+    _require(tag.get("tag") == expected_tag, "published tag name changed")
+    subject = tag.get("object")
+    _require(isinstance(subject, dict), "published tag subject is missing")
+    _require(subject.get("type") == "commit", "published tag must identify a commit")
+    _require(subject.get("sha") == pin["commit"], "published tag commit changed")
+    message = tag.get("message")
+    expected_message = (
+        rf"Release {re.escape(pin['version'])}\n\n"
+        rf"Release-Transaction: {re.escape(pin['transaction_id'])}\n"
+        r"Claim-Run: [1-9][0-9]*\n"
+        rf"Source-SHA: {re.escape(pin['commit'])}\n?"
+    )
+    _require(
+        isinstance(message, str) and re.fullmatch(expected_message, message) is not None,
+        "published tag transaction binding changed",
+    )
+    _require(isinstance(release, dict), "published release metadata must be an object")
+    _require(release.get("tag_name") == expected_tag, "published release tag changed")
+    _require(type(release.get("id")) is int and release["id"] > 0, "published release ID is invalid")
+    _require(release.get("draft") is False, "published release is a draft")
+    _require(release.get("prerelease") is False, "published release is a prerelease")
+    published_at = release.get("published_at")
+    _require(isinstance(published_at, str), "published release timestamp is missing")
+    try:
+        published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("published release timestamp is invalid") from exc
+    _require(published.tzinfo is not None, "published release timestamp must be timezone-aware")
+
+
 def candidate_archive_reference(pin: dict[str, Any]) -> str:
     return f"{CANDIDATE_LOCAL_IMAGE_REPOSITORY}:{pin['image']['archive_tag']}"
 
@@ -4248,6 +4288,10 @@ def parser() -> argparse.ArgumentParser:
     sbom.add_argument("--pin", type=Path, default=DEFAULT_PIN)
     sbom.add_argument("--state", choices=("ready", "ineligible", "transaction"), default="ready")
     sbom.add_argument("--sbom", type=Path, required=True)
+    published = commands.add_parser("validate-published-transaction")
+    published.add_argument("--pin", type=Path, required=True)
+    published.add_argument("--tag-metadata", type=Path, required=True)
+    published.add_argument("--release-metadata", type=Path, required=True)
     candidate = commands.add_parser("validate-candidate")
     candidate.add_argument("--pin", type=Path, required=True)
     candidate.add_argument("--archive", type=Path, required=True)
@@ -4301,6 +4345,19 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "validate-published-transaction":
+        pin = load_pin(args.pin.resolve(), expected_state="transaction")
+        tag = json.loads(
+            _read_bounded_regular_file(args.tag_metadata, label="published tag metadata", maximum_bytes=64 * 1024)
+        )
+        release = json.loads(
+            _read_bounded_regular_file(
+                args.release_metadata, label="published release metadata", maximum_bytes=1024 * 1024
+            )
+        )
+        validate_published_transaction_metadata(pin, tag, release)
+        print("Published transaction tag and release identity match the static pin")
+        return 0
     if args.command in {
         "compare-evidence",
         "compare-candidate-evidence",
