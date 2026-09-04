@@ -240,7 +240,27 @@ def test_workflow_runs_oracle_and_exact_known_negative_control() -> None:
     assert "run-expected-failure" in workflow
     assert "compare-evidence" in workflow
     assert "fetch-depth: 0" in workflow
-    assert workflow.count('--pin "$PIN_FILE"') == 4
+    assert workflow.count('--pin "$PIN_FILE"') == 6
+
+
+def test_workflow_adds_published_transaction_without_replacing_negative_control() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "credentials-verifier-artifact.yml").read_text(encoding="utf-8")
+    assert "pin: config/credentials-verifier-released-transaction.json" in workflow
+    assert "state: transaction\n            mode: transaction" in workflow
+    assert workflow.count("config/credentials-verifier-released-transaction.json") == 4
+    assert "validate-published-transaction" in workflow
+    assert "if: matrix.mode == 'transaction'" in workflow
+    assert "credentials_verifier_artifact.py run-transaction" in workflow
+    assert "credentials_verifier_artifact.py compare-transaction-evidence" in workflow
+    assert '--source-ref "${{ steps.artifact.outputs.source_ref }}"' in workflow
+    assert workflow.index("validate-published-transaction") < workflow.index("gh attestation verify")
+    comparison = workflow.split("  compare-language-neutral-evidence:", 1)[1].split("  candidate-containerd-load:", 1)[
+        0
+    ]
+    assert "fetch-depth: 0" in comparison
+    assert "compare-evidence" in comparison
+    assert "credentials-verifier-comparison.json" in comparison
+    assert "credentials-verifier-published-comparison.json" in comparison
 
 
 def test_workflow_runs_candidate_archive_load_on_pinned_containerd() -> None:
@@ -296,6 +316,152 @@ def test_transaction_pin_binds_unpublished_exact_digest_without_claiming_a_tag(t
         "sbom_digest": "sha256:" + "c" * 64,
         "provenance_verified": True,
     }
+
+
+def published_transaction_metadata(pin: dict[str, object]) -> tuple[dict, dict]:
+    tag = {
+        "tag": f"v{pin['version']}",
+        "object": {"type": "commit", "sha": pin["commit"]},
+        "message": (
+            f"Release {pin['version']}\n\n"
+            f"Release-Transaction: {pin['transaction_id']}\n"
+            "Claim-Run: 12345\n"
+            f"Source-SHA: {pin['commit']}\n"
+        ),
+    }
+    release = {
+        "id": 23456,
+        "tag_name": tag["tag"],
+        "draft": False,
+        "prerelease": False,
+        "published_at": "2026-09-04T23:00:00Z",
+    }
+    return tag, release
+
+
+def test_static_published_pin_binds_the_qualified_v1_1_214_artifacts() -> None:
+    pin = artifact.load_pin(
+        ROOT / "config" / "credentials-verifier-released-transaction.json", expected_state="transaction"
+    )
+    assert pin["version"] == "1.1.214"
+    assert pin["commit"] == "24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1"
+    assert pin["transaction_id"] == "0c8e31ce15211327f2bc71ecbd53d5dc1f7911b85fba57632c26954841e09b4c"
+    assert pin["image"]["digest"] == "sha256:27a5d3728ad6cf60d1402539fbcd1088f0958ef7e884c2dec6de1c4574238b80"
+    assert pin["sbom"]["digest"] == "sha256:adf2edebd509411ab83dbe30d7c4e0a71cd7c84e05ca558bae90cbbf68039afe"
+    assert pin["source_ref"] == "refs/heads/main"
+    assert "release_tag" not in pin
+
+
+@pytest.mark.parametrize("final_newline", [True, False])
+def test_published_transaction_preserves_protected_main_provenance(final_newline: bool) -> None:
+    pin = valid_transaction_pin()
+    original = copy.deepcopy(pin)
+    tag, release = published_transaction_metadata(pin)
+    if not final_newline:
+        tag["message"] = tag["message"].removesuffix("\n")
+    artifact.validate_published_transaction_metadata(pin, tag, release)
+    assert pin == original
+    assert pin["source_ref"] == "refs/heads/main"
+    assert "release_tag" not in pin
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda tag: tag.update(tag="v1.2.5"), "tag name changed"),
+        (lambda tag: tag.update(object=None), "subject is missing"),
+        (lambda tag: tag["object"].update(type="tag"), "identify a commit"),
+        (lambda tag: tag["object"].update(sha="b" * 40), "commit changed"),
+        (lambda tag: tag.update(message=None), "transaction binding"),
+        (lambda tag: tag.update(message=tag["message"].replace("1" * 64, "2" * 64)), "transaction binding"),
+        (lambda tag: tag.update(message=tag["message"].replace("a" * 40, "b" * 40)), "transaction binding"),
+        (
+            lambda tag: tag.update(message=tag["message"].replace("Claim-Run: 12345", "Claim-Run: 0")),
+            "transaction binding",
+        ),
+        (lambda tag: tag.update(message=tag["message"].replace("Claim-Run: 12345\n", "")), "transaction binding"),
+        (lambda tag: tag.update(message=tag["message"] + "Claim-Run: 54321\n"), "transaction binding"),
+    ],
+)
+def test_published_transaction_rejects_changed_or_ambiguous_tag_binding(
+    mutation: Callable[[dict], None], message: str
+) -> None:
+    pin = valid_transaction_pin()
+    tag, release = published_transaction_metadata(pin)
+    mutation(tag)
+    with pytest.raises(ValueError, match=message):
+        artifact.validate_published_transaction_metadata(pin, tag, release)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda release: release.update(tag_name="v1.2.5"), "release tag changed"),
+        (lambda release: release.update(id=0), "release ID"),
+        (lambda release: release.update(id=True), "release ID"),
+        (lambda release: release.update(id="23456"), "release ID"),
+        (lambda release: release.update(draft=True), "draft"),
+        (lambda release: release.update(draft=0), "draft"),
+        (lambda release: release.pop("draft"), "draft"),
+        (lambda release: release.update(prerelease=True), "prerelease"),
+        (lambda release: release.update(prerelease=0), "prerelease"),
+        (lambda release: release.pop("prerelease"), "prerelease"),
+        (lambda release: release.update(published_at=None), "timestamp is missing"),
+        (lambda release: release.update(published_at="not-a-date"), "timestamp is invalid"),
+        (lambda release: release.update(published_at="2026-09-04T23:00:00"), "timezone-aware"),
+    ],
+)
+def test_published_transaction_rejects_incomplete_or_nonpublic_release(
+    mutation: Callable[[dict], None], message: str
+) -> None:
+    pin = valid_transaction_pin()
+    tag, release = published_transaction_metadata(pin)
+    mutation(release)
+    with pytest.raises(ValueError, match=message):
+        artifact.validate_published_transaction_metadata(pin, tag, release)
+
+
+@pytest.mark.parametrize("metadata", [None, [], "not-an-object"])
+def test_published_transaction_rejects_nonobject_metadata(metadata: object) -> None:
+    pin = valid_transaction_pin()
+    tag, release = published_transaction_metadata(pin)
+    with pytest.raises(ValueError, match="tag metadata must be an object"):
+        artifact.validate_published_transaction_metadata(pin, metadata, release)
+    with pytest.raises(ValueError, match="release metadata must be an object"):
+        artifact.validate_published_transaction_metadata(pin, tag, metadata)
+
+
+def test_published_transaction_validator_does_not_relax_pin_source_ref() -> None:
+    pin = valid_transaction_pin()
+    tag, release = published_transaction_metadata(pin)
+    pin["source_ref"] = f"refs/tags/v{pin['version']}"
+    with pytest.raises(ValueError, match="protected main"):
+        artifact.validate_published_transaction_metadata(pin, tag, release)
+
+
+def test_published_transaction_cli_validates_bounded_metadata_files(tmp_path: Path) -> None:
+    pin = valid_transaction_pin()
+    tag, release = published_transaction_metadata(pin)
+    pin_path = write_pin(tmp_path / "pin.json", pin)
+    tag_path = write_pin(tmp_path / "tag.json", tag)
+    release_path = write_pin(tmp_path / "release.json", release)
+    arguments = [
+        "validate-published-transaction",
+        "--pin",
+        str(pin_path),
+        "--tag-metadata",
+        str(tag_path),
+        "--release-metadata",
+        str(release_path),
+    ]
+    assert artifact.main(arguments) == 0
+    tag_path.write_bytes(b" " * (64 * 1024 + 1))
+    with pytest.raises(ValueError, match="published tag metadata"):
+        artifact.main(arguments)
+    write_pin(tag_path, tag)
+    release_path.write_bytes(b" " * (1024 * 1024 + 1))
+    with pytest.raises(ValueError, match="published release metadata"):
+        artifact.main(arguments)
 
 
 @pytest.mark.parametrize(
