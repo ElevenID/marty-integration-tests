@@ -269,7 +269,7 @@ def test_workflow_runs_candidate_archive_load_on_pinned_containerd() -> None:
     assert "candidate-containerd-load:" in workflow
     assert "name: Candidate containerd load contract" in workflow
     assert 'RUN_CANDIDATE_DOCKER_TESTS: "true"' in workflow
-    assert workflow.count("docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1") == 1
+    assert workflow.count("docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70") == 1
     assert "version: v29.7.2" in workflow
     assert '"containerd-snapshotter": true' in workflow
     assert "test_candidate_archive_real_containerd_rejects_preexisting_wrong_literal_tag" in workflow
