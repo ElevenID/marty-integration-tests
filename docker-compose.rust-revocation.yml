@@ -105,6 +105,10 @@ services:
     environment:
       <<: *rust-revocation-service-auth
       ORG_GRPC_TARGET: organization-service:9002
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+    depends_on:
+      issuance-native:
+        condition: service_healthy
 
   organization-service:
     environment:

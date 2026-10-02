@@ -55,8 +55,9 @@ def test_public_stack_selects_healthy_native_issuance() -> None:
     retained = services["issuance-service"]
     assert retained["environment"]["DIDCOMM_DELIVERY_OWNER"] == "native"
     assert retained["environment"]["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
-    for name in ("issuance-service", "applicant-service", "flow-service", "gateway"):
+    for name in ("auth-service", "issuance-service", "applicant-service", "flow-service", "gateway"):
         assert services[name]["depends_on"]["issuance-native"]["condition"] == "service_healthy"
+    assert services["auth-service"]["environment"]["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     assert services["flow-service"]["environment"]["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
     assert services["gateway"]["environment"]["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     assert "issuance-native" in services["gateway"]["environment"]["GATEWAY_REQUIRED_READY_SERVICES"].split(",")
