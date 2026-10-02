@@ -32,6 +32,7 @@ def test_required_public_services_are_healthy() -> None:
         "credential-templates",
         "trust-profiles",
         "issuance",
+        "issuance-native",
         "compliance-profiles",
         "presentation-policies",
         "deployment-profiles",
