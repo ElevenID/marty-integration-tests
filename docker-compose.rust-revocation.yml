@@ -1,7 +1,5 @@
-# Opt-in topology for validating a release candidate whose shared services
-# image contains the canonical Rust revocation-profile implementation. Keep
-# this separate from docker-compose.yml until the Python service deletion has
-# landed in a coordinated Marty UI release.
+# Opt-in topology for validating the released Rust revocation and issuance
+# owners while Python issuance retains only its unmigrated routes.
 
 x-rust-revocation-service-auth: &rust-revocation-service-auth
   # Disposable private-network credential. A caller can override it to record
@@ -38,6 +36,47 @@ services:
       retries: 20
     networks: [marty-oss]
 
+  issuance-native:
+    image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}
+    restart: "no"
+    environment:
+      <<: [*rust-revocation-service-auth, *rust-signing-service-auth]
+      SERVICE_NAME: issuance_native
+      ENVIRONMENT: test
+      ISSUANCE_SERVICE_PORT: "8005"
+      ISSUANCE_GRPC_ENABLED: "true"
+      ISSUANCE_GRPC_PORT: "9005"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      REDIS_URL: redis://redis:6379
+      ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key-32-bytes}
+      TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
+      INTEGRATION_SECRET_MASTER_KEY: ${INTEGRATION_SECRET_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      ORG_GRPC_TARGET: organization-service:9002
+      CT_GRPC_TARGET: credential-template-service:9003
+      RP_GRPC_TARGET: revocation-profile-service:9013
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template-service:8003
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
+      DIDCOMM_DID_WEB_INTERNAL_BASE_URL: http://gateway:8000
+      RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      issuance-migrations:
+        condition: service_completed_successfully
+      signing-keys:
+        condition: service_healthy
+      revocation-profile-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8005/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [marty-oss]
+
   # Rust owns this schema after the cutover. It must run before the shared
   # migration artifact because credential-template migrations read the seeded
   # revocation profile.
@@ -66,6 +105,10 @@ services:
     environment:
       <<: *rust-revocation-service-auth
       ORG_GRPC_TARGET: organization-service:9002
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+    depends_on:
+      issuance-native:
+        condition: service_healthy
 
   organization-service:
     environment:
@@ -93,7 +136,11 @@ services:
     environment:
       <<: *rust-revocation-service-auth
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
+      DIDCOMM_DELIVERY_OWNER: native
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
     depends_on:
+      issuance-native:
+        condition: service_healthy
       revocation-profile-service:
         condition: service_healthy
       signing-keys:
@@ -102,6 +149,10 @@ services:
   applicant-service:
     environment:
       <<: *rust-revocation-service-auth
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+    depends_on:
+      issuance-native:
+        condition: service_healthy
 
   compliance-profile-service:
     environment:
@@ -126,6 +177,11 @@ services:
       ORG_GRPC_TARGET: organization-service:9002
       CT_GRPC_TARGET: credential-template-service:9003
       PP_GRPC_TARGET: presentation-policy-service:9009
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      ISSUANCE_GRPC_TARGET: issuance-native:9005
+    depends_on:
+      issuance-native:
+        condition: service_healthy
 
   revocation-profile-service:
     environment:
@@ -159,7 +215,11 @@ services:
       SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
       ORG_GRPC_TARGET: organization-service:9002
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
     depends_on:
+      issuance-native:
+        condition: service_healthy
       migrations:
         condition: service_completed_successfully
       redis:
