@@ -75,23 +75,30 @@ The Presentation Policy fixture needed the actual `trust-profile-service` and
 
 The resulting verifier decision was **deny**, not an infrastructure success or
 an acceptable happy path. In the disposable local replay, Flow reported
-`Credential signature was not verified:
-VCDM VC-JWT verification rejected the credential (1 error(s))`, with
-`signature_invalid`, `credential_format_mismatch`,
-`trust_profile_not_verified`, `credential_timestamp_missing`,
-`revocation_check_required`, and `claim_missing`. The released member-badge
-template (`50000000-0000-0000-0000-000000000040`) issues `VC_JWT`, while the
-released login trust profile (`60000000-0000-0000-0000-000000000001`) lists
-only `SD_JWT_VC` and `MDOC`; the login policy
-(`50000000-0000-0000-0000-000000000004`) requires that trust profile,
-`openbadge-v3`, and an email claim. The format mismatch is a concrete released
-seed/configuration incompatibility. The signature diagnostic needs a separate
-product-level investigation; it is not evidence that changing the trust-profile
-format alone would make this journey pass.
+`Credential signature was not verified: VCDM VC-JWT verification rejected the
+credential (1 error(s))`, with `signature_invalid`,
+`credential_format_mismatch`, `trust_profile_not_verified`,
+`credential_timestamp_missing`, `revocation_check_required`, and
+`claim_missing`. These diagnostics cannot be attributed directly to the issued
+credential: the experimental wallet submitted a signed VP JWT, which the
+released Flow path forwarded without extracting its embedded VC. Presentation
+Policy then evaluated the outer VP token as a credential. Submitting the raw
+VC-JWT instead would bypass presentation binding and is not a safe positive
+test.
+
+The released member-badge template (`50000000-0000-0000-0000-000000000040`)
+issues `VC_JWT`, while the login trust-profile metadata
+(`60000000-0000-0000-0000-000000000001`) lists only `SD_JWT_VC` and `MDOC`.
+That is a configuration discrepancy, but the evaluated policy path does not
+consult this `supported_formats` list, so it has not been proven to cause the
+observed denial. The login policy (`50000000-0000-0000-0000-000000000004`)
+requires that trust profile, `openbadge-v3`, and an email claim. A supported,
+holder-bound presentation and the remaining trust, timestamp, revocation, and
+claim requirements need separate verification before this is a happy path.
 
 These runtime diagnostics are a transient local observation; sanitized run
-output was not retained as an audit artifact. The seed-format mismatch above
-is independently checkable in the released configuration.
+output was not retained as an audit artifact. The template and trust-profile
+metadata above are independently checkable in the released configuration.
 
 All eight existing official OSS-stack cases passed on the experimental stack
 (`8 passed, 1 experimental verifier case deselected`). The positive verifier
