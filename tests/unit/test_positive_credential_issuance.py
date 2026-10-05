@@ -27,20 +27,44 @@ async def test_missing_issued_credential_fails_and_cleans_up(
         "_deactivate_disposable_application_flows",
         lambda *, extension_uri: _record_cleanup(operations, extension_uri=extension_uri),
     )
+
+    def post_offer(_url: str, event: dict[str, object], _headers: dict[str, str]) -> dict[str, object]:
+        data = event["data"]
+        assert isinstance(data, dict)
+        claims = data["claims"]
+        assert isinstance(claims, dict)
+        assert {
+            "member_id",
+            "email",
+            "organization_id",
+            "role",
+            "achievement_name",
+            "achievement_description",
+            "issued_at",
+        } <= claims.keys()
+        return {
+            "status": 200,
+            "body": {
+                "flows_triggered": 2,
+                "offers": [
+                    {
+                        "flow_definition_id": "seeded-production-flow",
+                        "credential_offer_transaction_id": "seeded-transaction",
+                        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%7D",
+                    },
+                    {
+                        "flow_definition_id": operations[-1],
+                        "credential_offer_transaction_id": "transaction-1",
+                        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%7D",
+                    },
+                ],
+            },
+        }
+
     monkeypatch.setattr(
         journey,
         "post_json",
-        lambda *_args: {
-            "status": 200,
-            "body": {
-                "flows_triggered": 1,
-                "offers": [{
-                    "flow_definition_id": operations[-1],
-                    "credential_offer_transaction_id": "transaction-1",
-                    "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%7D",
-                }],
-            },
-        },
+        post_offer,
     )
 
     class FakeWallet:

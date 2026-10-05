@@ -27,6 +27,7 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
     flow_id = str(uuid.uuid4())
     extension_uri = f"urn:elevenid:test:released-stack-positive-issuance:{flow_id}"
     application_id = f"artifact-issuance-{uuid.uuid4()}"
+    issued_at = datetime.now(UTC).isoformat()
     event = {
         "event_type": "application.approved",
         "aggregate_id": application_id,
@@ -35,7 +36,15 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
         "data": {
             "applicant_id": f"applicant-{application_id}",
             "credential_template_id": _CREDENTIAL_TEMPLATE_ID,
-            "claims": {"email": "nightly-issuance@example.invalid"},
+            "claims": {
+                "member_id": application_id,
+                "email": "nightly-issuance@example.invalid",
+                "organization_id": _ORGANIZATION_ID,
+                "role": "applicant",
+                "achievement_name": "Disposable member badge",
+                "achievement_description": "Disposable released-stack issuance check",
+                "issued_at": issued_at,
+            },
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }
@@ -49,11 +58,13 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
         assert response["status"] == 200
         body = response["body"]
         assert isinstance(body, dict)
-        assert body["flows_triggered"] == 1
+        assert body["flows_triggered"] >= 1
         offers = body["offers"]
         assert isinstance(offers, list)
-        assert len(offers) == 1
-        offer = offers[0]
+        assert len(offers) == body["flows_triggered"]
+        own_offers = [offer for offer in offers if offer.get("flow_definition_id") == flow_id]
+        assert len(own_offers) == 1
+        offer = own_offers[0]
         assert isinstance(offer, dict)
         assert offer["flow_definition_id"] == flow_id
         assert offer["credential_offer_transaction_id"]

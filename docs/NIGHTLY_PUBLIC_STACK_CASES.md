@@ -14,8 +14,9 @@ it cannot alone qualify a nightly release.
 The issuance case uses a per-run extension URI for targeted cleanup, including
 after an uncertain Flow insert. The application-approved webhook is shared by
 active Flow definitions for the seeded organization, so this OSS suite must
-remain serial against one Compose project; a parallel recovery test can still
-trigger an extra offer and correctly fail the one-offer assertion.
+remain serial against one Compose project. Seeded production Flows may also
+create offers for the event; the case requires exactly one offer from its own
+unique Flow ID and redeems only that offer.
 
 The official `marty-ui` stack release presently verifies the integration
 source archive against `release/stack-lock.json`, constructs
@@ -36,3 +37,13 @@ verifier artifact or an equivalent real verifier in the stack. A collect-only
 success or a stable-release manifest is
 not nightly qualification evidence. Preserve the separate official beta
 lifecycle, demo qualification, and YouTube policy.
+
+Local candidate check (2026-10-05): the five selected cases passed in 3.07s
+against disposable Linux containers from published `marty-ui v1.1.226`, using
+the exact `marty-integration-tests v1.2.81` Compose source pinned by that
+release. The local stack manifest SHA-256 was
+`97bb8e858301c29b5ccb08cc0ab6aff36b970517a5b9892fad2930fd3f8bcfff`
+and matched the released checksum; the image digests came from that manifest.
+The test runner was a Windows host, not the intended Linux nightly runner.
+This is targeted local evidence, not release qualification, attestation of a
+nightly tag, or a timing claim for CI.
