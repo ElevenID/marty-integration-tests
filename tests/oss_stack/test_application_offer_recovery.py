@@ -67,10 +67,12 @@ def _psql(sql: str, *, variables: dict[str, str] | None = None) -> str:
     return completed.stdout.strip()
 
 
-def _install_disposable_application_flow(flow_id: str) -> None:
+def _install_disposable_application_flow(
+    flow_id: str, *, extension_uri: str = _DISPOSABLE_EXTENSION_URI
+) -> None:
     extension = json.dumps(
         {
-            "extension_uri": _DISPOSABLE_EXTENSION_URI,
+            "extension_uri": extension_uri,
             "extension_version": "1.0.0",
             "extends_flow_type": "oid4vci_pre_authorized",
             "entry_step_id": "create_offer",
@@ -120,7 +122,9 @@ def _install_disposable_application_flow(flow_id: str) -> None:
     )
 
 
-def _deactivate_disposable_application_flows() -> None:
+def _deactivate_disposable_application_flows(
+    *, extension_uri: str = _DISPOSABLE_EXTENSION_URI
+) -> None:
     _psql(
         textwrap.dedent(
             """
@@ -130,7 +134,7 @@ def _deactivate_disposable_application_flows() -> None:
                AND status <> 'ARCHIVED';
             """
         ),
-        variables={"extension_uri": _DISPOSABLE_EXTENSION_URI},
+        variables={"extension_uri": extension_uri},
     )
 
 

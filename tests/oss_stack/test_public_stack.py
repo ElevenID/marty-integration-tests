@@ -19,10 +19,12 @@ def get_json(path: str) -> dict:
     return response.json()
 
 
+@pytest.mark.nightly_public_smoke
 def test_gateway_is_healthy() -> None:
     assert get_json("/health") == {"status": "healthy", "service": "api-gateway"}
 
 
+@pytest.mark.nightly_public_smoke
 def test_required_public_services_are_healthy() -> None:
     services = get_json("/health/services")["services"]
     required = {
@@ -45,6 +47,7 @@ def test_required_public_services_are_healthy() -> None:
     assert not unhealthy, f"required public services are unhealthy: {unhealthy}"
 
 
+@pytest.mark.nightly_public_smoke
 def test_oid4vci_metadata_is_available() -> None:
     issuer_metadata = get_json("/.well-known/openid-credential-issuer")
     assert issuer_metadata["credential_endpoint"].endswith("/v1/issuance/credential")
@@ -66,6 +69,7 @@ def test_oid4vci_metadata_is_available() -> None:
     assert authorization_metadata["token_endpoint"].endswith("/v1/issuance/token")
 
 
+@pytest.mark.nightly_public_smoke
 def test_ui_is_served() -> None:
     response = httpx.get(f"{UI_URL}/", timeout=10.0)
     response.raise_for_status()
