@@ -74,7 +74,8 @@ The Presentation Policy fixture needed the actual `trust-profile-service` and
 `issuance-service` URLs instead of the released services' default hostnames.
 
 The resulting verifier decision was **deny**, not an infrastructure success or
-an acceptable happy path. Flow reported `Credential signature was not verified:
+an acceptable happy path. In the disposable local replay, Flow reported
+`Credential signature was not verified:
 VCDM VC-JWT verification rejected the credential (1 error(s))`, with
 `signature_invalid`, `credential_format_mismatch`,
 `trust_profile_not_verified`, `credential_timestamp_missing`,
@@ -87,6 +88,10 @@ only `SD_JWT_VC` and `MDOC`; the login policy
 seed/configuration incompatibility. The signature diagnostic needs a separate
 product-level investigation; it is not evidence that changing the trust-profile
 format alone would make this journey pass.
+
+These runtime diagnostics are a transient local observation; sanitized run
+output was not retained as an audit artifact. The seed-format mismatch above
+is independently checkable in the released configuration.
 
 All eight existing official OSS-stack cases passed on the experimental stack
 (`8 passed, 1 experimental verifier case deselected`). The positive verifier
