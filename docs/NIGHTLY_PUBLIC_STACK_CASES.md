@@ -59,3 +59,52 @@ pytest time (14.44s command wall time). The manifest checksum and GitHub
 attestation were rechecked; resolved Compose configuration selected
 `DIDCOMM_DELIVERY_OWNER=native` and `http://issuance-native:8005`. This still
 does not prove the future Linux nightly runner or nightly artifact lineage.
+
+## A8 verifier feasibility replay (pinned `marty-ui` v1.1.226)
+
+A disposable, digest-pinned public-stack replay tested whether the issued
+member badge could complete an authorized issuance-to-verification journey.
+The experiment generated ephemeral workload certificates with the Auth and Flow
+SPIFFE URI SANs required by the released gRPC interfaces. With test-only
+Compose wiring, Auth credential-login returned a real OID4VP request, and
+Flow reached Presentation Policy over mTLS. The Trust Profile fixture also
+needed its `PUBLIC_DOMAIN` aligned with the gateway's published issuer DID;
+after that, its internal profile endpoint returned the issuer's DID keys.
+The Presentation Policy fixture needed the actual `trust-profile-service` and
+`issuance-service` URLs instead of the released services' default hostnames.
+
+The resulting verifier decision was **deny**, not an infrastructure success or
+an acceptable happy path. In the disposable local replay, Flow reported
+`Credential signature was not verified: VCDM VC-JWT verification rejected the
+credential (1 error(s))`, with `signature_invalid`,
+`credential_format_mismatch`, `trust_profile_not_verified`,
+`credential_timestamp_missing`, `revocation_check_required`, and
+`claim_missing`. These diagnostics cannot be attributed directly to the issued
+credential: the experimental wallet submitted a signed VP JWT, which the
+released Flow path forwarded without extracting its embedded VC. Presentation
+Policy then evaluated the outer VP token as a credential. Submitting the raw
+VC-JWT instead would bypass presentation binding and is not a safe positive
+test.
+
+The released member-badge template (`50000000-0000-0000-0000-000000000040`)
+issues `VC_JWT`, while the login trust-profile metadata
+(`60000000-0000-0000-0000-000000000001`) lists only `SD_JWT_VC` and `MDOC`.
+That is a configuration discrepancy, but the evaluated policy path does not
+consult this `supported_formats` list, so it has not been proven to cause the
+observed denial. The login policy (`50000000-0000-0000-0000-000000000004`)
+requires that trust profile, `openbadge-v3`, and an email claim. A supported,
+holder-bound presentation and the remaining trust, timestamp, revocation, and
+claim requirements need separate verification before this is a happy path.
+
+These runtime diagnostics are a transient local observation; sanitized run
+output was not retained as an audit artifact. The template and trust-profile
+metadata above are independently checkable in the released configuration.
+
+All eight existing official OSS-stack cases passed on the experimental stack
+(`8 passed, 1 experimental verifier case deselected`). The positive verifier
+case failed closed and was not committed. Experimental Compose changes and
+workload credentials were discarded; no production code or official test was
+changed. A8 therefore makes **no verified-issuance-to-login claim** and must
+not be promoted to nightly qualification on the strength of the issuance case.
+Resolve the released issuer/template/trust/policy contract, then rerun a real
+trusted presentation to an `allow` decision before adding such a claim.
