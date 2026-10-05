@@ -10,6 +10,10 @@ the public gateway with the existing headless OID4VCI wallet. It requires an
 immediate, nonempty issued credential and never skips. This is an issuance
 journey, not an independent signature, presentation, or verifier decision check;
 it cannot alone qualify a nightly release.
+The wallet's existing JWT-VC structural parser is used to reject malformed
+responses, and the decoded Open Badge subject must carry the generated member
+ID and expected achievement name/description. This decodes but does not
+cryptographically verify the signature.
 
 The issuance case uses a per-run extension URI for targeted cleanup, including
 after an uncertain Flow insert. The application-approved webhook is shared by
@@ -47,3 +51,11 @@ and matched the released checksum; the image digests came from that manifest.
 The test runner was a Windows host, not the intended Linux nightly runner.
 This is targeted local evidence, not release qualification, attestation of a
 nightly tag, or a timing claim for CI.
+
+After the structural assertion was added, the same manifest and isolated
+Compose project passed all eight `tests/oss_stack` cases, including the
+authentication/replay, recovery, and commerce-boundary checks, in 13.06s of
+pytest time (14.44s command wall time). The manifest checksum and GitHub
+attestation were rechecked; resolved Compose configuration selected
+`DIDCOMM_DELIVERY_OWNER=native` and `http://issuance-native:8005`. This still
+does not prove the future Linux nightly runner or nightly artifact lineage.

@@ -20,6 +20,34 @@ from tests.oss_stack.test_public_stack import GATEWAY_URL
 pytestmark = [pytest.mark.integration, pytest.mark.oss_stack]
 
 
+def assert_member_badge_credential(
+    wallet: OID4VCIWalletClient,
+    credential: str,
+    *,
+    member_id: str,
+    achievement_name: str,
+    achievement_description: str,
+) -> None:
+    """Check JWT-VC shape and event correlation, not its signature."""
+    assert credential
+    assert all(credential.split("."))
+    decoded = wallet.validate_credential_format(credential, "jwt_vc_json")
+    payload = decoded["payload"]
+    assert isinstance(payload, dict)
+    assert isinstance(payload.get("iss"), str)
+    assert payload["iss"]
+    vc = payload["vc"]
+    assert isinstance(vc, dict)
+    assert vc.get("type") == ["VerifiableCredential", "OpenBadgeCredential"]
+    subject = vc.get("credentialSubject")
+    assert isinstance(subject, dict)
+    assert subject.get("member_id") == member_id
+    achievement = subject.get("achievement")
+    assert isinstance(achievement, dict)
+    assert achievement.get("name") == achievement_name
+    assert achievement.get("description") == achievement_description
+
+
 @pytest.mark.asyncio
 @pytest.mark.nightly_public_smoke
 async def test_application_offer_redeems_to_issued_credential() -> None:
@@ -28,6 +56,8 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
     extension_uri = f"urn:elevenid:test:released-stack-positive-issuance:{flow_id}"
     application_id = f"artifact-issuance-{uuid.uuid4()}"
     issued_at = datetime.now(UTC).isoformat()
+    achievement_name = "Disposable member badge"
+    achievement_description = "Disposable released-stack issuance check"
     event = {
         "event_type": "application.approved",
         "aggregate_id": application_id,
@@ -41,8 +71,8 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
                 "email": "nightly-issuance@example.invalid",
                 "organization_id": _ORGANIZATION_ID,
                 "role": "applicant",
-                "achievement_name": "Disposable member badge",
-                "achievement_description": "Disposable released-stack issuance check",
+                "achievement_name": achievement_name,
+                "achievement_description": achievement_description,
                 "issued_at": issued_at,
             },
         },
@@ -87,6 +117,12 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
         assert len(issued) == 1
         credential = issued[0].get("credential")
         assert isinstance(credential, str)
-        assert credential
+        assert_member_badge_credential(
+            wallet,
+            credential,
+            member_id=application_id,
+            achievement_name=achievement_name,
+            achievement_description=achievement_description,
+        )
     finally:
         _deactivate_disposable_application_flows(extension_uri=extension_uri)
