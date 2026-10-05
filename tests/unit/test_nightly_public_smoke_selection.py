@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import ast
+import subprocess
+import sys
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).parents[1]
@@ -18,24 +19,29 @@ EXPECTED_CASE_IDS = {
 
 
 def _marked_case_ids(stack_dir: Path, tests_dir: Path) -> set[str]:
-    selected = set()
-    for path in sorted(stack_dir.rglob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        selected.update(
-            f"tests/{path.relative_to(tests_dir).as_posix()}::{node.name}"
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and any(
-                isinstance(decorator, ast.Attribute)
-                and isinstance(decorator.value, ast.Attribute)
-                and isinstance(decorator.value.value, ast.Name)
-                and decorator.value.value.id == "pytest"
-                and decorator.value.attr == "mark"
-                and decorator.attr == "nightly_public_smoke"
-                for decorator in node.decorator_list
-            )
-        )
-    return selected
+    # Ask pytest which cases -m will actually select. Static decorator inspection
+    # misses module/class marks, aliases, and marks added during collection.
+    result = subprocess.run(  # noqa: S603 - fixed interpreter and arguments; no shell
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(stack_dir.relative_to(tests_dir.parent).as_posix()),
+            "-m",
+            "nightly_public_smoke",
+            "--collect-only",
+            "-q",
+            "-o",
+            "addopts=",
+        ],
+        cwd=tests_dir.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return {line.strip() for line in result.stdout.splitlines() if line.startswith("tests/") and "::" in line}
 
 
 def test_candidate_nightly_smoke_case_ids_are_explicit() -> None:
@@ -44,15 +50,32 @@ def test_candidate_nightly_smoke_case_ids_are_explicit() -> None:
 
 
 def test_candidate_nightly_smoke_guard_sees_new_test_files(tmp_path: Path) -> None:
-    stack_dir = tmp_path / "oss_stack"
-    stack_dir.mkdir()
+    stack_dir = tmp_path / "tests" / "oss_stack"
+    stack_dir.mkdir(parents=True)
     (stack_dir / "test_new_journey.py").write_text(
+        "import pytest\n\n"
         "@pytest.mark.nightly_public_smoke\n"
         "def test_unreviewed_case():\n"
         "    pass\n",
         encoding="utf-8",
     )
 
-    assert _marked_case_ids(stack_dir, tmp_path) == {
+    assert _marked_case_ids(stack_dir, tmp_path / "tests") == {
         "tests/oss_stack/test_new_journey.py::test_unreviewed_case"
+    }
+
+
+def test_candidate_nightly_smoke_guard_sees_module_markers(tmp_path: Path) -> None:
+    stack_dir = tmp_path / "tests" / "oss_stack"
+    stack_dir.mkdir(parents=True)
+    (stack_dir / "test_module_mark.py").write_text(
+        "import pytest\n"
+        "pytestmark = pytest.mark.nightly_public_smoke\n\n"
+        "def test_unreviewed_case():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    assert _marked_case_ids(stack_dir, tmp_path / "tests") == {
+        "tests/oss_stack/test_module_mark.py::test_unreviewed_case"
     }
