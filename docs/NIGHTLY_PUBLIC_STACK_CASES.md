@@ -11,6 +11,12 @@ immediate, nonempty issued credential and never skips. This is an issuance
 journey, not an independent signature, presentation, or verifier decision check;
 it cannot alone qualify a nightly release.
 
+The issuance case uses a per-run extension URI for targeted cleanup, including
+after an uncertain Flow insert. The application-approved webhook is shared by
+active Flow definitions for the seeded organization, so this OSS suite must
+remain serial against one Compose project; a parallel recovery test can still
+trigger an extra offer and correctly fail the one-offer assertion.
+
 The official `marty-ui` stack release presently verifies the integration
 source archive against `release/stack-lock.json`, constructs
 `stack-manifest.json` with exact OCI digests, starts Compose from those

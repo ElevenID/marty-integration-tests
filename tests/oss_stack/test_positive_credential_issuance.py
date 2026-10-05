@@ -15,6 +15,7 @@ from tests.oss_stack.test_application_offer_recovery import (
     _deactivate_disposable_application_flows,
     _install_disposable_application_flow,
 )
+from tests.oss_stack.test_public_stack import GATEWAY_URL
 
 pytestmark = [pytest.mark.integration, pytest.mark.oss_stack]
 
@@ -24,6 +25,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.oss_stack]
 async def test_application_offer_redeems_to_issued_credential() -> None:
     """Exercise Flow -> Issuance -> public gateway -> wallet without login mocks."""
     flow_id = str(uuid.uuid4())
+    extension_uri = f"urn:elevenid:test:released-stack-positive-issuance:{flow_id}"
     application_id = f"artifact-issuance-{uuid.uuid4()}"
     event = {
         "event_type": "application.approved",
@@ -37,9 +39,8 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }
-    _deactivate_disposable_application_flows()
-    _install_disposable_application_flow(flow_id)
     try:
+        _install_disposable_application_flow(flow_id, extension_uri=extension_uri)
         response = post_json(
             "http://flow-service:8011/v1/flows/webhooks/application-approved",
             event,
@@ -60,7 +61,7 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
         assert isinstance(offer_uri, str)
         assert offer_uri.startswith("openid-credential-offer://")
 
-        wallet = OID4VCIWalletClient(issuer_base_url="http://127.0.0.1:28000")
+        wallet = OID4VCIWalletClient(issuer_base_url=GATEWAY_URL)
         try:
             result = await wallet.run_preauth_issuance(offer_uri, org_id=_ORGANIZATION_ID)
         finally:
@@ -77,4 +78,4 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
         assert isinstance(credential, str)
         assert credential
     finally:
-        _deactivate_disposable_application_flows()
+        _deactivate_disposable_application_flows(extension_uri=extension_uri)
