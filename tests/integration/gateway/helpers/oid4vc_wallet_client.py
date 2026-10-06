@@ -229,6 +229,35 @@ def _int_to_b64url(n: int, length: int) -> str:
     return _b64url_encode(n.to_bytes(length, "big"))
 
 
+def _public_es256_jwk(private_key: ec.EllipticCurvePrivateKey) -> dict[str, str]:
+    if private_key.curve.name != "secp256r1":
+        raise ValueError("ES256 presentation key must use P-256")
+    public = private_key.public_key().public_numbers()
+    return {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": _int_to_b64url(public.x, 32),
+        "y": _int_to_b64url(public.y, 32),
+    }
+
+
+def _sign_es256_jwt(
+    private_key: ec.EllipticCurvePrivateKey,
+    header: dict[str, Any],
+    payload: dict[str, Any],
+) -> str:
+    header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
+    payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    signing_input = f"{header_b64}.{payload_b64}".encode()
+
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    sig_der = private_key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+    r, s = decode_dss_signature(sig_der)
+    sig_bytes = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+    return f"{header_b64}.{payload_b64}.{_b64url_encode(sig_bytes)}"
+
+
 def _build_proof_jwt(
     private_key: ec.EllipticCurvePrivateKey,
     audience: str,
@@ -240,13 +269,7 @@ def _build_proof_jwt(
       Header: {"typ": "openid4vci-proof+jwt", "alg": "ES256", "jwk": {...}}
       Payload: {"aud": <issuer>, "iat": <now>, "nonce": <c_nonce>}
     """
-    pub = private_key.public_key().public_numbers()
-    jwk = {
-        "kty": "EC",
-        "crv": "P-256",
-        "x": _int_to_b64url(pub.x, 32),
-        "y": _int_to_b64url(pub.y, 32),
-    }
+    jwk = _public_es256_jwk(private_key)
     header = {
         "typ": "openid4vci-proof+jwt",
         "alg": "ES256",
@@ -258,18 +281,7 @@ def _build_proof_jwt(
         "nonce": nonce,
     }
 
-    header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
-    payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
-    signing_input = f"{header_b64}.{payload_b64}".encode()
-
-    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-
-    sig_der = private_key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
-    r, s = decode_dss_signature(sig_der)
-    sig_bytes = r.to_bytes(32, "big") + s.to_bytes(32, "big")
-    sig_b64 = _b64url_encode(sig_bytes)
-
-    return f"{header_b64}.{payload_b64}.{sig_b64}"
+    return _sign_es256_jwt(private_key, header, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +328,65 @@ class OID4VCIWalletClient:
 
     async def close(self):
         await self.client.aclose()
+
+    def build_signed_jwt_vp(
+        self,
+        credential: str,
+        *,
+        nonce: str,
+        audience: str,
+        lifetime_seconds: int = 300,
+    ) -> str:
+        """Sign one VC-JWT presentation with this wallet's issuance-proof key.
+
+        The nonce and audience must come from the verifier's request. This
+        constructs a presentation proof only; it does not verify the embedded
+        credential, its holder binding, or a verifier decision.
+        """
+        if not isinstance(credential, str) or len(credential) > 1_000_000:
+            raise ValueError("Exactly one nonempty compact VC-JWT is required")
+        compact_parts = credential.split(".")
+        if len(compact_parts) != 3 or not all(
+            part
+            and part.isascii()
+            and all(character.isalnum() or character in "-_" for character in part)
+            for part in compact_parts
+        ):
+            raise ValueError("Exactly one nonempty compact VC-JWT is required")
+        if not isinstance(nonce, str) or not 1 <= len(nonce) <= 256 or not nonce.strip():
+            raise ValueError("Verifier nonce must be nonempty and bounded")
+        if not isinstance(audience, str) or not 1 <= len(audience) <= 2048 or not audience.strip():
+            raise ValueError("Verifier audience must be nonempty")
+        if (
+            not isinstance(lifetime_seconds, int)
+            or isinstance(lifetime_seconds, bool)
+            or not 1 <= lifetime_seconds <= 300
+        ):
+            raise ValueError("Presentation lifetime must be between 1 and 300 seconds")
+
+        public_jwk = _public_es256_jwk(self._private_key)
+        # This DID is a self-declared holder claim, not proof of credential binding.
+        # A verifier must compare authenticated key material, not this DID text.
+        holder_did = f"did:jwk:{_b64url_encode(json.dumps(public_jwk, separators=(',', ':')).encode())}"
+        now = int(time.time())
+        return _sign_es256_jwt(
+            self._private_key,
+            {"typ": "vp+jwt", "alg": "ES256", "jwk": public_jwk},
+            {
+                "iss": holder_did,
+                "aud": audience,
+                "nonce": nonce,
+                "iat": now,
+                "nbf": now,
+                "exp": now + lifetime_seconds,
+                "vp": {
+                    "@context": ["https://www.w3.org/ns/credentials/v2"],
+                    "type": ["VerifiablePresentation"],
+                    "holder": holder_did,
+                    "verifiableCredential": [credential],
+                },
+            },
+        )
 
     def _rewrite_url(self, url: str) -> str:
         """Rewrite an external endpoint URL to go through the local gateway.
