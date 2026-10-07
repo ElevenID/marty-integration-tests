@@ -2592,11 +2592,12 @@ def resolver_server(state: ResolverState) -> Iterator[int]:
         thread.join(timeout=5)
 
 
-def _run(command: list[str], *, label: str, timeout: int = 120) -> str:
+def _run(command: list[str], *, label: str, timeout: int = 120, input_text: str | None = None) -> str:
     try:
         completed = subprocess.run(
             command,
             capture_output=True,
+            input=input_text,
             text=True,
             timeout=timeout,
             check=False,
@@ -4098,12 +4099,41 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
         _docker_remove("network", network)
 
 
+def positive_oid4vp_public_input() -> dict[str, Any]:
+    """Read fresh public evidence supplied by the remote issuer and test wallet.
+
+    This consumer never generates issuer or holder signing keys. The caller must
+    qualify the producer separately; reading a file proves no KMS provenance.
+    """
+    path = os.environ.get("MARTY_VERIFIER_POSITIVE_PUBLIC_INPUT")
+    _require(bool(path), "KMS and wallet public presentation input is required")
+    with Path(path).open("rb") as source:
+        encoded = source.read(128 * 1024 + 1)
+    _require(len(encoded) <= 128 * 1024, "positive runtime public input is too large")
+    value = json.loads(encoded)
+    _require(
+        isinstance(value, dict) and set(value) == {"presentation", "issuer_public_jwk"},
+        "positive runtime public input shape changed",
+    )
+    key = value["issuer_public_jwk"]
+    _require(
+        isinstance(key, dict) and set(key) == {"kty", "crv", "x", "y", "kid", "alg"},
+        "positive runtime input requires only public JWK fields",
+    )
+    _require(
+        isinstance(value["presentation"], str) and bool(value["presentation"]),
+        "positive runtime presentation is required",
+    )
+    return value
+
+
 def _run_positive_oid4vp_gate(reference: str) -> dict[str, Any]:
     raw = _run(
         [
             "docker",
             "run",
             "--rm",
+            "-i",
             "--network",
             "none",
             reference,
@@ -4111,6 +4141,7 @@ def _run_positive_oid4vp_gate(reference: str) -> dict[str, Any]:
         ],
         label="exercise exact-image positive OID4VP runtime gate",
         timeout=120,
+        input_text=json.dumps(positive_oid4vp_public_input()),
     )
     evidence = json.loads(raw)
     _require(isinstance(evidence, dict), "positive OID4VP runtime evidence was not an object")
