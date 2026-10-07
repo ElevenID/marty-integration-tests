@@ -3278,28 +3278,36 @@ def test_run_transaction_uses_transaction_state_and_removes_stale_evidence(
     assert observed == [(pin, True)]
 
 
-def test_positive_runtime_input_requires_external_public_material(
+def test_positive_runtime_input_requires_exact_producer_and_public_material(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MARTY_VERIFIER_POSITIVE_PUBLIC_INPUT", raising=False)
-    with pytest.raises(ValueError, match="public presentation input is required"):
+    monkeypatch.delenv("MARTY_VERIFIER_POSITIVE_PRODUCER", raising=False)
+    with pytest.raises(ValueError, match="public input producer is required"):
         artifact.positive_oid4vp_public_input()
-    path = tmp_path / "public-input.json"
-    monkeypatch.setenv("MARTY_VERIFIER_POSITIVE_PUBLIC_INPUT", str(path))
-    # This exercises parsing only; it is not a valid presentation or acceptance evidence.
+    producer = tmp_path / "marty-kms-positive-verifier-input.exe"
+    producer.write_bytes(b"test binary identity")
+    monkeypatch.setenv("MARTY_VERIFIER_POSITIVE_PRODUCER", str(producer))
+    monkeypatch.setenv("MARTY_VERIFIER_POSITIVE_PRODUCER_SHA256", "0" * 64)
+    with pytest.raises(ValueError, match="digest changed"):
+        artifact.positive_oid4vp_public_input()
+    monkeypatch.setenv(
+        "MARTY_VERIFIER_POSITIVE_PRODUCER_SHA256", hashlib.sha256(producer.read_bytes()).hexdigest()
+    )
     value = {
         "presentation": "unsigned",
         "issuer_public_jwk": dict.fromkeys(("kty", "crv", "x", "y", "kid", "alg"), "public"),
     }
-    path.write_text(json.dumps(value), encoding="utf-8")
+    outputs = [json.dumps(value)]
+    monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: outputs[0])
+    # This exercises transport parsing only; it is not a valid KMS presentation.
     assert artifact.positive_oid4vp_public_input() == value
     for member in ("d", "p", "q", "dp", "dq", "qi", "oth", "k"):
         private = copy.deepcopy(value)
         private["issuer_public_jwk"][member] = "forbidden"
-        path.write_text(json.dumps(private), encoding="utf-8")
+        outputs[0] = json.dumps(private)
         with pytest.raises(ValueError, match="only public JWK fields"):
             artifact.positive_oid4vp_public_input()
-    path.write_bytes(b" " * (128 * 1024 + 1))
+    outputs[0] = " " * (128 * 1024 + 1)
     with pytest.raises(ValueError, match="too large"):
         artifact.positive_oid4vp_public_input()
 

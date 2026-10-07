@@ -4100,15 +4100,29 @@ def _run_artifact_test(pin: dict[str, Any], evidence_path: Path, *, provenance_v
 
 
 def positive_oid4vp_public_input() -> dict[str, Any]:
-    """Read fresh public evidence supplied by the remote issuer and test wallet.
-
-    This consumer never generates issuer or holder signing keys. The caller must
-    qualify the producer separately; reading a file proves no KMS provenance.
-    """
-    path = os.environ.get("MARTY_VERIFIER_POSITIVE_PUBLIC_INPUT")
-    _require(bool(path), "KMS and wallet public presentation input is required")
-    with Path(path).open("rb") as source:
-        encoded = source.read(128 * 1024 + 1)
+    """Run the pinned Rust KMS and wallet fixture producer for fresh public input."""
+    path = os.environ.get("MARTY_VERIFIER_POSITIVE_PRODUCER")
+    expected_digest = os.environ.get("MARTY_VERIFIER_POSITIVE_PRODUCER_SHA256", "")
+    _require(bool(path), "KMS and wallet public input producer is required")
+    _require(
+        bool(re.fullmatch(r"[0-9a-f]{64}", expected_digest)),
+        "KMS and wallet public input producer digest is required",
+    )
+    producer = Path(path)
+    _require(
+        producer.is_absolute() and producer.is_file() and producer.name in {
+            "marty-kms-positive-verifier-input", "marty-kms-positive-verifier-input.exe"
+        },
+        "KMS and wallet public input producer path is invalid",
+    )
+    digest = hashlib.sha256()
+    with producer.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    _require(digest.hexdigest() == expected_digest, "KMS and wallet public input producer digest changed")
+    encoded = _run(
+        [str(producer)], label="produce fresh KMS and wallet public verifier input", timeout=120
+    )
     _require(len(encoded) <= 128 * 1024, "positive runtime public input is too large")
     value = json.loads(encoded)
     _require(
