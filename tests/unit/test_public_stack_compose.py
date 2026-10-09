@@ -144,6 +144,17 @@ def test_rust_issuance_migration_waits_for_native_credential_template_catalog() 
     assert "organization-service:\n        condition: service_healthy" in issuance_migrations
 
 
+def test_rust_issuance_canvas_completion_uses_a_public_https_base() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    issuance = service_section(compose, "issuance-service", "issuance-migrations")
+
+    assert "UI_BASE_URL: http://ui" in issuance
+    assert (
+        "CANVAS_LTI_EXPERIENCE_BASE_URL: "
+        "${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}"
+    ) in issuance
+
+
 def test_oid4vci_services_share_one_external_https_issuer_identifier() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     issuance = compose.split("  issuance-service:\n", 1)[1].split("\n  compliance-profile-service:\n", 1)[0]
