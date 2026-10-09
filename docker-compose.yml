@@ -203,6 +203,7 @@ services:
       DIDCOMM_DID_WEB_INTERNAL_BASE_URL: http://gateway:8000
       PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       UI_BASE_URL: http://ui
+      CANVAS_LTI_EXPERIENCE_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       INTEGRATION_SECRET_MASTER_KEY: ${INTEGRATION_SECRET_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
       CANVAS_MIRROR_WORKER_ENABLED: "false"
       # Shared only on the private Compose network so the authenticated gateway
