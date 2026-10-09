@@ -130,6 +130,20 @@ def test_migrations_never_seed_an_internal_public_origin() -> None:
     assert "PUBLIC_API_URL: ${ISSUER_BASE_URL:-http://gateway:8000}" not in migrations
 
 
+def test_rust_issuance_migration_waits_for_native_credential_template_catalog() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    issuance_migrations = service_section(
+        compose, "issuance-migrations", "applicant-service"
+    )
+
+    assert "migrations:\n        condition: service_completed_successfully" in issuance_migrations
+    assert (
+        "credential-template-service:\n        condition: service_healthy"
+        in issuance_migrations
+    )
+    assert "organization-service:\n        condition: service_healthy" in issuance_migrations
+
+
 def test_oid4vci_services_share_one_external_https_issuer_identifier() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     issuance = compose.split("  issuance-service:\n", 1)[1].split("\n  compliance-profile-service:\n", 1)[0]
