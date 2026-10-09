@@ -1,5 +1,4 @@
-# Opt-in topology for validating the released Rust revocation and issuance
-# owners while Python issuance retains only its unmigrated routes.
+# Required Rust service wiring for the artifact-only public stack.
 
 x-rust-revocation-service-auth: &rust-revocation-service-auth
   # Disposable private-network credential. A caller can override it to record
@@ -46,7 +45,8 @@ services:
       ISSUANCE_SERVICE_PORT: "8005"
       ISSUANCE_GRPC_ENABLED: "true"
       ISSUANCE_GRPC_PORT: "9005"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      DATABASE_URL: postgresql://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      MARTY_SCHEMA_STARTUP_MODE: validate
       REDIS_URL: redis://redis:6379
       ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}

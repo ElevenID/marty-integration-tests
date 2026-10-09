@@ -17,7 +17,6 @@ def manifest():
         "ghcr.io/elevenid/marty-ui-oss/ui",
         "ghcr.io/elevenid/marty-ui-oss/services",
         "ghcr.io/elevenid/marty-ui-oss/migrations",
-        "ghcr.io/elevenid/marty-credentials-issuance",
     ]
     return {
         "schema": "marty.stack/v1",
@@ -78,7 +77,19 @@ def manifest():
 def test_maps_required_images_by_immutable_uri():
     images = MODULE.image_map(manifest())
     assert images["MARTY_UI_IMAGE"].endswith("@sha256:" + "a" * 64)
+    assert images["MARTY_ISSUANCE_IMAGE"] == images["MARTY_SERVICES_IMAGE"]
     assert len(images) == 4
+
+
+def test_rejects_retired_credentials_image() -> None:
+    value = manifest()
+    value["components"][0]["artifacts"].append({
+        "type": "oci",
+        "uri": "ghcr.io/elevenid/marty-credentials-issuance",
+        "digest": "sha256:" + "a" * 64,
+    })
+    with pytest.raises(ValueError, match="Rust-only stack requires exactly"):
+        MODULE.image_map(value)
 
 
 def test_maps_required_python_artifacts_by_component_and_digest():

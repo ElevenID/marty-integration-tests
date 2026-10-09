@@ -20,7 +20,7 @@ REQUIRED_IMAGES = {
     "MARTY_UI_IMAGE": "ui",
     "MARTY_SERVICES_IMAGE": "services",
     "MARTY_MIGRATIONS_IMAGE": "migrations",
-    "MARTY_ISSUANCE_IMAGE": "marty-credentials-issuance",
+    "MARTY_ISSUANCE_IMAGE": "services",
 }
 REQUIRED_PYTHON_ARTIFACTS = {
     "MARTY_RS": ("marty-core-python", "python", "ElevenID/marty-core"),
@@ -70,6 +70,13 @@ def image_map(manifest: dict) -> dict[str, str]:
                 f"found {len(matches)}"
             )
         rendered[variable] = matches[0]
+    expected_repositories = {"ui", "services", "migrations"}
+    actual_repositories = {
+        image.split("@", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+        for image in images
+    }
+    if len(images) != 3 or actual_repositories != expected_repositories:
+        raise ValueError("Rust-only stack requires exactly the UI, services, and migrations images")
     return rendered
 
 
@@ -134,7 +141,6 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path(".env.stack"))
     parser.add_argument("--pull", action="store_true")
-    parser.add_argument("--previous-manifest", type=Path)
     args = parser.parse_args()
 
     manifest = load_manifest(args.manifest)
@@ -151,12 +157,6 @@ def main() -> int:
         "\n".join(f"{key}={value}" for key, value in sorted({**images, **artifacts}.items())) + "\n",
         encoding="utf-8",
     )
-
-    if args.previous_manifest:
-        previous = image_map(load_manifest(args.previous_manifest))
-        if set(previous) != set(image_map(manifest)):
-            raise ValueError("upgrade/rollback manifests do not expose the same image roles")
-        print("Validated upgrade and rollback image roles.")
 
     if args.pull:
         for image in images.values():

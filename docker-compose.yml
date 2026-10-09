@@ -171,8 +171,17 @@ services:
 
   issuance-service:
     image: ${MARTY_ISSUANCE_IMAGE:?run scripts/render_stack_env.py first}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8005/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     environment:
-      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      SERVICE_NAME: issuance_native
+      ENVIRONMENT: test
+      MARTY_SCHEMA_STARTUP_MODE: validate
+      ISSUANCE_SERVICE_PORT: "8005"
+      DATABASE_URL: postgresql://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
       REDIS_URL: redis://redis:6379
       # The issuer URL is a public protocol identifier, never an internal
       # service address. Official lanes override this with their TLS bridge.
@@ -188,6 +197,14 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
+      GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-oss-ci-rust-revocation-lifecycle-token-32-bytes}
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      DIDCOMM_DID_WEB_INTERNAL_BASE_URL: http://gateway:8000
+      PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      UI_BASE_URL: http://ui
+      INTEGRATION_SECRET_MASTER_KEY: ${INTEGRATION_SECRET_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+      CANVAS_MIRROR_WORKER_ENABLED: "false"
       # Shared only on the private Compose network so the authenticated gateway
       # can call the issuer's management API. This disposable default is not a
       # deployment credential; production supplies its own secret.
@@ -199,15 +216,15 @@ services:
         condition: service_completed_successfully
     networks: [marty-oss]
 
-  # The platform migration image owns the shared service schemas, while the
-  # credentials artifact owns its issuance schema and migration history. Keep
-  # both as release artifacts so a clean stack is genuinely deployable.
+  # The same signed Rust services image owns issuance migrations and runtime.
   issuance-migrations:
     image: ${MARTY_ISSUANCE_IMAGE:?run scripts/render_stack_env.py first}
-    command: ["python", "manage_migrations.py", "upgrade"]
+    entrypoint: ["/usr/local/bin/marty-issuance-service"]
+    command: ["migrate"]
     restart: "no"
     environment:
-      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      SERVICE_NAME: issuance_native
+      DATABASE_URL: postgresql://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
     depends_on:
       migrations:
         condition: service_completed_successfully

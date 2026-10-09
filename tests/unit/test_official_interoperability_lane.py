@@ -24,11 +24,11 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
         "MARTY_UI_IMAGE": "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "1" * 64,
         "MARTY_SERVICES_IMAGE": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "2" * 64,
         "MARTY_MIGRATIONS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "3" * 64,
-        "MARTY_ISSUANCE_IMAGE": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "4" * 64,
+        "MARTY_ISSUANCE_IMAGE": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "2" * 64,
     }
     manifest = tmp_path / "stack-manifest.json"
     artifacts = []
-    for reference in references.values():
+    for reference in sorted(set(references.values())):
         uri, digest = reference.split("@", 1)
         artifacts.append({"type": "oci", "uri": uri, "digest": digest})
     manifest.write_text(
@@ -92,7 +92,7 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
         "manifest_path": str(manifest.resolve()),
         "manifest_sha256": lane.file_sha256(manifest),
         "marty_commit": "a" * 40,
-        "images": [{"reference": reference} for reference in references.values()],
+        "images": [{"reference": reference} for reference in sorted(set(references.values()))],
     }
     base_images = json.loads((ROOT / "config" / "base-images.json").read_text(encoding="utf-8"))
     environment = {

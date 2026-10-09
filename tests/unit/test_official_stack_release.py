@@ -73,18 +73,6 @@ def stack_bytes() -> bytes:
                             },
                         ],
                     },
-                    {
-                        "name": "marty-credentials",
-                        "repository": "ElevenID/marty-credentials",
-                        "commit": "b" * 40,
-                        "artifacts": [
-                            {
-                                "type": "oci",
-                                "uri": "ghcr.io/elevenid/marty-credentials-issuance",
-                                "digest": "sha256:" + "c" * 64,
-                            }
-                        ],
-                    },
                     wheel_component("marty-core-python", "ElevenID/marty-core", "marty_rs"),
                     wheel_component(
                         "marty-verification-python",
