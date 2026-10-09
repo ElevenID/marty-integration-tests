@@ -10,7 +10,7 @@ This repository verifies the public Marty credential stack using only released, 
 - Trust, policy, flow, deployment, and revocation behavior
 - Headless-wallet and interoperability flows
 - Browser contracts against the released Marty UI
-- Upgrade and rollback manifest compatibility
+- Rust issuance runtime and migration image identity
 - The governed Credentials compatibility surface, retaining released Credentials `v0.1.71`
   as the immutable Python oracle and exact Rust `v1.1.208` as a provenance-verified negative
   control for its known unscoped session transaction ID. A third lane pins the qualified,
@@ -41,33 +41,11 @@ make stop
 
 `scripts/render_stack_env.py` rejects commerce markers, mutable image tags, missing digests, duplicate image roles, and unsupported manifest schemas. The generated `.env.stack` contains digest-pinned GHCR and base-image references and is never committed.
 
-### Rust revocation deletion candidate
-
-After a coordinated release candidate packages the canonical Rust
-revocation-profile binary in `MARTY_SERVICES_IMAGE`, exercise it with the
-opt-in overlay:
-
-```bash
-make start-rust-revocation STACK_MANIFEST=/path/to/candidate-stack-manifest.json
-pytest tests/integration/gateway/test_complete_lifecycle.py -v
-make stop-rust-revocation
-```
-
-The overlay runs the Rust-owned schema migrator before shared migrations,
-starts the Rust HTTP and gRPC endpoints, and applies one disposable service
-token to every caller and server involved in the lifecycle. It is deliberately
-not part of `make start`: the default stack remains compatible with releases
-from before the Python revocation service deletion. Evidence runs must retain
-the attested manifest, resolved image digests, Compose configuration, test
-output, and service logs.
-
-To validate upgrade and rollback inputs before running the suite:
-
-```bash
-python scripts/render_stack_env.py \
-  --manifest candidate-stack-manifest.json \
-  --previous-manifest previous-stack-manifest.json
-```
+`make start` combines the public Compose model with the required Rust service
+wiring. Issuance runtime and migrations use the same signed services digest;
+the renderer rejects a retired Credentials issuance image. Evidence runs
+retain the attested manifest, resolved image digests, Compose configuration,
+test output, and service logs.
 
 ## UI contracts
 

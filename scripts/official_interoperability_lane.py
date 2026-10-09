@@ -327,7 +327,7 @@ STACK_IMAGE_REPOSITORIES = {
     "MARTY_UI_IMAGE": "ui",
     "MARTY_SERVICES_IMAGE": "services",
     "MARTY_MIGRATIONS_IMAGE": "migrations",
-    "MARTY_ISSUANCE_IMAGE": "marty-credentials-issuance",
+    "MARTY_ISSUANCE_IMAGE": "services",
 }
 BASE_IMAGE_CONFIG_KEYS = {"POSTGRES_IMAGE": "postgres", "REDIS_IMAGE": "redis"}
 MATERIAL_ENV_KEYS = {
