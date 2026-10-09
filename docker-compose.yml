@@ -228,6 +228,12 @@ services:
     depends_on:
       migrations:
         condition: service_completed_successfully
+      # Rust issuance seeds from the Credential Template catalog and reads
+      # the organization table. Both native owners complete startup first.
+      credential-template-service:
+        condition: service_healthy
+      organization-service:
+        condition: service_healthy
     networks: [marty-oss]
 
   applicant-service:
