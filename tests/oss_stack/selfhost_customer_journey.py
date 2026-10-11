@@ -157,6 +157,11 @@ async def test_clean_install_issue_present_verify() -> None:
             )
             decision = await gateway.get_verification_decision(flow["instance_id"])
             assert decision.get("decision") == "allow", "public verifier did not accept the wallet presentation"
+            assert decision.get("result") == "passed", "accepted presentation did not pass verification"
+            assert any(
+                item.get("revocation_checked") is True
+                for item in decision.get("credential_results", [])
+            ), "accepted presentation omitted revocation evidence"
             assert issuance.get("id"), "issuance response omitted lifecycle identity"
             await gateway.revoke_credential(
                 issuance_id=str(issuance["id"]),
@@ -178,4 +183,20 @@ async def test_clean_install_issue_present_verify() -> None:
             denied = await gateway.get_verification_decision(revoked_flow["instance_id"])
             assert denied.get("decision") == "deny", "revoked credential was not denied"
             assert denied.get("result") == "failed", "revoked verification did not fail closed"
+            assert "revok" in str(denied.get("decision_reason", "")).lower(), (
+                "denial did not identify revocation as its reason"
+            )
+            assert "credential_revoked" in denied.get("error_codes", []), (
+                "denial omitted the credential_revoked error code"
+            )
+            denied_credentials = denied.get("credential_results", [])
+            assert any(item.get("revocation_checked") is True for item in denied_credentials), (
+                "denial omitted a revocation check"
+            )
+            assert any(item.get("not_revoked") is False for item in denied_credentials), (
+                "denial did not identify the credential as revoked"
+            )
+            assert any(item.get("satisfied") is False for item in denied_credentials), (
+                "denial omitted failed credential satisfaction"
+            )
         assert (await gateway.health_check()).get("status") == "healthy"
