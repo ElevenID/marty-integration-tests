@@ -27,6 +27,7 @@ Required explicit inputs:
 | `SELFHOST_TEST_USERNAME`, `SELFHOST_TEST_PASSWORD` | Disposable operator credentials; supply from files or a secret runner, not a committed env file |
 | `SELFHOST_ORG_ID` | Exact migration-seeded organization UUID |
 | `SELFHOST_ISSUER_DID` | Public DID of a KMS-backed issuer profile for that organization |
+| `SELFHOST_VERIFIER_DID` | Public DID selected by the installed verifier signing profile |
 
 ```bash
 python -m pytest -q tests/oss_stack/selfhost_customer_journey.py

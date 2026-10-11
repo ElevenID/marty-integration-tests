@@ -24,7 +24,7 @@ def required_inputs() -> dict[str, str]:
         "SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
         "SELFHOST_PUBLIC_DOMAIN",
         "SELFHOST_TEST_USERNAME", "SELFHOST_TEST_PASSWORD",
-        "SELFHOST_ORG_ID", "SELFHOST_ISSUER_DID",
+        "SELFHOST_ORG_ID", "SELFHOST_ISSUER_DID", "SELFHOST_VERIFIER_DID",
     )
     values = {name: os.environ.get(name, "").strip() for name in names}
     missing = sorted(name for name, value in values.items() if not value)
@@ -44,6 +44,8 @@ def required_inputs() -> dict[str, str]:
         raise ValueError("self-host organization ID is not canonical")
     if not values["SELFHOST_ISSUER_DID"].startswith("did:"):
         raise ValueError("self-host issuer public DID is invalid")
+    if not values["SELFHOST_VERIFIER_DID"].startswith("did:"):
+        raise ValueError("self-host verifier public DID is invalid")
     return values
 
 
@@ -62,6 +64,7 @@ async def test_clean_install_issue_present_verify() -> None:
     assert session_id, "public PKCE login returned no gateway session"
     organization_id = fixture["SELFHOST_ORG_ID"]
     issuer_did = fixture["SELFHOST_ISSUER_DID"]
+    verifier_did = fixture["SELFHOST_VERIFIER_DID"]
     unique = uuid4().hex[:10]
     async with GatewayClient(base_url=gateway_url) as gateway:
         gateway.set_session(session_id)
@@ -113,7 +116,7 @@ async def test_clean_install_issue_present_verify() -> None:
             assert credentials[0].get("credential")
             flow = await gateway.start_verification_flow(
                 presentation_policy_id=str(policy["id"]),
-                organization_id=organization_id, issuer_did=issuer_did,
+                organization_id=organization_id, issuer_did=verifier_did,
             )
             assert flow.get("instance_id")
             assert flow.get("request_uri")
