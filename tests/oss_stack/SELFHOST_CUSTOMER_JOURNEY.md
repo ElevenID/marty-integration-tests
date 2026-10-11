@@ -5,9 +5,13 @@ selection does not collect it. It uses the public gateway and Keycloak PKCE
 login, creates a synthetic compliance profile, revocation profile, credential
 template and presentation policy in the migration-seeded organization, issues
 to an in-memory headless wallet through OID4VCI, and requires an `allow`
-decision after OID4VP presentation. It never selects a KMS key directly: the
-public issuer DID resolves through the installed issuer profile. No external
-CSCA or DSC is required for this SD-JWT journey.
+decision after OID4VP presentation. It revokes that credential and requires a
+`deny` decision in a fresh presentation. It confirms both DIDs occur in the
+public active profile inventory. It never selects a KMS key directly: public
+DIDs resolve through installed profiles. A separate signed installation result
+must prove the profiles use non-exportable managed KMS custody; the public DID
+inventory deliberately omits custody coordinates. No external CSCA or DSC is
+required for this SD-JWT journey.
 
 Run only against a freshly extracted, digest-pinned self-host bundle with
 disposable PostgreSQL, Redis, external OpenBao, and scoped secrets. The caller
@@ -36,5 +40,6 @@ python -m pytest -q tests/oss_stack/selfhost_customer_journey.py
 Missing fixture inputs fail the selected test. The test is a business-journey
 component, not an installation qualifier by itself. Release evidence must also
 bind the test revision and result to the exact ZIP, image lock, source SHA,
-installed service graph, migration ledger, clean state, and owned teardown.
+installed service graph, migration ledger, KMS custody evidence, clean state,
+and owned teardown.
 Currently no published self-host bundle provides that evidence.

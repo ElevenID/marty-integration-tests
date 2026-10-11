@@ -72,6 +72,18 @@ async def test_clean_install_issue_present_verify() -> None:
         organizations = await gateway.list_organizations()
         assert any(item.get("id") == organization_id for item in organizations), (
             "PKCE principal cannot access the migration-seeded organization")
+        identity_response = await gateway.client.get(
+            "/v1/signing-keys/issuer-identities",
+            params={"organization_id": organization_id},
+        )
+        identity_response.raise_for_status()
+        identities = identity_response.json()
+        active = identities.get("identities")
+        assert isinstance(active, list), "public active issuer profiles are unavailable"
+        assert any(item.get("issuer_did") == issuer_did and item.get("status") == "active"
+                   for item in active), "credential issuer DID is not an active managed profile"
+        assert any(item.get("issuer_did") == verifier_did and item.get("status") == "active"
+                   for item in active), "verifier DID is not an active managed profile"
         compliance = await gateway.create_compliance_profile(
             organization_id=organization_id, name=f"Self-host check {unique}",
             compliance_code="MDL_SD_JWT", credential_format="sd_jwt_vc",
@@ -82,6 +94,23 @@ async def test_clean_install_issue_present_verify() -> None:
             revocation_mechanism=["STATUS_LIST_2021"],
         )
         revocation = await gateway.activate_revocation_profile(str(revocation["id"]))
+        entities = await gateway.list_issuer_entities(organization_id)
+        issuer_entity = next((item for item in entities if item.get("issuer_id") == issuer_did), None)
+        if issuer_entity is None:
+            issuer_entity = await gateway.create_issuer_entity(
+                organization_id=organization_id, issuer_id=issuer_did,
+                display_name=f"Self-host issuer {unique}",
+                description="Disposable public-route trust evidence",
+            )
+        trust_profile = await gateway.create_trust_profile(
+            organization_id=organization_id, name=f"Self-host trust {unique}",
+            supported_formats=["SD_JWT_VC"],
+            revocation_profile_id=str(revocation["id"]),
+            revocation_policy={"check_mode": "HARD_FAIL"},
+        )
+        await gateway.add_trust_profile_issuer(
+            str(trust_profile["id"]), str(issuer_entity["id"]), trust_level=100)
+        trust_profile = await gateway.activate_trust_profile(str(trust_profile["id"]))
         template_data = TestDataBuilder.sd_jwt_mdl_template(
             organization_id=organization_id, issuer_did=issuer_did,
             compliance_profile_id=str(compliance["id"]),
@@ -95,7 +124,8 @@ async def test_clean_install_issue_present_verify() -> None:
             credential_template_id=str(template["id"]),
             name=f"Self-host age check {unique}",
         )
-        policy = await gateway.create_presentation_policy(**policy_data)
+        policy = await gateway.create_presentation_policy(
+            **policy_data, trust_profile_id=str(trust_profile["id"]))
         policy = await gateway.activate_presentation_policy(str(policy["id"]))
         async with MartyHeadlessWalletClient(gateway_url=gateway_url) as wallet:
             await wallet.create_wallet(f"selfhost-{unique}")
@@ -116,6 +146,7 @@ async def test_clean_install_issue_present_verify() -> None:
             assert credentials[0].get("credential")
             flow = await gateway.start_verification_flow(
                 presentation_policy_id=str(policy["id"]),
+                trust_profile_id=str(trust_profile["id"]),
                 organization_id=organization_id, issuer_did=verifier_did,
             )
             assert flow.get("instance_id")
@@ -126,4 +157,25 @@ async def test_clean_install_issue_present_verify() -> None:
             )
             decision = await gateway.get_verification_decision(flow["instance_id"])
             assert decision.get("decision") == "allow", "public verifier did not accept the wallet presentation"
+            assert issuance.get("id"), "issuance response omitted lifecycle identity"
+            await gateway.revoke_credential(
+                issuance_id=str(issuance["id"]),
+                reason="Disposable self-host negative control",
+                organization_id=organization_id,
+            )
+            status = await gateway.get_revocation_status(
+                str(issuance["id"]), organization_id=organization_id)
+            assert status.get("revoked") is True or str(status.get("status", "")).lower() == "revoked"
+            revoked_flow = await gateway.start_verification_flow(
+                presentation_policy_id=str(policy["id"]),
+                trust_profile_id=str(trust_profile["id"]),
+                organization_id=organization_id, issuer_did=verifier_did,
+            )
+            await wallet.present_credential(
+                presentation_request_url=revoked_flow["request_uri"],
+                credential_ids=[credentials[0]["id"]], did=holder_did,
+            )
+            denied = await gateway.get_verification_decision(revoked_flow["instance_id"])
+            assert denied.get("decision") == "deny", "revoked credential was not denied"
+            assert denied.get("result") == "failed", "revoked verification did not fail closed"
         assert (await gateway.health_check()).get("status") == "healthy"
