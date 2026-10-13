@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
 import hashlib
 import json
 import os
@@ -159,6 +160,17 @@ def start_agent(
     return subprocess.Popen([str(path)], env=agent_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def windows_pipe_ready(endpoint: str) -> bool:
+    # WaitNamedPipeW tests for an accepting server without consuming a signer connection.
+    return bool(ctypes.windll.kernel32.WaitNamedPipeW(ctypes.c_wchar_p(endpoint), 0))
+
+
+def endpoints_ready(endpoints: list[str], *, windows: bool) -> bool:
+    if windows:
+        return all(windows_pipe_ready(endpoint) for endpoint in endpoints)
+    return all(Path(endpoint).is_socket() for endpoint in endpoints)
+
+
 def run(producer: Path, agent: Path, command: list[str]) -> int:
     if (
         not producer.is_file()
@@ -238,14 +250,12 @@ def run(producer: Path, agent: Path, command: list[str]) -> int:
             processes.append(
                 start_agent(agent, env, endpoints[1], auth[1], base, holder_name, HOLDER_KID, holder_token, ca)
             )
-            for attempt in range(30):
+            for attempt in range(100):
                 if any(process.poll() is not None for process in processes):
                     raise RuntimeError("disposable signer agent exited early")
-                if os.name != "nt" and all(Path(endpoint).is_socket() for endpoint in endpoints):
+                if endpoints_ready(endpoints, windows=os.name == "nt"):
                     break
-                if os.name == "nt" and attempt >= 5:
-                    break
-                if attempt == 29:
+                if attempt == 99:
                     raise RuntimeError("disposable signer agents did not become ready")
                 time.sleep(0.2)
             env.update(

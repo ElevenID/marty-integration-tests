@@ -146,3 +146,12 @@ def test_timed_out_startup_removes_only_labelled_container(monkeypatch: pytest.M
     label = calls[0][calls[0].index("--label") + 1]
     assert calls[1] == ("ps", "-aq", "--filter", "label=" + label)
     assert calls[2] == ("rm", "-f", "owned-container-id")
+
+
+def test_windows_requires_both_signer_pipes_to_accept_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    ready = {r"\\.\pipe\issuer"}
+    monkeypatch.setattr(fixture, "windows_pipe_ready", lambda endpoint: endpoint in ready)
+    endpoints = [r"\\.\pipe\issuer", r"\\.\pipe\holder"]
+    assert not fixture.endpoints_ready(endpoints, windows=True)
+    ready.add(r"\\.\pipe\holder")
+    assert fixture.endpoints_ready(endpoints, windows=True)
