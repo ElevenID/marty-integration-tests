@@ -141,7 +141,7 @@ def validate_stack_manifest(path: Path, pin: dict[str, str]) -> dict[str, object
     if not images:
         raise ValueError("released stack manifest contains no OCI artifacts")
     try:
-        image_map(manifest)
+        image_map(manifest, allow_historical_three_image=True)
         python_artifact_map(manifest)
     except ValueError as exc:
         raise ValueError(f"released stack cannot render official Compose inputs: {exc}") from exc

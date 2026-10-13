@@ -71,11 +71,6 @@ def stack_bytes() -> bytes:
                                 "uri": "ghcr.io/elevenid/marty-ui-oss/migrations",
                                 "digest": "sha256:" + "c" * 64,
                             },
-                            {
-                                "type": "oci",
-                                "uri": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
-                                "digest": "sha256:" + "c" * 64,
-                            },
                         ],
                     },
                     wheel_component("marty-core-python", "ElevenID/marty-core", "marty_rs"),

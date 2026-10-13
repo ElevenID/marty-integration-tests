@@ -44,7 +44,7 @@ def load_manifest(path: Path) -> dict:
     return manifest
 
 
-def image_map(manifest: dict) -> dict[str, str]:
+def image_map(manifest: dict, *, allow_historical_three_image: bool = False) -> dict[str, str]:
     images: list[str] = []
     for component in manifest.get("components", []):
         for artifact in component.get("artifacts", []):
@@ -58,8 +58,19 @@ def image_map(manifest: dict) -> dict[str, str]:
                 raise ValueError(f"OCI URI must not contain a mutable tag: {uri}")
             images.append(f"{uri}@{digest}")
 
+    actual_repositories = {
+        image.split("@", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+        for image in images
+    }
+    historical = (
+        allow_historical_three_image
+        and len(images) == 3
+        and actual_repositories == {"ui", "services", "migrations"}
+    )
     rendered: dict[str, str] = {}
     for variable, repository in REQUIRED_IMAGES.items():
+        if historical and repository == "openbao-didcomm":
+            continue
         matches = [
             image
             for image in images
@@ -72,11 +83,7 @@ def image_map(manifest: dict) -> dict[str, str]:
             )
         rendered[variable] = matches[0]
     expected_repositories = {"ui", "services", "migrations", "openbao-didcomm"}
-    actual_repositories = {
-        image.split("@", 1)[0].rstrip("/").rsplit("/", 1)[-1]
-        for image in images
-    }
-    if len(images) != 4 or actual_repositories != expected_repositories:
+    if not historical and (len(images) != 4 or actual_repositories != expected_repositories):
         raise ValueError("KMS-only stack requires exactly the UI, services, migrations, and OpenBao DIDComm images")
     return rendered
 
@@ -142,10 +149,13 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path(".env.stack"))
     parser.add_argument("--pull", action="store_true")
+    parser.add_argument("--allow-historical-three-image", action="store_true")
     args = parser.parse_args()
 
     manifest = load_manifest(args.manifest)
-    images = image_map(manifest)
+    images = image_map(
+        manifest, allow_historical_three_image=args.allow_historical_three_image
+    )
     artifacts = python_artifact_map(manifest)
     base = json.loads(Path("config/base-images.json").read_text(encoding="utf-8"))
     images["POSTGRES_IMAGE"] = base["postgres"]

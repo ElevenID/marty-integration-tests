@@ -103,6 +103,8 @@ def test_rejects_stack_without_kms_didcomm_plugin() -> None:
     ]
     with pytest.raises(ValueError, match="openbao-didcomm"):
         MODULE.image_map(value)
+    historical = MODULE.image_map(value, allow_historical_three_image=True)
+    assert "MARTY_OPENBAO_DIDCOMM_IMAGE" not in historical
 
 
 def test_maps_required_python_artifacts_by_component_and_digest():
