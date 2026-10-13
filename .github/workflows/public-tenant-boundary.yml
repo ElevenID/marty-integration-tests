@@ -111,7 +111,7 @@ jobs:
             gh attestation verify "oci://$reference" --repo "$repository"
             docker pull "$reference"
           done < <(jq -r '.images[] | [.repository, .reference] | @tsv' work/stack/stack-metadata.json)
-          python scripts/render_stack_env.py --manifest work/stack/stack-manifest.json --output work/stack/.env.stack
+          python scripts/render_stack_env.py --manifest work/stack/stack-manifest.json --output work/stack/.env.stack --allow-historical-three-image
 
       - name: Install attested released DIDComm verifier
         env:

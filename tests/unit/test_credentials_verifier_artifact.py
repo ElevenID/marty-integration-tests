@@ -240,27 +240,22 @@ def test_workflow_runs_oracle_and_exact_known_negative_control() -> None:
     assert "run-expected-failure" in workflow
     assert "compare-evidence" in workflow
     assert "fetch-depth: 0" in workflow
-    assert workflow.count('--pin "$PIN_FILE"') == 6
+    assert workflow.count('--pin "$PIN_FILE"') == 4
 
 
-def test_workflow_adds_published_transaction_without_replacing_negative_control() -> None:
+def test_workflow_does_not_execute_a_pre_kms_published_transaction() -> None:
     workflow = (ROOT / ".github" / "workflows" / "credentials-verifier-artifact.yml").read_text(encoding="utf-8")
-    assert "pin: config/credentials-verifier-released-transaction.json" in workflow
-    assert "state: transaction\n            mode: transaction" in workflow
-    assert workflow.count("config/credentials-verifier-released-transaction.json") == 4
-    assert "validate-published-transaction" in workflow
-    assert "if: matrix.mode == 'transaction'" in workflow
-    assert "credentials_verifier_artifact.py run-transaction" in workflow
-    assert "credentials_verifier_artifact.py compare-transaction-evidence" in workflow
+    assert "pin: config/credentials-verifier-released-transaction.json" not in workflow
+    assert "mode: transaction" not in workflow
+    assert "credentials_verifier_artifact.py run-transaction" not in workflow
     assert '--source-ref "${{ steps.artifact.outputs.source_ref }}"' in workflow
-    assert workflow.index("validate-published-transaction") < workflow.index("gh attestation verify")
     comparison = workflow.split("  compare-language-neutral-evidence:", 1)[1].split("  candidate-containerd-load:", 1)[
         0
     ]
     assert "fetch-depth: 0" in comparison
     assert "compare-evidence" in comparison
     assert "credentials-verifier-comparison.json" in comparison
-    assert "credentials-verifier-published-comparison.json" in comparison
+    assert "credentials-verifier-published-comparison.json" not in comparison
 
 
 def test_workflow_runs_candidate_archive_load_on_pinned_containerd() -> None:
@@ -3278,6 +3273,40 @@ def test_run_transaction_uses_transaction_state_and_removes_stale_evidence(
     assert observed == [(pin, True)]
 
 
+def test_positive_runtime_input_requires_exact_producer_and_public_material(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MARTY_VERIFIER_POSITIVE_PRODUCER", raising=False)
+    with pytest.raises(ValueError, match="public input producer is required"):
+        artifact.positive_oid4vp_public_input()
+    producer = tmp_path / "marty-kms-positive-verifier-input.exe"
+    producer.write_bytes(b"test binary identity")
+    monkeypatch.setenv("MARTY_VERIFIER_POSITIVE_PRODUCER", str(producer))
+    monkeypatch.setenv("MARTY_VERIFIER_POSITIVE_PRODUCER_SHA256", "0" * 64)
+    with pytest.raises(ValueError, match="digest changed"):
+        artifact.positive_oid4vp_public_input()
+    monkeypatch.setenv(
+        "MARTY_VERIFIER_POSITIVE_PRODUCER_SHA256", hashlib.sha256(producer.read_bytes()).hexdigest()
+    )
+    value = {
+        "presentation": "unsigned",
+        "issuer_public_jwk": dict.fromkeys(("kty", "crv", "x", "y", "kid", "alg"), "public"),
+    }
+    outputs = [json.dumps(value)]
+    monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: outputs[0])
+    # This exercises transport parsing only; it is not a valid KMS presentation.
+    assert artifact.positive_oid4vp_public_input() == value
+    for member in ("d", "p", "q", "dp", "dq", "qi", "oth", "k"):
+        private = copy.deepcopy(value)
+        private["issuer_public_jwk"][member] = "forbidden"
+        outputs[0] = json.dumps(private)
+        with pytest.raises(ValueError, match="only public JWK fields"):
+            artifact.positive_oid4vp_public_input()
+    outputs[0] = " " * (128 * 1024 + 1)
+    with pytest.raises(ValueError, match="too large"):
+        artifact.positive_oid4vp_public_input()
+
+
 def test_exact_image_positive_oid4vp_gate_requires_complete_runtime_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3293,10 +3322,22 @@ def test_exact_image_positive_oid4vp_gate_requires_complete_runtime_projection(
         ],
     }
 
-    def run(command: list[str], *, label: str, timeout: int) -> str:
+    def run(command: list[str], *, label: str, timeout: int, input_text: str) -> str:
+        public_input = json.loads(input_text)
+        assert set(public_input) == {"presentation", "issuer_public_jwk"}
+        assert set(public_input["issuer_public_jwk"]) == {"kty", "crv", "x", "y", "kid", "alg"}
+        assert "~" in public_input["presentation"]
         calls.append((command, label, timeout))
         return json.dumps(evidence)
 
+    monkeypatch.setattr(
+        artifact,
+        "positive_oid4vp_public_input",
+        lambda: {
+            "presentation": "synthetic~public~input",
+            "issuer_public_jwk": dict.fromkeys(("kty", "crv", "x", "y", "kid", "alg"), "synthetic"),
+        },
+    )
     monkeypatch.setattr(artifact, "_run", run)
     reference = artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64
 
@@ -3307,6 +3348,7 @@ def test_exact_image_positive_oid4vp_gate_requires_complete_runtime_projection(
                 "docker",
                 "run",
                 "--rm",
+                "-i",
                 "--network",
                 "none",
                 reference,
