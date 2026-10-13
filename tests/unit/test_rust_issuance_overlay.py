@@ -18,6 +18,7 @@ def test_public_stack_selects_healthy_native_issuance() -> None:
                 "MARTY_ISSUANCE_IMAGE",
                 "MARTY_MIGRATIONS_IMAGE",
                 "MARTY_UI_IMAGE",
+                "MARTY_OPENBAO_DIDCOMM_IMAGE",
                 "POSTGRES_IMAGE",
                 "REDIS_IMAGE",
             ),
@@ -47,7 +48,9 @@ def test_public_stack_selects_healthy_native_issuance() -> None:
     assert native["image"] == TEST_IMAGE
     assert native["environment"]["SERVICE_NAME"] == "issuance_native"
     assert native["environment"]["ISSUANCE_GRPC_ENABLED"] == "true"
-    assert native["environment"]["INTEGRATION_SECRET_MASTER_KEY"]
+    assert native["environment"]["INTEGRATION_SECRET_KMS_URL"] == "https://signing-keys:8018/internal"
+    assert native["environment"]["INTEGRATION_SECRET_KMS_CA_FILE"] == "/run/signing-ca/ca.crt"
+    assert "INTEGRATION_SECRET_MASTER_KEY" not in native["environment"]
     assert native["depends_on"]["issuance-migrations"]["condition"] == "service_completed_successfully"
     assert native["depends_on"]["revocation-profile-service"]["condition"] == "service_healthy"
     assert native["healthcheck"]["test"][-1] == "http://localhost:8005/health"

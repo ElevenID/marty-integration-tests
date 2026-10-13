@@ -88,13 +88,19 @@ def image_map(manifest: dict, *, allow_historical_three_image: bool = False) -> 
     return rendered
 
 
-def python_artifact_map(manifest: dict) -> dict[str, str]:
-    """Render immutable wheel inputs required when Compose builds local adapters."""
+def python_artifact_map(
+    manifest: dict, *, require_marty_common: bool = True
+) -> dict[str, str]:
+    """Render immutable wheels needed by the selected stack's adapters."""
     rendered: dict[str, str] = {}
     components = manifest.get("components", [])
     if not isinstance(components, list):
         raise ValueError("stack manifest components must be a list")
-    for variable, (component_name, artifact_type, repository) in REQUIRED_PYTHON_ARTIFACTS.items():
+    required = REQUIRED_PYTHON_ARTIFACTS if require_marty_common else {
+        key: value for key, value in REQUIRED_PYTHON_ARTIFACTS.items()
+        if key != "MARTY_COMMON"
+    }
+    for variable, (component_name, artifact_type, repository) in required.items():
         matches = [
             artifact
             for component in components
@@ -156,7 +162,11 @@ def main() -> int:
     images = image_map(
         manifest, allow_historical_three_image=args.allow_historical_three_image
     )
-    artifacts = python_artifact_map(manifest)
+    # The current four-image Rust stack has no Marty Python deployment adapter.
+    # The archived three-image interoperability lane still requires its wheel.
+    artifacts = python_artifact_map(
+        manifest, require_marty_common="MARTY_OPENBAO_DIDCOMM_IMAGE" not in images
+    )
     base = json.loads(Path("config/base-images.json").read_text(encoding="utf-8"))
     images["POSTGRES_IMAGE"] = base["postgres"]
     images["REDIS_IMAGE"] = base["redis"]

@@ -120,6 +120,22 @@ def test_maps_required_python_artifacts_by_component_and_digest():
     assert len(artifacts) == 8
 
 
+def test_current_four_image_stack_does_not_require_historical_marty_common_wheel() -> None:
+    value = manifest()
+    value["components"] = [
+        component for component in value["components"]
+        if component["name"] != "marty-common"
+    ]
+    images = MODULE.image_map(value)
+    artifacts = MODULE.python_artifact_map(
+        value, require_marty_common="MARTY_OPENBAO_DIDCOMM_IMAGE" not in images
+    )
+    assert len(artifacts) == 6
+    assert "MARTY_COMMON_URI" not in artifacts
+    with pytest.raises(ValueError, match="marty-common"):
+        MODULE.python_artifact_map(value)
+
+
 @pytest.mark.parametrize(
     "component_name",
     ["marty-core-python", "marty-verification-python", "marty-iso18013-python", "marty-common"],
