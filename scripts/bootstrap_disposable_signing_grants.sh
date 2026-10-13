@@ -42,7 +42,9 @@ done | bao policy write sign-grant-verify - >/dev/null
 write_token() {
     policy="$1"
     destination="$2"
-    token="$(bao token create -policy="$policy" -no-default-policy -orphan -ttl=1h -renewable=false -field=token)"
+    # Official lanes may run for three hours; keep the scoped token valid for
+    # their full disposable job lifetime without granting renewal rights.
+    token="$(bao token create -policy="$policy" -no-default-policy -orphan -ttl=4h -renewable=false -field=token)"
     if [ -z "$token" ] || [ "$token" = "$BAO_TOKEN" ]; then
         echo 'Disposable scoped grant token creation failed' >&2
         exit 1
