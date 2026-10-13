@@ -13,11 +13,10 @@ This repository verifies the public Marty credential stack using only released, 
 - Rust issuance runtime and migration image identity
 - The governed Credentials compatibility surface, retaining released Credentials `v0.1.71`
   as the immutable Python oracle and exact Rust `v1.1.208` as a provenance-verified negative
-  control for its known unscoped session transaction ID. A third lane pins the qualified,
-  published Rust `v1.1.214` services digest, compares all 19 shared checks, and additionally
-  exercises trusted-positive OID4VP and default-disabled compatibility routes. See the
-  [published transaction regression gate](docs/VERIFIER_RELEASED_TRANSACTION.md) for the
-  exact release evidence and protected-main provenance binding.
+  control for its known unscoped session transaction ID. The pre-KMS published Rust
+  transaction is archived as [historical evidence](docs/VERIFIER_RELEASED_TRANSACTION.md);
+  the current Rust verifier receives fresh, public KMS-issued input during exact-image
+  stack-release qualification.
 
 Billing, Square, subscription plans, and product-catalog tests live in the private commerce overlay and are intentionally excluded.
 
@@ -39,7 +38,7 @@ pytest tests/integration/ -v
 make stop
 ```
 
-`scripts/render_stack_env.py` rejects commerce markers, mutable image tags, missing digests, duplicate image roles, and unsupported manifest schemas. The generated `.env.stack` contains digest-pinned GHCR and base-image references and is never committed.
+`scripts/render_stack_env.py` rejects commerce markers, mutable image tags, missing digests, duplicate image roles, and unsupported manifest schemas. Current stacks require the UI, services, migrations, and OpenBao DIDComm image digests. The generated `.env.stack` contains digest-pinned GHCR and base-image references and is never committed.
 
 `make start` combines the public Compose model with the required Rust service
 wiring. Issuance runtime and migrations use the same signed services digest;
