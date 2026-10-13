@@ -17,6 +17,7 @@ def manifest():
         "ghcr.io/elevenid/marty-ui-oss/ui",
         "ghcr.io/elevenid/marty-ui-oss/services",
         "ghcr.io/elevenid/marty-ui-oss/migrations",
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
     ]
     return {
         "schema": "marty.stack/v1",
@@ -78,7 +79,8 @@ def test_maps_required_images_by_immutable_uri():
     images = MODULE.image_map(manifest())
     assert images["MARTY_UI_IMAGE"].endswith("@sha256:" + "a" * 64)
     assert images["MARTY_ISSUANCE_IMAGE"] == images["MARTY_SERVICES_IMAGE"]
-    assert len(images) == 4
+    assert images["MARTY_OPENBAO_DIDCOMM_IMAGE"].endswith("@sha256:" + "a" * 64)
+    assert len(images) == 5
 
 
 def test_rejects_retired_credentials_image() -> None:
@@ -88,7 +90,18 @@ def test_rejects_retired_credentials_image() -> None:
         "uri": "ghcr.io/elevenid/marty-credentials-issuance",
         "digest": "sha256:" + "a" * 64,
     })
-    with pytest.raises(ValueError, match="Rust-only stack requires exactly"):
+    with pytest.raises(ValueError, match="KMS-only stack requires exactly"):
+        MODULE.image_map(value)
+
+
+def test_rejects_stack_without_kms_didcomm_plugin() -> None:
+    value = manifest()
+    value["components"][0]["artifacts"] = [
+        artifact
+        for artifact in value["components"][0]["artifacts"]
+        if not artifact["uri"].endswith("/openbao-didcomm")
+    ]
+    with pytest.raises(ValueError, match="openbao-didcomm"):
         MODULE.image_map(value)
 
 

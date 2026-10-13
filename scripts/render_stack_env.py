@@ -20,6 +20,7 @@ REQUIRED_IMAGES = {
     "MARTY_UI_IMAGE": "ui",
     "MARTY_SERVICES_IMAGE": "services",
     "MARTY_MIGRATIONS_IMAGE": "migrations",
+    "MARTY_OPENBAO_DIDCOMM_IMAGE": "openbao-didcomm",
     "MARTY_ISSUANCE_IMAGE": "services",
 }
 REQUIRED_PYTHON_ARTIFACTS = {
@@ -70,13 +71,13 @@ def image_map(manifest: dict) -> dict[str, str]:
                 f"found {len(matches)}"
             )
         rendered[variable] = matches[0]
-    expected_repositories = {"ui", "services", "migrations"}
+    expected_repositories = {"ui", "services", "migrations", "openbao-didcomm"}
     actual_repositories = {
         image.split("@", 1)[0].rstrip("/").rsplit("/", 1)[-1]
         for image in images
     }
-    if len(images) != 3 or actual_repositories != expected_repositories:
-        raise ValueError("Rust-only stack requires exactly the UI, services, and migrations images")
+    if len(images) != 4 or actual_repositories != expected_repositories:
+        raise ValueError("KMS-only stack requires exactly the UI, services, migrations, and OpenBao DIDComm images")
     return rendered
 
 
