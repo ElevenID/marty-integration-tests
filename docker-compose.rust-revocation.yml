@@ -11,23 +11,80 @@ x-rust-signing-service-auth: &rust-signing-service-auth
   # authentication even in this short-lived artifact stack.
   SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
 
+x-rust-signing-gateway-auth: &rust-signing-gateway-auth
+  # Distinct, disposable call credentials for the exact-image signing routes.
+  SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY: ${SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY:-oss-ci-service-sign-gateway-key-2026-remote-only}
+
+x-rust-issuer-sign-auth: &rust-issuer-sign-auth
+  SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-oss-ci-issuer-sign-gateway-key-2026-remote-only}
+
+x-rust-integration-secret-auth: &rust-integration-secret-auth
+  SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-oss-ci-integration-envelope-api-key-2026-remote-only}
+
+x-rust-issuance-grants: &rust-issuance-grants
+  BAO_ADDR: http://openbao:8200
+  ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/credential
+  ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/canvas
+  ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/readiness
+  ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/passport
+
 services:
+  signing-integration-tls-bootstrap:
+    image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/scripts/bootstrap_disposable_signing_tls.sh"]
+    restart: "no"
+    volumes:
+      - ./scripts/bootstrap_disposable_signing_tls.sh:/scripts/bootstrap_disposable_signing_tls.sh:ro
+      - signing-integration-tls-server:/tls-server
+      - signing-integration-tls-ca:/tls-ca
+    networks: [marty-oss]
+
+  openbao-grant-bootstrap:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?run scripts/render_stack_env.py first}
+    entrypoint: ["/bin/sh", "/scripts/bootstrap_disposable_signing_grants.sh"]
+    restart: "no"
+    environment:
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+    volumes:
+      - ./scripts/bootstrap_disposable_signing_grants.sh:/scripts/bootstrap_disposable_signing_grants.sh:ro
+      - signing-grant-verify:/grant-verify
+      - signing-grant-gateway:/grant-gateway
+      - signing-grant-flow:/grant-flow
+      - signing-grant-issuance:/grant-issuance
+    depends_on:
+      openbao:
+        condition: service_healthy
+    networks: [marty-oss]
+
   signing-keys:
     image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}
     restart: "no"
     environment:
-      <<: *rust-signing-service-auth
+      <<: [*rust-signing-service-auth, *rust-signing-gateway-auth, *rust-issuer-sign-auth, *rust-integration-secret-auth]
       SERVICE_NAME: signing_keys
       SIGNING_KEYS_SERVICE_PORT: "8017"
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
+      ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/grant-verify/token
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/signing-tls/tls.crt
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/signing-tls/tls.key
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       RUST_LOG: ${SIGNING_KEYS_RUST_LOG:-info}
+    volumes:
+      - signing-grant-verify:/run/grant-verify:ro
+      - signing-integration-tls-server:/run/signing-tls:ro
     depends_on:
       redis:
         condition: service_healthy
       openbao:
         condition: service_healthy
+      openbao-grant-bootstrap:
+        condition: service_completed_successfully
+      signing-integration-tls-bootstrap:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8017/health"]
       interval: 5s
@@ -39,7 +96,7 @@ services:
     image: ${MARTY_SERVICES_IMAGE:?run scripts/render_stack_env.py first}
     restart: "no"
     environment:
-      <<: [*rust-revocation-service-auth, *rust-signing-service-auth]
+      <<: [*rust-revocation-service-auth, *rust-signing-service-auth, *rust-issuer-sign-auth, *rust-integration-secret-auth, *rust-issuance-grants]
       SERVICE_NAME: issuance_native
       ENVIRONMENT: test
       ISSUANCE_SERVICE_PORT: "8005"
@@ -52,7 +109,8 @@ services:
       PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key-32-bytes}
       TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
-      INTEGRATION_SECRET_MASTER_KEY: ${INTEGRATION_SECRET_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/signing-ca/ca.crt
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       ORG_GRPC_TARGET: organization-service:9002
       CT_GRPC_TARGET: credential-template-service:9003
@@ -61,6 +119,9 @@ services:
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
       DIDCOMM_DID_WEB_INTERNAL_BASE_URL: http://gateway:8000
       RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
+    volumes:
+      - signing-grant-issuance:/run/grant-issuance:ro
+      - signing-integration-tls-ca:/run/signing-ca:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,6 +129,10 @@ services:
         condition: service_completed_successfully
       signing-keys:
         condition: service_healthy
+      openbao-grant-bootstrap:
+        condition: service_completed_successfully
+      signing-integration-tls-bootstrap:
+        condition: service_completed_successfully
       revocation-profile-service:
         condition: service_healthy
     healthcheck:
@@ -134,10 +199,15 @@ services:
 
   issuance-service:
     environment:
-      <<: *rust-revocation-service-auth
+      <<: [*rust-revocation-service-auth, *rust-issuer-sign-auth, *rust-integration-secret-auth, *rust-issuance-grants]
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
       DIDCOMM_DELIVERY_OWNER: native
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/signing-ca/ca.crt
+    volumes:
+      - signing-integration-tls-ca:/run/signing-ca:ro
+      - signing-grant-issuance:/run/grant-issuance:ro
     depends_on:
       issuance-native:
         condition: service_healthy
@@ -172,16 +242,22 @@ services:
 
   flow-service:
     environment:
-      <<: *rust-revocation-service-auth
+      <<: [*rust-revocation-service-auth, *rust-issuer-sign-auth]
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
+      BAO_ADDR: http://openbao:8200
+      FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-flow/token
       ORG_GRPC_TARGET: organization-service:9002
       CT_GRPC_TARGET: credential-template-service:9003
       PP_GRPC_TARGET: presentation-policy-service:9009
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_GRPC_TARGET: issuance-native:9005
+    volumes:
+      - signing-grant-flow:/run/grant-flow:ro
     depends_on:
       issuance-native:
         condition: service_healthy
+      openbao-grant-bootstrap:
+        condition: service_completed_successfully
 
   revocation-profile-service:
     environment:
@@ -211,12 +287,16 @@ services:
 
   gateway:
     environment:
-      <<: *rust-revocation-service-auth
+      <<: [*rust-revocation-service-auth, *rust-signing-gateway-auth, *rust-issuer-sign-auth]
       SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
+      GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-gateway/service
+      GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE: /run/grant-gateway/issuer-did
       ORG_GRPC_TARGET: organization-service:9002
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
+    volumes:
+      - signing-grant-gateway:/run/grant-gateway:ro
     depends_on:
       issuance-native:
         condition: service_healthy
@@ -226,3 +306,13 @@ services:
         condition: service_healthy
       signing-keys:
         condition: service_healthy
+      openbao-grant-bootstrap:
+        condition: service_completed_successfully
+
+volumes:
+  signing-grant-verify:
+  signing-grant-gateway:
+  signing-grant-flow:
+  signing-grant-issuance:
+  signing-integration-tls-server:
+  signing-integration-tls-ca:

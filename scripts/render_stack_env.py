@@ -88,13 +88,22 @@ def image_map(manifest: dict, *, allow_historical_three_image: bool = False) -> 
     return rendered
 
 
-def python_artifact_map(manifest: dict) -> dict[str, str]:
-    """Render immutable wheel inputs required when Compose builds local adapters."""
+def python_artifact_map(
+    manifest: dict, *, require_marty_common: bool | None = None
+) -> dict[str, str]:
+    """Render immutable wheels needed by the selected stack's adapters."""
+    if require_marty_common is None:
+        images = image_map(manifest, allow_historical_three_image=True)
+        require_marty_common = "MARTY_OPENBAO_DIDCOMM_IMAGE" not in images
     rendered: dict[str, str] = {}
     components = manifest.get("components", [])
     if not isinstance(components, list):
         raise ValueError("stack manifest components must be a list")
-    for variable, (component_name, artifact_type, repository) in REQUIRED_PYTHON_ARTIFACTS.items():
+    required = REQUIRED_PYTHON_ARTIFACTS if require_marty_common else {
+        key: value for key, value in REQUIRED_PYTHON_ARTIFACTS.items()
+        if key != "MARTY_COMMON"
+    }
+    for variable, (component_name, artifact_type, repository) in required.items():
         matches = [
             artifact
             for component in components

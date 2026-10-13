@@ -5,7 +5,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 
@@ -26,6 +25,7 @@ def test_public_stack_uses_shared_rust_issuance_runtime_and_migrator() -> None:
         "MARTY_SERVICES_IMAGE": SERVICES,
         "MARTY_ISSUANCE_IMAGE": SERVICES,
         "MARTY_MIGRATIONS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64,
+        "MARTY_OPENBAO_DIDCOMM_IMAGE": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "f" * 64,
         "POSTGRES_IMAGE": "postgres@sha256:" + "d" * 64,
         "REDIS_IMAGE": "redis@sha256:" + "e" * 64,
     })
