@@ -240,27 +240,22 @@ def test_workflow_runs_oracle_and_exact_known_negative_control() -> None:
     assert "run-expected-failure" in workflow
     assert "compare-evidence" in workflow
     assert "fetch-depth: 0" in workflow
-    assert workflow.count('--pin "$PIN_FILE"') == 6
+    assert workflow.count('--pin "$PIN_FILE"') == 4
 
 
-def test_workflow_adds_published_transaction_without_replacing_negative_control() -> None:
+def test_workflow_does_not_execute_a_pre_kms_published_transaction() -> None:
     workflow = (ROOT / ".github" / "workflows" / "credentials-verifier-artifact.yml").read_text(encoding="utf-8")
-    assert "pin: config/credentials-verifier-released-transaction.json" in workflow
-    assert "state: transaction\n            mode: transaction" in workflow
-    assert workflow.count("config/credentials-verifier-released-transaction.json") == 4
-    assert "validate-published-transaction" in workflow
-    assert "if: matrix.mode == 'transaction'" in workflow
-    assert "credentials_verifier_artifact.py run-transaction" in workflow
-    assert "credentials_verifier_artifact.py compare-transaction-evidence" in workflow
+    assert "pin: config/credentials-verifier-released-transaction.json" not in workflow
+    assert "mode: transaction" not in workflow
+    assert "credentials_verifier_artifact.py run-transaction" not in workflow
     assert '--source-ref "${{ steps.artifact.outputs.source_ref }}"' in workflow
-    assert workflow.index("validate-published-transaction") < workflow.index("gh attestation verify")
     comparison = workflow.split("  compare-language-neutral-evidence:", 1)[1].split("  candidate-containerd-load:", 1)[
         0
     ]
     assert "fetch-depth: 0" in comparison
     assert "compare-evidence" in comparison
     assert "credentials-verifier-comparison.json" in comparison
-    assert "credentials-verifier-published-comparison.json" in comparison
+    assert "credentials-verifier-published-comparison.json" not in comparison
 
 
 def test_workflow_runs_candidate_archive_load_on_pinned_containerd() -> None:
