@@ -26,6 +26,7 @@ def test_public_stack_uses_shared_rust_issuance_runtime_and_migrator() -> None:
         "MARTY_ISSUANCE_IMAGE": SERVICES,
         "MARTY_MIGRATIONS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64,
         "MARTY_OPENBAO_DIDCOMM_IMAGE": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "f" * 64,
+        "BAO_DEV_ROOT_TOKEN": "disposable-custom-openbao-token",
         "POSTGRES_IMAGE": "postgres@sha256:" + "d" * 64,
         "REDIS_IMAGE": "redis@sha256:" + "e" * 64,
     })
@@ -35,6 +36,10 @@ def test_public_stack_uses_shared_rust_issuance_runtime_and_migrator() -> None:
         cwd=ROOT, env=env, text=True, capture_output=True, check=True,
     )
     services = json.loads(rendered.stdout)["services"]
+    migrations = services["migrations"]["environment"]
+    assert migrations["BAO_ADDR"] == "http://openbao:8200"
+    assert migrations["BAO_TOKEN"] == "disposable-custom-openbao-token"
+    assert migrations["NOTIFICATION_OPENBAO_TOKEN"] == migrations["BAO_TOKEN"]
     for name in ("issuance-service", "issuance-native", "issuance-migrations"):
         assert services[name]["image"] == SERVICES
     for name in ("issuance-service", "issuance-native"):
