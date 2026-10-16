@@ -21,6 +21,7 @@ REQUIRED_IMAGES = {
     "MARTY_SERVICES_IMAGE": "services",
     "MARTY_MIGRATIONS_IMAGE": "migrations",
     "MARTY_OPENBAO_DIDCOMM_IMAGE": "openbao-didcomm",
+    "MARTY_KEYCLOAK_IMAGE": "keycloak",
     "MARTY_ISSUANCE_IMAGE": "services",
 }
 REQUIRED_PYTHON_ARTIFACTS = {
@@ -69,7 +70,7 @@ def image_map(manifest: dict, *, allow_historical_three_image: bool = False) -> 
     )
     rendered: dict[str, str] = {}
     for variable, repository in REQUIRED_IMAGES.items():
-        if historical and repository == "openbao-didcomm":
+        if historical and repository in {"openbao-didcomm", "keycloak"}:
             continue
         matches = [
             image
@@ -82,9 +83,11 @@ def image_map(manifest: dict, *, allow_historical_three_image: bool = False) -> 
                 f"found {len(matches)}"
             )
         rendered[variable] = matches[0]
-    expected_repositories = {"ui", "services", "migrations", "openbao-didcomm"}
-    if not historical and (len(images) != 4 or actual_repositories != expected_repositories):
-        raise ValueError("KMS-only stack requires exactly the UI, services, migrations, and OpenBao DIDComm images")
+    expected_repositories = {"ui", "services", "migrations", "openbao-didcomm", "keycloak"}
+    if not historical and (len(images) != 5 or actual_repositories != expected_repositories):
+        raise ValueError(
+            "KMS-only stack requires exactly the UI, services, migrations, OpenBao DIDComm, and Keycloak images"
+        )
     return rendered
 
 
