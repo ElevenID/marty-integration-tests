@@ -445,12 +445,16 @@ def test_stack_binding_accepts_only_the_attested_manifest_and_rendered_images(tm
     lane.validate_stack_binding(manifest, metadata, environment)
 
 
-def test_stack_binding_accepts_current_four_image_without_historical_wheel(tmp_path: Path) -> None:
+def test_stack_binding_accepts_current_five_image_without_historical_wheel(tmp_path: Path) -> None:
     manifest, metadata, environment = stack_binding_fixture(tmp_path)
     plugin = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "9" * 64
+    keycloak = "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "8" * 64
     value = json.loads(manifest.read_text(encoding="utf-8"))
     value["components"][0]["artifacts"].append({
         "type": "oci", "uri": plugin.split("@", 1)[0], "digest": plugin.split("@", 1)[1]
+    })
+    value["components"][0]["artifacts"].append({
+        "type": "oci", "uri": keycloak.split("@", 1)[0], "digest": keycloak.split("@", 1)[1]
     })
     value["components"] = [
         component for component in value["components"]
@@ -459,7 +463,9 @@ def test_stack_binding_accepts_current_four_image_without_historical_wheel(tmp_p
     manifest.write_text(json.dumps(value), encoding="utf-8")
     metadata["manifest_sha256"] = lane.file_sha256(manifest)
     metadata["images"].append({"reference": plugin})
+    metadata["images"].append({"reference": keycloak})
     environment["MARTY_OPENBAO_DIDCOMM_IMAGE"] = plugin
+    environment["MARTY_KEYCLOAK_IMAGE"] = keycloak
     environment.pop("MARTY_COMMON_URI")
     environment.pop("MARTY_COMMON_DIGEST")
 
@@ -470,6 +476,10 @@ def test_stack_binding_accepts_current_four_image_without_historical_wheel(tmp_p
 
     loaded["MARTY_OPENBAO_DIDCOMM_IMAGE"] = plugin.replace("9" * 64, "f" * 64)
     with pytest.raises(ValueError, match="MARTY_OPENBAO_DIDCOMM_IMAGE"):
+        lane.validate_stack_binding(manifest, metadata, loaded)
+    loaded["MARTY_OPENBAO_DIDCOMM_IMAGE"] = plugin
+    loaded["MARTY_KEYCLOAK_IMAGE"] = keycloak.replace("8" * 64, "f" * 64)
+    with pytest.raises(ValueError, match="MARTY_KEYCLOAK_IMAGE"):
         lane.validate_stack_binding(manifest, metadata, loaded)
 
 

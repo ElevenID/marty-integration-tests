@@ -313,6 +313,7 @@ STACK_ENV_KEYS = {
     "MARTY_MIGRATIONS_IMAGE",
     "MARTY_ISSUANCE_IMAGE",
     "MARTY_OPENBAO_DIDCOMM_IMAGE",
+    "MARTY_KEYCLOAK_IMAGE",
     "POSTGRES_IMAGE",
     "REDIS_IMAGE",
     "MARTY_RS_URI",
@@ -325,7 +326,12 @@ STACK_ENV_KEYS = {
     "MARTY_COMMON_DIGEST",
 }
 STACK_ARTIFACT_ENVIRONMENT = REQUIRED_PYTHON_ARTIFACTS
-STACK_OPTIONAL_ENV_KEYS = {"MARTY_OPENBAO_DIDCOMM_IMAGE", "MARTY_COMMON_URI", "MARTY_COMMON_DIGEST"}
+STACK_OPTIONAL_ENV_KEYS = {
+    "MARTY_OPENBAO_DIDCOMM_IMAGE",
+    "MARTY_KEYCLOAK_IMAGE",
+    "MARTY_COMMON_URI",
+    "MARTY_COMMON_DIGEST",
+}
 BASE_IMAGE_CONFIG_KEYS = {"POSTGRES_IMAGE": "postgres", "REDIS_IMAGE": "redis"}
 MATERIAL_ENV_KEYS = {
     "EUDI_TEST_MATERIAL_MODE",
@@ -509,6 +515,8 @@ def validate_stack_binding(
             raise ValueError(f"{variable} does not match the attested stack manifest")
     if ("MARTY_OPENBAO_DIDCOMM_IMAGE" in stack_environment) != ("MARTY_OPENBAO_DIDCOMM_IMAGE" in expected_images):
         raise ValueError("OpenBao DIDComm image presence does not match the attested stack manifest")
+    if ("MARTY_KEYCLOAK_IMAGE" in stack_environment) != ("MARTY_KEYCLOAK_IMAGE" in expected_images):
+        raise ValueError("Keycloak image presence does not match the attested stack manifest")
 
     expected_artifacts = python_artifact_map(manifest)
     for variable, expected in expected_artifacts.items():
