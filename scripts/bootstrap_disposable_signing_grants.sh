@@ -3,11 +3,13 @@
 # policy owner is marty-ui/docker/openbao-init.sh.
 set -eu
 
-if [ "${BAO_ADDR:-}" != "http://openbao:8200" ] || [ -z "${BAO_TOKEN:-}" ]; then
+if [ "${BAO_ADDR:-}" != "https://openbao:8200" ] ||
+   [ "${BAO_CACERT:-}" != "/run/openbao-ca/ca.crt" ] ||
+   [ ! -r "$BAO_CACERT" ] || [ -z "${BAO_TOKEN:-}" ]; then
     echo 'Disposable grant bootstrap requires the isolated OpenBao service' >&2
     exit 1
 fi
-export VAULT_ADDR="$BAO_ADDR" VAULT_TOKEN="$BAO_TOKEN"
+export VAULT_ADDR="$BAO_ADDR" VAULT_CACERT="$BAO_CACERT" VAULT_TOKEN="$BAO_TOKEN"
 if ! bao secrets list -format=json | grep -q '"transit/"'; then
     bao secrets enable transit >/dev/null
 fi

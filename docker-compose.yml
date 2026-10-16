@@ -30,15 +30,33 @@ services:
   openbao:
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?run scripts/render_stack_env.py first}
     cap_add: [IPC_LOCK]
-    command: server -dev
+    hostname: openbao
+    command: ["server", "-dev", "-dev-tls", "-dev-tls-cert-dir=/tmp"]
     environment:
       BAO_DEV_ROOT_TOKEN_ID: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
     healthcheck:
-      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      test: ["CMD", "bao", "status", "-address=https://openbao:8200", "-ca-cert=/tmp/vault-ca.pem"]
       interval: 5s
       timeout: 5s
       retries: 10
+    networks: [marty-oss]
+    volumes:
+      - openbao-tls:/tmp
+
+  # Publish only the public trust root. Application containers never receive
+  # OpenBao's disposable TLS private key.
+  openbao-ca-publish:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?run scripts/render_stack_env.py first}
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["cp /openbao-tls/vault-ca.pem /ca/ca.crt && chmod 0444 /ca/ca.crt"]
+    restart: "no"
+    volumes:
+      - openbao-tls:/openbao-tls:ro
+      - openbao-public-ca:/ca
+    depends_on:
+      openbao:
+        condition: service_healthy
     networks: [marty-oss]
 
   # Network-only stdlib probe; the signed Rust migrations image has no Python.
@@ -101,11 +119,15 @@ services:
       # Enables the migration artifact's KMS/DID bootstrap for the disposable
       # test organization; issuance still uses the normal signing boundary.
       REDIS_URL: redis://redis:6379
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/openbao-ca/ca.crt
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       # Disposable public-stack fixture: the bootstrap requires the explicit
       # notification envelope token, even when it shares this dev OpenBao root.
       NOTIFICATION_OPENBAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /run/openbao-ca/ca.crt
+    volumes:
+      - openbao-public-ca:/run/openbao-ca:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,6 +135,8 @@ services:
         condition: service_healthy
       openbao:
         condition: service_healthy
+      openbao-ca-publish:
+        condition: service_completed_successfully
     networks: [marty-oss]
 
   auth-service:
@@ -207,7 +231,8 @@ services:
       ORG_GRPC_TARGET: organization-service:9002
       CT_GRPC_TARGET: credential-template-service:9003
       RP_GRPC_TARGET: revocation-profile-service:9013
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/openbao-ca/ca.crt
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
       GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-oss-ci-rust-revocation-lifecycle-token-32-bytes}
@@ -222,6 +247,8 @@ services:
       # can call the issuer's management API. This disposable default is not a
       # deployment credential; production supplies its own secret.
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-oss-ci-issuance-internal-key-32-bytes}
+    volumes:
+      - openbao-public-ca:/run/openbao-ca:ro
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -365,8 +392,11 @@ services:
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile-service:8010
       FLOW_SERVICE_URL: http://flow-service:8011
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/openbao-ca/ca.crt
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+    volumes:
+      - openbao-public-ca:/run/openbao-ca:ro
     ports: ["28000:8000"]
 
   ui:
@@ -408,3 +438,7 @@ services:
 networks:
   marty-oss:
     driver: bridge
+
+volumes:
+  openbao-tls:
+  openbao-public-ca:

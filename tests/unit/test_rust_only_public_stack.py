@@ -37,9 +37,43 @@ def test_public_stack_uses_shared_rust_issuance_runtime_and_migrator() -> None:
     )
     services = json.loads(rendered.stdout)["services"]
     migrations = services["migrations"]["environment"]
-    assert migrations["BAO_ADDR"] == "http://openbao:8200"
+    assert migrations["BAO_ADDR"] == "https://openbao:8200"
+    assert migrations["BAO_CACERT"] == "/run/openbao-ca/ca.crt"
+    assert migrations["NOTIFICATION_OPENBAO_CA_CERT_FILE"] == migrations["BAO_CACERT"]
     assert migrations["BAO_TOKEN"] == "disposable-custom-openbao-token"
     assert migrations["NOTIFICATION_OPENBAO_TOKEN"] == migrations["BAO_TOKEN"]
+    assert services["openbao"]["hostname"] == "openbao"
+    assert "-dev-tls" in services["openbao"]["command"]
+    signing = services["signing-keys"]
+    signing_env = signing["environment"]
+    assert "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE" not in signing_env
+    assert signing_env["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR"] == migrations["BAO_ADDR"]
+    assert signing_env["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE"] == migrations["BAO_CACERT"]
+    assert signing_env["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME"] == "workload-tls-signing-keys-server"
+    assert signing_env["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION"] == "1"
+    assert signing["depends_on"]["signing-integration-tls-bootstrap"]["condition"] == (
+        "service_completed_successfully"
+    )
+    bootstrap = services["signing-integration-tls-bootstrap"]
+    assert bootstrap["environment"]["MARTY_TLS_BOOTSTRAP_PROFILE"] == "selfhost-disposable"
+    assert bootstrap["environment"]["MARTY_SELFHOST_DISPOSABLE_OPENBAO"] == "1"
+    assert bootstrap["environment"]["BAO_ROOT_TOKEN_FILE"] == "/bootstrap-input/root.token"
+    assert "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE" not in (
+        ROOT / "docker-compose.rust-revocation.yml"
+    ).read_text(encoding="utf-8")
+    for name, service in services.items():
+        environment = service.get("environment", {})
+        mounts = service.get("volumes", [])
+        if name not in ("openbao", "openbao-ca-publish"):
+            assert not any(mount["source"].endswith("openbao-tls") for mount in mounts), name
+        if "BAO_ADDR" in environment:
+            assert environment["BAO_ADDR"] == "https://openbao:8200", name
+            assert environment["BAO_CACERT"] == "/run/openbao-ca/ca.crt", name
+            assert any(
+                mount["source"].endswith("openbao-public-ca")
+                and mount["target"] == "/run/openbao-ca"
+                for mount in mounts
+            ), name
     for name in ("issuance-service", "issuance-native", "issuance-migrations"):
         assert services[name]["image"] == SERVICES
     for name in ("issuance-service", "issuance-native"):

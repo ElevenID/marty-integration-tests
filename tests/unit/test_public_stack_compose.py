@@ -181,7 +181,12 @@ def test_rust_cutover_overlay_runs_authenticated_signing_service() -> None:
     assert "*rust-signing-service-auth" in signing
     assert "*rust-signing-gateway-auth" in signing
     assert "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/grant-verify/token" in signing
-    assert "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/signing-tls/tls.crt" in signing
+    assert (
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: "
+        "/run/signing-tls/signing_keys_workload_server_cert"
+    ) in signing
+    assert "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE" not in signing
+    assert "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR: https://openbao:8200" in signing
     assert "http://localhost:8017/health" in signing
     assert "SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017" in gateway
     assert signing_key in gateway

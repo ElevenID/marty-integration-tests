@@ -22,7 +22,8 @@ x-rust-integration-secret-auth: &rust-integration-secret-auth
   SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-oss-ci-integration-envelope-api-key-2026-remote-only}
 
 x-rust-issuance-grants: &rust-issuance-grants
-  BAO_ADDR: http://openbao:8200
+  BAO_ADDR: https://openbao:8200
+  BAO_CACERT: /run/openbao-ca/ca.crt
   ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/credential
   ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/canvas
   ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/readiness
@@ -34,10 +35,26 @@ services:
     user: "0:0"
     entrypoint: ["/bin/sh", "/scripts/bootstrap_disposable_signing_tls.sh"]
     restart: "no"
+    environment:
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/openbao-ca/ca.crt
+      BAO_DEV_ROOT_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+      BAO_ROOT_TOKEN_FILE: /bootstrap-input/root.token
+      MARTY_TLS_BOOTSTRAP_PROFILE: selfhost-disposable
+      MARTY_SELFHOST_DISPOSABLE_OPENBAO: "1"
+      MARTY_SELFHOST_PROJECT: marty-selfhost-disposable-oss-ci
+      SELFHOST_TLS_OUTPUT_DIR: /bootstrap-output
+    tmpfs:
+      - /bootstrap-input:mode=0700
+      - /bootstrap-output:mode=0700
     volumes:
       - ./scripts/bootstrap_disposable_signing_tls.sh:/scripts/bootstrap_disposable_signing_tls.sh:ro
       - signing-integration-tls-server:/tls-server
       - signing-integration-tls-ca:/tls-ca
+      - openbao-public-ca:/run/openbao-ca:ro
+    depends_on:
+      openbao-grant-bootstrap:
+        condition: service_completed_successfully
     networks: [marty-oss]
 
   openbao-grant-bootstrap:
@@ -45,7 +62,8 @@ services:
     entrypoint: ["/bin/sh", "/scripts/bootstrap_disposable_signing_grants.sh"]
     restart: "no"
     environment:
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/openbao-ca/ca.crt
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
     volumes:
       - ./scripts/bootstrap_disposable_signing_grants.sh:/scripts/bootstrap_disposable_signing_grants.sh:ro
@@ -53,9 +71,12 @@ services:
       - signing-grant-gateway:/grant-gateway
       - signing-grant-flow:/grant-flow
       - signing-grant-issuance:/grant-issuance
+      - openbao-public-ca:/run/openbao-ca:ro
     depends_on:
       openbao:
         condition: service_healthy
+      openbao-ca-publish:
+        condition: service_completed_successfully
     networks: [marty-oss]
 
   signing-keys:
@@ -68,14 +89,20 @@ services:
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
       SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/grant-verify/token
-      SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/signing-tls/tls.crt
-      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/signing-tls/tls.key
-      BAO_ADDR: http://openbao:8200
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/signing-tls/signing_keys_workload_server_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR: https://openbao:8200
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE: /run/openbao-ca/ca.crt
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE: /run/signing-tls/signing_keys_tls_kms_token
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME: workload-tls-signing-keys-server
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION: "1"
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/openbao-ca/ca.crt
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       RUST_LOG: ${SIGNING_KEYS_RUST_LOG:-info}
     volumes:
       - signing-grant-verify:/run/grant-verify:ro
       - signing-integration-tls-server:/run/signing-tls:ro
+      - openbao-public-ca:/run/openbao-ca:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -122,6 +149,7 @@ services:
     volumes:
       - signing-grant-issuance:/run/grant-issuance:ro
       - signing-integration-tls-ca:/run/signing-ca:ro
+      - openbao-public-ca:/run/openbao-ca:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -244,7 +272,8 @@ services:
     environment:
       <<: [*rust-revocation-service-auth, *rust-issuer-sign-auth]
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/openbao-ca/ca.crt
       FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-flow/token
       ORG_GRPC_TARGET: organization-service:9002
       CT_GRPC_TARGET: credential-template-service:9003
@@ -253,6 +282,7 @@ services:
       ISSUANCE_GRPC_TARGET: issuance-native:9005
     volumes:
       - signing-grant-flow:/run/grant-flow:ro
+      - openbao-public-ca:/run/openbao-ca:ro
     depends_on:
       issuance-native:
         condition: service_healthy

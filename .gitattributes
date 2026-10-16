@@ -1,0 +1,2 @@
+scripts/bootstrap_disposable_signing_grants.sh text eol=lf
+scripts/bootstrap_disposable_signing_tls.sh text eol=lf

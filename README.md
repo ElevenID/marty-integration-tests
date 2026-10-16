@@ -46,6 +46,11 @@ the renderer rejects a retired Credentials issuance image. Evidence runs
 retain the attested manifest, resolved image digests, Compose configuration,
 test output, and service logs.
 
+OpenBao and the signing TLS identity are disposable in this harness. If their
+certificate or scoped token expires, the bootstrap fails closed rather than
+rotating keys in place. `make clean` removes this stack's disposable volumes
+(including its test database); then `make start` creates a fresh project.
+
 ## UI contracts
 
 The default Compose stack exposes the released UI at `http://127.0.0.1:23000`. To use another running release artifact, set `MARTY_UI_URL`.
