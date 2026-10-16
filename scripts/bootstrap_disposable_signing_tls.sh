@@ -37,8 +37,22 @@ if [ -e /tls-server/signing_keys_workload_server_cert ] ||
         echo 'Disposable keyless signing TLS material ready'
         exit 0
     fi
-    echo 'Disposable signing TLS is stale or incomplete; start a fresh Compose project or run down --volumes on this disposable stack' >&2
-    exit 1
+    # A normal Compose stop/start recreates dev-mode OpenBao but retains named
+    # volumes. Only reset these three owned outputs when the workload PKI mount
+    # is absent, proving this is a fresh disposable OpenBao instance. An
+    # expired token against an existing mount still fails closed.
+    mounts="$(curl --fail --silent --show-error --max-time 5 --cacert "$BAO_CACERT" \
+        --header "X-Vault-Token: $BAO_DEV_ROOT_TOKEN" \
+        "$BAO_ADDR/v1/sys/mounts")" || {
+        echo 'Unable to verify disposable OpenBao state; signing TLS remains unchanged' >&2
+        exit 1
+    }
+    if printf '%s' "$mounts" | grep -Fq '"workload-pki/"'; then
+        echo 'Disposable signing TLS is stale or incomplete against existing OpenBao state; start a fresh Compose project or run down --volumes' >&2
+        exit 1
+    fi
+    rm -f /tls-server/signing_keys_workload_server_cert \
+        /tls-server/signing_keys_tls_kms_token /tls-ca/ca.crt
 fi
 
 SELFHOST_TLS_OUTPUT_DIR="$(mktemp -d /bootstrap-output/run.XXXXXX)"

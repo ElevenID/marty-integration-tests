@@ -46,10 +46,12 @@ the renderer rejects a retired Credentials issuance image. Evidence runs
 retain the attested manifest, resolved image digests, Compose configuration,
 test output, and service logs.
 
-OpenBao and the signing TLS identity are disposable in this harness. If their
-certificate or scoped token expires, the bootstrap fails closed rather than
-rotating keys in place. `make clean` removes this stack's disposable volumes
-(including its test database); then `make start` creates a fresh project.
+OpenBao and the signing TLS identity are disposable in this harness. A normal
+`make stop`/`make start` re-provisions the owned TLS files when OpenBao is
+recreated. If a certificate or scoped token expires against an existing
+OpenBao instance, bootstrap fails closed rather than rotating keys in place.
+`make clean` removes this stack's disposable volumes (including its test
+database); then `make start` creates a fresh project.
 
 ## UI contracts
 
