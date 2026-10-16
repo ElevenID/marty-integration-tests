@@ -37,7 +37,34 @@ def test_public_stack_uses_shared_rust_issuance_runtime_and_migrator() -> None:
     )
     services = json.loads(rendered.stdout)["services"]
     migrations = services["migrations"]["environment"]
-    assert migrations["BAO_ADDR"] == "http://openbao:8200"
+    assert migrations["BAO_ADDR"] == "https://openbao:8200"
+    assert migrations["BAO_CACERT"] == "/bao/public-ca/vault-ca.pem"
+    assert services["openbao"]["hostname"] == "openbao"
+    assert "-dev-tls" in services["openbao"]["command"]
+    assert "-dev" not in services["openbao"]["command"]
+    signing = services["signing-keys"]["environment"]
+    assert "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE" not in signing
+    assert signing["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR"] == "https://openbao:8200"
+    assert signing["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE"] == "/bao/public-ca/vault-ca.pem"
+    assert signing["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME"] == "oss-ci-signing-keys-tls"
+    assert services["migrations"]["environment"]["NOTIFICATION_OPENBAO_CA_CERT_FILE"] == (
+        "/bao/public-ca/vault-ca.pem"
+    )
+    assert services["migrations"]["depends_on"]["openbao-plugin-bootstrap"]["condition"] == (
+        "service_completed_successfully"
+    )
+    private_volume = "openbao-tls"
+    for name, service in services.items():
+        mounts = service.get("volumes", [])
+        has_private_volume = any(mount["source"] == private_volume for mount in mounts)
+        assert has_private_volume == (
+            name in {"openbao-tls-init", "openbao", "openbao-ca-export"}
+        )
+    assert services["signing-keys"]["volumes"]
+    assert any(
+        mount["source"] == "openbao-public-ca"
+        for mount in services["signing-keys"]["volumes"]
+    )
     assert migrations["BAO_TOKEN"] == "disposable-custom-openbao-token"
     assert migrations["NOTIFICATION_OPENBAO_TOKEN"] == migrations["BAO_TOKEN"]
     for name in ("issuance-service", "issuance-native", "issuance-migrations"):
