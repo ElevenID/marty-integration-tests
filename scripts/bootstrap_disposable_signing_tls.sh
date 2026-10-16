@@ -26,7 +26,26 @@ if [ -e /tls-server/tls.crt ] || [ -e /tls-server/token ] || [ -e /tls-ca/ca.crt
         exit 1
     fi
     existing=true
-else
+fi
+key_path=transit/keys/oss-ci-signing-keys-tls
+key_metadata="$(bao read -format=json "$key_path" 2>&1)" || {
+    if [ "$key_metadata" != "No value found at $key_path" ]; then
+        echo 'Disposable workload TLS key lookup failed' >&2
+        exit 1
+    fi
+    key_metadata=
+}
+if [ "$existing" = true ] && [ -z "$key_metadata" ]; then
+    if ! bao status -format=json | grep -q '"storage_type": "inmem"'; then
+        echo 'Missing workload TLS key outside disposable in-memory OpenBao' >&2
+        exit 1
+    fi
+    # `compose down` preserves named volumes but dev OpenBao loses its keys.
+    # These files contain only public certificates and a scoped test token.
+    rm -f /tls-server/tls.crt /tls-server/token /tls-ca/ca.crt
+    existing=false
+fi
+if [ -z "$key_metadata" ]; then
     bao write transit/keys/oss-ci-signing-keys-tls \
         type=ecdsa-p256 exportable=false allow_plaintext_backup=false >/dev/null
 fi
