@@ -46,6 +46,7 @@ class MartyHeadlessWalletClient:
         self.wallet_id: Optional[str] = None
         self.did: Optional[str] = None
         self._credentials: List[Dict[str, Any]] = []
+        self._holder_keys: Dict[str, Any] = {}
 
         # Lazily-created protocol clients (one per issuance flow).
         # The VCI client is recreated per ``accept_credential_offer`` call so
@@ -65,6 +66,7 @@ class MartyHeadlessWalletClient:
         if self._vp_client:
             await self._vp_client.close()
             self._vp_client = None
+        self._holder_keys.clear()
 
     # -- wallet / DID management -------------------------------------------
 
@@ -93,8 +95,9 @@ class MartyHeadlessWalletClient:
         After issuance, the headless VP client sends the raw credential
         so the issuer-bound key type is transparent to presentation.
         """
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         import json
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
         # Ed25519 key for DID / issuance proof-of-possession
         ed_priv = Ed25519PrivateKey.generate()
@@ -147,6 +150,7 @@ class MartyHeadlessWalletClient:
                         "format": cred_obj.get("format", "unknown"),
                         "raw_response": cred_obj,
                     })
+                    self._holder_keys[cred_id] = vci._private_key
 
             logger.info(
                 "Accepted offer — wallet now holds %d credential(s)",
@@ -208,6 +212,8 @@ class MartyHeadlessWalletClient:
 
         if not selected:
             selected = list(self._credentials)
+        if not selected:
+            raise ValueError("No credential is available for presentation")
 
         # 1. Resolve the presentation request to get the nonce
         request = await self._vp_client.resolve_presentation_request(
@@ -218,12 +224,13 @@ class MartyHeadlessWalletClient:
         state = request.get("state")
 
         # 2. Build the VP token from the first selected credential
-        raw_cred = selected[0].get("credential", "") if selected else ""
-        # Use the rewritten response_uri as audience for KB-JWT
-        rewritten_response_uri = (
-            self._vp_client._rewrite_url(response_uri) if response_uri else ""
+        raw_cred = selected[0].get("credential", "")
+        # The verifier binds KB-JWT audience to its public client_id, not the
+        # loopback URL used by this test client to deliver the response.
+        vp_token = self._build_vp_token(
+            raw_cred, nonce, request.get("client_id", ""),
+            self._holder_keys.get(selected[0]["id"]),
         )
-        vp_token = self._build_vp_token(raw_cred, nonce, rewritten_response_uri)
 
         # 3. Build presentation_submission
         pd = request.get("presentation_definition")
@@ -280,29 +287,46 @@ class MartyHeadlessWalletClient:
         return result
 
     def _build_vp_token(
-        self, raw_credential: str, nonce: str, audience: str
+        self, raw_credential: str, nonce: str, audience: str,
+        holder_key: Any = None,
     ) -> str:
-        """Build a VP JWT token that wraps the credential.
-
-        The flow service expects a JWT whose payload contains a ``nonce``
-        claim matching the authorization request nonce.  For SD-JWT
-        credentials we wrap the raw credential inside a VP JWT envelope
-        (OID4VP §6.3.1).
-
-        For plain JWT credentials (no ``~`` delimiter) the raw JWT is
-        also wrapped in a VP JWT so the nonce is always present.
-        """
+        """Bind an SD-JWT to its holder key, or wrap a plain JWT in a VP JWT."""
+        import base64
+        import hashlib
         import json
         import time
 
-        from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.backends import default_backend
-        from cryptography.hazmat.primitives import hashes as _hashes
-        from cryptography.hazmat.primitives.asymmetric.utils import (
-            decode_dss_signature,
-        )
+        from cryptography.hazmat.primitives.asymmetric import ec
 
-        # Use a fresh ephemeral key for the VP JWT
+        if "~" in raw_credential:
+            if holder_key is None or not nonce or not audience:
+                raise ValueError("SD-JWT holder key and verifier context are required")
+            issuer_jwt = raw_credential.split("~", 1)[0]
+            issuer_payload = json.loads(base64.urlsafe_b64decode(
+                issuer_jwt.split(".")[1] + "==="
+            ))
+            public = holder_key.public_key().public_numbers()
+            expected = {
+                "kty": "EC", "crv": "P-256",
+                "x": _b64url_encode(public.x.to_bytes(32, "big")),
+                "y": _b64url_encode(public.y.to_bytes(32, "big")),
+            }
+            confirmation = issuer_payload.get("cnf", {}).get("jwk", {})
+            if any(confirmation.get(key) != value for key, value in expected.items()):
+                raise ValueError("SD-JWT confirmation key differs from retained holder key")
+            unsigned = raw_credential.rstrip("~") + "~"
+            if unsigned.split("~")[-2].count(".") == 2 and unsigned.split("~")[-2] != issuer_jwt:
+                raise ValueError("issued SD-JWT already contains a key-binding JWT")
+            binding = self._sign_jwt(
+                {"typ": "kb+jwt", "alg": "ES256"},
+                {"aud": audience, "nonce": nonce, "iat": int(time.time()),
+                 "sd_hash": _b64url_encode(hashlib.sha256(unsigned.encode()).digest())},
+                holder_key,
+            )
+            return unsigned + binding
+
+        # Plain JWT credentials use a separate presentation JWT envelope.
         vp_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
         pub = vp_key.public_key().public_numbers()
         jwk = {
@@ -325,6 +349,16 @@ class MartyHeadlessWalletClient:
             },
         }
 
+        return self._sign_jwt(header, payload, vp_key)
+
+    @staticmethod
+    def _sign_jwt(header: Dict[str, Any], payload: Dict[str, Any], private_key: Any) -> str:
+        import json
+
+        from cryptography.hazmat.primitives import hashes as _hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
         hdr_b64 = _b64url_encode(
             json.dumps(header, separators=(",", ":")).encode()
         )
@@ -333,7 +367,7 @@ class MartyHeadlessWalletClient:
         )
         signing_input = f"{hdr_b64}.{pay_b64}".encode()
 
-        sig_der = vp_key.sign(signing_input, ec.ECDSA(_hashes.SHA256()))
+        sig_der = private_key.sign(signing_input, ec.ECDSA(_hashes.SHA256()))
         r, s = decode_dss_signature(sig_der)
         sig_bytes = r.to_bytes(32, "big") + s.to_bytes(32, "big")
         sig_b64 = _b64url_encode(sig_bytes)
@@ -367,9 +401,10 @@ class MartyHeadlessWalletClient:
         )
         return f"openid4vp://authorize?{params}"
 
-    # -- delete wallet (no-op) ---------------------------------------------
+    # -- delete wallet -----------------------------------------------------
 
     async def delete_wallet(self, wallet_id: Optional[str] = None):
-        """No-op — headless wallet is in-memory only."""
+        """Discard in-memory credentials and holder keys."""
         self._credentials.clear()
+        self._holder_keys.clear()
         logger.info("Deleted headless wallet %s", self.wallet_id)

@@ -119,6 +119,27 @@ class AuthHelper:
         )
         return urlunparse(rewritten)
 
+    def _allow_loopback_keycloak_session(self, client: httpx.AsyncClient,
+                                         action_url: str) -> None:
+        """Send Keycloak's Secure login cookies over its local HTTP test port.
+
+        The public issuer is HTTPS, so Keycloak marks its cookies Secure even
+        when this helper connects directly to the disposable loopback port.
+        Limit the exception to cookies scoped to that realm on the same
+        loopback host; remote HTTP destinations retain the Secure restriction.
+        """
+        local = urlparse(self.keycloak_local_url)
+        action = urlparse(action_url)
+        if (local.scheme != "http" or local.hostname not in {"127.0.0.1", "localhost"}
+                or action.scheme != "http" or action.hostname != local.hostname
+                or action.port != local.port or not action.path.startswith("/realms/")):
+            return
+        domains = {action.hostname, f"{action.hostname}.local"}
+        for cookie in client.cookies.jar:
+            if (cookie.secure and cookie.domain in domains
+                    and cookie.path.startswith("/realms/")):
+                cookie.secure = False
+
     # ------------------------------------------------------------------
     # Core PKCE flow
     # ------------------------------------------------------------------
@@ -201,6 +222,7 @@ class AuthHelper:
         raw_action = action_match.group(1).replace("&amp;", "&")
         action_url = self._to_keycloak_local(raw_action)
         logger.debug("[pkce] Form action: %s", action_url[:120])
+        self._allow_loopback_keycloak_session(client, action_url)
 
         # ----------------------------------------------------------------
         # Step 4: POST credentials to Keycloak
