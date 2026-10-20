@@ -4141,7 +4141,36 @@ def positive_oid4vp_public_input() -> dict[str, Any]:
     return value
 
 
+def _require_oid4vp_rejection(
+    reference: str, public_input: dict[str, Any], *, expected_errors: set[str],
+) -> None:
+    """Distinguish the packaged verifier's rejection from a Docker failure."""
+    try:
+        completed = subprocess.run(
+            [
+                "docker", "run", "--rm", "-i", "--network", "none", reference,
+                "/usr/local/bin/marty-verifier-positive-gate",
+            ],
+            input=json.dumps(public_input), capture_output=True, text=True,
+            timeout=120, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ArtifactRuntimeError("negative OID4VP runtime gate could not complete") from exc
+    # The Rust binary exits 2 and emits only this bounded error on rejection.
+    # Exit 125/126/127, signals, startup errors and unexpected output are not
+    # negative acceptance. Never forward subprocess output into evidence/errors.
+    _require(
+        completed.returncode == 2
+        and not completed.stdout.strip()
+        and completed.stderr.strip() in {
+            f"positive OID4VP runtime gate failed: {error}" for error in expected_errors
+        },
+        "negative OID4VP runtime did not demonstrate the expected verifier rejection",
+    )
+
+
 def _run_positive_oid4vp_gate(reference: str) -> dict[str, Any]:
+    public_input = positive_oid4vp_public_input()
     raw = _run(
         [
             "docker",
@@ -4155,7 +4184,7 @@ def _run_positive_oid4vp_gate(reference: str) -> dict[str, Any]:
         ],
         label="exercise exact-image positive OID4VP runtime gate",
         timeout=120,
-        input_text=json.dumps(positive_oid4vp_public_input()),
+        input_text=json.dumps(public_input),
     )
     evidence = json.loads(raw)
     _require(isinstance(evidence, dict), "positive OID4VP runtime evidence was not an object")
@@ -4181,6 +4210,28 @@ def _run_positive_oid4vp_gate(reference: str) -> dict[str, Any]:
         for check_id, (outcome, code) in OID4VP_PASS_CHECK_PROJECTION.items()
     ]
     _require(checks == expected, "positive OID4VP canonical check projection changed")
+
+    # Preserve the old standalone probe's two negatives under the gate that
+    # actually owns transaction acceptance. Mutate the same accepted public
+    # input, without generating more issuer/holder keys or changing the image.
+    parts = public_input["presentation"].split("~")
+    jwt = parts[0].split(".")
+    _require(len(jwt) == 3 and bool(jwt[2]), "positive runtime issuer JWT shape changed")
+    jwt[2] = ("A" if jwt[2][0] != "A" else "B") + jwt[2][1:]
+    parts[0] = ".".join(jwt)
+    _require_oid4vp_rejection(
+        reference, dict(public_input, presentation="~".join(parts)),
+        expected_errors={
+            "native verifier rejected the runtime presentation",
+            "presentation proof did not pass",
+            "credential proof did not pass",
+        },
+    )
+    _require_oid4vp_rejection(
+        reference,
+        dict(public_input, issuer_public_jwk=dict(public_input["issuer_public_jwk"], d="forbidden")),
+        expected_errors={"runtime gate requires only public JWK fields"},
+    )
     return evidence
 
 
