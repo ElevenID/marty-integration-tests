@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Generate static conformance test fixtures for OID4VC / OID4VP tests.
 
-Produces a corpus of JSON, JWT, and JWK files consumed by:
-  - marty-integration-tests (Python pytest conformance suite)
-  - marty-verifier          (Rust integration tests)
-  - marty-authenticator     (Flutter/Dart conformance tests)
+Historical producer for the JSON, JWT, and JWK fixture family used by Core,
+Verifier, and Authenticator. Integration's current pytest suite no longer reads
+these output files. Native and Dart suites maintain their own fixture copies
+or representations, which have drifted from this directory. Preserve this
+regeneration source until vector ownership and coverage are reconciled; review
+differences and run the owning suites before replacing their fixtures. A fresh
+generator run alone does not establish cross-suite parity.
 
 Usage:
     python generate_fixtures.py
@@ -12,7 +15,7 @@ Usage:
 All output files are written to this directory.  The outputs are deterministic
 (same key seed → same files) so the git diff is stable.
 
-Key constants used across all three test suites:
+Historical key constants for this fixture family:
   VERIFIER_ID = "https://verifier.example.com"
   ISSUER_URL  = "https://issuer.example.com"
   NONCE       = "n-0S6_WzA2Mj"
