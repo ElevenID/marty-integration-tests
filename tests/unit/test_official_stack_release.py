@@ -201,3 +201,10 @@ def test_bad_download_is_deleted_and_never_attested(tmp_path: Path, monkeypatch:
         release.download_and_attest(pin, output)
     assert len(calls) == 1
     assert not (output / "stack-manifest.json").exists()
+
+
+def test_current_reviewed_stack_checkout_matches_manifest_provenance() -> None:
+    # A future approved history rewrite must qualify distinct commits explicitly.
+    pin = release.load_pin()
+    assert pin["repository"] == "ElevenID/marty-ui"
+    assert pin["marty_checkout_commit"] == pin["marty_commit"]

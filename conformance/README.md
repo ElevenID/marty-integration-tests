@@ -644,15 +644,23 @@ Marty commit recorded by that release. The release, manifest digest, provenance
 commit, and executable checkout commit are repository-reviewed together; a
 new stack therefore requires a PR rather than a dispatch-time override.
 
-If an approved repository payload cleanup rewrites that exact commit, the
-reviewed pin preserves the manifest's original provenance value and records a
-separate, literal executable checkout commit. Unit validation requires that
-checkout to equal the result in `history-rewrite-map.json`. The map is
-intentionally empty during normal operation. Populate it solely from the
-complete old-to-new map produced by the reviewed rewrite in
-`ElevenID/.github#22`, then update the pin and both workflow literals in the
-same reviewed PR; unknown commits remain unchanged, while malformed maps or
-commit IDs fail closed.
+The completed repository rewrite in [organization maintenance #22](https://github.com/ElevenID/.github/issues/22)
+no longer needs a runtime translation tool. Its historical
+[old-to-new map](https://github.com/ElevenID/marty-integration-tests/blob/5b3ec6a802a5e13201be8883741889405a86d146/conformance/history-rewrite-map.json)
+and [resolver](https://github.com/ElevenID/marty-integration-tests/blob/5b3ec6a802a5e13201be8883741889405a86d146/scripts/resolve_history_rewrite.py)
+remain available at the last containing revision. The current reviewed pin
+uses the same provenance and executable checkout commit, with that invariant
+checked by the official release tests.
+
+A future repository rewrite still requires separate explicit approval,
+recoverable mirrors, a reviewed complete mapping and release/pin qualification.
+If it rewrites a released commit, preserve the manifest's original provenance
+and qualify the corresponding executable checkout separately. Update the pin,
+both workflow literals and the current-pin equality test together in a reviewed
+PR; do not edit released manifests or infer an executable checkout from an
+unreviewed map. Existing digest, attestation and exact literal-checkout gates
+remain mandatory. Retiring the completed translation tool does not approve a
+future rewrite or establish equivalence between different commits.
 
 Each lane owns separate Compose projects and disposable TLS, truststore,
 keystore, operator credentials, fixtures, and output directories. OID4VP Final
