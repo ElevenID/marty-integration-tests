@@ -3311,6 +3311,8 @@ def test_exact_image_positive_oid4vp_gate_requires_complete_runtime_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[list[str], str, int]] = []
+    rejections: list[tuple[str, dict, set[str]]] = []
+    produced: list[dict] = []
     evidence = {
         "schema": "elevenid.credentials-verifier-positive-runtime/v1",
         "status": "passed",
@@ -3330,14 +3332,20 @@ def test_exact_image_positive_oid4vp_gate_requires_complete_runtime_projection(
         calls.append((command, label, timeout))
         return json.dumps(evidence)
 
-    monkeypatch.setattr(
-        artifact,
-        "positive_oid4vp_public_input",
-        lambda: {
-            "presentation": "synthetic~public~input",
-            "issuer_public_jwk": dict.fromkeys(("kty", "crv", "x", "y", "kid", "alg"), "synthetic"),
-        },
-    )
+    public_input = {
+        "presentation": "header.payload.signature~disclosure~holder-proof",
+        "issuer_public_jwk": dict.fromkeys(("kty", "crv", "x", "y", "kid", "alg"), "synthetic"),
+    }
+
+    def produce() -> dict:
+        produced.append(public_input)
+        return public_input
+
+    def reject(image: str, value: dict, *, expected_errors: set[str]) -> None:
+        rejections.append((image, value, expected_errors))
+
+    monkeypatch.setattr(artifact, "positive_oid4vp_public_input", produce)
+    monkeypatch.setattr(artifact, "_require_oid4vp_rejection", reject)
     monkeypatch.setattr(artifact, "_run", run)
     reference = artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64
 
@@ -3359,11 +3367,94 @@ def test_exact_image_positive_oid4vp_gate_requires_complete_runtime_projection(
         )
     ]
 
+    assert produced == [public_input]
+    assert len(rejections) == 2
+    assert all(image == reference for image, _, _ in rejections)
+    tampered, private = [value for _, value, _ in rejections]
+    assert tampered["presentation"] == "header.payload.Aignature~disclosure~holder-proof"
+    assert tampered["issuer_public_jwk"] == public_input["issuer_public_jwk"]
+    assert private["presentation"] == public_input["presentation"]
+    assert private["issuer_public_jwk"] == dict(public_input["issuer_public_jwk"], d="forbidden")
+    assert "d" not in public_input["issuer_public_jwk"]
+    assert public_input["presentation"] == "header.payload.signature~disclosure~holder-proof"
+
+    # Neither an accepted mutation nor a failed negative probe may produce a
+    # successful transaction check. Exercise failure at either mutation.
+    for fail_at in (0, 1):
+        attempted = []
+
+        def fail_rejection(*_args: object, **_kwargs: object) -> None:
+            attempted.append(None)
+            if len(attempted) > fail_at:
+                raise ValueError("negative OID4VP rejection failed")
+
+        monkeypatch.setattr(artifact, "_require_oid4vp_rejection", fail_rejection)
+        with pytest.raises(ValueError, match="negative OID4VP rejection failed"):
+            artifact._run_positive_oid4vp_gate(reference)
+        assert len(attempted) == fail_at + 1
+
     changed = copy.deepcopy(evidence)
     changed["checks"] = changed["checks"][:-1]
     monkeypatch.setattr(artifact, "_run", lambda *_args, **_kwargs: json.dumps(changed))
     with pytest.raises(ValueError, match="canonical check projection"):
         artifact._run_positive_oid4vp_gate(reference)
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr", "accepted"),
+    [
+        (2, "", "positive OID4VP runtime gate failed: credential proof did not pass\n", True),
+        (2, "", "positive OID4VP runtime gate failed: runtime gate requires only public JWK fields\n", True),
+        (0, "", "", False),
+        (1, "", "", False),
+        (125, "", "Docker startup failure", False),
+        (126, "", "permission denied", False),
+        (127, "", "binary not found", False),
+        (137, "", "", False),
+        (2, '{"decision":"PASS"}', "positive OID4VP runtime gate failed: credential proof did not pass", False),
+        (2, "", "positive OID4VP runtime gate failed: runtime clock rejected", False),
+        (2, "", "unrelated failure with sensitive material", False),
+        (2, "", "positive OID4VP runtime gate failed: credential proof did not pass\nextra output", False),
+    ],
+)
+def test_exact_image_negative_gate_requires_verifier_rejection(
+    monkeypatch: pytest.MonkeyPatch, returncode: int, stdout: str, stderr: str, accepted: bool,
+) -> None:
+    observed = []
+    reference = artifact.RUST_IMAGE_URI + "@sha256:" + "b" * 64
+    public_input = {"presentation": "synthetic-public-input", "issuer_public_jwk": {"d": "forbidden"}}
+
+    def run(command: list[str], **kwargs: object) -> object:
+        observed.append((command, kwargs))
+        return artifact.subprocess.CompletedProcess(command, returncode, stdout, stderr)
+
+    monkeypatch.setattr(artifact.subprocess, "run", run)
+    errors = {"credential proof did not pass", "runtime gate requires only public JWK fields"}
+    if accepted:
+        artifact._require_oid4vp_rejection(reference, public_input, expected_errors=errors)
+    else:
+        with pytest.raises(ValueError, match="did not demonstrate the expected verifier rejection") as error:
+            artifact._require_oid4vp_rejection(reference, public_input, expected_errors=errors)
+        assert "sensitive material" not in str(error.value)
+    assert observed == [(
+        ["docker", "run", "--rm", "-i", "--network", "none", reference,
+         "/usr/local/bin/marty-verifier-positive-gate"],
+        {"input": json.dumps(public_input), "capture_output": True, "text": True,
+         "timeout": 120, "check": False},
+    )]
+
+
+@pytest.mark.parametrize("failure", [OSError("private detail"), artifact.subprocess.TimeoutExpired("docker", 120)])
+def test_exact_image_negative_gate_propagates_process_failures(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception,
+) -> None:
+    def run(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(artifact.subprocess, "run", run)
+    with pytest.raises(artifact.ArtifactRuntimeError, match="could not complete") as error:
+        artifact._require_oid4vp_rejection("image", {}, expected_errors={"rejected"})
+    assert "private detail" not in str(error.value)
 
 
 def test_default_disabled_start_requires_native_health_without_compatibility_leak(
