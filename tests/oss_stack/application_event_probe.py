@@ -66,7 +66,7 @@ def _run_python(probe: str, *, timeout: int = 45) -> str:
             "--rm",
             "--no-deps",
             "-T",
-            "migrations",
+            "network-probe",
             "python",
             "-c",
             probe,

@@ -1,5 +1,28 @@
 # Published verifier transaction regression gate
 
+Historical evidence only: the scheduled artifact workflow no longer executes
+the pre-KMS published Rust transaction pinned below. Its positive runtime gate
+was built before the current remote-only issuer and wallet input contract, so
+replaying it would preserve an obsolete local-signing test path. The immutable
+pin and prior results remain for audit. Current Rust verifier release
+qualification runs against the exact candidate services digest in Marty UI's
+stack-release workflow with fresh scoped OpenBao issuer and holder keys, the
+Core test-wallet producer, and public input passed to the packaged verifier.
+No KMS-only release is accepted from the historical pin.
+
+The current `credentials_verifier_artifact.py` positive runtime gate also owns
+the former standalone probe's tampered issuer-signature and private issuer-JWK
+negative checks. A transaction can record its positive check only after both
+negatives reject on the same digest-selected image and fresh public input.
+Verifier exit 2, empty stdout and the expected bounded verifier diagnostic are
+required; Docker startup errors, unrelated failures, output and timeouts do not
+count as rejection. The orphan `probe_positive_verifier_image.py` is retired.
+Collected artifact-harness tests cover the mutations and fail-closed process
+handling. Actual image acceptance still requires the current UI release gate
+and scoped KMS/wallet producer; unit mocks do not supply that runtime evidence.
+
+The remainder of this document records the retired historical lane.
+
 The static published-transaction lane reruns the already-authoritative
 `run-transaction` and `compare-transaction-evidence` owners. It does not add a
 second verifier, change the frozen check sets or declare the Python oracle

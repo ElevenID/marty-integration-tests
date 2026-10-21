@@ -17,7 +17,8 @@ def manifest():
         "ghcr.io/elevenid/marty-ui-oss/ui",
         "ghcr.io/elevenid/marty-ui-oss/services",
         "ghcr.io/elevenid/marty-ui-oss/migrations",
-        "ghcr.io/elevenid/marty-credentials-issuance",
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+        "ghcr.io/elevenid/marty-ui-oss/keycloak",
     ]
     return {
         "schema": "marty.stack/v1",
@@ -75,14 +76,63 @@ def manifest():
     }
 
 
+def historical_manifest() -> dict:
+    value = manifest()
+    value["components"][0]["artifacts"] = [
+        artifact for artifact in value["components"][0]["artifacts"]
+        if not artifact["uri"].endswith(("/openbao-didcomm", "/keycloak"))
+    ]
+    return value
+
+
 def test_maps_required_images_by_immutable_uri():
     images = MODULE.image_map(manifest())
     assert images["MARTY_UI_IMAGE"].endswith("@sha256:" + "a" * 64)
-    assert len(images) == 4
+    assert images["MARTY_ISSUANCE_IMAGE"] == images["MARTY_SERVICES_IMAGE"]
+    assert images["MARTY_OPENBAO_DIDCOMM_IMAGE"].endswith("@sha256:" + "a" * 64)
+    assert images["MARTY_KEYCLOAK_IMAGE"].endswith("@sha256:" + "a" * 64)
+    assert len(images) == 6
+
+
+def test_rejects_retired_credentials_image() -> None:
+    value = manifest()
+    value["components"][0]["artifacts"].append({
+        "type": "oci",
+        "uri": "ghcr.io/elevenid/marty-credentials-issuance",
+        "digest": "sha256:" + "a" * 64,
+    })
+    with pytest.raises(ValueError, match="KMS-only stack requires exactly"):
+        MODULE.image_map(value)
+
+
+def test_rejects_stack_without_kms_didcomm_plugin() -> None:
+    value = manifest()
+    value["components"][0]["artifacts"] = [
+        artifact
+        for artifact in value["components"][0]["artifacts"]
+        if not artifact["uri"].endswith("/openbao-didcomm")
+    ]
+    with pytest.raises(ValueError, match="openbao-didcomm"):
+        MODULE.image_map(value)
+    with pytest.raises(ValueError, match="openbao-didcomm"):
+        MODULE.image_map(value, allow_historical_three_image=True)
+    historical = MODULE.image_map(historical_manifest(), allow_historical_three_image=True)
+    assert "MARTY_OPENBAO_DIDCOMM_IMAGE" not in historical
+    assert "MARTY_KEYCLOAK_IMAGE" not in historical
+
+
+def test_rejects_stack_without_kms_keycloak_image() -> None:
+    value = manifest()
+    value["components"][0]["artifacts"] = [
+        artifact for artifact in value["components"][0]["artifacts"]
+        if not artifact["uri"].endswith("/keycloak")
+    ]
+    with pytest.raises(ValueError, match="keycloak"):
+        MODULE.image_map(value)
 
 
 def test_maps_required_python_artifacts_by_component_and_digest():
-    artifacts = MODULE.python_artifact_map(manifest())
+    artifacts = MODULE.python_artifact_map(historical_manifest())
     assert artifacts["MARTY_RS_URI"].endswith("/marty_rs.whl")
     assert artifacts["MARTY_RS_DIGEST"] == "sha256:" + "b" * 64
     assert artifacts["MARTY_COMMON_URI"].endswith("/marty_common.whl")
@@ -94,18 +144,31 @@ def test_maps_required_python_artifacts_by_component_and_digest():
     assert len(artifacts) == 8
 
 
+def test_current_five_image_stack_does_not_require_historical_marty_common_wheel() -> None:
+    value = manifest()
+    value["components"] = [
+        component for component in value["components"]
+        if component["name"] != "marty-common"
+    ]
+    artifacts = MODULE.python_artifact_map(value)
+    assert len(artifacts) == 6
+    assert "MARTY_COMMON_URI" not in artifacts
+    with pytest.raises(ValueError, match="marty-common"):
+        MODULE.python_artifact_map(value, require_marty_common=True)
+
+
 @pytest.mark.parametrize(
     "component_name",
     ["marty-core-python", "marty-verification-python", "marty-iso18013-python", "marty-common"],
 )
 def test_rejects_missing_or_ambiguous_required_python_artifact(component_name: str) -> None:
-    missing = manifest()
+    missing = historical_manifest() if component_name == "marty-common" else manifest()
     component = next(item for item in missing["components"] if item["name"] == component_name)
     component["artifacts"] = []
     with pytest.raises(ValueError, match="expected exactly one"):
         MODULE.python_artifact_map(missing)
 
-    ambiguous = manifest()
+    ambiguous = historical_manifest() if component_name == "marty-common" else manifest()
     component = next(item for item in ambiguous["components"] if item["name"] == component_name)
     component["artifacts"].append(deepcopy(component["artifacts"][0]))
     with pytest.raises(ValueError, match="found 2"):
@@ -132,7 +195,7 @@ def test_rejects_unbound_or_malformed_required_python_artifact(mutation: dict[st
         component["repository"] = mutation["repository"]
     else:
         component["artifacts"][0].update(mutation)
-    with pytest.raises(ValueError, match="expected exactly one|immutable GitHub release"):
+    with pytest.raises(ValueError, match="expected exactly one|immutable GitHub release|KMS-only stack"):
         MODULE.python_artifact_map(value)
 
 

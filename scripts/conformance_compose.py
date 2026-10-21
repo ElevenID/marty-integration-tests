@@ -21,7 +21,10 @@ def main() -> int:
     if not args.arguments:
         parser.error("provide Docker Compose arguments after --")
     return subprocess.run(
-        docker_command(["compose", "--project-name", project_name(), *args.arguments]),
+        docker_command(["compose", "--project-name", project_name(),
+                        "--file", "docker-compose.yml",
+                        "--file", "docker-compose.rust-revocation.yml",
+                        *args.arguments]),
         check=False,
     ).returncode
 

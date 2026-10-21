@@ -24,21 +24,74 @@ x-service: &service
   networks: [marty-oss]
 
 services:
+  openbao-tls-init:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?run scripts/render_stack_env.py first}
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c", "chown openbao:openbao /bao/tls && chmod 0700 /bao/tls"]
+    volumes:
+      - openbao-tls:/bao/tls
+    networks: [marty-oss]
+
   # Ephemeral OpenBao transit service for the OSS conformance stack. It exists
   # only on the private Compose network and supplies the normal remote signing
   # boundary; it is never exposed as a public endpoint.
   openbao:
-    image: quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?run scripts/render_stack_env.py first}
+    hostname: openbao
     cap_add: [IPC_LOCK]
-    command: server -dev
+    command: server -dev-tls -dev-tls-cert-dir=/bao/tls -dev-listen-address=0.0.0.0:8200 -config=/bao/config/openbao-fixture.hcl
     environment:
       BAO_DEV_ROOT_TOKEN_ID: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    volumes:
+      - openbao-tls:/bao/tls
+      - ./services/openbao-fixture.hcl:/bao/config/openbao-fixture.hcl:ro
+    depends_on:
+      openbao-tls-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      test: ["CMD", "bao", "status", "-address=https://127.0.0.1:8200", "-ca-cert=/bao/tls/vault-ca.pem"]
       interval: 5s
       timeout: 5s
       retries: 10
+    networks: [marty-oss]
+
+  openbao-ca-export:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?run scripts/render_stack_env.py first}
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/scripts/export_disposable_openbao_ca.sh"]
+    volumes:
+      - ./scripts/export_disposable_openbao_ca.sh:/scripts/export_disposable_openbao_ca.sh:ro
+      - openbao-tls:/bao/tls:ro
+      - openbao-public-ca:/bao/public-ca
+    depends_on:
+      openbao:
+        condition: service_healthy
+    networks: [marty-oss]
+
+  openbao-plugin-bootstrap:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?run scripts/render_stack_env.py first}
+    entrypoint: ["/bin/sh", "/scripts/bootstrap_disposable_openbao.sh"]
+    environment:
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/vault-ca.pem
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+    volumes:
+      - ./scripts/bootstrap_disposable_openbao.sh:/scripts/bootstrap_disposable_openbao.sh:ro
+      - openbao-public-ca:/bao/public-ca:ro
+    depends_on:
+      openbao-ca-export:
+        condition: service_completed_successfully
+    networks: [marty-oss]
+
+  # Network-only stdlib probe; the signed Rust migrations image has no Python.
+  network-probe:
+    profiles: [probe]
+    image: docker.io/library/python@sha256:236173eb74001afe2f60862de935b74fcbd00adfca247b2c27051a70a6a39a2d
+    read_only: true
+    user: "65534:65534"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks: [marty-oss]
 
   postgres:
@@ -91,15 +144,24 @@ services:
       # Enables the migration artifact's KMS/DID bootstrap for the disposable
       # test organization; issuance still uses the normal signing boundary.
       REDIS_URL: redis://redis:6379
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/vault-ca.pem
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+      # Disposable public-stack fixture: the bootstrap requires the explicit
+      # notification envelope token, even when it shares this dev OpenBao root.
+      NOTIFICATION_OPENBAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /bao/public-ca/vault-ca.pem
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      openbao:
-        condition: service_healthy
+      openbao-ca-export:
+        condition: service_completed_successfully
+      openbao-plugin-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - openbao-public-ca:/bao/public-ca:ro
     networks: [marty-oss]
 
   auth-service:
@@ -171,8 +233,17 @@ services:
 
   issuance-service:
     image: ${MARTY_ISSUANCE_IMAGE:?run scripts/render_stack_env.py first}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8005/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     environment:
-      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      SERVICE_NAME: issuance_native
+      ENVIRONMENT: test
+      MARTY_SCHEMA_STARTUP_MODE: validate
+      ISSUANCE_SERVICE_PORT: "8005"
+      DATABASE_URL: postgresql://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
       REDIS_URL: redis://redis:6379
       # The issuer URL is a public protocol identifier, never an internal
       # service address. Official lanes override this with their TLS bridge.
@@ -185,9 +256,18 @@ services:
       ORG_GRPC_TARGET: organization-service:9002
       CT_GRPC_TARGET: credential-template-service:9003
       RP_GRPC_TARGET: revocation-profile-service:9013
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/vault-ca.pem
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
       TOKEN_HMAC_KEY: test-only-token-hmac-key-32-bytes
+      GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-oss-ci-rust-revocation-lifecycle-token-32-bytes}
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-oss-ci-rust-signing-internal-key-32-bytes}
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      DIDCOMM_DID_WEB_INTERNAL_BASE_URL: http://gateway:8000
+      PUBLIC_API_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      UI_BASE_URL: http://ui
+      CANVAS_LTI_EXPERIENCE_BASE_URL: ${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}
+      CANVAS_MIRROR_WORKER_ENABLED: "false"
       # Shared only on the private Compose network so the authenticated gateway
       # can call the issuer's management API. This disposable default is not a
       # deployment credential; production supplies its own secret.
@@ -197,20 +277,28 @@ services:
         condition: service_completed_successfully
       issuance-migrations:
         condition: service_completed_successfully
+    volumes:
+      - openbao-public-ca:/bao/public-ca:ro
     networks: [marty-oss]
 
-  # The platform migration image owns the shared service schemas, while the
-  # credentials artifact owns its issuance schema and migration history. Keep
-  # both as release artifacts so a clean stack is genuinely deployable.
+  # The same signed Rust services image owns issuance migrations and runtime.
   issuance-migrations:
     image: ${MARTY_ISSUANCE_IMAGE:?run scripts/render_stack_env.py first}
-    command: ["python", "manage_migrations.py", "upgrade"]
+    entrypoint: ["/usr/local/bin/marty-issuance-service"]
+    command: ["migrate"]
     restart: "no"
     environment:
-      DATABASE_URL: postgresql+asyncpg://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
+      SERVICE_NAME: issuance_native
+      DATABASE_URL: postgresql://marty:marty_oss_ci_2026@postgres:5432/marty_credentials
     depends_on:
       migrations:
         condition: service_completed_successfully
+      # Rust issuance seeds from the Credential Template catalog and reads
+      # the organization table. Both native owners complete startup first.
+      credential-template-service:
+        condition: service_healthy
+      organization-service:
+        condition: service_healthy
     networks: [marty-oss]
 
   applicant-service:
@@ -329,7 +417,8 @@ services:
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile-service:8010
       FLOW_SERVICE_URL: http://flow-service:8011
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile-service:8013
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/vault-ca.pem
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-oss-ci-openbao-token}
     ports: ["28000:8000"]
 
@@ -372,3 +461,7 @@ services:
 networks:
   marty-oss:
     driver: bridge
+
+volumes:
+  openbao-tls:
+  openbao-public-ca:

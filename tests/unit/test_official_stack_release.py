@@ -73,18 +73,6 @@ def stack_bytes() -> bytes:
                             },
                         ],
                     },
-                    {
-                        "name": "marty-credentials",
-                        "repository": "ElevenID/marty-credentials",
-                        "commit": "b" * 40,
-                        "artifacts": [
-                            {
-                                "type": "oci",
-                                "uri": "ghcr.io/elevenid/marty-credentials-issuance",
-                                "digest": "sha256:" + "c" * 64,
-                            }
-                        ],
-                    },
                     wheel_component("marty-core-python", "ElevenID/marty-core", "marty_rs"),
                     wheel_component(
                         "marty-verification-python",
@@ -213,3 +201,10 @@ def test_bad_download_is_deleted_and_never_attested(tmp_path: Path, monkeypatch:
         release.download_and_attest(pin, output)
     assert len(calls) == 1
     assert not (output / "stack-manifest.json").exists()
+
+
+def test_current_reviewed_stack_checkout_matches_manifest_provenance() -> None:
+    # A future approved history rewrite must qualify distinct commits explicitly.
+    pin = release.load_pin()
+    assert pin["repository"] == "ElevenID/marty-ui"
+    assert pin["marty_checkout_commit"] == pin["marty_commit"]

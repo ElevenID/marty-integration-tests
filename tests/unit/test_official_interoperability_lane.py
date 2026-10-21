@@ -24,11 +24,11 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
         "MARTY_UI_IMAGE": "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "1" * 64,
         "MARTY_SERVICES_IMAGE": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "2" * 64,
         "MARTY_MIGRATIONS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "3" * 64,
-        "MARTY_ISSUANCE_IMAGE": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "4" * 64,
+        "MARTY_ISSUANCE_IMAGE": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "2" * 64,
     }
     manifest = tmp_path / "stack-manifest.json"
     artifacts = []
-    for reference in references.values():
+    for reference in sorted(set(references.values())):
         uri, digest = reference.split("@", 1)
         artifacts.append({"type": "oci", "uri": uri, "digest": digest})
     manifest.write_text(
@@ -92,7 +92,7 @@ def stack_binding_fixture(tmp_path: Path) -> tuple[Path, dict[str, object], dict
         "manifest_path": str(manifest.resolve()),
         "manifest_sha256": lane.file_sha256(manifest),
         "marty_commit": "a" * 40,
-        "images": [{"reference": reference} for reference in references.values()],
+        "images": [{"reference": reference} for reference in sorted(set(references.values()))],
     }
     base_images = json.loads((ROOT / "config" / "base-images.json").read_text(encoding="utf-8"))
     environment = {
@@ -443,6 +443,44 @@ def test_stack_metadata_must_be_a_json_object(tmp_path: Path) -> None:
 def test_stack_binding_accepts_only_the_attested_manifest_and_rendered_images(tmp_path: Path) -> None:
     manifest, metadata, environment = stack_binding_fixture(tmp_path)
     lane.validate_stack_binding(manifest, metadata, environment)
+
+
+def test_stack_binding_accepts_current_five_image_without_historical_wheel(tmp_path: Path) -> None:
+    manifest, metadata, environment = stack_binding_fixture(tmp_path)
+    plugin = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "9" * 64
+    keycloak = "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "8" * 64
+    value = json.loads(manifest.read_text(encoding="utf-8"))
+    value["components"][0]["artifacts"].append({
+        "type": "oci", "uri": plugin.split("@", 1)[0], "digest": plugin.split("@", 1)[1]
+    })
+    value["components"][0]["artifacts"].append({
+        "type": "oci", "uri": keycloak.split("@", 1)[0], "digest": keycloak.split("@", 1)[1]
+    })
+    value["components"] = [
+        component for component in value["components"]
+        if component["name"] != "marty-common"
+    ]
+    manifest.write_text(json.dumps(value), encoding="utf-8")
+    metadata["manifest_sha256"] = lane.file_sha256(manifest)
+    metadata["images"].append({"reference": plugin})
+    metadata["images"].append({"reference": keycloak})
+    environment["MARTY_OPENBAO_DIDCOMM_IMAGE"] = plugin
+    environment["MARTY_KEYCLOAK_IMAGE"] = keycloak
+    environment.pop("MARTY_COMMON_URI")
+    environment.pop("MARTY_COMMON_DIGEST")
+
+    env_path = tmp_path / ".env.stack"
+    env_path.write_text("\n".join(f"{key}={value}" for key, value in environment.items()), encoding="utf-8")
+    loaded = lane.load_stack_environment(env_path)
+    lane.validate_stack_binding(manifest, metadata, loaded)
+
+    loaded["MARTY_OPENBAO_DIDCOMM_IMAGE"] = plugin.replace("9" * 64, "f" * 64)
+    with pytest.raises(ValueError, match="MARTY_OPENBAO_DIDCOMM_IMAGE"):
+        lane.validate_stack_binding(manifest, metadata, loaded)
+    loaded["MARTY_OPENBAO_DIDCOMM_IMAGE"] = plugin
+    loaded["MARTY_KEYCLOAK_IMAGE"] = keycloak.replace("8" * 64, "f" * 64)
+    with pytest.raises(ValueError, match="MARTY_KEYCLOAK_IMAGE"):
+        lane.validate_stack_binding(manifest, metadata, loaded)
 
 
 def test_stack_binding_rejects_a_different_evidence_manifest(tmp_path: Path) -> None:

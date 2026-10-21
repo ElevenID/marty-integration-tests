@@ -130,6 +130,31 @@ def test_migrations_never_seed_an_internal_public_origin() -> None:
     assert "PUBLIC_API_URL: ${ISSUER_BASE_URL:-http://gateway:8000}" not in migrations
 
 
+def test_rust_issuance_migration_waits_for_native_credential_template_catalog() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    issuance_migrations = service_section(
+        compose, "issuance-migrations", "applicant-service"
+    )
+
+    assert "migrations:\n        condition: service_completed_successfully" in issuance_migrations
+    assert (
+        "credential-template-service:\n        condition: service_healthy"
+        in issuance_migrations
+    )
+    assert "organization-service:\n        condition: service_healthy" in issuance_migrations
+
+
+def test_rust_issuance_canvas_completion_uses_a_public_https_base() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    issuance = service_section(compose, "issuance-service", "issuance-migrations")
+
+    assert "UI_BASE_URL: http://ui" in issuance
+    assert (
+        "CANVAS_LTI_EXPERIENCE_BASE_URL: "
+        "${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}"
+    ) in issuance
+
+
 def test_oid4vci_services_share_one_external_https_issuer_identifier() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     issuance = compose.split("  issuance-service:\n", 1)[1].split("\n  compliance-profile-service:\n", 1)[0]
@@ -153,7 +178,10 @@ def test_rust_cutover_overlay_runs_authenticated_signing_service() -> None:
     assert "SERVICE_NAME: signing_keys" in signing
     assert 'SIGNING_KEYS_SERVICE_PORT: "8017"' in signing
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in signing
-    assert "<<: *rust-signing-service-auth" in signing
+    assert "*rust-signing-service-auth" in signing
+    assert "*rust-signing-gateway-auth" in signing
+    assert "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/grant-verify/token" in signing
+    assert "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/signing-tls/tls.crt" in signing
     assert "http://localhost:8017/health" in signing
     assert "SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017" in gateway
     assert signing_key in gateway

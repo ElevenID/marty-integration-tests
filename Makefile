@@ -1,8 +1,9 @@
 # Makefile for Marty Integration Tests
 
-.PHONY: help install install-e2e stack-env test test-fast test-wallet test-ui-contracts conformance conformance-local conformance-oidf-validate conformance-stack-start conformance-stack-stop clean start start-rust-revocation stop stop-rust-revocation restart logs
+.PHONY: help install install-e2e stack-env test test-fast test-wallet test-ui-contracts conformance conformance-local conformance-oidf-validate conformance-stack-start conformance-stack-stop clean start stop restart logs
 
 STACK_MANIFEST ?= stack-manifest.json
+COMPOSE_FILES := --file docker-compose.yml --file docker-compose.rust-revocation.yml
 
 help:
 	@echo "Marty Integration Tests - Available commands:"
@@ -11,9 +12,7 @@ help:
 	@echo "  make install-e2e       - Install browser-test dependencies and Chromium"
 	@echo "  make stack-env         - Verify STACK_MANIFEST and render digest-only image inputs"
 	@echo "  make start             - Start the immutable stack described by STACK_MANIFEST"
-	@echo "  make start-rust-revocation - Start the opt-in Rust revocation candidate stack"
 	@echo "  make stop              - Stop all services"
-	@echo "  make stop-rust-revocation  - Stop the opt-in Rust revocation candidate stack"
 	@echo "  make restart           - Restart all services"
 	@echo "  make test              - Run all integration tests"
 	@echo "  make test-fast         - Run tests with parallel execution"
@@ -41,22 +40,13 @@ stack-env:
 	python scripts/render_stack_env.py --manifest "$(STACK_MANIFEST)" --output .env.stack
 
 start: stack-env
-	docker compose --env-file .env.stack up -d
+	docker compose --env-file .env.stack $(COMPOSE_FILES) up -d --wait
 	@echo "Waiting for services to be healthy..."
-	@sleep 10
-	docker compose --env-file .env.stack ps
-
-start-rust-revocation: stack-env
-	docker compose --env-file .env.stack --file docker-compose.yml --file docker-compose.rust-revocation.yml up -d --wait
-	docker compose --env-file .env.stack --file docker-compose.yml --file docker-compose.rust-revocation.yml ps
+	docker compose --env-file .env.stack $(COMPOSE_FILES) ps
 
 stop:
 	@test -f .env.stack || { echo "ERROR: .env.stack is missing; run make stack-env first"; exit 1; }
-	docker compose --env-file .env.stack down
-
-stop-rust-revocation:
-	@test -f .env.stack || { echo "ERROR: .env.stack is missing; run make stack-env first"; exit 1; }
-	docker compose --env-file .env.stack --file docker-compose.yml --file docker-compose.rust-revocation.yml down
+	docker compose --env-file .env.stack $(COMPOSE_FILES) down
 
 restart: stop start
 
@@ -103,10 +93,10 @@ conformance-stack-stop:
 	python scripts/conformance_compose.py -- --env-file .env.stack down -v
 
 logs:
-	docker compose --env-file .env.stack logs -f
+	docker compose --env-file .env.stack $(COMPOSE_FILES) logs -f
 
 clean:
-	@test ! -f .env.stack || docker compose --env-file .env.stack down -v
+	@test ! -f .env.stack || docker compose --env-file .env.stack $(COMPOSE_FILES) down -v
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
 	rm -rf htmlcov/ .coverage

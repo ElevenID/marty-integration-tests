@@ -47,6 +47,7 @@ from oidf_mdoc_binding_audit import audit as audit_oidf_mdoc_binding  # noqa: E4
 from oidf_sd_jwt_diagnostic_audit import audit as audit_oidf_sd_jwt_diagnostics  # noqa: E402
 from render_stack_env import (  # noqa: E402
     REQUIRED_PYTHON_ARTIFACTS,
+    image_map,
     immutable_wheel_uri,
     python_artifact_map,
 )
@@ -311,6 +312,8 @@ STACK_ENV_KEYS = {
     "MARTY_SERVICES_IMAGE",
     "MARTY_MIGRATIONS_IMAGE",
     "MARTY_ISSUANCE_IMAGE",
+    "MARTY_OPENBAO_DIDCOMM_IMAGE",
+    "MARTY_KEYCLOAK_IMAGE",
     "POSTGRES_IMAGE",
     "REDIS_IMAGE",
     "MARTY_RS_URI",
@@ -323,11 +326,11 @@ STACK_ENV_KEYS = {
     "MARTY_COMMON_DIGEST",
 }
 STACK_ARTIFACT_ENVIRONMENT = REQUIRED_PYTHON_ARTIFACTS
-STACK_IMAGE_REPOSITORIES = {
-    "MARTY_UI_IMAGE": "ui",
-    "MARTY_SERVICES_IMAGE": "services",
-    "MARTY_MIGRATIONS_IMAGE": "migrations",
-    "MARTY_ISSUANCE_IMAGE": "marty-credentials-issuance",
+STACK_OPTIONAL_ENV_KEYS = {
+    "MARTY_OPENBAO_DIDCOMM_IMAGE",
+    "MARTY_KEYCLOAK_IMAGE",
+    "MARTY_COMMON_URI",
+    "MARTY_COMMON_DIGEST",
 }
 BASE_IMAGE_CONFIG_KEYS = {"POSTGRES_IMAGE": "postgres", "REDIS_IMAGE": "redis"}
 MATERIAL_ENV_KEYS = {
@@ -381,9 +384,11 @@ def load_stack_environment(path: Path) -> dict[str, str]:
         if not key.endswith(("_URI", "_DIGEST")) and not DIGEST_IMAGE.fullmatch(value):
             raise ValueError(f"{key} must be an OCI image pinned by sha256 digest")
         result[key] = value
-    missing = STACK_ENV_KEYS - result.keys()
+    missing = (STACK_ENV_KEYS - STACK_OPTIONAL_ENV_KEYS) - result.keys()
     if missing:
         raise ValueError("stack environment is missing: " + ", ".join(sorted(missing)))
+    if ("MARTY_COMMON_URI" in result) != ("MARTY_COMMON_DIGEST" in result):
+        raise ValueError("stack environment must include both Marty common artifact fields")
     return result
 
 
@@ -499,24 +504,26 @@ def validate_stack_binding(
     if not isinstance(recorded_digest, str) or actual_digest != recorded_digest:
         raise ValueError("the deployed stack manifest does not match the attested metadata digest")
 
-    manifest_references = manifest_image_references(json.loads(manifest_path.read_text(encoding="utf-8")))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_references = manifest_image_references(manifest)
     if metadata_image_references(metadata) != manifest_references:
         raise ValueError("stack metadata images do not match the attested manifest")
 
-    for variable, repository_name in STACK_IMAGE_REPOSITORIES.items():
-        matches = {
-            reference
-            for reference in manifest_references
-            if reference.split("@", 1)[0].rstrip("/").rsplit("/", 1)[-1] == repository_name
-        }
-        if len(matches) != 1 or stack_environment[variable] not in matches:
+    expected_images = image_map(manifest, allow_historical_three_image=True)
+    for variable, reference in expected_images.items():
+        if stack_environment.get(variable) != reference:
             raise ValueError(f"{variable} does not match the attested stack manifest")
+    if ("MARTY_OPENBAO_DIDCOMM_IMAGE" in stack_environment) != ("MARTY_OPENBAO_DIDCOMM_IMAGE" in expected_images):
+        raise ValueError("OpenBao DIDComm image presence does not match the attested stack manifest")
+    if ("MARTY_KEYCLOAK_IMAGE" in stack_environment) != ("MARTY_KEYCLOAK_IMAGE" in expected_images):
+        raise ValueError("Keycloak image presence does not match the attested stack manifest")
 
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected_artifacts = python_artifact_map(manifest)
     for variable, expected in expected_artifacts.items():
         if stack_environment[variable] != expected:
             raise ValueError(f"{variable} artifact does not match the attested stack manifest")
+    if ("MARTY_COMMON_URI" in stack_environment) != ("MARTY_COMMON_URI" in expected_artifacts):
+        raise ValueError("Marty common artifact presence does not match the attested stack manifest")
 
     base_images_raw: object = json.loads((ROOT / "config" / "base-images.json").read_text(encoding="utf-8"))
     if not isinstance(base_images_raw, dict):

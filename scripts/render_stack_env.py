@@ -20,7 +20,9 @@ REQUIRED_IMAGES = {
     "MARTY_UI_IMAGE": "ui",
     "MARTY_SERVICES_IMAGE": "services",
     "MARTY_MIGRATIONS_IMAGE": "migrations",
-    "MARTY_ISSUANCE_IMAGE": "marty-credentials-issuance",
+    "MARTY_OPENBAO_DIDCOMM_IMAGE": "openbao-didcomm",
+    "MARTY_KEYCLOAK_IMAGE": "keycloak",
+    "MARTY_ISSUANCE_IMAGE": "services",
 }
 REQUIRED_PYTHON_ARTIFACTS = {
     "MARTY_RS": ("marty-core-python", "python", "ElevenID/marty-core"),
@@ -43,7 +45,7 @@ def load_manifest(path: Path) -> dict:
     return manifest
 
 
-def image_map(manifest: dict) -> dict[str, str]:
+def image_map(manifest: dict, *, allow_historical_three_image: bool = False) -> dict[str, str]:
     images: list[str] = []
     for component in manifest.get("components", []):
         for artifact in component.get("artifacts", []):
@@ -57,8 +59,19 @@ def image_map(manifest: dict) -> dict[str, str]:
                 raise ValueError(f"OCI URI must not contain a mutable tag: {uri}")
             images.append(f"{uri}@{digest}")
 
+    actual_repositories = {
+        image.split("@", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+        for image in images
+    }
+    historical = (
+        allow_historical_three_image
+        and len(images) == 3
+        and actual_repositories == {"ui", "services", "migrations"}
+    )
     rendered: dict[str, str] = {}
     for variable, repository in REQUIRED_IMAGES.items():
+        if historical and repository in {"openbao-didcomm", "keycloak"}:
+            continue
         matches = [
             image
             for image in images
@@ -70,16 +83,30 @@ def image_map(manifest: dict) -> dict[str, str]:
                 f"found {len(matches)}"
             )
         rendered[variable] = matches[0]
+    expected_repositories = {"ui", "services", "migrations", "openbao-didcomm", "keycloak"}
+    if not historical and (len(images) != 5 or actual_repositories != expected_repositories):
+        raise ValueError(
+            "KMS-only stack requires exactly the UI, services, migrations, OpenBao DIDComm, and Keycloak images"
+        )
     return rendered
 
 
-def python_artifact_map(manifest: dict) -> dict[str, str]:
-    """Render immutable wheel inputs required when Compose builds local adapters."""
+def python_artifact_map(
+    manifest: dict, *, require_marty_common: bool | None = None
+) -> dict[str, str]:
+    """Render immutable wheels needed by the selected stack's adapters."""
+    if require_marty_common is None:
+        images = image_map(manifest, allow_historical_three_image=True)
+        require_marty_common = "MARTY_OPENBAO_DIDCOMM_IMAGE" not in images
     rendered: dict[str, str] = {}
     components = manifest.get("components", [])
     if not isinstance(components, list):
         raise ValueError("stack manifest components must be a list")
-    for variable, (component_name, artifact_type, repository) in REQUIRED_PYTHON_ARTIFACTS.items():
+    required = REQUIRED_PYTHON_ARTIFACTS if require_marty_common else {
+        key: value for key, value in REQUIRED_PYTHON_ARTIFACTS.items()
+        if key != "MARTY_COMMON"
+    }
+    for variable, (component_name, artifact_type, repository) in required.items():
         matches = [
             artifact
             for component in components
@@ -134,11 +161,13 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path(".env.stack"))
     parser.add_argument("--pull", action="store_true")
-    parser.add_argument("--previous-manifest", type=Path)
+    parser.add_argument("--allow-historical-three-image", action="store_true")
     args = parser.parse_args()
 
     manifest = load_manifest(args.manifest)
-    images = image_map(manifest)
+    images = image_map(
+        manifest, allow_historical_three_image=args.allow_historical_three_image
+    )
     artifacts = python_artifact_map(manifest)
     base = json.loads(Path("config/base-images.json").read_text(encoding="utf-8"))
     images["POSTGRES_IMAGE"] = base["postgres"]
@@ -151,12 +180,6 @@ def main() -> int:
         "\n".join(f"{key}={value}" for key, value in sorted({**images, **artifacts}.items())) + "\n",
         encoding="utf-8",
     )
-
-    if args.previous_manifest:
-        previous = image_map(load_manifest(args.previous_manifest))
-        if set(previous) != set(image_map(manifest)):
-            raise ValueError("upgrade/rollback manifests do not expose the same image roles")
-        print("Validated upgrade and rollback image roles.")
 
     if args.pull:
         for image in images.values():
