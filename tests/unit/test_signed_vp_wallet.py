@@ -90,14 +90,33 @@ async def test_signed_vp_reuses_issuance_proof_key_and_binds_request(
         ("", "nonce", "audience", 300),
         ("not-a-jwt", "nonce", "audience", 300),
         ("a..c", "nonce", "audience", 300),
+        ("a.b.c.d", "nonce", "audience", 300),
+        ("a.b.c=", "nonce", "audience", 300),
+        ("a.b.é", "nonce", "audience", 300),
+        ("a." + "b" * 1_000_000 + ".c", "nonce", "audience", 300),
+        (["a.b.c"], "nonce", "audience", 300),
         ("a.b.c", "", "audience", 300),
         ("a.b.c", "   ", "audience", 300),
         ("a.b.c", None, "audience", 300),
+        ("a.b.c", "n" * 257, "audience", 300),
         ("a.b.c", "nonce", "", 300),
+        ("a.b.c", "nonce", "   ", 300),
         ("a.b.c", "nonce", None, 300),
+        ("a.b.c", "nonce", "a" * 2049, 300),
         ("a.b.c", "nonce", "audience", 0),
+        ("a.b.c", "nonce", "audience", -1),
         ("a.b.c", "nonce", "audience", 301),
         ("a.b.c", "nonce", "audience", True),
+        ("a.b.c", "nonce", "audience", 1.5),
+        ("a.b.c", "nonce", "audience", "300"),
+    ],
+    ids=[
+        "empty-credential", "not-compact", "empty-segment", "extra-segment",
+        "padding", "non-ascii", "oversize-credential", "credential-list",
+        "empty-nonce", "blank-nonce", "null-nonce", "oversize-nonce",
+        "empty-audience", "blank-audience", "null-audience", "oversize-audience",
+        "zero-lifetime", "negative-lifetime", "oversize-lifetime", "bool-lifetime",
+        "float-lifetime", "string-lifetime",
     ],
 )
 async def test_signed_vp_requires_one_compact_credential_and_bounded_server_inputs(
@@ -120,3 +139,12 @@ async def test_signed_vp_rejects_non_p256_wallet_key() -> None:
             wallet.build_signed_jwt_vp("a.b.c", nonce="nonce", audience="audience")
     finally:
         await wallet.close()
+
+
+def test_issuance_proof_rejects_non_p256_key() -> None:
+    with pytest.raises(ValueError, match="P-256"):
+        wallet_module._build_proof_jwt(
+            ec.generate_private_key(ec.SECP384R1()),
+            "https://issuer.example",
+            "issuer-nonce",
+        )
