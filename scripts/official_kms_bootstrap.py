@@ -256,6 +256,30 @@ def openbao_network(container: str, project: str) -> tuple[str, str]:
     return matches[0]
 
 
+def scoped_transit_signing_token(bao, key_name: str, policy_name: str,
+                                 authority: str, challenge: bytes) -> str:
+    """Issue and exercise a bounded Transit signer token for one key."""
+    if (not re.fullmatch(r"[a-z0-9-]+", key_name)
+            or not re.fullmatch(r"[a-z0-9-]+", policy_name)
+            or not challenge):
+        raise ValueError("scoped Transit signer inputs are invalid")
+    policy = (f'path "transit/keys/{key_name}" {{ capabilities = ["read"] }}\n'
+              f'path "transit/sign/{key_name}" {{ capabilities = ["update"] }}')
+    bao.request("PUT", f"sys/policies/acl/{policy_name}", {"policy": policy})
+    auth = bao.request("POST", "auth/token/create", {
+        "policies": [policy_name], "no_default_policy": True, "ttl": "8h",
+    })["auth"]
+    token = auth.get("client_token")
+    if not isinstance(token, str) or len(token) < 20 or token == authority:
+        raise RuntimeError("scoped Transit signer token is invalid")
+    signature = bao.request("POST", f"transit/sign/{key_name}", {
+        "input": base64.b64encode(challenge).decode("ascii"),
+    }, token=token).get("data", {}).get("signature")
+    if not isinstance(signature, str) or not signature:
+        raise RuntimeError("scoped Transit signer token cannot sign")
+    return token
+
+
 def provision_envoy(ui: Path, private: Path, ca: Path, root: Path) -> None:
     sys.path.insert(0, str(ui / "scripts"))
     from selfhost_openbao_client import Bao, certificate_public_key_der, public_key_der
@@ -290,21 +314,9 @@ def provision_envoy(ui: Path, private: Path, ca: Path, root: Path) -> None:
             or certificate_public_key_der(certificate) != public_key_der(public_key)):
         raise RuntimeError("Envoy certificate is not bound to its remote KMS key")
     private_file(private / "envoy_issuance_client_cert", certificate)
-    policy = f'path "transit/keys/{name}" {{ capabilities = ["read"] }}\n' \
-             f'path "transit/sign/{name}" {{ capabilities = ["update"] }}'
     policy_name = f"official-{secrets.token_hex(6)}-{name}"
-    bao.request("PUT", f"sys/policies/acl/{policy_name}", {"policy": policy})
-    auth = bao.request("POST", "auth/token/create", {
-        "policies": [policy_name], "no_default_policy": True, "ttl": "8h",
-    })["auth"]
-    token = auth.get("client_token")
-    if not isinstance(token, str) or len(token) < 20 or token == authority:
-        raise RuntimeError("Envoy KMS token is not scoped")
-    signature = bao.request("POST", f"transit/sign/{name}", {
-        "input": base64.b64encode(b"official-envoy-proof").decode("ascii"),
-    }, token=token).get("data", {}).get("signature")
-    if not signature:
-        raise RuntimeError("Envoy scoped token cannot sign")
+    token = scoped_transit_signing_token(bao, name, policy_name, authority,
+                                         b"official-envoy-proof")
     private_file(private / "envoy_issuance_tls_kms_token", token)
 
 
@@ -357,20 +369,8 @@ def provision_oidf_edge(ui: Path, private: Path, material: Path, ca: Path,
     certificate_path = private / "oidf-edge.crt"
     private_file(certificate_path, pem + root_cert.public_bytes(serialization.Encoding.PEM).decode("ascii"))
     policy_name = f"official-{secrets.token_hex(6)}-oidf-edge"
-    bao.request("PUT", f"sys/policies/acl/{policy_name}", {"policy": (
-        f'path "transit/keys/{name}" {{ capabilities = ["read"] }}\n'
-        f'path "transit/sign/{name}" {{ capabilities = ["update"] }}'
-    )})
-    token = bao.request("POST", "auth/token/create", {
-        "policies": [policy_name], "no_default_policy": True, "ttl": "8h",
-    })["auth"].get("client_token")
-    if not isinstance(token, str) or len(token) < 20 or token == authority:
-        raise RuntimeError("official edge token is not scoped")
-    signature = bao.request("POST", f"transit/sign/{name}", {
-        "input": base64.b64encode(b"official-edge-proof").decode("ascii"),
-    }, token=token).get("data", {}).get("signature")
-    if not signature:
-        raise RuntimeError("official edge scoped token cannot sign")
+    token = scoped_transit_signing_token(bao, name, policy_name, authority,
+                                         b"official-edge-proof")
     private_file(private / "oidf_edge_tls_kms_token", token)
     return name, certificate_path
 

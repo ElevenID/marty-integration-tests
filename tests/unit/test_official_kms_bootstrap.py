@@ -1,4 +1,5 @@
 import importlib.util
+import base64
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -69,3 +70,31 @@ def test_runtime_environment_requires_exact_private_kms_inputs(tmp_path: Path) -
     with pytest.raises(ValueError, match="missing or unsupported"):
         MODULE.validate_runtime_environment({key: value for key, value in values.items()
                                              if key != "OIDF_TLS_KMS_TOKEN_FILE"}, tmp_path, origin)
+
+
+def test_scoped_transit_token_proves_only_its_bound_sign_route() -> None:
+    class Bao:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, path, body, *, token=None):
+            self.calls.append((method, path, body, token))
+            if path == "auth/token/create":
+                return {"auth": {"client_token": "s" * 24}}
+            return {"data": {"signature": "vault:v1:signature"}}
+
+    bao = Bao()
+    token = MODULE.scoped_transit_signing_token(
+        bao, "one-key", "one-policy", "root-authority", b"fresh-proof")
+    assert token == "s" * 24
+    assert bao.calls[0][2]["policy"] == (
+        'path "transit/keys/one-key" { capabilities = ["read"] }\n'
+        'path "transit/sign/one-key" { capabilities = ["update"] }')
+    assert bao.calls[1][2] == {"policies": ["one-policy"],
+                                "no_default_policy": True, "ttl": "8h"}
+    assert bao.calls[2] == ("POST", "transit/sign/one-key",
+                            {"input": base64.b64encode(b"fresh-proof").decode("ascii")}, token)
+    with pytest.raises(ValueError, match="inputs are invalid"):
+        MODULE.scoped_transit_signing_token(bao, "../other", "one-policy",
+                                             "root-authority", b"fresh-proof")
+    assert len(bao.calls) == 3
