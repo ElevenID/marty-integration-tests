@@ -117,3 +117,26 @@ def test_scoped_transit_token_proves_only_its_bound_sign_route() -> None:
         MODULE.scoped_transit_signing_token(bao, "../other", "one-policy",
                                              "root-authority", b"fresh-proof")
     assert len(bao.calls) == 3
+
+
+def test_shared_transit_key_provisioning_rejects_exportable_key() -> None:
+    class Bao:
+        def __init__(self, exportable: bool):
+            self.exportable = exportable
+            self.calls = []
+
+        def request(self, method, path, body=None):
+            self.calls.append((method, path, body))
+            if method == "GET":
+                return {"data": {"type": "ecdsa-p256", "exportable": self.exportable,
+                                 "allow_plaintext_backup": False, "latest_version": 1,
+                                 "keys": {"1": {"public_key": "public-pem"}}}}
+            return {}
+
+    bao = Bao(False)
+    assert MODULE.provision_nonexportable_transit_key(bao, "official-edge", "edge") == "public-pem"
+    assert bao.calls[0] == ("POST", "transit/keys/official-edge", {
+        "type": "ecdsa-p256", "exportable": False, "allow_plaintext_backup": False,
+    })
+    with pytest.raises(RuntimeError, match="not non-exportable"):
+        MODULE.provision_nonexportable_transit_key(Bao(True), "official-edge", "edge")

@@ -302,6 +302,22 @@ def scoped_transit_signing_token(bao, key_name: str, policy_name: str,
     return token
 
 
+def provision_nonexportable_transit_key(bao, name: str, purpose: str) -> str:
+    """Create and attest one version-one P-256 key using the product Bao client."""
+    bao.request("POST", f"transit/keys/{name}", {
+        "type": "ecdsa-p256", "exportable": False, "allow_plaintext_backup": False,
+    })
+    metadata = bao.request("GET", f"transit/keys/{name}")["data"]
+    if (metadata.get("type") != "ecdsa-p256" or metadata.get("exportable") is not False
+            or metadata.get("allow_plaintext_backup") is not False
+            or metadata.get("latest_version") != 1):
+        raise RuntimeError(f"{purpose} key is not non-exportable version one")
+    public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
+    if not isinstance(public_key, str):
+        raise RuntimeError(f"{purpose} key has no public binding")
+    return public_key
+
+
 def provision_envoy(ui: Path, private: Path, ca: Path, root: Path) -> None:
     sys.path.insert(0, str(ui / "scripts"))
     from selfhost_openbao_client import Bao, certificate_public_key_der, public_key_der
@@ -311,14 +327,7 @@ def provision_envoy(ui: Path, private: Path, ca: Path, root: Path) -> None:
     name = "workload-tls-envoy-issuance-client"
     role = "envoy-issuance-client"
     uri = "spiffe://marty.internal/service/envoy-issuance-bridge"
-    bao.request("POST", f"transit/keys/{name}", {
-        "type": "ecdsa-p256", "exportable": False, "allow_plaintext_backup": False,
-    })
-    metadata = bao.request("GET", f"transit/keys/{name}")["data"]
-    if (metadata.get("type") != "ecdsa-p256" or metadata.get("exportable") is not False
-            or metadata.get("allow_plaintext_backup") is not False
-            or metadata.get("latest_version") != 1):
-        raise RuntimeError("Envoy TLS key is not non-exportable version one")
+    public_key = provision_nonexportable_transit_key(bao, name, "Envoy TLS")
     bao.request("POST", f"workload-pki/roles/{role}", {
         "allow_any_name": True, "allow_localhost": True, "allow_ip_sans": True,
         "allowed_uri_sans": uri, "server_flag": False, "client_flag": True,
@@ -330,9 +339,7 @@ def provision_envoy(ui: Path, private: Path, ca: Path, root: Path) -> None:
         "csr": csr, "common_name": "envoy-issuance-bridge", "uri_sans": uri, "ttl": "8h",
     })["data"]
     certificate = signed.get("certificate")
-    public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
     if (not isinstance(certificate, str) or "private_key" in signed
-            or not isinstance(public_key, str)
             or certificate_public_key_der(certificate) != public_key_der(public_key)):
         raise RuntimeError("Envoy certificate is not bound to its remote KMS key")
     private_file(private / "envoy_issuance_client_cert", certificate)
@@ -353,18 +360,10 @@ def provision_oidf_edge(ui: Path, private: Path, material: Path, ca: Path,
     name = f"official-{secrets.token_hex(8)}-oidf-edge"
     authority = root.read_text(encoding="ascii").strip()
     bao = Bao(KMS_ORIGIN, ca, authority)
-    bao.request("POST", f"transit/keys/{name}", {
-        "type": "ecdsa-p256", "exportable": False, "allow_plaintext_backup": False,
-    })
-    metadata = bao.request("GET", f"transit/keys/{name}")["data"]
-    if (metadata.get("type") != "ecdsa-p256" or metadata.get("exportable") is not False
-            or metadata.get("allow_plaintext_backup") is not False
-            or metadata.get("latest_version") != 1):
-        raise RuntimeError("official edge key is not non-exportable version one")
+    public_key = provision_nonexportable_transit_key(bao, name, "official edge")
     csr_pem = bao.request("POST", f"transit/keys/{name}/csr", {"version": 1})["data"]["csr"]
     csr = x509.load_pem_x509_csr(csr_pem.encode("ascii"))
-    public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
-    if (not isinstance(public_key, str) or not csr.is_signature_valid
+    if (not csr.is_signature_valid
             or csr.public_key().public_bytes(serialization.Encoding.DER,
                                              serialization.PublicFormat.SubjectPublicKeyInfo)
             != public_key_der(public_key)):
