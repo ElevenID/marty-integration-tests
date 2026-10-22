@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 import time
@@ -376,6 +377,58 @@ def run(command: list[str], environment: dict[str, str]) -> int:
     return subprocess.run(command, check=False, env=environment).returncode
 
 
+def diagnose_released_native_model(args: argparse.Namespace, project: str,
+                                   environment: dict[str, str]) -> None:
+    """Report only the source location of a swallowed native model exception."""
+    if args.stack_manifest is None:
+        return
+    try:
+        ui = args.marty_ui.resolve()
+        stack = runpy.run_path(str(ui / "scripts/conformance_stack.py"))
+        command = stack["compose_command"](
+            project, include_haip=args.haip,
+            include_didcomm_authcrypt=args.didcomm_authcrypt,
+        )
+        rendered = subprocess.run(
+            [*command, "config", "--format", "json"], cwd=ui, env=environment,
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if rendered.returncode:
+            return
+        model = json.loads(rendered.stdout)
+        native = runpy.run_path(str(ui / "scripts/conformance_native.py"))
+        locations: list[str] = []
+
+        def trace(frame, event, detail):
+            if event == "exception":
+                error_type = detail[0]
+                source = Path(frame.f_code.co_filename)
+                if (error_type.__name__ in {"KeyError", "TypeError", "AttributeError",
+                                             "IndexError", "OfficialReleaseError"}
+                        and source.name in {"conformance_native.py",
+                                            "validate_beta_didcomm_configuration.py",
+                                            "prepare_official_beta_release.py"}
+                        and source.parent == ui / "scripts"):
+                    locations.append(f"{source.name}:{frame.f_lineno}:{error_type.__name__}")
+            return trace
+
+        previous = sys.gettrace()
+        try:
+            sys.settrace(trace)
+            native["validate_model"](model, project=project,
+                                      authcrypt=args.didcomm_authcrypt,
+                                      local_build=False)
+        except ValueError:
+            pass
+        finally:
+            sys.settrace(previous)
+        if locations:
+            print(f"Released native model diagnostic: {locations[-1]}", file=sys.stderr)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+        # Diagnostics cannot change the real lane result or expose the model.
+        return
+
+
 def emit_eudi_startup_diagnostic(project: str, environment: dict[str, str]) -> None:
     """Classify verifier startup failure without publishing sensitive logs."""
     selector = [
@@ -716,6 +769,8 @@ def execute(args: argparse.Namespace) -> int:
         started.append(name)
         result = run(command(), environment)
         if result:
+            if name == "marty":
+                diagnose_released_native_model(args, projects["marty"], environment)
             if name == "eudi":
                 emit_eudi_startup_diagnostic(projects["eudi"], environment)
             if not args.retain_on_up_failure:
