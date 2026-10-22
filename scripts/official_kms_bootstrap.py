@@ -72,6 +72,31 @@ KEYCLOAK_FILES = {
     "KEYCLOAK_11ID_COOKIE_TOKEN_FILE": "keycloak_11id_cookie_token",
     "KEYCLOAK_11ID_CIBA_TOKEN_FILE": "keycloak_11id_ciba_token",
 }
+SERVER_ROLES = frozenset({"SIGNING_KEYS", "AUTH_SERVER", "ORG", "ES", "RP", "CT",
+                          "ISSUANCE", "FLOW_SERVER", "PP"})
+CERTIFICATE_ENV_OVERRIDES = {
+    "AUTH_SERVER": "AUTH_WORKLOAD_SERVER_CERT_FILE",
+    "FLOW_CLIENT": "FLOW_WORKLOAD_CLIENT_CERT_FILE",
+    "FLOW_SERVER": "FLOW_WORKLOAD_SERVER_CERT_FILE",
+    "ENVOY_ISSUANCE": "ENVOY_ISSUANCE_CLIENT_CERT_FILE",
+}
+
+
+def role_environment(tls: Path, extra: Path) -> dict[str, str]:
+    """Describe every scoped workload KMS input from the same role inventory."""
+    environment = {}
+    for prefix, (certificate, token, key_name) in ENV_ROLES.items():
+        directory = extra if prefix == "ENVOY_ISSUANCE" else tls
+        certificate_key = CERTIFICATE_ENV_OVERRIDES.get(
+            prefix, f"{prefix}_WORKLOAD_{'SERVER' if prefix in SERVER_ROLES else 'CLIENT'}_CERT_FILE")
+        environment.update({
+            f"{prefix}_TLS_KMS_ADDR": KMS_ORIGIN,
+            f"{prefix}_TLS_KMS_KEY_NAME": key_name,
+            f"{prefix}_TLS_KMS_KEY_VERSION": "1",
+            f"{prefix}_TLS_KMS_TOKEN_FILE": str(directory / token),
+            certificate_key: str(directory / certificate),
+        })
+    return environment
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None, cwd: Path | None = None,
@@ -108,17 +133,7 @@ def validate_runtime_environment(values: dict[str, str], root: Path, origin: str
         "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE", "FLOW_WORKLOAD_CLIENT_CERT_FILE",
         "ENVOY_ISSUANCE_CLIENT_CERT_FILE", *KEYCLOAK_FILES,
     }
-    for prefix in ENV_ROLES:
-        expected.update({f"{prefix}_TLS_KMS_ADDR", f"{prefix}_TLS_KMS_KEY_NAME",
-                         f"{prefix}_TLS_KMS_KEY_VERSION", f"{prefix}_TLS_KMS_TOKEN_FILE"})
-        if prefix != "ENVOY_ISSUANCE":
-            expected.add(f"{prefix}_WORKLOAD_{'SERVER' if prefix in {'SIGNING_KEYS', 'AUTH_SERVER', 'ORG', 'ES', 'RP', 'CT', 'ISSUANCE', 'FLOW_SERVER', 'PP'} else 'CLIENT'}_CERT_FILE")
-    # The flow role uses the historical FLOW_* certificate names.
-    expected.discard("FLOW_CLIENT_WORKLOAD_CLIENT_CERT_FILE")
-    expected.discard("FLOW_SERVER_WORKLOAD_SERVER_CERT_FILE")
-    expected.discard("AUTH_SERVER_WORKLOAD_SERVER_CERT_FILE")
-    expected.add("FLOW_WORKLOAD_SERVER_CERT_FILE")
-    expected.add("AUTH_WORKLOAD_SERVER_CERT_FILE")
+    expected.update(role_environment(root / "tls", root / "extra"))
     if set(values) != expected:
         raise ValueError("disposable KMS environment has missing or unsupported inputs")
     for key, value in values.items():
@@ -400,22 +415,7 @@ def runtime_environment(tls: Path, keycloak: Path, extra: Path, ca: Path,
         "OIDF_EDGE_TLS_CERT_FILE": str(edge[1]),
     }
     environment.update({name: str(keycloak / file) for name, file in KEYCLOAK_FILES.items()})
-    for prefix, (certificate, token, key_name) in ENV_ROLES.items():
-        root = extra if prefix == "ENVOY_ISSUANCE" else tls
-        environment.update({
-            f"{prefix}_TLS_KMS_ADDR": KMS_ORIGIN,
-            f"{prefix}_TLS_KMS_KEY_NAME": key_name,
-            f"{prefix}_TLS_KMS_KEY_VERSION": "1",
-            f"{prefix}_TLS_KMS_TOKEN_FILE": str(root / token),
-        })
-        if prefix not in {"FLOW_CLIENT", "FLOW_SERVER", "AUTH_SERVER", "ENVOY_ISSUANCE"}:
-            environment[f"{prefix}_WORKLOAD_{'SERVER' if prefix in {'SIGNING_KEYS', 'AUTH_SERVER', 'ORG', 'ES', 'RP', 'CT', 'ISSUANCE', 'PP'} else 'CLIENT'}_CERT_FILE"] = str(root / certificate)
-    # These two Compose names predate the role-prefix convention.
-    environment["SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE"] = str(tls / "signing_keys_workload_server_cert")
-    environment["FLOW_WORKLOAD_CLIENT_CERT_FILE"] = str(tls / "flow_workload_client_cert")
-    environment["FLOW_WORKLOAD_SERVER_CERT_FILE"] = str(tls / "flow_workload_server_cert")
-    environment["AUTH_WORKLOAD_SERVER_CERT_FILE"] = str(tls / "auth_workload_server_cert")
-    environment["ENVOY_ISSUANCE_CLIENT_CERT_FILE"] = str(extra / "envoy_issuance_client_cert")
+    environment.update(role_environment(tls, extra))
     for name, value in environment.items():
         if name.endswith("_FILE") and not Path(value).is_file():
             raise RuntimeError(f"disposable KMS output is missing {name}")

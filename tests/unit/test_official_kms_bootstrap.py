@@ -64,12 +64,19 @@ def test_runtime_environment_requires_exact_private_kms_inputs(tmp_path: Path) -
                                         {"OIDF_PUBLIC_BASE_URL": origin},
                                         ("official-test-oidf-edge", extra / "oidf-edge.crt"))
     MODULE.validate_runtime_environment(values, tmp_path, origin)
+    assert values["FLOW_WORKLOAD_CLIENT_CERT_FILE"] == str(tls / "flow_workload_client_cert")
+    assert values["FLOW_WORKLOAD_SERVER_CERT_FILE"] == str(tls / "flow_workload_server_cert")
+    assert values["AUTH_WORKLOAD_SERVER_CERT_FILE"] == str(tls / "auth_workload_server_cert")
+    assert values["ENVOY_ISSUANCE_CLIENT_CERT_FILE"] == str(extra / "envoy_issuance_client_cert")
     with pytest.raises(ValueError, match="origin is invalid"):
         MODULE.validate_runtime_environment({**values, "OIDF_TLS_KMS_ADDR": "http://openbao:8200"},
                                             tmp_path, origin)
     with pytest.raises(ValueError, match="missing or unsupported"):
         MODULE.validate_runtime_environment({key: value for key, value in values.items()
                                              if key != "OIDF_TLS_KMS_TOKEN_FILE"}, tmp_path, origin)
+    with pytest.raises(ValueError, match="missing or unsupported"):
+        MODULE.validate_runtime_environment({key: value for key, value in values.items()
+                                             if key != "FLOW_WORKLOAD_CLIENT_CERT_FILE"}, tmp_path, origin)
 
 
 def test_scoped_transit_token_proves_only_its_bound_sign_route() -> None:
