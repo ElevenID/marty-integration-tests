@@ -168,11 +168,20 @@ def main() -> int:
     images = image_map(
         manifest, allow_historical_three_image=args.allow_historical_three_image
     )
+    # The released Compose adapter still interpolates its Keycloak KMS image
+    # through a digest-only variable even when the same immutable image is
+    # supplied as MARTY_KEYCLOAK_IMAGE. Derive both from the attested manifest.
+    if keycloak_image := images.get("MARTY_KEYCLOAK_IMAGE"):
+        images["KEYCLOAK_KMS_IMAGE_DIGEST"] = keycloak_image.rsplit("@", 1)[1]
     artifacts = python_artifact_map(manifest)
     base = json.loads(Path("config/base-images.json").read_text(encoding="utf-8"))
     images["POSTGRES_IMAGE"] = base["postgres"]
     images["REDIS_IMAGE"] = base["redis"]
-    for value in images.values():
+    for variable, value in images.items():
+        if variable == "KEYCLOAK_KMS_IMAGE_DIGEST":
+            if not DIGEST.fullmatch(value):
+                raise ValueError(f"invalid Keycloak image digest: {value}")
+            continue
         if "@sha256:" not in value:
             raise ValueError(f"image is not pinned by digest: {value}")
 
@@ -182,7 +191,9 @@ def main() -> int:
     )
 
     if args.pull:
-        for image in images.values():
+        for variable, image in images.items():
+            if variable == "KEYCLOAK_KMS_IMAGE_DIGEST":
+                continue
             subprocess.run(docker_command(["pull", image]), check=True)
     print(f"Rendered {len(images)} immutable images to {args.output}.")
     return 0
