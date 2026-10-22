@@ -232,3 +232,8 @@ jobs:
             exit 1
           fi
           exit "$LANE_EXIT_CODE"
+
+      - name: Erase disposable bootstrap authorities
+        if: always()
+        shell: bash
+        run: rm -f work/material/official-ca.key work/kms/bootstrap-root-token

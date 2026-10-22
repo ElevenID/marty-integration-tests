@@ -433,13 +433,13 @@ def main() -> int:
     if not isinstance(material, dict) or not material.get("OIDF_PUBLIC_BASE_URL", "").startswith("https://"):
         raise ValueError("official TLS material is incomplete")
     bootstrap_env = placeholder_environment(compose, images, private, project, material)
-    require_kms_only_images(compose, bootstrap_env, args.marty_ui, images)
     tls = private / "tls"
     keycloak = private / "keycloak"
     extra = private / "extra"
-    for directory in (tls, keycloak, extra):
-        directory.mkdir(mode=0o700)
     try:
+        require_kms_only_images(compose, bootstrap_env, args.marty_ui, images)
+        for directory in (tls, keycloak, extra):
+            directory.mkdir(mode=0o700)
         run([*compose, "up", "--detach", "--no-build", "openbao-init"],
             env=bootstrap_env, cwd=args.marty_ui)
         container = wait_openbao_init(compose, bootstrap_env, args.marty_ui)
