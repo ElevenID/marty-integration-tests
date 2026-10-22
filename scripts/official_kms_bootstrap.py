@@ -440,7 +440,7 @@ def main() -> int:
         require_kms_only_images(compose, bootstrap_env, args.marty_ui, images)
         for directory in (tls, keycloak, extra):
             directory.mkdir(mode=0o700)
-        run([*compose, "up", "--detach", "--no-build", "openbao-init"],
+        run([*compose, "up", "--detach", "--no-build", "--pull", "never", "openbao-init"],
             env=bootstrap_env, cwd=args.marty_ui)
         container = wait_openbao_init(compose, bootstrap_env, args.marty_ui)
         ca = private / "openbao_tls_ca_cert"
