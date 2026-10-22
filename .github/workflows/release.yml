@@ -12,7 +12,18 @@ permissions:
   contents: read
 
 jobs:
+  official-interoperability:
+    name: Require the complete pinned official suite
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    uses: ./.github/workflows/official-interoperability.yml
+    with:
+      lane: all
+
   release:
+    needs: official-interoperability
     runs-on: ubuntu-latest
     environment: release
     permissions:

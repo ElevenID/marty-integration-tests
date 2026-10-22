@@ -466,6 +466,7 @@ def test_stack_binding_accepts_current_five_image_without_historical_wheel(tmp_p
     metadata["images"].append({"reference": keycloak})
     environment["MARTY_OPENBAO_DIDCOMM_IMAGE"] = plugin
     environment["MARTY_KEYCLOAK_IMAGE"] = keycloak
+    environment["KEYCLOAK_KMS_IMAGE_DIGEST"] = keycloak.rsplit("@", 1)[1]
     environment.pop("MARTY_COMMON_URI")
     environment.pop("MARTY_COMMON_DIGEST")
 
@@ -480,6 +481,10 @@ def test_stack_binding_accepts_current_five_image_without_historical_wheel(tmp_p
     loaded["MARTY_OPENBAO_DIDCOMM_IMAGE"] = plugin
     loaded["MARTY_KEYCLOAK_IMAGE"] = keycloak.replace("8" * 64, "f" * 64)
     with pytest.raises(ValueError, match="MARTY_KEYCLOAK_IMAGE"):
+        lane.validate_stack_binding(manifest, metadata, loaded)
+    loaded["MARTY_KEYCLOAK_IMAGE"] = keycloak
+    loaded["KEYCLOAK_KMS_IMAGE_DIGEST"] = "sha256:" + "f" * 64
+    with pytest.raises(ValueError, match="Keycloak Compose digest"):
         lane.validate_stack_binding(manifest, metadata, loaded)
 
 

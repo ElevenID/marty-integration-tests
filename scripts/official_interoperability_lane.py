@@ -314,6 +314,7 @@ STACK_ENV_KEYS = {
     "MARTY_ISSUANCE_IMAGE",
     "MARTY_OPENBAO_DIDCOMM_IMAGE",
     "MARTY_KEYCLOAK_IMAGE",
+    "KEYCLOAK_KMS_IMAGE_DIGEST",
     "POSTGRES_IMAGE",
     "REDIS_IMAGE",
     "MARTY_RS_URI",
@@ -329,6 +330,7 @@ STACK_ARTIFACT_ENVIRONMENT = REQUIRED_PYTHON_ARTIFACTS
 STACK_OPTIONAL_ENV_KEYS = {
     "MARTY_OPENBAO_DIDCOMM_IMAGE",
     "MARTY_KEYCLOAK_IMAGE",
+    "KEYCLOAK_KMS_IMAGE_DIGEST",
     "MARTY_COMMON_URI",
     "MARTY_COMMON_DIGEST",
 }
@@ -517,6 +519,10 @@ def validate_stack_binding(
         raise ValueError("OpenBao DIDComm image presence does not match the attested stack manifest")
     if ("MARTY_KEYCLOAK_IMAGE" in stack_environment) != ("MARTY_KEYCLOAK_IMAGE" in expected_images):
         raise ValueError("Keycloak image presence does not match the attested stack manifest")
+    keycloak_image = expected_images.get("MARTY_KEYCLOAK_IMAGE")
+    expected_keycloak_digest = keycloak_image.rsplit("@", 1)[1] if keycloak_image else None
+    if stack_environment.get("KEYCLOAK_KMS_IMAGE_DIGEST") != expected_keycloak_digest:
+        raise ValueError("Keycloak Compose digest does not match the attested stack manifest")
 
     expected_artifacts = python_artifact_map(manifest)
     for variable, expected in expected_artifacts.items():
@@ -1151,7 +1157,10 @@ def compose_command(
         args.run_id,
         "--marty-ui",
         str(args.marty_ui),
+        *official_compose_release_args(args),
     ]
+    if getattr(args, "kms_prestarted", False):
+        command.append("--marty-prestarted")
     if marty_only:
         command.append("--marty-only")
     if oidf:
@@ -1165,6 +1174,27 @@ def compose_command(
             raise ValueError("retaining a failed official suite is valid only for up")
         command.append("--retain-on-up-failure")
     return command
+
+
+def released_native_stack_args(args: argparse.Namespace) -> list[str]:
+    manifest = getattr(args, "stack_manifest", None)
+    revision = getattr(args, "release_ui_revision", None)
+    if manifest is None or revision is None:
+        return []
+    manifest = manifest.resolve()
+    return [
+        "--stack-manifest", str(manifest),
+        "--stack-checksums", str(manifest.with_name("SHA256SUMS")),
+        "--release-ui-revision", str(revision),
+    ]
+
+
+def official_compose_release_args(args: argparse.Namespace) -> list[str]:
+    manifest = getattr(args, "stack_manifest", None)
+    revision = getattr(args, "release_ui_revision", None)
+    if manifest is None or revision is None:
+        return []
+    return ["--stack-manifest", str(manifest), "--release-ui-revision", str(revision)]
 
 
 def bootstrap_fixtures(
@@ -1281,6 +1311,7 @@ def refresh_request_signing_certificate(
         "--project",
         f"marty-conformance-{args.run_id}",
         "--haip",
+        *released_native_stack_args(args),
         "--resume",
         "up",
     ]
@@ -1347,11 +1378,27 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         raise ValueError(f"{args.lane} requires generated verifier test material")
 
     metadata = load_stack_metadata(args.stack_metadata)
+    args.release_ui_revision = str(metadata["marty_commit"])
     stack_environment = load_stack_environment(args.stack_env)
     validate_stack_binding(args.stack_manifest, metadata, stack_environment)
     environment = os.environ.copy()
     environment.update(stack_environment)
+    kms_env = getattr(args, "kms_env", None)
+    kms_values = None
+    if kms_env is not None:
+        from official_kms_bootstrap import load_assignments
+
+        kms_root = kms_env.resolve().parent
+        if kms_root.is_symlink() or not kms_root.is_dir() or kms_env.is_symlink():
+            raise ValueError("disposable KMS input directory is invalid")
+        kms_values = load_assignments(kms_env)
+        environment.update(kms_values)
+        args.kms_prestarted = True
     environment.update(load_material_environment(args.material))
+    if kms_values is not None:
+        from official_kms_bootstrap import validate_runtime_environment
+
+        validate_runtime_environment(kms_values, kms_root, environment["OIDF_PUBLIC_BASE_URL"])
     gateway_url = environment.get("OIDF_PUBLIC_BASE_URL", "https://marty-oidf.test:18443").rstrip("/")
     gateway = urlsplit(gateway_url)
     if gateway.scheme != "https" or not gateway.hostname or gateway.path:
@@ -1687,7 +1734,9 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     environment["VCDM_RELATED_RESOURCE_URLS"] = w3c_related_resource_allowlist()
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
-    base = [sys.executable, str(launcher), "--project", project]
+    base = [sys.executable, str(launcher), "--project", project, *released_native_stack_args(args)]
+    if getattr(args, "kms_prestarted", False):
+        base.append("--resume")
     result = 1
     try:
         if run([*base, "up"], environment):
@@ -1832,6 +1881,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--stack-manifest", type=Path, required=True)
     result.add_argument("--stack-metadata", type=Path, required=True)
     result.add_argument("--stack-env", type=Path, required=True)
+    result.add_argument("--kms-env", type=Path, required=True)
     result.add_argument("--material", type=Path, required=True)
     result.add_argument("--haip-material", type=Path)
     result.add_argument("--oidf-runner", type=Path)
@@ -1842,7 +1892,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    for name in ("marty_ui", "stack_manifest", "stack_metadata", "stack_env", "material"):
+    for name in ("marty_ui", "stack_manifest", "stack_metadata", "stack_env", "kms_env", "material"):
         setattr(args, name, getattr(args, name).resolve())
     if args.haip_material:
         args.haip_material = args.haip_material.resolve()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from hashlib import sha256
 from pathlib import Path
 
@@ -89,6 +90,103 @@ def stack_bytes() -> bytes:
     ).encode()
 
 
+def candidate_manifest(tmp_path: Path) -> Path:
+    value = json.loads(stack_bytes())
+    for name in ("openbao-didcomm", "keycloak"):
+        value["components"][0]["artifacts"].append({
+            "type": "oci", "uri": f"ghcr.io/elevenid/marty-ui-oss/{name}",
+            "digest": "sha256:" + "e" * 64,
+        })
+    path = tmp_path / "candidate.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
+
+def candidate_arguments(manifest: Path, output: Path) -> dict:
+    return {"tag": "v1.2.3", "source_sha": "b" * 40,
+            "manifest_sha256": release.file_sha256(manifest), "output_dir": output}
+
+
+def test_candidate_binds_signed_producer_and_preserves_unpublished_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = candidate_manifest(tmp_path)
+    output = tmp_path / "stack"
+    calls = []
+    monkeypatch.setattr(release, "require_gh", lambda: "gh")
+    monkeypatch.setattr(release.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs)))
+    metadata = release.materialize_candidate(manifest, **candidate_arguments(manifest, output))
+    assert calls == [([
+        "gh", "attestation", "verify", str(manifest), "--repo", "ElevenID/marty-ui",
+        "--signer-workflow", "ElevenID/marty-ui/.github/workflows/cd.yml",
+        "--source-digest", "b" * 40, "--source-ref", "refs/heads/main",
+        "--deny-self-hosted-runners",
+    ], {"check": True})]
+    assert (output / "stack-manifest.json").read_bytes() == manifest.read_bytes()
+    assert (output / "SHA256SUMS").read_text().split()[0] == release.file_sha256(manifest)[7:]
+    assert metadata["manifest_path"] == str((output / "stack-manifest.json").resolve())
+    assert metadata["qualification_context"] == "PRE_PUBLICATION_CANDIDATE"
+    assert metadata["published_release"] is False
+    assert len(metadata["images"]) == 5
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("tag", "latest"), ("tag", "v1.2.4"),
+    ("source_sha", "main"), ("source_sha", "a" * 40),
+    ("manifest_sha256", "sha256:" + "f" * 64),
+])
+def test_candidate_rejects_wrong_independent_identity_before_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: str,
+) -> None:
+    manifest = candidate_manifest(tmp_path)
+    arguments = candidate_arguments(manifest, tmp_path / "stack")
+    arguments[field] = value
+    monkeypatch.setattr(release, "require_gh", lambda: pytest.fail("must reject before attestation"))
+    with pytest.raises(ValueError, match="candidate requires|expected|digest mismatch"):
+        release.materialize_candidate(manifest, **arguments)
+    assert not arguments["output_dir"].exists()
+
+
+def test_candidate_rejects_historical_stack_without_kms_roles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "candidate.json"
+    manifest.write_bytes(stack_bytes())
+    monkeypatch.setattr(release, "require_gh", lambda: pytest.fail("must reject missing KMS roles"))
+    with pytest.raises(ValueError, match="expected exactly one image.*openbao-didcomm"):
+        release.materialize_candidate(manifest, **candidate_arguments(manifest, tmp_path / "stack"))
+
+
+def test_candidate_attestation_failure_cannot_emit_materialized_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = candidate_manifest(tmp_path)
+    output = tmp_path / "stack"
+    monkeypatch.setattr(release, "require_gh", lambda: "gh")
+    def reject(command: list[str], *, check: bool) -> None:
+        assert check
+        raise subprocess.CalledProcessError(1, command)
+    monkeypatch.setattr(release.subprocess, "run", reject)
+    with pytest.raises(subprocess.CalledProcessError):
+        release.materialize_candidate(manifest, **candidate_arguments(manifest, output))
+    assert not output.exists()
+
+
+def test_candidate_rejects_changed_subject_during_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = candidate_manifest(tmp_path)
+    output = tmp_path / "stack"
+    monkeypatch.setattr(release, "require_gh", lambda: "gh")
+    def replace_subject(_command: list[str], *, check: bool) -> None:
+        assert check
+        manifest.write_bytes(manifest.read_bytes() + b" ")
+    monkeypatch.setattr(release.subprocess, "run", replace_subject)
+    with pytest.raises(ValueError, match="digest mismatch"):
+        release.materialize_candidate(manifest, **candidate_arguments(manifest, output))
+    assert not output.exists()
+
+
 def test_privileged_workflow_uses_only_repository_reviewed_pin(tmp_path: Path) -> None:
     write_pin_path = tmp_path / "pin.json"
     write_pin(write_pin_path)
@@ -173,7 +271,12 @@ def test_download_checks_reviewed_hash_before_attestation(tmp_path: Path, monkey
         calls.append(command)
         if command[1:3] == ["release", "download"]:
             output.mkdir(parents=True, exist_ok=True)
-            (output / "stack-manifest.json").write_bytes(content)
+            if "SHA256SUMS" in command:
+                (output / "SHA256SUMS").write_text(
+                    f"{sha256(content).hexdigest()}  stack-manifest.json\n", encoding="utf-8"
+                )
+            else:
+                (output / "stack-manifest.json").write_bytes(content)
         return object()
 
     monkeypatch.setattr(release, "require_gh", lambda: "gh")
@@ -181,6 +284,7 @@ def test_download_checks_reviewed_hash_before_attestation(tmp_path: Path, monkey
     assert release.download_and_attest(pin, output) == output / "stack-manifest.json"
     assert calls[0][1:3] == ["release", "download"]
     assert calls[1][1:3] == ["attestation", "verify"]
+    assert calls[2][1:3] == ["release", "download"]
 
 
 def test_bad_download_is_deleted_and_never_attested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

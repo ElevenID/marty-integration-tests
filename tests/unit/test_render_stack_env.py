@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -92,6 +93,17 @@ def test_maps_required_images_by_immutable_uri():
     assert images["MARTY_OPENBAO_DIDCOMM_IMAGE"].endswith("@sha256:" + "a" * 64)
     assert images["MARTY_KEYCLOAK_IMAGE"].endswith("@sha256:" + "a" * 64)
     assert len(images) == 6
+
+
+def test_rendered_keycloak_compose_digest_comes_from_attested_image(tmp_path, monkeypatch):
+    source = tmp_path / "manifest.json"
+    target = tmp_path / "stack.env"
+    source.write_text(json.dumps(manifest()), encoding="utf-8")
+    monkeypatch.chdir(MODULE_PATH.parents[1])
+    monkeypatch.setattr(sys, "argv", ["render_stack_env.py", "--manifest", str(source), "--output", str(target)])
+    assert MODULE.main() == 0
+    assignments = dict(line.split("=", 1) for line in target.read_text(encoding="utf-8").splitlines())
+    assert assignments["KEYCLOAK_KMS_IMAGE_DIGEST"] == assignments["MARTY_KEYCLOAK_IMAGE"].rsplit("@", 1)[1]
 
 
 def test_rejects_retired_credentials_image() -> None:

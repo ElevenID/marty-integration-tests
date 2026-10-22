@@ -686,10 +686,11 @@ def generate_material(
     wallet_kit_port: int = DEFAULT_PORTS["wallet_kit"],
     valid_hours: int = 24,
     keytool: Path | None = None,
+    staging_ca_key: Path | None = None,
     now: datetime | None = None,
     java_store_builder: Callable[..., None] = _build_java_stores,
 ) -> dict[str, Any]:
-    """Generate local material without persisting the root private key."""
+    """Generate disposable fixture material, optionally staging its CA for a KMS CSR."""
     hostname = _dns_name(hostname, "hostname")
     ports = {
         "marty": _port(marty_port, "Marty port"),
@@ -706,6 +707,11 @@ def generate_material(
 
     output_dir = output_dir.resolve()
     targets = [output_dir / name for name in OUTPUT_FILES]
+    if staging_ca_key is not None:
+        staging_ca_key = staging_ca_key.resolve()
+        if staging_ca_key.parent != output_dir or staging_ca_key.name in OUTPUT_FILES:
+            raise ValueError("staging CA key must be a separate file in the material directory")
+        targets.append(staging_ca_key)
     existing = list(output_dir.iterdir()) if output_dir.is_dir() else [path for path in targets if path.exists()]
     if existing:
         raise FileExistsError("refusing to overwrite EUDI material: " + ", ".join(map(str, existing)))
@@ -846,6 +852,11 @@ def generate_material(
             },
         }
         _write_public(output_dir / REPORT_FILE, (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        if staging_ca_key is not None:
+            _write_private(staging_ca_key, root_key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ))
         return report
     except Exception:
         for path in reversed(targets):
@@ -1150,6 +1161,7 @@ def parser() -> argparse.ArgumentParser:
     generate.add_argument("--wallet-kit-port", type=int, default=DEFAULT_PORTS["wallet_kit"])
     generate.add_argument("--valid-hours", type=int, default=24)
     generate.add_argument("--keytool", type=Path)
+    generate.add_argument("--staging-ca-key", type=Path)
     validate = subparsers.add_parser("validate")
     validate.add_argument(
         "--material",
@@ -1173,6 +1185,7 @@ def main(argv: list[str] | None = None) -> int:
             wallet_kit_port=args.wallet_kit_port,
             valid_hours=args.valid_hours,
             keytool=args.keytool,
+            staging_ca_key=args.staging_ca_key,
         )
     else:
         environment: Mapping[str, str]

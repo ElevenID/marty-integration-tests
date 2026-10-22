@@ -1,6 +1,30 @@
 name: Official interoperability
 
 on:
+  workflow_call:
+    inputs:
+      lane:
+        type: string
+        required: false
+        default: all
+      candidate_artifact:
+        description: Current protected-main product CD manifest artifact, before promotion
+        type: string
+        required: false
+        default: ''
+      candidate_manifest_sha256:
+        type: string
+        required: false
+        default: ''
+      candidate_tag:
+        type: string
+        required: false
+        default: ''
+      harness_revision:
+        description: Exact integration source used by the product caller
+        type: string
+        required: false
+        default: ''
   schedule:
     - cron: "41 5 8 * *"
   workflow_dispatch:
@@ -42,9 +66,34 @@ jobs:
       PYTHONUNBUFFERED: "1"
       OFFICIAL_SUITE_RUN_ID: ${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      - name: Validate candidate caller before fetching source
+        env:
+          CANDIDATE_ARTIFACT: ${{ inputs.candidate_artifact }}
+          CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate_manifest_sha256 }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          HARNESS_REVISION: ${{ inputs.harness_revision }}
+          LANE: ${{ inputs.lane || 'all' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$CANDIDATE_ARTIFACT" ]; then
+            test "$GITHUB_REPOSITORY" = ElevenID/marty-ui
+            test "$GITHUB_REF" = refs/heads/main
+            test "$LANE" = all
+            test "$CANDIDATE_ARTIFACT" = "stack-release-official-candidate-$GITHUB_RUN_ID"
+            [[ "$HARNESS_REVISION" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$CANDIDATE_MANIFEST_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "$CANDIDATE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          else
+            test "$GITHUB_REPOSITORY" = ElevenID/marty-integration-tests
+            test -z "$CANDIDATE_MANIFEST_SHA256$CANDIDATE_TAG$HARNESS_REVISION"
+          fi
+
       - name: Checkout integration harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          repository: ElevenID/marty-integration-tests
+          ref: ${{ inputs.harness_revision || github.sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -71,6 +120,7 @@ jobs:
           echo "MARTY_PLAYWRIGHT_BROWSER_CHANNEL=chrome" >> "$GITHUB_ENV"
 
       - name: Resolve and attest released stack
+        if: inputs.candidate_artifact == ''
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -81,6 +131,27 @@ jobs:
             --metadata-output work/stack/stack-metadata.json
           )
           python scripts/official_stack_release.py materialize "${stack_args[@]}"
+
+      - name: Download current pre-publication candidate
+        if: inputs.candidate_artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.candidate_artifact }}
+          path: work/candidate
+
+      - name: Verify exact protected-main candidate without a published release
+        if: inputs.candidate_artifact != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate_manifest_sha256 }}
+        shell: bash
+        run: >-
+          python scripts/official_stack_release.py materialize-candidate
+          --manifest work/candidate/stack-manifest.json
+          --tag "$CANDIDATE_TAG" --source-sha "$GITHUB_SHA"
+          --manifest-sha256 "$CANDIDATE_MANIFEST_SHA256"
+          --output-dir work/stack --metadata-output work/stack/stack-metadata.json
 
       - name: Verify and pull attested stack images
         env:
@@ -94,10 +165,20 @@ jobs:
           python scripts/render_stack_env.py --manifest work/stack/stack-manifest.json --output work/stack/.env.stack --allow-historical-three-image
 
       - name: Checkout released Marty deployment adapter
+        if: inputs.candidate_artifact == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-ui
-          ref: 4bbbbe63d1b0a98f8b41437e745cc307f5ecf2af
+          ref: a10bf3189383ce91002a795a7bc4f03c1d5c3d1a
+          path: work/marty-ui
+          persist-credentials: false
+
+      - name: Checkout exact product candidate deployment adapter
+        if: inputs.candidate_artifact != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-ui
+          ref: ${{ github.sha }}
           path: work/marty-ui
           persist-credentials: false
 
@@ -124,7 +205,7 @@ jobs:
 
       - name: Generate disposable TLS and EUDI material
         run: |
-          python scripts/eudi_test_material.py generate --output work/material --marty-port 18443
+          python scripts/eudi_test_material.py generate --output work/material --marty-port 18443 --staging-ca-key work/material/official-ca.key
           python scripts/eudi_test_material.py validate --material work/material
           python -c "import json; from urllib.parse import urlsplit; data=json.load(open('work/material/report.json', encoding='utf-8')); hosts=sorted({urlsplit(value).hostname for value in data['urls'].values()} | {'localhost.emobix.co.uk'}); print('127.0.0.1 ' + ' '.join(host for host in hosts if host and host != 'localhost'))" | sudo tee -a /etc/hosts
 
@@ -146,6 +227,17 @@ jobs:
           echo "MARTY_CONFORMANCE_ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"
           echo "MARTY_CONFORMANCE_REVIEWER_PASSWORD=$reviewer_password" >> "$GITHUB_ENV"
 
+      - name: Bootstrap disposable KMS-only released stack
+        shell: bash
+        run: >-
+          python scripts/official_kms_bootstrap.py
+          --run-id "$OFFICIAL_SUITE_RUN_ID"
+          --marty-ui work/marty-ui
+          --stack-manifest work/stack/stack-manifest.json
+          --stack-env work/stack/.env.stack
+          --material work/material
+          --output-dir work/kms
+
       - name: Run official lane
         id: lane
         shell: bash
@@ -158,6 +250,7 @@ jobs:
             --stack-manifest work/stack/stack-manifest.json
             --stack-metadata work/stack/stack-metadata.json
             --stack-env work/stack/.env.stack
+            --kms-env work/kms/.env.kms
             --material work/material
             --haip-material work/haip-material
             --oidf-runner work/oidf-runner
@@ -186,7 +279,7 @@ jobs:
             --input work/evidence/raw
             --output "work/sanitized/${{ matrix.lane }}"
             --lane "${{ matrix.lane }}"
-            --harness-commit "${{ github.sha }}"
+            --harness-commit "$(git rev-parse HEAD)"
             --exit-code "$LANE_EXIT_CODE"
             --stack-metadata work/stack/stack-metadata.json
             --material-report work/material/report.json
@@ -214,3 +307,8 @@ jobs:
             exit 1
           fi
           exit "$LANE_EXIT_CODE"
+
+      - name: Erase disposable bootstrap authorities
+        if: always()
+        shell: bash
+        run: rm -f work/material/official-ca.key work/kms/bootstrap-root-token

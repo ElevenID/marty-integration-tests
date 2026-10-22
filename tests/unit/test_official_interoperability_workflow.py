@@ -1,11 +1,53 @@
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import textwrap
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "official-interoperability.yml"
 PYTHON_LOCK = ROOT / "requirements" / "official-py312.lock"
+
+
+@pytest.mark.parametrize(("overrides", "allowed"), [
+    ({}, True),
+    ({"GITHUB_REPOSITORY": "other/product"}, False),
+    ({"GITHUB_REF": "refs/heads/feature"}, False),
+    ({"LANE": "oid4vci-issuer"}, False),
+    ({"CANDIDATE_ARTIFACT": "stack-release-official-candidate-98"}, False),
+    ({"HARNESS_REVISION": "main"}, False),
+    ({"CANDIDATE_MANIFEST_SHA256": "latest"}, False),
+    ({"CANDIDATE_TAG": "v1.2.3;true"}, False),
+    ({"CANDIDATE_ARTIFACT": "", "CANDIDATE_MANIFEST_SHA256": "",
+      "CANDIDATE_TAG": "", "HARNESS_REVISION": "",
+      "GITHUB_REPOSITORY": "ElevenID/marty-integration-tests"}, True),
+    ({"CANDIDATE_ARTIFACT": "", "CANDIDATE_MANIFEST_SHA256": "",
+      "CANDIDATE_TAG": "", "HARNESS_REVISION": ""}, False),
+])
+def test_actual_candidate_caller_guard(
+    overrides: dict[str, str], allowed: bool,
+) -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    step = text.split("      - name: Validate candidate caller before fetching source\n", 1)[1]
+    script = textwrap.dedent(step.split("      - name: Checkout integration harness", 1)[0]
+                             .split("        run: |\n", 1)[1])
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    assert bash, "Bash is required to execute the actual workflow caller guard"
+    environment = {**os.environ, "GITHUB_REPOSITORY": "ElevenID/marty-ui",
+                   "GITHUB_REF": "refs/heads/main", "GITHUB_RUN_ID": "99",
+                   "CANDIDATE_ARTIFACT": "stack-release-official-candidate-99",
+                   "CANDIDATE_MANIFEST_SHA256": "sha256:" + "a" * 64,
+                   "CANDIDATE_TAG": "v1.2.3", "HARNESS_REVISION": "b" * 40,
+                   "LANE": "all", **overrides}
+    result = subprocess.run([bash, "--noprofile", "--norc"], input=script,
+                            env=environment, text=True, capture_output=True, check=False)
+    assert (result.returncode == 0) == allowed, result.stderr
 
 
 def test_workflow_is_manual_and_monthly_with_isolated_standard_runner_lanes() -> None:

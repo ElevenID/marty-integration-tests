@@ -822,6 +822,26 @@ message, multi-recipient, routing/mediation, DID rotation, or broad DID-method
 evidence. Those capabilities require separate production APIs and tests before
 they may be claimed.
 
+## Pre-publication product candidates
+
+The reusable `official-interoperability.yml` also accepts a signed candidate
+manifest from the current protected-main `ElevenID/marty-ui` release run.
+The caller supplies its exact integration harness revision, candidate tag and
+independent manifest SHA-256, and the artifact must be named
+`stack-release-official-candidate-<current-run-id>`. Candidate calls require
+all seven lanes. This route uses the same suites, KMS provisioning, production
+deployment adapter and evidence sanitizer as the released-stack route.
+
+`official_stack_release.py materialize-candidate` verifies the manifest subject
+against product `cd.yml` provenance at the exact main commit on a hosted runner,
+requires all five current KMS-only image roles, and preserves the manifest
+bytes and digest through materialization. It emits an explicit unpublished
+candidate context in the evidence. A public release or Git tag is unnecessary;
+the regular reviewed `stack-under-test.json` pin is unchanged. Product CD must
+require the complete reusable workflow before promotion and persist its gate
+evidence. Merely adding this adapter does not enable that product gate or
+establish an official pass.
+
 ## Updating official suites
 
 The monthly `official-suite-updates.yml` workflow checks OIDF, W3C, every

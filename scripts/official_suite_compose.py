@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 import time
@@ -89,6 +90,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("command", choices=("up", "down", "ps", "logs"))
     result.add_argument("--run-id", default=os.environ.get("OFFICIAL_SUITE_RUN_ID") or os.environ.get("GITHUB_RUN_ID"))
     result.add_argument("--marty-ui", type=Path, required=True, help="pinned marty-ui checkout")
+    result.add_argument("--stack-manifest", type=Path, help="attested released stack manifest")
+    result.add_argument("--release-ui-revision", help="exact released UI source commit")
+    result.add_argument("--marty-prestarted", action="store_true", help="resume the exact KMS-bootstrapped Marty project")
     result.add_argument("--oidf-runner", type=Path, help="pinned official OIDF runner checkout")
     result.add_argument("--oidf", action="store_true", help="include the official OIDF runner project")
     result.add_argument("--eudi", action="store_true", help="include the EUDI reference project")
@@ -373,6 +377,63 @@ def run(command: list[str], environment: dict[str, str]) -> int:
     return subprocess.run(command, check=False, env=environment).returncode
 
 
+def diagnose_released_native_model(args: argparse.Namespace, project: str,
+                                   environment: dict[str, str]) -> None:
+    """Report only the source location of a swallowed native model exception."""
+    if args.stack_manifest is None:
+        return
+    try:
+        ui = args.marty_ui.resolve()
+        stack = runpy.run_path(str(ui / "scripts/conformance_stack.py"))
+        command = stack["compose_command"](
+            project, include_haip=args.haip,
+            include_didcomm_authcrypt=args.didcomm_authcrypt,
+        )
+        rendered = subprocess.run(
+            [*command, "config", "--format", "json"], cwd=ui, env=environment,
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if rendered.returncode:
+            return
+        model = json.loads(rendered.stdout)
+        native = runpy.run_path(str(ui / "scripts/conformance_native.py"))
+        locations: list[str] = []
+
+        def trace(frame, event, detail):
+            if event == "exception":
+                error_type = detail[0]
+                source = Path(frame.f_code.co_filename)
+                if (error_type.__name__ in {"KeyError", "TypeError", "AttributeError",
+                                             "IndexError", "OfficialReleaseError"}
+                        and source.name in {"conformance_native.py",
+                                            "validate_beta_didcomm_configuration.py",
+                                            "prepare_official_beta_release.py"}
+                        and source.parent == ui / "scripts"):
+                    missing = (detail[1].args[0] if error_type is KeyError
+                               and detail[1].args else None)
+                    field = (f":{missing}" if missing in {"bind", "create_host_path"}
+                             else "")
+                    locations.append(
+                        f"{source.name}:{frame.f_lineno}:{error_type.__name__}{field}")
+            return trace
+
+        previous = sys.gettrace()
+        try:
+            sys.settrace(trace)
+            native["validate_model"](model, project=project,
+                                      authcrypt=args.didcomm_authcrypt,
+                                      local_build=False)
+        except ValueError:
+            pass
+        finally:
+            sys.settrace(previous)
+        if locations:
+            print(f"Released native model diagnostic: {locations[-1]}", file=sys.stderr)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+        # Diagnostics cannot change the real lane result or expose the model.
+        return
+
+
 def emit_eudi_startup_diagnostic(project: str, environment: dict[str, str]) -> None:
     """Classify verifier startup failure without publishing sensitive logs."""
     selector = [
@@ -453,13 +514,22 @@ def marty_command(
     if not script.is_file():
         raise ValueError(f"Marty conformance launcher is missing: {script}")
     command = [sys.executable, str(script), "--project", projects["marty"]]
+    if getattr(args, "stack_manifest", None) is not None:
+        manifest = args.stack_manifest.resolve()
+        if not getattr(args, "release_ui_revision", None):
+            raise ValueError("released native stack requires the exact UI source revision")
+        command.extend([
+            "--stack-manifest", str(manifest),
+            "--stack-checksums", str(manifest.with_name("SHA256SUMS")),
+            "--release-ui-revision", args.release_ui_revision,
+        ])
     if args.haip if include_haip is None else include_haip:
         command.append("--haip")
     if getattr(args, "didcomm_authcrypt", False):
         command.append("--didcomm-authcrypt")
     if args.local_build:
         command.append("--local-build")
-    if resume:
+    if resume or (getattr(args, "marty_prestarted", False) and action == "up"):
         command.append("--resume")
     command.append(action)
     return command
@@ -704,6 +774,8 @@ def execute(args: argparse.Namespace) -> int:
         started.append(name)
         result = run(command(), environment)
         if result:
+            if name == "marty":
+                diagnose_released_native_model(args, projects["marty"], environment)
             if name == "eudi":
                 emit_eudi_startup_diagnostic(projects["eudi"], environment)
             if not args.retain_on_up_failure:
