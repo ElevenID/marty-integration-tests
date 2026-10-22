@@ -1159,6 +1159,8 @@ def compose_command(
         str(args.marty_ui),
         *official_compose_release_args(args),
     ]
+    if getattr(args, "kms_prestarted", False):
+        command.append("--marty-prestarted")
     if marty_only:
         command.append("--marty-only")
     if oidf:
@@ -1381,7 +1383,22 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
     validate_stack_binding(args.stack_manifest, metadata, stack_environment)
     environment = os.environ.copy()
     environment.update(stack_environment)
+    kms_env = getattr(args, "kms_env", None)
+    kms_values = None
+    if kms_env is not None:
+        from official_kms_bootstrap import load_assignments
+
+        kms_root = kms_env.resolve().parent
+        if kms_root.is_symlink() or not kms_root.is_dir() or kms_env.is_symlink():
+            raise ValueError("disposable KMS input directory is invalid")
+        kms_values = load_assignments(kms_env)
+        environment.update(kms_values)
+        args.kms_prestarted = True
     environment.update(load_material_environment(args.material))
+    if kms_values is not None:
+        from official_kms_bootstrap import validate_runtime_environment
+
+        validate_runtime_environment(kms_values, kms_root, environment["OIDF_PUBLIC_BASE_URL"])
     gateway_url = environment.get("OIDF_PUBLIC_BASE_URL", "https://marty-oidf.test:18443").rstrip("/")
     gateway = urlsplit(gateway_url)
     if gateway.scheme != "https" or not gateway.hostname or gateway.path:
@@ -1718,6 +1735,8 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
     base = [sys.executable, str(launcher), "--project", project, *released_native_stack_args(args)]
+    if getattr(args, "kms_prestarted", False):
+        base.append("--resume")
     result = 1
     try:
         if run([*base, "up"], environment):
@@ -1862,6 +1881,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--stack-manifest", type=Path, required=True)
     result.add_argument("--stack-metadata", type=Path, required=True)
     result.add_argument("--stack-env", type=Path, required=True)
+    result.add_argument("--kms-env", type=Path, required=True)
     result.add_argument("--material", type=Path, required=True)
     result.add_argument("--haip-material", type=Path)
     result.add_argument("--oidf-runner", type=Path)
@@ -1872,7 +1892,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    for name in ("marty_ui", "stack_manifest", "stack_metadata", "stack_env", "material"):
+    for name in ("marty_ui", "stack_manifest", "stack_metadata", "stack_env", "kms_env", "material"):
         setattr(args, name, getattr(args, name).resolve())
     if args.haip_material:
         args.haip_material = args.haip_material.resolve()

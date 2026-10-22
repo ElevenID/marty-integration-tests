@@ -46,6 +46,17 @@ def generated(tmp_path: Path, **options: object) -> Path:
     return output
 
 
+def test_official_staging_ca_key_is_private_and_matches_fixture_root(tmp_path: Path) -> None:
+    output = generated(tmp_path, staging_ca_key=tmp_path / "material" / "official-ca.key")
+    staged = output / "official-ca.key"
+    root = x509.load_pem_x509_certificate((output / material.ROOT_CA_FILE).read_bytes())
+    key = serialization.load_pem_private_key(staged.read_bytes(), password=None)
+    assert isinstance(key, ec.EllipticCurvePrivateKey)
+    assert key.public_key().public_numbers() == root.public_key().public_numbers()
+    if os.name == "posix":
+        assert stat.S_IMODE(staged.stat().st_mode) == 0o600
+
+
 def certificates(path: Path) -> list[x509.Certificate]:
     return [x509.load_pem_x509_certificate(value) for value in material.PEM_CERTIFICATE.findall(path.read_bytes())]
 

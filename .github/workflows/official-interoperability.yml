@@ -130,7 +130,7 @@ jobs:
 
       - name: Generate disposable TLS and EUDI material
         run: |
-          python scripts/eudi_test_material.py generate --output work/material --marty-port 18443
+          python scripts/eudi_test_material.py generate --output work/material --marty-port 18443 --staging-ca-key work/material/official-ca.key
           python scripts/eudi_test_material.py validate --material work/material
           python -c "import json; from urllib.parse import urlsplit; data=json.load(open('work/material/report.json', encoding='utf-8')); hosts=sorted({urlsplit(value).hostname for value in data['urls'].values()} | {'localhost.emobix.co.uk'}); print('127.0.0.1 ' + ' '.join(host for host in hosts if host and host != 'localhost'))" | sudo tee -a /etc/hosts
 
@@ -152,6 +152,17 @@ jobs:
           echo "MARTY_CONFORMANCE_ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"
           echo "MARTY_CONFORMANCE_REVIEWER_PASSWORD=$reviewer_password" >> "$GITHUB_ENV"
 
+      - name: Bootstrap disposable KMS-only released stack
+        shell: bash
+        run: >-
+          python scripts/official_kms_bootstrap.py
+          --run-id "$OFFICIAL_SUITE_RUN_ID"
+          --marty-ui work/marty-ui
+          --stack-manifest work/stack/stack-manifest.json
+          --stack-env work/stack/.env.stack
+          --material work/material
+          --output-dir work/kms
+
       - name: Run official lane
         id: lane
         shell: bash
@@ -164,6 +175,7 @@ jobs:
             --stack-manifest work/stack/stack-manifest.json
             --stack-metadata work/stack/stack-metadata.json
             --stack-env work/stack/.env.stack
+            --kms-env work/kms/.env.kms
             --material work/material
             --haip-material work/haip-material
             --oidf-runner work/oidf-runner

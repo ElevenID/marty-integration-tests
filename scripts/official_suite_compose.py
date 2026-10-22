@@ -91,6 +91,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--marty-ui", type=Path, required=True, help="pinned marty-ui checkout")
     result.add_argument("--stack-manifest", type=Path, help="attested released stack manifest")
     result.add_argument("--release-ui-revision", help="exact released UI source commit")
+    result.add_argument("--marty-prestarted", action="store_true", help="resume the exact KMS-bootstrapped Marty project")
     result.add_argument("--oidf-runner", type=Path, help="pinned official OIDF runner checkout")
     result.add_argument("--oidf", action="store_true", help="include the official OIDF runner project")
     result.add_argument("--eudi", action="store_true", help="include the EUDI reference project")
@@ -470,7 +471,7 @@ def marty_command(
         command.append("--didcomm-authcrypt")
     if args.local_build:
         command.append("--local-build")
-    if resume:
+    if resume or (getattr(args, "marty_prestarted", False) and action == "up"):
         command.append("--resume")
     command.append(action)
     return command
