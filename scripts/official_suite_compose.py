@@ -409,7 +409,12 @@ def diagnose_released_native_model(args: argparse.Namespace, project: str,
                                             "validate_beta_didcomm_configuration.py",
                                             "prepare_official_beta_release.py"}
                         and source.parent == ui / "scripts"):
-                    locations.append(f"{source.name}:{frame.f_lineno}:{error_type.__name__}")
+                    missing = (detail[1].args[0] if error_type is KeyError
+                               and detail[1].args else None)
+                    field = (f":{missing}" if missing in {"bind", "create_host_path"}
+                             else "")
+                    locations.append(
+                        f"{source.name}:{frame.f_lineno}:{error_type.__name__}{field}")
             return trace
 
         previous = sys.gettrace()
