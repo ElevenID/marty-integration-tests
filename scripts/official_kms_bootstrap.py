@@ -35,6 +35,16 @@ COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 REQUIRED = re.compile(r"\$\{([A-Z][A-Z0-9_]*):\?[^}]*\}")
 EXTENDS = re.compile(r"^\s*file:\s*(docker-compose[^\s]+\.yml)\s*$", re.MULTILINE)
 KMS_ORIGIN = "https://openbao:8200"
+
+
+class SafeBootstrapError(ValueError):
+    """A fixed, credential-free bootstrap reason suitable for CI output."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 ENV_ROLES = {
     "SIGNING_KEYS": ("signing_keys_workload_server_cert", "signing_keys_tls_kms_token", "workload-tls-signing-keys-server"),
     "GATEWAY": ("gateway_workload_client_cert", "gateway_tls_kms_token", "workload-tls-gateway-auth-client"),
@@ -193,10 +203,10 @@ def require_kms_only_images(compose: list[str], env: dict[str, str], ui: Path,
     plugin = images["MARTY_OPENBAO_DIDCOMM_IMAGE"]
     if any(services.get(name, {}).get("image") != plugin
            for name in ("openbao", "openbao-tls-init", "openbao-init")):
-        raise ValueError("released conformance stack replaces its attested KMS-only OpenBao plugin")
+        raise SafeBootstrapError("released conformance stack replaces its attested KMS-only OpenBao plugin")
     if any(services.get(name, {}).get("image") != images["MARTY_SERVICES_IMAGE"]
            for name in ("issuance-native", "oidf-tls-proxy")):
-        raise ValueError("released native issuance or official edge differs from the attested services image")
+        raise SafeBootstrapError("released native issuance or official edge differs from the attested services image")
 
 
 def container_id(compose: list[str], service: str, env: dict[str, str], ui: Path) -> str:
@@ -498,5 +508,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, KeyError, HTTPError) as error:
-        print(f"Official KMS bootstrap failed: {type(error).__name__}", file=sys.stderr)
+        reason = error.code if isinstance(error, SafeBootstrapError) else type(error).__name__
+        print(f"Official KMS bootstrap failed: {reason}", file=sys.stderr)
         raise SystemExit(2) from None
