@@ -165,6 +165,55 @@ def require_gh() -> str:
     return executable
 
 
+def materialize_candidate(
+    manifest_path: Path, *, tag: str, source_sha: str, manifest_sha256: str,
+    output_dir: Path,
+) -> dict[str, object]:
+    """Verify a pre-promotion CD candidate without requiring a public release.
+
+    The producer supplies independent expected identity; the signed subject
+    must come from the protected-main product release workflow. The normal
+    repository-reviewed release pin is never rewritten or bypassed.
+    """
+    if not SEMVER_TAG.fullmatch(tag) or not COMMIT.fullmatch(source_sha):
+        raise ValueError("candidate requires an exact version and source commit")
+    if not SHA256.fullmatch(manifest_sha256):
+        raise ValueError("candidate requires an independent manifest sha256 digest")
+    pin = {
+        "repository": REPOSITORY, "release_tag": tag, "manifest_asset": ASSET,
+        "manifest_sha256": manifest_sha256, "marty_commit": source_sha,
+    }
+    metadata = validate_stack_manifest(manifest_path, pin)
+    # New candidates must carry every current KMS-only role. Historical public
+    # releases retain their existing compatibility policy in materialize.
+    image_map(json.loads(manifest_path.read_text(encoding="utf-8")),
+              allow_historical_three_image=False)
+    subprocess.run([
+        require_gh(), "attestation", "verify", str(manifest_path),
+        "--repo", REPOSITORY,
+        "--signer-workflow", f"{REPOSITORY}/.github/workflows/cd.yml",
+        "--source-digest", source_sha, "--source-ref", "refs/heads/main",
+        "--deny-self-hosted-runners",
+    ], check=True)
+    if validate_stack_manifest(manifest_path, pin) != metadata:
+        raise ValueError("candidate manifest changed during attestation verification")
+    output_dir.mkdir(parents=True, exist_ok=False)
+    destination = output_dir / ASSET
+    payload = manifest_path.read_bytes()
+    if f"sha256:{sha256(payload).hexdigest()}" != manifest_sha256:
+        raise ValueError("candidate manifest changed before materialization")
+    destination.write_bytes(payload)
+    (output_dir / "SHA256SUMS").write_text(
+        f"{manifest_sha256.removeprefix('sha256:')}  {ASSET}\n", encoding="utf-8",
+    )
+    metadata.update({
+        "manifest_path": str(destination.resolve()),
+        "qualification_context": "PRE_PUBLICATION_CANDIDATE",
+        "published_release": False,
+    })
+    return metadata
+
+
 def download_and_attest(pin: dict[str, str], output_dir: Path) -> Path:
     gh = require_gh()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -225,18 +274,31 @@ def parser() -> argparse.ArgumentParser:
     materialize.add_argument("--pin", type=Path, default=DEFAULT_PIN)
     materialize.add_argument("--output-dir", type=Path, required=True)
     materialize.add_argument("--metadata-output", type=Path, required=True)
+    candidate = commands.add_parser("materialize-candidate")
+    candidate.add_argument("--manifest", type=Path, required=True)
+    candidate.add_argument("--tag", required=True)
+    candidate.add_argument("--source-sha", required=True)
+    candidate.add_argument("--manifest-sha256", required=True)
+    candidate.add_argument("--output-dir", type=Path, required=True)
+    candidate.add_argument("--metadata-output", type=Path, required=True)
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    pin = load_pin(args.pin.resolve())
     if args.command == "validate-pin":
+        pin = load_pin(args.pin.resolve())
         print(json.dumps(pin, indent=2, sort_keys=True))
         return 0
-    resolved = resolve_pin(pin)
-    manifest_path = download_and_attest(resolved, args.output_dir.resolve())
-    metadata = validate_stack_manifest(manifest_path, resolved)
+    if args.command == "materialize-candidate":
+        metadata = materialize_candidate(
+            args.manifest.resolve(), tag=args.tag, source_sha=args.source_sha,
+            manifest_sha256=args.manifest_sha256, output_dir=args.output_dir.resolve(),
+        )
+    else:
+        resolved = resolve_pin(load_pin(args.pin.resolve()))
+        manifest_path = download_and_attest(resolved, args.output_dir.resolve())
+        metadata = validate_stack_manifest(manifest_path, resolved)
     metadata_output = args.metadata_output.resolve()
     metadata_output.parent.mkdir(parents=True, exist_ok=True)
     metadata_output.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
