@@ -77,6 +77,18 @@ def test_runtime_environment_requires_exact_private_kms_inputs(tmp_path: Path) -
     with pytest.raises(ValueError, match="missing or unsupported"):
         MODULE.validate_runtime_environment({key: value for key, value in values.items()
                                              if key != "FLOW_WORKLOAD_CLIENT_CERT_FILE"}, tmp_path, origin)
+    with pytest.raises(ValueError, match="role input differs"):
+        MODULE.validate_runtime_environment(
+            {**values, "FLOW_CLIENT_TLS_KMS_KEY_NAME": values["FLOW_SERVER_TLS_KMS_KEY_NAME"]},
+            tmp_path, origin)
+    with pytest.raises(ValueError, match="role input differs"):
+        MODULE.validate_runtime_environment(
+            {**values, "FLOW_CLIENT_TLS_KMS_TOKEN_FILE": values["FLOW_SERVER_TLS_KMS_TOKEN_FILE"]},
+            tmp_path, origin)
+    with pytest.raises(ValueError, match="Keycloak KMS input differs"):
+        MODULE.validate_runtime_environment(
+            {**values, "KEYCLOAK_SIGNING_KMS_TOKEN_FILE": values["KEYCLOAK_MASTER_COOKIE_TOKEN_FILE"]},
+            tmp_path, origin)
 
 
 def test_scoped_transit_token_proves_only_its_bound_sign_route() -> None:

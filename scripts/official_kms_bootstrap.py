@@ -133,9 +133,16 @@ def validate_runtime_environment(values: dict[str, str], root: Path, origin: str
         "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE", "FLOW_WORKLOAD_CLIENT_CERT_FILE",
         "ENVOY_ISSUANCE_CLIENT_CERT_FILE", *KEYCLOAK_FILES,
     }
-    expected.update(role_environment(root / "tls", root / "extra"))
+    role_values = role_environment(root / "tls", root / "extra")
+    expected.update(role_values)
     if set(values) != expected:
         raise ValueError("disposable KMS environment has missing or unsupported inputs")
+    for key, value in role_values.items():
+        if values[key] != value:
+            raise ValueError(f"disposable KMS role input differs from its provisioned binding: {key}")
+    for key, filename in KEYCLOAK_FILES.items():
+        if values[key] != str(root / "keycloak" / filename):
+            raise ValueError(f"disposable Keycloak KMS input differs from its provisioned binding: {key}")
     for key, value in values.items():
         if key.endswith("_FILE"):
             path = Path(value)
