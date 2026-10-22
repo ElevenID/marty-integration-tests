@@ -199,6 +199,20 @@ def download_and_attest(pin: dict[str, str], output_dir: Path) -> Path:
         [gh, "attestation", "verify", str(manifest_path), "--repo", pin["repository"]],
         check=True,
     )
+    checksums = output_dir / "SHA256SUMS"
+    if checksums.exists():
+        raise FileExistsError(f"refusing to reuse existing release checksums: {checksums}")
+    subprocess.run(
+        [gh, "release", "download", pin["release_tag"], "--repo", pin["repository"],
+         "--pattern", "SHA256SUMS", "--dir", str(output_dir)],
+        check=True,
+    )
+    if not checksums.is_file():
+        raise ValueError("GitHub release download did not produce SHA256SUMS")
+    matching = [line.split(None, 1)[0] for line in checksums.read_text(encoding="utf-8").splitlines()
+                if line.endswith(f"  {manifest_path.name}")]
+    if matching != [actual.removeprefix("sha256:")]:
+        raise ValueError("release checksums do not bind the reviewed stack manifest")
     return manifest_path
 
 

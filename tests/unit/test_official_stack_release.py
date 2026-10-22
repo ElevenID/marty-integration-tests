@@ -173,7 +173,12 @@ def test_download_checks_reviewed_hash_before_attestation(tmp_path: Path, monkey
         calls.append(command)
         if command[1:3] == ["release", "download"]:
             output.mkdir(parents=True, exist_ok=True)
-            (output / "stack-manifest.json").write_bytes(content)
+            if "SHA256SUMS" in command:
+                (output / "SHA256SUMS").write_text(
+                    f"{sha256(content).hexdigest()}  stack-manifest.json\n", encoding="utf-8"
+                )
+            else:
+                (output / "stack-manifest.json").write_bytes(content)
         return object()
 
     monkeypatch.setattr(release, "require_gh", lambda: "gh")
@@ -181,6 +186,7 @@ def test_download_checks_reviewed_hash_before_attestation(tmp_path: Path, monkey
     assert release.download_and_attest(pin, output) == output / "stack-manifest.json"
     assert calls[0][1:3] == ["release", "download"]
     assert calls[1][1:3] == ["attestation", "verify"]
+    assert calls[2][1:3] == ["release", "download"]
 
 
 def test_bad_download_is_deleted_and_never_attested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

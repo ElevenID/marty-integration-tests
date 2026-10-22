@@ -314,6 +314,7 @@ STACK_ENV_KEYS = {
     "MARTY_ISSUANCE_IMAGE",
     "MARTY_OPENBAO_DIDCOMM_IMAGE",
     "MARTY_KEYCLOAK_IMAGE",
+    "KEYCLOAK_KMS_IMAGE_DIGEST",
     "POSTGRES_IMAGE",
     "REDIS_IMAGE",
     "MARTY_RS_URI",
@@ -329,6 +330,7 @@ STACK_ARTIFACT_ENVIRONMENT = REQUIRED_PYTHON_ARTIFACTS
 STACK_OPTIONAL_ENV_KEYS = {
     "MARTY_OPENBAO_DIDCOMM_IMAGE",
     "MARTY_KEYCLOAK_IMAGE",
+    "KEYCLOAK_KMS_IMAGE_DIGEST",
     "MARTY_COMMON_URI",
     "MARTY_COMMON_DIGEST",
 }
@@ -517,6 +519,10 @@ def validate_stack_binding(
         raise ValueError("OpenBao DIDComm image presence does not match the attested stack manifest")
     if ("MARTY_KEYCLOAK_IMAGE" in stack_environment) != ("MARTY_KEYCLOAK_IMAGE" in expected_images):
         raise ValueError("Keycloak image presence does not match the attested stack manifest")
+    keycloak_image = expected_images.get("MARTY_KEYCLOAK_IMAGE")
+    expected_keycloak_digest = keycloak_image.rsplit("@", 1)[1] if keycloak_image else None
+    if stack_environment.get("KEYCLOAK_KMS_IMAGE_DIGEST") != expected_keycloak_digest:
+        raise ValueError("Keycloak Compose digest does not match the attested stack manifest")
 
     expected_artifacts = python_artifact_map(manifest)
     for variable, expected in expected_artifacts.items():
@@ -1151,6 +1157,7 @@ def compose_command(
         args.run_id,
         "--marty-ui",
         str(args.marty_ui),
+        *official_compose_release_args(args),
     ]
     if marty_only:
         command.append("--marty-only")
@@ -1165,6 +1172,27 @@ def compose_command(
             raise ValueError("retaining a failed official suite is valid only for up")
         command.append("--retain-on-up-failure")
     return command
+
+
+def released_native_stack_args(args: argparse.Namespace) -> list[str]:
+    manifest = getattr(args, "stack_manifest", None)
+    revision = getattr(args, "release_ui_revision", None)
+    if manifest is None or revision is None:
+        return []
+    manifest = manifest.resolve()
+    return [
+        "--stack-manifest", str(manifest),
+        "--stack-checksums", str(manifest.with_name("SHA256SUMS")),
+        "--release-ui-revision", str(revision),
+    ]
+
+
+def official_compose_release_args(args: argparse.Namespace) -> list[str]:
+    manifest = getattr(args, "stack_manifest", None)
+    revision = getattr(args, "release_ui_revision", None)
+    if manifest is None or revision is None:
+        return []
+    return ["--stack-manifest", str(manifest), "--release-ui-revision", str(revision)]
 
 
 def bootstrap_fixtures(
@@ -1281,6 +1309,7 @@ def refresh_request_signing_certificate(
         "--project",
         f"marty-conformance-{args.run_id}",
         "--haip",
+        *released_native_stack_args(args),
         "--resume",
         "up",
     ]
@@ -1347,6 +1376,7 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
         raise ValueError(f"{args.lane} requires generated verifier test material")
 
     metadata = load_stack_metadata(args.stack_metadata)
+    args.release_ui_revision = str(metadata["marty_commit"])
     stack_environment = load_stack_environment(args.stack_env)
     validate_stack_binding(args.stack_manifest, metadata, stack_environment)
     environment = os.environ.copy()
@@ -1687,7 +1717,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
     environment["VCDM_RELATED_RESOURCE_URLS"] = w3c_related_resource_allowlist()
     launcher = args.marty_ui / "scripts" / "conformance_stack.py"
     project = f"marty-conformance-{args.run_id}"
-    base = [sys.executable, str(launcher), "--project", project]
+    base = [sys.executable, str(launcher), "--project", project, *released_native_stack_args(args)]
     result = 1
     try:
         if run([*base, "up"], environment):

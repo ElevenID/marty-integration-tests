@@ -89,6 +89,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("command", choices=("up", "down", "ps", "logs"))
     result.add_argument("--run-id", default=os.environ.get("OFFICIAL_SUITE_RUN_ID") or os.environ.get("GITHUB_RUN_ID"))
     result.add_argument("--marty-ui", type=Path, required=True, help="pinned marty-ui checkout")
+    result.add_argument("--stack-manifest", type=Path, help="attested released stack manifest")
+    result.add_argument("--release-ui-revision", help="exact released UI source commit")
     result.add_argument("--oidf-runner", type=Path, help="pinned official OIDF runner checkout")
     result.add_argument("--oidf", action="store_true", help="include the official OIDF runner project")
     result.add_argument("--eudi", action="store_true", help="include the EUDI reference project")
@@ -453,6 +455,15 @@ def marty_command(
     if not script.is_file():
         raise ValueError(f"Marty conformance launcher is missing: {script}")
     command = [sys.executable, str(script), "--project", projects["marty"]]
+    if getattr(args, "stack_manifest", None) is not None:
+        manifest = args.stack_manifest.resolve()
+        if not getattr(args, "release_ui_revision", None):
+            raise ValueError("released native stack requires the exact UI source revision")
+        command.extend([
+            "--stack-manifest", str(manifest),
+            "--stack-checksums", str(manifest.with_name("SHA256SUMS")),
+            "--release-ui-revision", args.release_ui_revision,
+        ])
     if args.haip if include_haip is None else include_haip:
         command.append("--haip")
     if getattr(args, "didcomm_authcrypt", False):
