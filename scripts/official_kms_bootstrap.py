@@ -194,8 +194,9 @@ def require_kms_only_images(compose: list[str], env: dict[str, str], ui: Path,
     if any(services.get(name, {}).get("image") != plugin
            for name in ("openbao", "openbao-tls-init", "openbao-init")):
         raise ValueError("released conformance stack replaces its attested KMS-only OpenBao plugin")
-    if services.get("issuance-native", {}).get("image") != images["MARTY_SERVICES_IMAGE"]:
-        raise ValueError("released native issuance differs from the attested services image")
+    if any(services.get(name, {}).get("image") != images["MARTY_SERVICES_IMAGE"]
+           for name in ("issuance-native", "oidf-tls-proxy")):
+        raise ValueError("released native issuance or official edge differs from the attested services image")
 
 
 def container_id(compose: list[str], service: str, env: dict[str, str], ui: Path) -> str:

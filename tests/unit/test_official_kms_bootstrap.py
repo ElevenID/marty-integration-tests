@@ -36,6 +36,7 @@ def test_bootstrap_rejects_plain_openbao_in_released_conformance_graph(monkeypat
     services = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64
     graph = {"services": {name: {"image": plugin} for name in ("openbao", "openbao-tls-init", "openbao-init")}}
     graph["services"]["issuance-native"] = {"image": services}
+    graph["services"]["oidf-tls-proxy"] = {"image": services}
     monkeypatch.setattr(MODULE, "run", lambda *args, **kwargs: SimpleNamespace(stdout=json.dumps(graph)))
     images = {"MARTY_OPENBAO_DIDCOMM_IMAGE": plugin, "MARTY_SERVICES_IMAGE": services}
     MODULE.require_kms_only_images(["docker", "compose"], {}, tmp_path, images)
