@@ -72,29 +72,17 @@ KEYCLOAK_FILES = {
     "KEYCLOAK_11ID_COOKIE_TOKEN_FILE": "keycloak_11id_cookie_token",
     "KEYCLOAK_11ID_CIBA_TOKEN_FILE": "keycloak_11id_ciba_token",
 }
-SERVER_ROLES = frozenset({"SIGNING_KEYS", "AUTH_SERVER", "ORG", "ES", "RP", "CT",
-                          "ISSUANCE", "FLOW_SERVER", "PP"})
-CERTIFICATE_ENV_OVERRIDES = {
-    "AUTH_SERVER": "AUTH_WORKLOAD_SERVER_CERT_FILE",
-    "FLOW_CLIENT": "FLOW_WORKLOAD_CLIENT_CERT_FILE",
-    "FLOW_SERVER": "FLOW_WORKLOAD_SERVER_CERT_FILE",
-    "ENVOY_ISSUANCE": "ENVOY_ISSUANCE_CLIENT_CERT_FILE",
-}
-
-
 def role_environment(tls: Path, extra: Path) -> dict[str, str]:
     """Describe every scoped workload KMS input from the same role inventory."""
     environment = {}
     for prefix, (certificate, token, key_name) in ENV_ROLES.items():
         directory = extra if prefix == "ENVOY_ISSUANCE" else tls
-        certificate_key = CERTIFICATE_ENV_OVERRIDES.get(
-            prefix, f"{prefix}_WORKLOAD_{'SERVER' if prefix in SERVER_ROLES else 'CLIENT'}_CERT_FILE")
         environment.update({
             f"{prefix}_TLS_KMS_ADDR": KMS_ORIGIN,
             f"{prefix}_TLS_KMS_KEY_NAME": key_name,
             f"{prefix}_TLS_KMS_KEY_VERSION": "1",
             f"{prefix}_TLS_KMS_TOKEN_FILE": str(directory / token),
-            certificate_key: str(directory / certificate),
+            f"{certificate.upper()}_FILE": str(directory / certificate),
         })
     return environment
 
