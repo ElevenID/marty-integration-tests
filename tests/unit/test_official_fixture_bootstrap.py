@@ -969,8 +969,8 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     assert presentation_template["issuer_did"] == "did:web:issuer.example.com"
     for template in (credential_template, presentation_template):
         assert template["credential_type"] == "VerifiableCredential"
-        assert template["schema_uri"] == {"type": "object"}
-        assert template["claims"] == []
+        assert template["schema_uri"] == {"type": "object", "properties": {"id": {"type": "string"}}}
+        assert template["claims"] == [{"name": "id", "display_name": "Subject identifier", "required": False}]
         assert "issuer_profile_id" not in template
         assert "signing_service_id" not in template
         assert "signing_key_reference" not in template
