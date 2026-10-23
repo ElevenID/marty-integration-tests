@@ -88,30 +88,60 @@ def read_flow_evidence(
         return result, outcome_projection(result, flow_id, instance_readback=True), "instance_result_pending"
 
 
-def capture_success_page(page: Page, flow_id: str, outcome: dict[str, str], destination: Path) -> str:
+def capture_success_page(
+    page: Page,
+    flow_id: str,
+    outcome: dict[str, str],
+    destination: Path,
+    *,
+    progress: dict[str, str] | None = None,
+) -> str:
     """Capture the real console dialog only after correlated successful results."""
     if outcome != {"status": "completed", "result": "passed", "decision": "allow"}:
         raise ValueError("a successful verifier screenshot requires a completed allow result")
+    if progress is None:
+        progress = {}
+    progress["stage"] = "history_tab"
     page.get_by_role("tab", name="History").click()
+    progress["stage"] = "history_flow_row"
     row = page.locator(f'[data-flow-instance-id="{flow_id}"]')
     row.wait_for(timeout=30_000)
     result_path = f"/v1/flows/instances/{flow_id}/result"
+    progress["stage"] = "dialog_result_readback"
     with page.expect_response(lambda response: urlsplit(response.url).path == result_path) as readback:
         row.get_by_role("button", name="View session details").click()
     response = readback.value
     if response.status != 200 or outcome_projection(response.json(), flow_id) != outcome:
         raise ValueError("browser verification evidence does not match the public result")
     dialog = page.get_by_role("dialog")
+    progress["stage"] = "dialog_flow_identity"
     dialog.get_by_text(flow_id, exact=True).wait_for(timeout=30_000)
+    progress["stage"] = "dialog_result_loaded"
     dialog.get_by_label("Loading verification result").wait_for(state="hidden", timeout=30_000)
+    progress["stage"] = "dialog_verified_outcome"
     dialog.get_by_text("Verified", exact=True).first.wait_for(timeout=30_000)
     if dialog.get_by_role("alert").count():
         raise ValueError("verification evidence dialog contains an error")
+    progress["stage"] = "success_screenshot"
     page.screenshot(path=str(destination), full_page=True)
     destination.chmod(0o600)
     digest = hashlib.sha256(destination.read_bytes()).hexdigest()
     dialog.get_by_role("button", name="Close", exact=True).click()
     return digest
+
+
+def capture_failure_diagnostics(page: Page, destination: Path, error: Exception, stage: str) -> None:
+    """Retain real failure state privately, never as successful review evidence."""
+    write_private_json(
+        destination.with_suffix(".json"),
+        {"stage": stage, "error_class": type(error).__name__, "error": str(error), "url": page.url},
+    )
+    html = destination.with_suffix(".html")
+    html.touch(mode=0o600, exist_ok=False)
+    html.write_text(page.content(), encoding="utf-8")
+    screenshot = destination.with_suffix(".png")
+    screenshot.touch(mode=0o600, exist_ok=False)
+    page.screenshot(path=str(screenshot), full_page=True, timeout=10_000)
 
 
 def main() -> int:
@@ -150,6 +180,8 @@ def main() -> int:
             for flow_id, name in correlations.items():
                 row: dict[str, object] = {"test_name": name, "capture_status": "PENDING", "screenshot": None}
                 rows.append(row)
+                progress = {"stage": "public_result_readback"}
+                digest = hashlib.sha256(name.encode()).hexdigest()
                 try:
                     result, outcome, source = read_flow_evidence(
                         base_url,
@@ -159,18 +191,25 @@ def main() -> int:
                     )
                     row["readback_source"] = source
                     row.update(outcome)
-                    digest = hashlib.sha256(name.encode()).hexdigest()
                     write_private_json(args.private_output / f"{digest}.json", result)
                     if name in pending:
                         destination = args.private_output / f"{digest}.png"
                         row["screenshot"] = {
-                            "sha256": capture_success_page(page, flow_id, outcome, destination),
+                            "sha256": capture_success_page(page, flow_id, outcome, destination, progress=progress),
                             "private_file": destination.name,
                             "review_status": "PENDING",
                         }
                     row["capture_status"] = "CAPTURED" if name in pending else "RESULT_RECORDED"
                 except Exception as error:  # noqa: BLE001 - retain other modules without exporting private exceptions
-                    row.update(capture_status="FAILED", error_class=type(error).__name__)
+                    row.update(
+                        capture_status="FAILED", error_class=type(error).__name__, failure_stage=progress["stage"]
+                    )
+                    try:
+                        capture_failure_diagnostics(
+                            page, args.private_output / f"{digest}-failure", error, progress["stage"]
+                        )
+                    except Exception as diagnostic_error:  # noqa: BLE001 - private diagnostic failure is not evidence
+                        row["diagnostic_error_class"] = type(diagnostic_error).__name__
                     # A failed dialog must not contaminate the next module.
                     open_org_console(page, base_url)
         finally:
