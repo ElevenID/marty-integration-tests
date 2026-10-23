@@ -1318,7 +1318,7 @@ def refresh_request_signing_certificate(
         "--resume",
         "up",
     ]
-    if run(command, refresh_environment):
+    if run(command, refresh_environment, native_attestation=True):
         raise RuntimeError("released Marty stack could not adopt the disposable request-signing certificate")
     wait_for_public_stack(refresh_environment)
     print(
