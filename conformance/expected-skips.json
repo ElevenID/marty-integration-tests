@@ -14,13 +14,5 @@
     "reason": "Marty does not advertise batch_credential_issuance. OID4VCI permits single-credential issuance; enable this module only with a reviewed batch issuance capability.",
     "owner": "ElevenID",
     "expires": "2027-01-01"
-  },
-  {
-    "test-name": "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm",
-    "configuration-filename": "*marty-issuer*.json",
-    "variant": {"vci_credential_encryption": "plain"},
-    "reason": "Marty's active issuer profile does not advertise credential encryption. Enable this negative module only with reviewed encryption support and interoperability coverage.",
-    "owner": "ElevenID",
-    "expires": "2027-01-01"
   }
 ]
