@@ -1216,6 +1216,35 @@ def test_mdoc_public_trust_uses_root_or_direct_pin_semantics(ca: bool) -> None:
     assert payload["trust_sources"][0]["certificate_pem"] == certificate
 
 
+def test_mdoc_root_bootstrap_does_not_invent_a_document_signer_relationship() -> None:
+    certificate = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC), not_after=datetime(2035, 1, 1, tzinfo=UTC), ca=True
+    )
+    calls = []
+    responses = iter([
+        issuer_identity_response(key_purpose="mdoc_dsc", credential_format="MDOC"),
+        issuer_identity_response(key_purpose="oid4vp_request_signing", credential_format="MDOC"),
+        {"identity": issuer_identity_response()["identity"], "public_jwk": PUBLIC_SIGNING_JWK},
+        *({"id": value} for value in ["compliance-1", "revocation-1", "revocation-1", "template-1",
+                                      "template-1", "policy-1", "policy-1", "trust-1", "trust-1"]),
+    ])
+
+    def request(_gateway: str, _session: str, path: str, *, method: str, json_body: dict | None = None) -> object:
+        assert path != "/v1/issuer-entities"
+        assert not path.endswith("/issuers")
+        calls.append((path, method, json_body))
+        return next(responses)
+
+    result = fixtures.bootstrap(
+        "https://marty.test", "real-session", organization_id=fixtures.DEFAULT_ORGANIZATION,
+        run_id="run-1", mode="oid4vp-mdoc", oidf_mdoc_trust_anchor_pem=certificate, request=request,
+    )
+    trust = next(body for path, _method, body in calls if path == "/v1/trust-profiles")
+    assert trust["trust_sources"][0]["source_type"] == "ROOT_CA"
+    assert result["oid4vp_mdoc_trust_profile_id"] == "trust-1"
+    assert "oid4vp_mdoc_status_issuer_id" not in result
+
+
 def test_mdoc_bootstrap_requires_the_runner_document_certificate() -> None:
     with pytest.raises(ValueError, match="document certificate"):
         fixtures.bootstrap(

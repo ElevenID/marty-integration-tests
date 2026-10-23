@@ -1536,11 +1536,16 @@ def bootstrap(
                 ),
             )
             trust_profile_id = response_id(created_trust_profile, "OID4VP trust profile")
-            # A pinned key proves a signature but cannot authorize its issuer.
-            # Materialize the exact commit-pinned signer as a governed entity
-            # and relationship before activation, so verification cannot fall
-            # back to an allowlist or infer trust from JWK possession.
-            if mdoc:
+            # Govern direct signer pins through an exact issuer relationship.
+            # An explicit ROOT_CA instead authorizes its authenticated certificate
+            # chain. Registering that CA as a leaf signer would deny every real
+            # descendant whose certificate fingerprint is necessarily different.
+            mdoc_root = mdoc and _certificate_is_ca(
+                x509.load_pem_x509_certificate(oidf_mdoc_trust_anchor_pem.encode("ascii"))
+            )
+            if mdoc_root:
+                issuer_payload = None
+            elif mdoc:
                 assert oidf_mdoc_trust_anchor_pem is not None
                 issuer_payload = mdoc_issuer_entity_payload(
                     organization_id,
@@ -1560,41 +1565,42 @@ def bootstrap(
                 issuer_resource = "OID4VP SD-JWT issuer entity"
                 relationship_resource = "OID4VP SD-JWT issuer relationship"
                 relationship_source = "official-oidf-commit-pinned-sd-jwt-signer"
-            created_issuer = request(
-                gateway_url,
-                session_id,
-                "/v1/issuer-entities",
-                method="POST",
-                json_body=issuer_payload,
-            )
-            issuer_entity_id = response_id(created_issuer, issuer_resource)
-            linked_issuer = request(
-                gateway_url,
-                session_id,
-                f"/v1/trust-profiles/{trust_profile_id}/issuers",
-                method="POST",
-                json_body={
-                    "issuer_id": issuer_entity_id,
-                    "trust_level": 100,
-                    "relationship_status": "TRUSTED",
-                    "cascade_revocation_policy": "AUTO_CASCADE",
-                    "metadata": {
-                        "source": relationship_source,
-                    },
-                },
-            )
-            response_id(linked_issuer, relationship_resource)
-            if mdoc:
-                result[f"{prefix}_status_issuer_id"] = issuer_payload["issuer_id"]
-            else:
-                result[f"{prefix}_trusted_issuer_id"] = issuer_payload["issuer_id"]
-                # The per-module interaction adapter uses the same public key
-                # to create an exact governed IssuerEntity for the runner's
-                # dynamic test-instance issuer URL. Private key material was
-                # already removed by ``official_signer_public_jwk``.
-                result[f"{prefix}_credential_issuer_public_jwk"] = dict(
-                    oidf_signer_public_jwk
+            if issuer_payload is not None:
+                created_issuer = request(
+                    gateway_url,
+                    session_id,
+                    "/v1/issuer-entities",
+                    method="POST",
+                    json_body=issuer_payload,
                 )
+                issuer_entity_id = response_id(created_issuer, issuer_resource)
+                linked_issuer = request(
+                    gateway_url,
+                    session_id,
+                    f"/v1/trust-profiles/{trust_profile_id}/issuers",
+                    method="POST",
+                    json_body={
+                        "issuer_id": issuer_entity_id,
+                        "trust_level": 100,
+                        "relationship_status": "TRUSTED",
+                        "cascade_revocation_policy": "AUTO_CASCADE",
+                        "metadata": {
+                            "source": relationship_source,
+                        },
+                    },
+                )
+                response_id(linked_issuer, relationship_resource)
+                if mdoc:
+                    result[f"{prefix}_status_issuer_id"] = issuer_payload["issuer_id"]
+                else:
+                    result[f"{prefix}_trusted_issuer_id"] = issuer_payload["issuer_id"]
+                    # The per-module interaction adapter uses the same public key
+                    # to create an exact governed IssuerEntity for the runner's
+                    # dynamic test-instance issuer URL. Private key material was
+                    # already removed by ``official_signer_public_jwk``.
+                    result[f"{prefix}_credential_issuer_public_jwk"] = dict(
+                        oidf_signer_public_jwk
+                    )
             activated_trust_profile = request(
                 gateway_url,
                 session_id,
