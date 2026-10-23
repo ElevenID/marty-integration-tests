@@ -1429,6 +1429,12 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
             # Satisfy beta's interpolation without enabling its separate
             # Credentials compatibility adapter in these protocol suites.
             "VERIFICATION_GOVERNANCE_JSON": "{}",
+            # These suites authenticate their operator with Keycloak, not
+            # credential login. An unprovisioned run-specific policy keeps
+            # that separate login path fail-closed without borrowing beta's.
+            "CREDENTIAL_LOGIN_POLICY_ID": "official-protocol-only-" + args.run_id,
+            "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER": "true",
+            "CREDENTIAL_LOGIN_CREATE_USERS": "false",
             "OFFICIAL_SUITE_RUN_ID": args.run_id,
             "MARTY_COMMIT": str(metadata["marty_commit"]),
             "MARTY_CONFORMANCE_ORGANIZATION_ID": environment.get(
