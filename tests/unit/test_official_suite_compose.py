@@ -231,6 +231,28 @@ def test_non_start_commands_do_not_require_live_material(
     assert environment["EUDI_VERIFIER_KEYSTORE_PASSWORD"] == "unused-cleanup-value"
 
 
+@pytest.mark.parametrize("operation", ["down", "logs", "ps"])
+def test_haip_non_start_operations_survive_deleted_certificate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    checkout = marty_checkout(tmp_path)
+    material = haip_material(tmp_path, "failed-staging")
+    (material / haip.CERTIFICATE_FILE).unlink()
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(lifecycle, "run", lambda command, _env, **_kw: calls.append(command) or 0)
+
+    assert lifecycle.main([
+        operation, "--run-id", "failed-haip", "--marty-ui", str(checkout),
+        "--oidf-runner", str(tmp_path / "oidf"), "--oidf", "--haip",
+        "--haip-material", str(material),
+    ]) == 0
+    assert [component(command) for command in calls] == ["oidf", "marty"]
+    assert all(action(command) == operation for command in calls)
+    assert "--haip" not in calls[-1]
+    assert "marty-conformance-failed-haip" in calls[-1]
+
+
 def test_remote_external_mode_requires_explicit_daemon_bind_roots(tmp_path: Path) -> None:
     ui = marty_checkout(tmp_path)
     oidf = tmp_path / "oidf-runner"

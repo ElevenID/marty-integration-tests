@@ -651,7 +651,12 @@ def eudi_command(projects: dict[str, str], action: str) -> list[str]:
 def components(
     args: argparse.Namespace, projects: dict[str, str], action: str
 ) -> list[tuple[str, Callable[[], list[str]]]]:
-    entries: list[tuple[str, Callable[[], list[str]]]] = [("marty", lambda: marty_command(args, projects, action))]
+    # HAIP changes runtime environment/mounts, not resource identities. Logs,
+    # inspection and teardown use the base graph even after a failed staging
+    # operation has removed its disposable certificate.
+    entries: list[tuple[str, Callable[[], list[str]]]] = [
+        ("marty", lambda: marty_command(args, projects, action, include_haip=args.haip and action == "up"))
+    ]
     if args.oidf:
         entries.append(("oidf", lambda: oidf_command(args, projects, action)))
     if args.eudi:
@@ -702,7 +707,9 @@ def execute(args: argparse.Namespace) -> int:
 
     projects = project_names(args.run_id)
     environment = child_environment(
-        require_haip=args.haip and args.command != "up",
+        # Startup validates/stages HAIP below. Non-start operations must not
+        # open a certificate that failed staging may already have removed.
+        require_haip=False,
         require_eudi=args.eudi,
         haip_material=args.haip_material,
         eudi_material=args.eudi_material,
