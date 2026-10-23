@@ -1289,9 +1289,10 @@ def test_base_environment_binds_eudi_vct_to_verified_gateway_origin(
 
     assert environment["EUDI_TEST_VCT_ORIGIN"] == environment["OIDF_MARTY_GATEWAY_URL"]
     assert environment["MARTY_ORG_ID"] == environment["MARTY_CONFORMANCE_ORGANIZATION_ID"]
-    assert environment["MARTY_ISSUER_DID"] == (
+    assert environment["MARTY_ISSUER_DID"] == "did:web:marty-oidf.test"
+    assert environment["MARTY_ISSUER_DID"] != (
         "did:web:marty-oidf.test:orgs:" + environment["MARTY_ORG_ID"]
-    )
+    ), "startup's disabled-policy identity must not preempt the attested fixture"
     assert "GH_TOKEN" not in environment
 
 
