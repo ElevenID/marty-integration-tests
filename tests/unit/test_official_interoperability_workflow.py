@@ -8,7 +8,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "official-interoperability.yml"
@@ -16,13 +15,17 @@ PYTHON_LOCK = ROOT / "requirements" / "official-py312.lock"
 
 
 def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    job = workflow["jobs"]["run-lane"]
-    runtime = next(step for step in job["steps"] if step.get("id") == "lane")
-    assert runtime["env"]["GH_TOKEN"] == "${{ github.token }}"
-    assert "official_interoperability_lane.py" in runtime["run"]
-    assert "GH_TOKEN" not in job["env"]
-    assert all(permission == "read" for permission in workflow["permissions"].values())
+    text = WORKFLOW.read_text(encoding="utf-8")
+    runtime = text.split("      - name: Run official lane\n", 1)[1].split(
+        "      - name: Record locally built EUDI harness digest", 1
+    )[0]
+    assert re.search(r"        env:\n(?:          #.*\n)*          GH_TOKEN: \$\{\{ github.token \}\}\n", runtime)
+    assert "official_interoperability_lane.py" in runtime
+    job_environment = text.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
+    assert "GH_TOKEN" not in job_environment
+    permissions = text.split("\npermissions:\n", 1)[1].split("\nconcurrency:", 1)[0]
+    assert permissions.strip()
+    assert all(re.fullmatch(r"[a-z-]+: read", line.strip()) for line in permissions.splitlines() if line.strip())
 
 
 @pytest.mark.parametrize(("overrides", "allowed"), [
