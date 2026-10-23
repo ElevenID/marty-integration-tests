@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,24 @@ assert SPEC.loader
 evidence = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(evidence)
 FLOW = "12345678-1234-1234-1234-123456789abc"
+
+
+@pytest.mark.parametrize("mutation", ["none", "variant", "instance"])
+def test_correlations_require_exact_plan_variant_and_test_instance(tmp_path: Path, mutation: str) -> None:
+    from oidf_marty_start_verification import PRIVATE_FLOW_AUDIT_SCHEMA, private_flow_audit_path
+
+    name = "oid4vp-1final-verifier-happy-flow"
+    label = name + "[vp_profile=haip]"
+    source = private_flow_audit_path(tmp_path, "test1", FLOW)
+    source.write_text(json.dumps({"schema": PRIVATE_FLOW_AUDIT_SCHEMA, "test_name": label, "flow_instance_id": FLOW}))
+    binding = {"test_name": name, "test_id": "test1", "interaction_name": label}
+    modules = {"modules": [{"test_name": name}], "plan_coverage": {"complete": True, "module_bindings": [binding]}}
+    if mutation == "none":
+        assert evidence.bound_correlations(tmp_path, modules) == {FLOW: name}
+    else:
+        binding["interaction_name" if mutation == "variant" else "test_id"] = "different"
+        with pytest.raises((ValueError, FileNotFoundError)):
+            evidence.bound_correlations(tmp_path, modules)
 
 
 def test_outcomes_require_the_exact_public_flow_binding() -> None:

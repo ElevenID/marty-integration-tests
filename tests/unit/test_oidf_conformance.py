@@ -828,6 +828,21 @@ def test_plan_coverage_unavailable_readback_cannot_qualify(tmp_path: Path) -> No
     assert oidf.official_plan_coverage(tmp_path, "official-plan")["complete"] is False
 
 
+def test_plan_callback_names_bind_sorted_module_variants_without_changing_raw_names() -> None:
+    plan, infos = plan_and_exports()
+    extra = {"vp_profile": "haip", "client_id_prefix": "x509_hash", "request_method": "request_uri_signed"}
+    plan["modules"][0]["variant"] = extra
+    infos[0]["variant"].update(extra)
+    coverage = oidf.compare_plan_coverage(infos, plan, "official-plan[format=sd_jwt_vc]")
+    assert coverage["module_bindings"][0] == {
+        "test_name": "happy", "test_id": "test1",
+        "interaction_name": "happy[client_id_prefix=x509_hash][request_method=request_uri_signed][vp_profile=haip]",
+    }
+    plan["modules"][0]["variant"]["vp_profile"] = "haip][forged=value"
+    with pytest.raises(ValueError, match="official"):
+        oidf.compare_plan_coverage(infos, plan, "official-plan[format=sd_jwt_vc]")
+
+
 def test_failure_diagnostics_exposes_metadata_warning_names_without_private_payloads(tmp_path: Path) -> None:
     with zipfile.ZipFile(tmp_path / "official.zip", "w") as exported:
         exported.writestr(

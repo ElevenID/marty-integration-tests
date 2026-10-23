@@ -310,9 +310,8 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         "request_transport": (
             "url_query" if request_method == "url_query" else "request_uri"
         ),
-        # Select POST retrieval only for the official module that verifies
-        # the OID4VP 5.10 wallet_nonce round trip.  The ordinary signed-JAR
-        # modules remain GET.
+        # Select POST for the module exercising the wallet_nonce exchange.
+        # Other stock wallet modules retrieve the signed request with GET.
         "request_uri_method": (
             "post"
             if request_method == "request_uri_signed"
@@ -341,6 +340,25 @@ def start_flow(gateway_url: str, session_id: str, body: dict[str, Any]) -> dict[
     return data
 
 
+def private_flow_audit_path(directory: Path, test_id: str, flow_id: str) -> Path:
+    digest = hashlib.sha256(f"{test_id}\0{flow_id}".encode()).hexdigest()
+    return directory / f"{digest}.json"
+
+
+def read_private_flow_audit(directory: Path, test_id: str, flow_id: str, interaction_name: str) -> None:
+    """Require the exact official instance, variant label and production flow."""
+    source = private_flow_audit_path(directory, test_id, flow_id)
+    if source.is_symlink() or not source.resolve().is_relative_to(directory.resolve()):
+        raise ValueError("private flow audit is not an owned correlation file")
+    record = json.loads(source.read_text(encoding="utf-8"))
+    if record != {
+        "schema": PRIVATE_FLOW_AUDIT_SCHEMA,
+        "test_name": interaction_name,
+        "flow_instance_id": flow_id,
+    }:
+        raise ValueError("review flow does not belong to the exact official test instance")
+
+
 def write_private_flow_audit(payload: dict[str, Any], result: dict[str, Any]) -> None:
     """Record only the private correlation needed for safe failure diagnosis."""
     configured = os.environ.get("OIDF_MARTY_FLOW_AUDIT_DIR", "").strip()
@@ -357,10 +375,9 @@ def write_private_flow_audit(payload: dict[str, Any], result: dict[str, Any]) ->
         "flow_instance_id": flow_instance_id,
     }
     serialized = json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
-    digest = hashlib.sha256(f"{test_id}\0{flow_instance_id}".encode()).hexdigest()
     directory = Path(configured)
     directory.mkdir(parents=True, exist_ok=True)
-    destination = directory / f"{digest}.json"
+    destination = private_flow_audit_path(directory, test_id, flow_instance_id)
     try:
         descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError as exc:

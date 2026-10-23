@@ -31,7 +31,7 @@ from oidf_marty_public_login import (  # noqa: E402
     public_origin,
     required_env,
 )
-from oidf_marty_start_verification import gateway_session_id  # noqa: E402
+from oidf_marty_start_verification import gateway_session_id, read_private_flow_audit  # noqa: E402
 from oidf_sd_jwt_diagnostic_audit import FLOW_ID, _private_mappings  # noqa: E402
 
 if TYPE_CHECKING:
@@ -146,6 +146,28 @@ def capture_failure_diagnostics(page: Page, destination: Path, error: Exception,
     page.screenshot(path=str(screenshot), full_page=True, animations="disabled", timeout=10_000)
 
 
+def bound_correlations(directory: Path, modules: dict) -> dict[str, str]:
+    """Resolve stock callback labels only through the verified complete plan."""
+    coverage = modules.get("plan_coverage", {})
+    bindings = coverage.get("module_bindings", [])
+    names = {row["test_name"] for row in modules["modules"]}
+    if coverage.get("complete") is not True or len(bindings) != len(names):
+        raise ValueError("verification evidence requires complete official instance bindings")
+    by_label = {row["interaction_name"]: row for row in bindings}
+    if len(by_label) != len(bindings) or {row["test_name"] for row in bindings} != names:
+        raise ValueError("verification evidence has ambiguous official variant bindings")
+    correlated = {}
+    for flow_id, label in _private_mappings(directory).items():
+        binding = by_label.get(label)
+        if binding is None:
+            raise ValueError("Marty flow does not match the selected official variant")
+        read_private_flow_audit(directory, binding["test_id"], flow_id, label)
+        correlated[flow_id] = binding["test_name"]
+    if len(set(correlated.values())) != len(correlated):
+        raise ValueError("verification evidence has ambiguous module-to-flow bindings")
+    return correlated
+
+
 def main() -> int:
     from playwright.sync_api import sync_playwright
 
@@ -155,10 +177,8 @@ def main() -> int:
     parser.add_argument("--private-output", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    correlations = _private_mappings(args.flow_audit_dir)
-    if len(set(correlations.values())) != len(correlations):
-        raise ValueError("verification evidence has ambiguous module-to-flow bindings")
     modules = json.loads(args.module_results.read_text(encoding="utf-8"))
+    correlations = bound_correlations(args.flow_audit_dir, modules)
     pending = modules["pending_review"]
     if not isinstance(pending, list) or not set(pending).issubset(correlations.values()):
         raise ValueError("review modules have no correlated Marty flows")
