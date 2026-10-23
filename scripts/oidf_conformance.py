@@ -447,9 +447,9 @@ def write_browser_automation_diagnostics(output: Path) -> list[dict[str, object]
     return diagnostics
 
 
-def strict_module_summary(output: Path, expected_skips: list[dict]) -> dict[str, object]:
-    """A successful runner process cannot qualify missing or review-only results."""
-    modules: dict[str, dict[str, object]] = {}
+def exported_module_info(output: Path) -> list[dict[str, Any]]:
+    """Read upstream module metadata once through the same export boundary."""
+    infos = []
     for archive in sorted(output.glob("*.zip")):
         with zipfile.ZipFile(archive) as exported:
             for path in exported.namelist():
@@ -458,35 +458,140 @@ def strict_module_summary(output: Path, expected_skips: list[dict]) -> dict[str,
                 raw = json.loads(exported.read(path))
                 if not isinstance(raw, dict) or not isinstance(raw.get("testInfo"), dict):
                     continue
-                info = raw["testInfo"]
-                name = info.get("testName")
-                if not isinstance(name, str) or not SAFE_MODULE.fullmatch(name):
-                    raise ValueError("official export has an invalid module name")
-                if name in modules:
-                    raise ValueError("official export has ambiguous duplicate module results")
-                status = info.get("status")
-                result = info.get("result")
-                modules[name] = {
-                    "test_name": name,
-                    "status": status if isinstance(status, str) and status in SAFE_MODULE_STATES else "UNKNOWN",
-                    "result": result if isinstance(result, str) and result in SAFE_MODULE_RESULTS else "UNKNOWN",
-                }
+                infos.append(raw["testInfo"])
+    return infos
+
+
+def strict_module_summary(output: Path, expected_skips: list[dict]) -> dict[str, object]:
+    """A successful runner process cannot qualify missing or review-only results."""
+    modules: dict[str, dict[str, object]] = {}
+    for info in exported_module_info(output):
+        name = info.get("testName")
+        if not isinstance(name, str) or not SAFE_MODULE.fullmatch(name):
+            raise ValueError("official export has an invalid module name")
+        if name in modules:
+            raise ValueError("official export has ambiguous duplicate module results")
+        status = info.get("status")
+        result = info.get("result")
+        modules[name] = {
+            "test_name": name,
+            "status": status if isinstance(status, str) and status in SAFE_MODULE_STATES else "UNKNOWN",
+            "result": result if isinstance(result, str) and result in SAFE_MODULE_RESULTS else "UNKNOWN",
+        }
     rows = list(modules.values())
     pending_review = [row["test_name"] for row in rows if row["result"] == "REVIEW"]
     unexpected_skips = [
-        row["test_name"] for row in rows if row["result"] == "SKIPPED"
+        row["test_name"]
+        for row in rows
+        if row["result"] == "SKIPPED"
         and not any(fnmatch.fnmatchcase(str(row["test_name"]), entry["test-name"]) for entry in expected_skips)
     ]
-    passed = any(row["result"] == "PASSED" for row in rows) and not unexpected_skips and all(
-        row["status"] == "FINISHED" and row["result"] in {"PASSED", "SKIPPED"} for row in rows
+    passed = (
+        any(row["result"] == "PASSED" for row in rows)
+        and not unexpected_skips
+        and all(row["status"] == "FINISHED" and row["result"] in {"PASSED", "SKIPPED"} for row in rows)
     )
     return {
         "schema": "elevenid.official-oidf-module-results/v1",
-        "source_policy": "unmodified", "modules": rows,
+        "source_policy": "unmodified",
+        "modules": rows,
         "counts": dict(Counter(str(row["result"]) for row in rows)),
-        "pending_review": pending_review, "unexpected_skips": unexpected_skips,
+        "pending_review": pending_review,
+        "unexpected_skips": unexpected_skips,
         "passed": passed,
     }
+
+
+def compare_plan_coverage(infos: list[dict[str, Any]], plan: Any, selection: str) -> dict[str, object]:
+    """Bind every exported instance to the complete, live upstream plan."""
+    name, _, suffix = selection.partition("[")
+    pairs = re.findall(r"\[([A-Za-z0-9_]+)=([A-Za-z0-9_.:-]+)\]", "[" + suffix if suffix else "")
+    if selection != name + "".join(f"[{key}={value}]" for key, value in pairs) or len(dict(pairs)) != len(pairs):
+        raise ValueError("invalid official plan selection")
+    variant = dict(pairs)
+    if not isinstance(plan, dict) or plan.get("planName") != name or plan.get("variant") != variant:
+        raise ValueError("live official plan does not match the selected profile")
+    plan_id = plan.get("_id")
+    if not isinstance(plan_id, str) or not re.fullmatch(r"[A-Za-z0-9]{1,180}", plan_id):
+        raise ValueError("invalid official plan identity")
+    expected: dict[str, tuple[str, dict[str, str]]] = {}
+    modules = plan.get("modules")
+    if not isinstance(modules, list) or not modules:
+        raise ValueError("official plan contains no modules")
+    for module in modules:
+        if not isinstance(module, dict):
+            raise ValueError("invalid official plan module")
+        module_name = module.get("testModule")
+        instances = module.get("instances")
+        extra_variant = module.get("variant")
+        if (
+            not isinstance(module_name, str)
+            or not SAFE_MODULE.fullmatch(module_name)
+            or module_name in expected
+            or not isinstance(extra_variant, dict)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in extra_variant.items())
+            or not isinstance(instances, list)
+            or len(instances) != 1
+            or not isinstance(instances[0], str)
+            or not re.fullmatch(r"[A-Za-z0-9]{1,180}", instances[0])
+        ):
+            raise ValueError("official plan has missing or ambiguous module instances")
+        expected[module_name] = (instances[0], {**variant, **extra_variant})
+    if len({identity for identity, _ in expected.values()}) != len(expected):
+        raise ValueError("official plan reuses an instance identity")
+    exported = set()
+    for info in infos:
+        module_name = info.get("testName")
+        if not isinstance(module_name, str) or module_name not in expected or module_name in exported:
+            raise ValueError("official export has unexpected or duplicate modules")
+        identity, module_variant = expected[module_name]
+        if (
+            info.get("planId") != plan_id
+            or info.get("testId") != identity
+            or info.get("_id") != identity
+            or info.get("variant") != module_variant
+        ):
+            raise ValueError("official export does not match its live plan instance")
+        exported.add(module_name)
+    missing = sorted(expected.keys() - exported)
+    # Hash only the bounded binding, never the plan's private configuration.
+    binding = {"plan_id": plan_id, "selection": selection, "modules": expected}
+    return {
+        "complete": not missing,
+        "expected_modules": sorted(expected),
+        "missing_modules": missing,
+        "exported_module_count": len(exported),
+        "binding_sha256": sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest(),
+    }
+
+
+def official_plan_coverage(output: Path, selection: str) -> dict[str, object]:
+    """Read the actual selected plan before teardown; unavailable evidence fails closed."""
+    try:
+        # Reuse the existing public OIDF transport, including scoped local DNS,
+        # configured trust and the runner's explicit local TLS mode.
+        from oidf_marty_verifier import request_json
+
+        infos = exported_module_info(output)
+        plan_ids = {info.get("planId") for info in infos}
+        if len(plan_ids) != 1:
+            raise ValueError("official exports do not identify one plan")
+        plan_id = next(iter(plan_ids))
+        if not isinstance(plan_id, str) or not re.fullmatch(r"[A-Za-z0-9]{1,180}", plan_id):
+            raise ValueError("invalid official plan identity")
+        server = os.environ.get("CONFORMANCE_SERVER", "")
+        _validate_absolute_url(server, "CONFORMANCE_SERVER")
+        token = os.environ.get("CONFORMANCE_TOKEN")
+        status, plan = request_json(
+            server.rstrip("/") + "/api/plan/" + plan_id,
+            headers={"Authorization": "Bearer " + token} if token else {},
+            insecure="CONFORMANCE_DEV_MODE" in os.environ or "DISABLE_SSL_VERIFY" in os.environ,
+        )
+        if status != 200:
+            raise ValueError("official plan readback failed")
+        return compare_plan_coverage(infos, plan, selection)
+    except Exception as error:  # noqa: BLE001 - API errors/configuration may contain credentials
+        return {"complete": False, "error_class": type(error).__name__}
 
 
 def write_evidence(
@@ -518,7 +623,12 @@ def write_evidence(
         }
     effective_skips = expected_skips if expected_skips is not None else applicable_expected_skips(config)
     module_summary = strict_module_summary(output, effective_skips)
-    (output / "module-results.json").write_text(json.dumps(module_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    coverage = official_plan_coverage(output, manifest["profiles"][profile_name]["test_plan"])
+    module_summary["plan_coverage"] = coverage
+    module_summary["passed"] = module_summary["passed"] and coverage["complete"]
+    (output / "module-results.json").write_text(
+        json.dumps(module_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     qualified_exit = exit_code or (0 if module_summary["passed"] else 1)
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
@@ -735,7 +845,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     validate_runner(runner, manifest)
     write_failure_diagnostics(output)
     write_browser_automation_diagnostics(output)
-    return write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
+    return write_evidence(
+        output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips
+    )
 
 
 def parse_args() -> argparse.Namespace:
