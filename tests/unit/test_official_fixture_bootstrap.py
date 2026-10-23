@@ -204,6 +204,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "revocation-1"},
             {"id": "revocation-1"},
             {"id": "template-1"},
+            {"id": "template-1"},
             {"id": "policy-1"},
             {"id": "policy-1"},
             {"id": "trust-1"},
@@ -297,10 +298,10 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert "issuer_profile_id" not in calls[6][2]
     assert calls[6][2]["revocation_profile_id"] == "revocation-1"
     assert "compliance_profile" not in calls[6][2]
-    assert calls[7][0] == "/v1/presentation-policies"
-    assert calls[8][0] == "/v1/presentation-policies/policy-1/activate"
-    assert calls[9][0] == "/v1/trust-profiles"
-    assert calls[10] == (
+    assert calls[8][0] == "/v1/presentation-policies"
+    assert calls[9][0] == "/v1/presentation-policies/policy-1/activate"
+    assert calls[10][0] == "/v1/trust-profiles"
+    assert calls[11] == (
         "/v1/issuer-entities",
         "POST",
         fixtures.sd_jwt_issuer_entity_payload(
@@ -309,7 +310,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             run_id="run-1",
         ),
     )
-    assert calls[11] == (
+    assert calls[12] == (
         "/v1/trust-profiles/trust-1/issuers",
         "POST",
         {
@@ -322,21 +323,21 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             },
         },
     )
-    assert calls[12][0] == "/v1/trust-profiles/trust-1/activate"
+    assert calls[13][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
-    assert calls[13][0] == "/v1/signing-keys/issuer-identities"
-    assert calls[13][2] == {
+    assert calls[14][0] == "/v1/signing-keys/issuer-identities"
+    assert calls[14][2] == {
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
         "issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
         "key_purpose": "vc_jwt_issuer",
         "credential_format": "JSON_LD",
         "algorithm": "EdDSA",
     }
-    assert calls[18][0] == "/v1/credential-templates/template-2/activate"
-    assert calls[20][0] == "/v1/credential-templates/template-3/activate"
-    assert calls[17][2]["credential_payload_format"] == "ldp_vc"
-    assert calls[19][2]["credential_payload_format"] == "ldp_vc"
-    assert calls[21] == (
+    assert calls[19][0] == "/v1/credential-templates/template-2/activate"
+    assert calls[21][0] == "/v1/credential-templates/template-3/activate"
+    assert calls[18][2]["credential_payload_format"] == "ldp_vc"
+    assert calls[20][2]["credential_payload_format"] == "ldp_vc"
+    assert calls[22] == (
         "/v1/trust-profiles",
         "POST",
         fixtures.w3c_trust_profile_payload(
@@ -345,7 +346,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             run_id="run-1",
         ),
     )
-    assert calls[22] == (
+    assert calls[23] == (
         "/v1/issuer-entities",
         "POST",
         fixtures.w3c_issuer_entity_payload(
@@ -354,7 +355,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             run_id="run-1",
         ),
     )
-    assert calls[23] == (
+    assert calls[24] == (
         "/v1/trust-profiles/w3c-trust-1/issuers",
         "POST",
         {
@@ -367,25 +368,25 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             },
         },
     )
-    assert calls[24][0:2] == (
+    assert calls[25][0:2] == (
         "/v1/trust-profiles/w3c-trust-1/activate",
         "POST",
     )
-    assert calls[25][2]["holder_binding"] == {"required": False}
-    assert calls[29][0].startswith("/v1/api-keys?organization_id=")
-    assert calls[29][2] == {
+    assert calls[26][2]["holder_binding"] == {"required": False}
+    assert calls[30][0].startswith("/v1/api-keys?organization_id=")
+    assert calls[30][2] == {
         "name": "Official W3C VC API run-1",
         "description": "Disposable key for one official VCDM v2 suite run",
         "scopes": ["credentials:issue", "credentials:read"],
         "is_test": True,
     }
-    assert calls[25][2]["trust_profile_id"] == "w3c-trust-1"
-    requirement = calls[25][2]["credential_requirements"][0]
+    assert calls[26][2]["trust_profile_id"] == "w3c-trust-1"
+    requirement = calls[26][2]["credential_requirements"][0]
     assert requirement["credential_template_id"] == "template-2"
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert requirement["trust_profile_id"] == "w3c-trust-1"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[27][2]["holder_binding"] == {
+    assert calls[28][2]["holder_binding"] == {
         "required": True,
         "binding_methods": ["DEVICE_KEY"],
         "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
@@ -395,8 +396,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             "replay_detection_required": False,
         },
     }
-    assert "trust_profile_id" not in calls[27][2]
-    assert calls[27][2]["credential_requirements"] == []
+    assert "trust_profile_id" not in calls[28][2]
+    assert calls[28][2]["credential_requirements"] == []
 
 
 def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() -> None:
@@ -412,6 +413,7 @@ def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() 
             {"id": "compliance-1"},
             {"id": "revocation-1"},
             {"id": "revocation-1"},
+            {"id": "template-1"},
             {"id": "template-1"},
             {"id": "policy-1"},
             {"id": "policy-1"},
@@ -456,7 +458,7 @@ def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() 
     assert result["oid4vp_request_issuer_public_jwk"] == PUBLIC_SIGNING_JWK
     assert result["oid4vp_credential_issuer_public_jwk"] == PUBLIC_SIGNING_JWK
     assert result["oid4vp_trusted_issuer_id"] == fixtures.OFFICIAL_OIDF_ISSUER_ID
-    browser_calls = calls[13:]
+    browser_calls = calls[14:]
     assert [path for path, _method, _body in browser_calls] == [
         "/v1/compliance-profiles",
         "/v1/credential-templates",
@@ -622,6 +624,7 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             {"id": "revocation-1"},
             {"id": "revocation-1"},
             {"id": "template-1"},
+            {"id": "template-1"},
             {"id": "policy-1"},
             {"id": "policy-1"},
             {"id": "trust-1"},
@@ -672,8 +675,8 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
     assert calls[2][0] == "/v1/signing-keys/issuer-identities/resolve"
     assert calls[6][2]["credential_payload_format"] == "MDOC"
     assert calls[6][2]["doctype"] == "org.iso.18013.5.1.mDL"
-    assert calls[7][2]["credential_requirements"][0]["credential_payload_format"] == "MDOC"
-    trust_profile = calls[9][2]
+    assert calls[8][2]["credential_requirements"][0]["credential_payload_format"] == "MDOC"
+    trust_profile = calls[10][2]
     assert trust_profile["supported_formats"] == ["MDOC"]
     assert trust_profile["trust_sources"] == [
         {
@@ -685,8 +688,8 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             ),
         }
     ]
-    assert calls[10][0:2] == ("/v1/issuer-entities", "POST")
-    assert calls[10][2] == {
+    assert calls[11][0:2] == ("/v1/issuer-entities", "POST")
+    assert calls[11][2] == {
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
         "issuer_id": f"x509-sha256:{certificate_sha256}",
         "issuer_type": "GOVERNMENT",
@@ -703,7 +706,7 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             "certificate_sha256": certificate_sha256,
         },
     }
-    assert calls[11] == (
+    assert calls[12] == (
         "/v1/trust-profiles/trust-1/issuers",
         "POST",
         {
@@ -716,7 +719,7 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             },
         },
     )
-    assert calls[12][0:2] == ("/v1/trust-profiles/trust-1/activate", "POST")
+    assert calls[13][0:2] == ("/v1/trust-profiles/trust-1/activate", "POST")
     assert "allowed_issuers" not in trust_profile
     assert "system_issuer_overrides" not in trust_profile
     assert all("issuer_profile_id" not in (body or {}) for _path, _method, body in calls)
@@ -752,7 +755,10 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
             {"id": "revocation-profile"},
             {"id": "revocation-profile"},
             {"id": "passport-template"},
+            {"id": "passport-template"},
             {"id": "mdl-template"},
+            {"id": "mdl-template"},
+            {"id": "open-badge-template"},
             {"id": "open-badge-template"},
         ]
     )
@@ -829,7 +835,14 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
         "credential_format": "SD_JWT_VC",
         "algorithm": "ES256",
     }
-    for _path, _method, body in calls[8:]:
+    assert [path for path, _method, _body in calls[8:] if path.endswith("/activate")] == [
+        "/v1/credential-templates/passport-template/activate",
+        "/v1/credential-templates/mdl-template/activate",
+        "/v1/credential-templates/open-badge-template/activate",
+    ]
+    for path, _method, body in calls[8:]:
+        if path != "/v1/credential-templates":
+            continue
         assert body is not None
         assert body["issuer_did"] == result["eudi_issuer_did"]
         assert "issuer_profile_id" not in body
@@ -1200,4 +1213,14 @@ def test_bootstrap_rejects_invalid_public_api_identifier() -> None:
             mode="oid4vp",
             oidf_signer_public_jwk=PUBLIC_SIGNING_JWK,
             request=lambda *_args, **_kwargs: next(responses),
+        )
+
+
+@pytest.mark.parametrize("activation", [{"id": "other-template"}, {"id": "invalid/id"}, None])
+def test_active_template_fixture_rejects_wrong_activation_identity(activation: object) -> None:
+    replies = iter([{"id": "created-template"}, activation])
+    with pytest.raises(RuntimeError, match="activated"):
+        fixtures.create_active_credential_template(
+            "https://marty.test", "session", {"organization_id": fixtures.DEFAULT_ORGANIZATION},
+            "test template", request=lambda *_a, **_kw: next(replies),
         )
