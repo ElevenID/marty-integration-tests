@@ -860,6 +860,7 @@ def emit_w3c_issuance_diagnostic(run_id: str) -> None:
     for service in (
         "gateway",
         "issuance",
+        "issuance-native",
         "presentation-policy",
         "revocation-profile",
         "credential-template",

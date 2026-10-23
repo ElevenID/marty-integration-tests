@@ -258,29 +258,18 @@ def template_payload(
                 if presentation
                 else f"Official W3C VC v2 Data Integrity issuer {run_id}"
             ),
-            "credential_type": "VerifiableId",
-            "vct": "https://credentials.marty.dev/VerifiableId",
+            "credential_type": "VerifiableCredential",
+            "vct": "https://www.w3.org/ns/credentials/v2#VerifiableCredential",
             "supported_formats": ["ldp_vc"],
             "credential_payload_format": "ldp_vc",
             "compliance_profile_id": compliance_profile_id,
             "issuer_did": issuer_did,
             "revocation_profile_id": revocation_profile_id,
-            "schema_uri": {
-                "type": "object",
-                "properties": {
-                    "givenName": {"type": "string"},
-                    "familyName": {"type": "string"},
-                    "birthDate": {"type": "string", "format": "full-date"},
-                    "documentNumber": {"type": "string"},
-                },
-                "required": ["givenName", "familyName", "birthDate", "documentNumber"],
-            },
-            "claims": [
-                {"name": "givenName", "display_name": "Given Name", "required": True},
-                {"name": "familyName", "display_name": "Family Name", "required": True},
-                {"name": "birthDate", "display_name": "Birth Date", "required": True},
-                {"name": "documentNumber", "display_name": "Document Number", "required": True},
-            ],
+            # The unchanged official suite uses generic VCDM credentials,
+            # including the minimal subject containing only an id. Do not
+            # impose Marty's product-specific identity claims on that role.
+            "schema_uri": {"type": "object"},
+            "claims": [],
         }
     if mdoc:
         # This is an actual ISO 18013-5 mDL template.  The official OIDF
@@ -1351,7 +1340,7 @@ def bootstrap(
         )
         template_id = response_id(created_template, f"{prefix} credential template")
         credential_configuration_id: str | None = None
-        if oid4vci:
+        if oid4vci or w3c:
             activated_template = request(
                 gateway_url,
                 session_id,
@@ -1361,11 +1350,12 @@ def bootstrap(
             if (
                 response_id(
                     activated_template,
-                    "activated OID4VCI credential template",
+                    f"activated {prefix} credential template",
                 )
                 != template_id
             ):
-                raise RuntimeError("activated OID4VCI credential template id changed unexpectedly")
+                raise RuntimeError(f"activated {prefix} credential template id changed unexpectedly")
+        if oid4vci:
             issuer_metadata = request(
                 gateway_url,
                 session_id,
@@ -1398,6 +1388,14 @@ def bootstrap(
                 created_presentation_template,
                 f"{prefix} presentation template",
             )
+            activated_presentation_template = request(
+                gateway_url,
+                session_id,
+                f"/v1/credential-templates/{presentation_template_id}/activate",
+                method="POST",
+            )
+            if response_id(activated_presentation_template, "activated W3C presentation template") != presentation_template_id:
+                raise RuntimeError("activated W3C presentation template id changed unexpectedly")
         w3c_trust_profile_id: str | None = None
         if w3c:
             issuer_did = str(profile_payload["issuer_did"])
