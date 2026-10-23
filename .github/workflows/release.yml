@@ -42,7 +42,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/check_release_lineage.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --expected-commit "$GITHUB_SHA"
       - name: Install uv without a tag-scoped dependency cache
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.11.3"
           enable-cache: false
@@ -71,7 +71,7 @@ jobs:
             --prefix="marty-integration-tests-${version}/" \
             --output="release-assets/marty-integration-tests-${version}-source.tar.gz" \
             HEAD
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           path: .
           format: spdx-json
