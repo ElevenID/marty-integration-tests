@@ -1288,6 +1288,10 @@ def test_base_environment_binds_eudi_vct_to_verified_gateway_origin(
     environment, _ = lane.base_environment(args)
 
     assert environment["EUDI_TEST_VCT_ORIGIN"] == environment["OIDF_MARTY_GATEWAY_URL"]
+    assert environment["MARTY_ORG_ID"] == environment["MARTY_CONFORMANCE_ORGANIZATION_ID"]
+    assert environment["MARTY_ISSUER_DID"] == (
+        "did:web:marty-oidf.test:orgs:" + environment["MARTY_ORG_ID"]
+    )
     assert "GH_TOKEN" not in environment
 
 
