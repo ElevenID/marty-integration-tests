@@ -72,6 +72,12 @@ KEYCLOAK_FILES = {
     "KEYCLOAK_11ID_COOKIE_TOKEN_FILE": "keycloak_11id_cookie_token",
     "KEYCLOAK_11ID_CIBA_TOKEN_FILE": "keycloak_11id_ciba_token",
 }
+RUNTIME_CREDENTIALS = (
+    "MARTY_DB_PASSWORD", "REDIS_PASSWORD", "DEVICE_REGISTRATION_GATEWAY_KEY",
+    "DEVICE_REGISTRATION_SIGNING_KEYS_KEY", "FLOW_APPLICATION_EVENT_HMAC_KEY",
+    "FLOW_WEBHOOK_SECRET", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY", "TOKEN_HMAC_KEY",
+    "SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_ISSUER_SIGN_KEY",
+)
 def role_environment(tls: Path, extra: Path) -> dict[str, str]:
     """Describe every scoped workload KMS input from the same role inventory."""
     environment = {}
@@ -113,8 +119,7 @@ def validate_runtime_environment(values: dict[str, str], root: Path, origin: str
     expected = {
         "KEYCLOAK_KMS_ADDR", "KEYCLOAK_KMS_KEY_VERSION", "OPENBAO_TLS_CA_CERT_FILE",
         "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE", "DEV_INTEGRATION_SECRET_CA_FILE",
-        "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY", "TOKEN_HMAC_KEY",
-        "SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_ISSUER_SIGN_KEY",
+        *RUNTIME_CREDENTIALS,
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY", "PUBLIC_API_URL", "CORS_ORIGINS",
         "OIDF_TLS_KMS_ADDR", "OIDF_TLS_KMS_KEY_NAME", "OIDF_TLS_KMS_KEY_VERSION",
         "OIDF_TLS_KMS_CA_CERT_FILE", "OIDF_TLS_KMS_TOKEN_FILE", "OIDF_EDGE_TLS_CERT_FILE",
@@ -418,12 +423,7 @@ def runtime_environment(tls: Path, keycloak: Path, extra: Path, ca: Path,
         "OPENBAO_TLS_CA_CERT_FILE": str(ca),
         "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE": str(tls / "workload_identity_ca_cert"),
         "DEV_INTEGRATION_SECRET_CA_FILE": str(tls / "workload_identity_ca_cert"),
-        "MARTY_DB_PASSWORD": secrets.token_urlsafe(32),
-        "GRPC_SERVICE_TOKEN": secrets.token_urlsafe(32),
-        "ISSUANCE_API_KEY": secrets.token_urlsafe(32),
-        "TOKEN_HMAC_KEY": secrets.token_urlsafe(32),
-        "SIGNING_KEYS_INTERNAL_API_KEY": secrets.token_urlsafe(32),
-        "SIGNING_KEYS_ISSUER_SIGN_KEY": secrets.token_urlsafe(32),
+        **{key: secrets.token_urlsafe(32) for key in RUNTIME_CREDENTIALS},
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY": base64.urlsafe_b64encode(os.urandom(32)).decode("ascii"),
         "PUBLIC_API_URL": material["OIDF_PUBLIC_BASE_URL"],
         "CORS_ORIGINS": material["OIDF_PUBLIC_BASE_URL"],

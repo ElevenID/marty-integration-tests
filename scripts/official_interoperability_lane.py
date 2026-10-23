@@ -1412,8 +1412,23 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
             "so the unmodified official runner can fetch Marty request_uri values"
         )
     gateway_port = gateway.port or 443
+    # Share the same disposable organization and DID binding used by fixture
+    # creation; the deployed workload profile requires both before startup.
+    from official_fixture_bootstrap import issuer_identity_payload
+
+    organization_id = environment.get(
+        "MARTY_CONFORMANCE_ORGANIZATION_ID", "00000000-0000-0000-0000-000000000001"
+    )
+    identity = issuer_identity_payload(
+        organization_id, gateway_url=gateway_url, w3c=False, algorithm="ES256"
+    )
     environment.update(
         {
+            "MARTY_ORG_ID": organization_id,
+            "MARTY_ISSUER_DID": identity["issuer_did"],
+            # Satisfy beta's interpolation without enabling its separate
+            # Credentials compatibility adapter in these protocol suites.
+            "VERIFICATION_GOVERNANCE_JSON": "{}",
             "OFFICIAL_SUITE_RUN_ID": args.run_id,
             "MARTY_COMMIT": str(metadata["marty_commit"]),
             "MARTY_CONFORMANCE_ORGANIZATION_ID": environment.get(
