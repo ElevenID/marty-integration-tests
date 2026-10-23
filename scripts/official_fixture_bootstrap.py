@@ -672,6 +672,13 @@ def official_signer_public_jwk(config_path: Path) -> dict[str, str]:
     }
 
 
+def _certificate_is_ca(certificate: x509.Certificate) -> bool:
+    try:
+        return certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    except x509.ExtensionNotFound:
+        return False
+
+
 def official_mdoc_trust_anchor(
     runner_source: Path,
     *,
@@ -712,11 +719,7 @@ def official_mdoc_trust_anchor(
     if current_iaca:
         # Current upstream generates a separate end-entity document signer.
         # Trust its published IACA, never substitute that CA as the signer.
-        try:
-            is_ca = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
-        except x509.ExtensionNotFound:
-            is_ca = False
-        if not is_ca:
+        if not _certificate_is_ca(certificate):
             raise ValueError("official OIDF mdoc IACA root certificate must be a CA")
     checked_at = now or datetime.now(UTC)
     if checked_at.tzinfo is None:
@@ -749,6 +752,8 @@ def trust_profile_payload(
         if public_jwk is not None:
             raise ValueError("mdoc trust must use the runner document certificate, not its SD-JWT JWK")
         ssl.PEM_cert_to_DER_cert(mdoc_trust_anchor_pem)
+        certificate = x509.load_pem_x509_certificate(mdoc_trust_anchor_pem.encode("ascii"))
+        is_ca = _certificate_is_ca(certificate)
         return {
             "organization_id": organization_id,
             "name": f"Official OIDF mdoc signer {run_id}",
@@ -761,7 +766,7 @@ def trust_profile_payload(
             "allowed_algorithms": ["ES256"],
             "trust_sources": [
                 {
-                    "source_type": "PINNED_ISSUER",
+                    "source_type": "ROOT_CA" if is_ca else "PINNED_ISSUER",
                     "certificate_pem": mdoc_trust_anchor_pem,
                     "description": (
                         "Public test certificate extracted from the exact commit-pinned OIDF conformance runner; "

@@ -1206,6 +1206,16 @@ def test_current_runner_uses_its_iaca_without_confusing_ca_and_document_signer(t
             fixtures.official_mdoc_trust_anchor(tmp_path, now=datetime(2026, 1, 1, tzinfo=UTC))
 
 
+@pytest.mark.parametrize("ca", [True, False])
+def test_mdoc_public_trust_uses_root_or_direct_pin_semantics(ca: bool) -> None:
+    certificate = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC), not_after=datetime(2035, 1, 1, tzinfo=UTC), ca=ca
+    )
+    payload = fixtures.trust_profile_payload("org-1", None, run_id="run-1", mdoc_trust_anchor_pem=certificate)
+    assert payload["trust_sources"][0]["source_type"] == ("ROOT_CA" if ca else "PINNED_ISSUER")
+    assert payload["trust_sources"][0]["certificate_pem"] == certificate
+
+
 def test_mdoc_bootstrap_requires_the_runner_document_certificate() -> None:
     with pytest.raises(ValueError, match="document certificate"):
         fixtures.bootstrap(
