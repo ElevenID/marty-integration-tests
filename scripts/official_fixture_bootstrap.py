@@ -268,8 +268,8 @@ def template_payload(
             # The unchanged official suite uses generic VCDM credentials,
             # including the minimal subject containing only an id. Do not
             # impose Marty's product-specific identity claims on that role.
-            "schema_uri": {"type": "object"},
-            "claims": [],
+            "schema_uri": {"type": "object", "properties": {"id": {"type": "string"}}},
+            "claims": [{"name": "id", "display_name": "Subject identifier", "required": False}],
         }
     if mdoc:
         # This is an actual ISO 18013-5 mDL template.  The official OIDF
