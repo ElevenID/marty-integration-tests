@@ -310,12 +310,12 @@ def flow_body(payload: dict[str, Any]) -> dict[str, Any]:
         "request_transport": (
             "url_query" if request_method == "url_query" else "request_uri"
         ),
-        # HAIP requires the wallet_nonce exchange. Let the official wallet
-        # supply it through POST; standard GET modules remain unchanged.
+        # Select POST for the module exercising the wallet_nonce exchange.
+        # Other stock wallet modules retrieve the signed request with GET.
         "request_uri_method": (
             "post"
             if request_method == "request_uri_signed"
-            and (profile == "haip" or module_name == REQUEST_URI_METHOD_POST_TEST)
+            and module_name == REQUEST_URI_METHOD_POST_TEST
             else "get"
         ),
     }

@@ -51,7 +51,7 @@ def test_flow_body_selects_post_only_for_the_official_signed_post_module(
 
 
 @pytest.mark.parametrize("module", ["happy-flow", "request-uri-method-post", "invalid-credential-signature"])
-def test_flow_body_selects_post_for_haip_wallet_nonce_exchange(
+def test_haip_transport_preserves_the_stock_wallet_module_retrieval_method(
     monkeypatch: pytest.MonkeyPatch,
     module: str,
 ) -> None:
@@ -66,7 +66,9 @@ def test_flow_body_selects_post_for_haip_wallet_nonce_exchange(
         "request_method": "request_uri_signed",
     }
 
-    assert oidf_start.flow_body(payload)["request_uri_method"] == "post"
+    assert oidf_start.flow_body(payload)["request_uri_method"] == (
+        "post" if module == "request-uri-method-post" else "get"
+    )
 
 
 @pytest.mark.parametrize(
