@@ -83,7 +83,7 @@ def test_marty_only_runs_without_an_official_runner(
     monkeypatch.setattr(
         lifecycle,
         "run",
-        lambda command, _environment: calls.append((component(command), action(command))) or 0,
+        lambda command, _environment, **_kwargs: calls.append((component(command), action(command))) or 0,
     )
 
     assert (
@@ -273,7 +273,7 @@ def test_eudi_readiness_failure_unwinds_all_started_projects(
     monkeypatch.setattr(
         lifecycle,
         "run",
-        lambda command, _environment: calls.append((component(command), action(command))) or 0,
+        lambda command, _environment, **_kwargs: calls.append((component(command), action(command))) or 0,
     )
     monkeypatch.setattr(
         lifecycle,
@@ -659,7 +659,12 @@ def test_eudi_can_enable_haip_without_joining_the_oidf_runner_project(
         lambda **kwargs: child_options.update(kwargs) or {},
     )
     monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
-    monkeypatch.setattr(lifecycle, "run", lambda command, _environment: calls.append(command) or 0)
+    def record_run(command: list[str], _environment: dict[str, str], *, native_attestation: bool = False) -> int:
+        assert native_attestation is (component(command) == "marty")
+        calls.append(command)
+        return 0
+
+    monkeypatch.setattr(lifecycle, "run", record_run)
     monkeypatch.setattr(lifecycle, "wait_for_eudi_readiness", lambda _environment: None)
     monkeypatch.setattr(
         lifecycle,
@@ -695,8 +700,9 @@ def test_failed_up_unwinds_only_started_projects_in_reverse(tmp_path: Path, monk
     monkeypatch.setattr(lifecycle, "child_environment", dict)
     monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
 
-    def fake_run(command: list[str], _environment: dict[str, str]) -> int:
+    def fake_run(command: list[str], _environment: dict[str, str], *, native_attestation: bool = False) -> int:
         call = (component(command), action(command))
+        assert native_attestation is (call == ("marty", "up"))
         calls.append(call)
         return 17 if call == ("oidf", "up") else 0
 
@@ -728,8 +734,9 @@ def test_failed_up_can_be_retained_for_caller_diagnostics(tmp_path: Path, monkey
     monkeypatch.setattr(lifecycle, "child_environment", dict)
     monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
 
-    def fake_run(command: list[str], _environment: dict[str, str]) -> int:
+    def fake_run(command: list[str], _environment: dict[str, str], *, native_attestation: bool = False) -> int:
         call = (component(command), action(command))
+        assert native_attestation is (call == ("marty", "up"))
         calls.append(call)
         return 17 if call == ("oidf", "up") else 0
 
@@ -775,8 +782,9 @@ def test_eudi_failure_is_classified_before_teardown(
     monkeypatch.setattr(lifecycle, "child_environment", dict)
     monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
 
-    def fake_run(command: list[str], _environment: dict[str, str]) -> int:
+    def fake_run(command: list[str], _environment: dict[str, str], *, native_attestation: bool = False) -> int:
         call = (component(command), action(command))
+        assert native_attestation is (call == ("marty", "up"))
         calls.append(call)
         return 17 if call == ("eudi", "up") else 0
 

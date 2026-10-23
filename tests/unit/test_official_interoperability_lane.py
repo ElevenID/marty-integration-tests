@@ -1288,7 +1288,7 @@ def test_base_environment_binds_eudi_vct_to_verified_gateway_origin(
     environment, _ = lane.base_environment(args)
 
     assert environment["EUDI_TEST_VCT_ORIGIN"] == environment["OIDF_MARTY_GATEWAY_URL"]
-    assert environment["GH_TOKEN"] == "synthetic-read-only-attestation-token"
+    assert "GH_TOKEN" not in environment
 
 
 def test_base_environment_rejects_loopback_request_uri_hostname(
