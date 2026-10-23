@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -137,8 +138,16 @@ def test_authenticated_json_request_is_origin_scoped_and_uses_gateway_cookie(
 
     assert result == {"ok": True}
     assert captured["url"] == "https://marty-oidf.test/v1/presentation-policies"
-    assert captured["headers"] == {"Accept": "application/json", "Cookie": "sessionId=public-session"}
+    headers = captured["headers"]
+    assert isinstance(headers, dict)
+    key = headers.pop("Idempotency-Key")
+    assert UUID(key).version == 4
+    assert headers == {"Accept": "application/json", "Cookie": "sessionId=public-session"}
     assert captured["json_body"] == {"name": "Official OID4VP policy"}
+    public_login.authenticated_json_request("https://marty-oidf.test", "public-session", "/v1/application-templates", method="POST", json_body={"name": "different operation"})
+    assert captured["headers"]["Idempotency-Key"] != key
+    public_login.authenticated_json_request("https://marty-oidf.test", "public-session", "/v1/application-templates")
+    assert "Idempotency-Key" not in captured["headers"]
 
 
 def test_authenticated_json_request_rejects_non_origin_relative_paths() -> None:
