@@ -1,6 +1,8 @@
 import importlib.util
 import base64
 import json
+import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,7 +48,7 @@ def test_bootstrap_rejects_plain_openbao_in_released_conformance_graph(monkeypat
         MODULE.require_kms_only_images(["docker", "compose"], {}, tmp_path, images)
 
 
-def test_runtime_environment_requires_exact_private_kms_inputs(tmp_path: Path) -> None:
+def runtime_inputs(tmp_path: Path) -> tuple[dict[str, str], str]:
     tls, keycloak, extra = (tmp_path / name for name in ("tls", "keycloak", "extra"))
     for directory in (tls, keycloak, extra):
         directory.mkdir()
@@ -56,13 +58,19 @@ def test_runtime_environment_requires_exact_private_kms_inputs(tmp_path: Path) -
         directory = extra if prefix == "ENVOY_ISSUANCE" else tls
         (directory / certificate).write_text("certificate", encoding="ascii")
         (directory / token).write_text("scoped", encoding="ascii")
-    for path in (tls / "workload_identity_ca_cert", tmp_path / "ca.crt",
+    for path in (tls / "workload_identity_ca_cert", tmp_path / "openbao_tls_ca_cert",
                  extra / "oidf_edge_tls_kms_token", extra / "oidf-edge.crt"):
         path.write_text("certificate", encoding="ascii")
     origin = "https://marty-oidf.test:18443"
-    values = MODULE.runtime_environment(tls, keycloak, extra, tmp_path / "ca.crt",
+    values = MODULE.runtime_environment(tls, keycloak, extra, tmp_path / "openbao_tls_ca_cert",
                                         {"OIDF_PUBLIC_BASE_URL": origin},
                                         ("official-test-oidf-edge", extra / "oidf-edge.crt"))
+    return values, origin
+
+
+def test_runtime_environment_requires_exact_private_kms_inputs(tmp_path: Path) -> None:
+    values, origin = runtime_inputs(tmp_path)
+    tls, extra = tmp_path / "tls", tmp_path / "extra"
     MODULE.validate_runtime_environment(values, tmp_path, origin)
     assert values["FLOW_WORKLOAD_CLIENT_CERT_FILE"] == str(tls / "flow_workload_client_cert")
     assert values["FLOW_WORKLOAD_SERVER_CERT_FILE"] == str(tls / "flow_workload_server_cert")
@@ -89,6 +97,40 @@ def test_runtime_environment_requires_exact_private_kms_inputs(tmp_path: Path) -
         MODULE.validate_runtime_environment(
             {**values, "KEYCLOAK_SIGNING_KMS_TOKEN_FILE": values["KEYCLOAK_MASTER_COOKIE_TOKEN_FILE"]},
             tmp_path, origin)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Compose runtime mount permissions require POSIX")
+@pytest.mark.parametrize("fault", [None, "public-parent", "root-authority", "symlink", "outside"])
+def test_runtime_mount_permissions_preserve_the_private_authority_boundary(tmp_path: Path, fault: str | None) -> None:
+    tmp_path.chmod(0o700)
+    values, origin = runtime_inputs(tmp_path)
+    authority = tmp_path / "bootstrap-root-token"
+    MODULE.private_file(authority, "private-authority")
+    environment_file = tmp_path / ".env.kms"
+    MODULE.private_file(environment_file, "private-environment")
+    for name, value in values.items():
+        if name.endswith("_FILE"):
+            Path(value).chmod(0o600)
+    if fault == "public-parent":
+        tmp_path.chmod(0o755)
+    elif fault == "root-authority":
+        values["OPENBAO_TLS_CA_CERT_FILE"] = str(authority)
+    elif fault == "symlink":
+        source = Path(values["OPENBAO_TLS_CA_CERT_FILE"])
+        source.unlink()
+        source.symlink_to(authority)
+    elif fault == "outside":
+        values["OPENBAO_TLS_CA_CERT_FILE"] = str(tmp_path.parent / "outside.pem")
+    if fault:
+        with pytest.raises(ValueError):
+            MODULE.prepare_runtime_mount_files(values, tmp_path, origin)
+    else:
+        MODULE.prepare_runtime_mount_files(values, tmp_path, origin)
+        assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+        assert all(stat.S_IMODE(Path(value).stat().st_mode) == 0o444
+                   for name, value in values.items() if name.endswith("_FILE"))
+    assert stat.S_IMODE(authority.stat().st_mode) == 0o600
+    assert stat.S_IMODE(environment_file.stat().st_mode) == 0o600
 
 
 def test_scoped_transit_token_proves_only_its_bound_sign_route() -> None:
