@@ -150,6 +150,32 @@ def validate_runtime_environment(values: dict[str, str], root: Path, origin: str
             raise ValueError(f"disposable KMS input is invalid: {key}")
 
 
+def prepare_runtime_mount_files(values: dict[str, str], root: Path, origin: str) -> None:
+    """Expose only runtime leaf inputs through individual read-only secret mounts.
+
+    Compose bind-backed secrets retain host permissions rather than remapping
+    their UID. Runtime service users differ from the provisioning user. The
+    private host directory remains 0700; only the reviewed public certificates
+    and scoped runtime tokens become readable at their container mount points.
+    Root authority and the private environment file are never exportable here.
+    """
+    if root.is_symlink() or stat.S_IMODE(root.stat().st_mode) != 0o700:
+        raise ValueError("runtime KMS mounts require a private 0700 directory")
+    validate_runtime_environment(values, root, origin)
+    allowed = {
+        root / "openbao_tls_ca_cert", root / "tls" / "workload_identity_ca_cert",
+        root / "extra" / "oidf_edge_tls_kms_token", root / "extra" / "oidf-edge.crt",
+        *(root / "keycloak" / name for name in KEYCLOAK_FILES.values()),
+        *(Path(value) for name, value in role_environment(root / "tls", root / "extra").items()
+          if name.endswith("_FILE")),
+    }
+    paths = {Path(value) for name, value in values.items() if name.endswith("_FILE")}
+    if not paths.issubset(allowed):
+        raise ValueError("runtime KMS mount is not an approved leaf export")
+    for path in paths:
+        path.chmod(0o444)
+
+
 def checked_release(args: argparse.Namespace) -> tuple[dict[str, str], list[str], dict]:
     if not RUN_ID.fullmatch(args.run_id):
         raise ValueError("official run id is invalid")
@@ -485,7 +511,7 @@ def main() -> int:
                                    material["OIDF_PUBLIC_BASE_URL"])
         (args.material / "official-ca.key").unlink()
         environment = runtime_environment(tls, keycloak, extra, ca, material, edge)
-        validate_runtime_environment(environment, private, material["OIDF_PUBLIC_BASE_URL"])
+        prepare_runtime_mount_files(environment, private, material["OIDF_PUBLIC_BASE_URL"])
         private_file(private / ".env.kms", "".join(f"{key}={value}\n" for key, value in sorted(environment.items())))
         root.unlink()
         print("Staged disposable KMS-only runtime inputs for the attested released stack.")
