@@ -602,7 +602,9 @@ def policy_payload(
         holder_binding.update(
             {
                 "binding_methods": ["DEVICE_KEY"],
-                "proof_profiles": ["MDOC_DEVICE_AUTHENTICATION" if mdoc else "OID4VP_VERIFIABLE_PRESENTATION"],
+                # MDOC supplies DEVICE_KEY holder authentication inside the
+                # same OID4VP presentation protocol profile as other formats.
+                "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
                 "proof_freshness": {
                     "challenge_required": True,
                     "audience_binding_required": True,

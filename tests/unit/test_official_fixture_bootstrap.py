@@ -593,7 +593,7 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
     assert policy["holder_binding"] == {
         "required": True,
         "binding_methods": ["DEVICE_KEY"],
-        "proof_profiles": ["MDOC_DEVICE_AUTHENTICATION"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
         "proof_freshness": {
             "challenge_required": True,
             "audience_binding_required": True,
