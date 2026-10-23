@@ -463,7 +463,10 @@ def test_verifier_configuration_profile_must_match_the_official_plan(tmp_path: P
         oidf.validate_config(config, "oid4vp-verifier")
 
 
-def test_evidence_records_non_secret_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("module_result,expected_exit", [("PASSED", 0), ("REVIEW", 1)])
+def test_evidence_records_non_secret_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module_result: str, expected_exit: int,
+) -> None:
     runner = tmp_path / "runner"
     runner.mkdir()
     (runner / ".git").mkdir()
@@ -471,13 +474,16 @@ def test_evidence_records_non_secret_provenance(tmp_path: Path, monkeypatch: pyt
     config.write_text('{"credential":{"signing_jwk":{"d":"private"}}}', encoding="utf-8")
     output = tmp_path / "report"
     output.mkdir()
-    (output / "official-result.json").write_text('{"result":"pass"}', encoding="utf-8")
+    with zipfile.ZipFile(output / "official-result.zip", "w") as exported:
+        exported.writestr("module.json", json.dumps({"testInfo": {
+            "testName": "oid4vp-1final-verifier-happy-flow", "status": "FINISHED", "result": module_result,
+        }, "results": []}))
     stack = tmp_path / "stack.json"
     stack.write_text('{"schema":"marty.stack/v1","release":"marty-ui@1.0.0"}', encoding="utf-8")
     monkeypatch.setattr(oidf, "git_revision", lambda _path: "a" * 40)
-    oidf.write_evidence(output, oidf.load_manifest(), "oid4vp-verifier", config, runner, 0, stack, "pre-activation")
+    assert oidf.write_evidence(output, oidf.load_manifest(), "oid4vp-verifier", config, runner, 0, stack, "pre-activation") == expected_exit
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
-    assert evidence["result"] == {"exit_code": 0, "passed": True}
+    assert evidence["result"] == {"exit_code": expected_exit, "process_exit_code": 0, "passed": expected_exit == 0}
     assert evidence["execution_mode"] == "pre-activation"
     assert evidence["marty"]["stack_manifest"]["release"] == "marty-ui@1.0.0"
     assert evidence["configuration"]["sha256"].startswith("sha256:")
@@ -671,3 +677,36 @@ def test_tls_proxy_uses_only_oidf_approved_tls12_ciphers() -> None:
     assert "ECDHE-RSA-AES128-GCM-SHA256" in config
     assert "AES_128_CBC" not in config
     assert "ECDHE-RSA-AES128-SHA" not in config
+
+
+@pytest.mark.parametrize("status,result,expected", [
+    ("FINISHED", "PASSED", True), ("FINISHED", "REVIEW", False),
+    ("FINISHED", "WARNING", False), ("FINISHED", "FAILED", False),
+    ("INTERRUPTED", "PASSED", False), ("WAITING", None, False),
+])
+def test_strict_module_summary_preserves_official_review_and_completion(
+    tmp_path: Path, status: str, result: object, expected: bool,
+) -> None:
+    with zipfile.ZipFile(tmp_path / "official.zip", "w") as exported:
+        exported.writestr("test.json", json.dumps({"testInfo": {
+            "testName": "oid4vp-1final-verifier-happy-flow", "status": status, "result": result,
+        }, "results": []}))
+    summary = oidf.strict_module_summary(tmp_path, [])
+    assert summary["passed"] is expected
+    assert bool(summary["pending_review"]) is (result == "REVIEW")
+
+
+def test_strict_module_summary_rejects_missing_results_and_undeclared_skips(tmp_path: Path) -> None:
+    assert oidf.strict_module_summary(tmp_path, [])["passed"] is False
+    with zipfile.ZipFile(tmp_path / "official.zip", "w") as exported:
+        exported.writestr("test.json", json.dumps({"testInfo": {
+            "testName": "oid4vci-1_0-issuer-batch-issuance", "status": "FINISHED", "result": "SKIPPED",
+        }, "results": []}))
+    assert oidf.strict_module_summary(tmp_path, [])["passed"] is False
+    expected_skips = [{"test-name": "oid4vci-1_0-issuer-batch-issuance"}]
+    assert oidf.strict_module_summary(tmp_path, expected_skips)["passed"] is False
+    with zipfile.ZipFile(tmp_path / "official.zip", "a") as exported:
+        exported.writestr("happy.json", json.dumps({"testInfo": {
+            "testName": "oid4vci-1_0-issuer-happy-flow", "status": "FINISHED", "result": "PASSED",
+        }, "results": []}))
+    assert oidf.strict_module_summary(tmp_path, expected_skips)["passed"] is True

@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import zipfile
+from collections import Counter
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
@@ -446,6 +447,48 @@ def write_browser_automation_diagnostics(output: Path) -> list[dict[str, object]
     return diagnostics
 
 
+def strict_module_summary(output: Path, expected_skips: list[dict]) -> dict[str, object]:
+    """A successful runner process cannot qualify missing or review-only results."""
+    modules: dict[str, dict[str, object]] = {}
+    for archive in sorted(output.glob("*.zip")):
+        with zipfile.ZipFile(archive) as exported:
+            for path in exported.namelist():
+                if not path.endswith(".json"):
+                    continue
+                raw = json.loads(exported.read(path))
+                if not isinstance(raw, dict) or not isinstance(raw.get("testInfo"), dict):
+                    continue
+                info = raw["testInfo"]
+                name = info.get("testName")
+                if not isinstance(name, str) or not SAFE_MODULE.fullmatch(name):
+                    raise ValueError("official export has an invalid module name")
+                if name in modules:
+                    raise ValueError("official export has ambiguous duplicate module results")
+                status = info.get("status")
+                result = info.get("result")
+                modules[name] = {
+                    "test_name": name,
+                    "status": status if isinstance(status, str) and status in SAFE_MODULE_STATES else "UNKNOWN",
+                    "result": result if isinstance(result, str) and result in SAFE_MODULE_RESULTS else "UNKNOWN",
+                }
+    rows = list(modules.values())
+    pending_review = [row["test_name"] for row in rows if row["result"] == "REVIEW"]
+    unexpected_skips = [
+        row["test_name"] for row in rows if row["result"] == "SKIPPED"
+        and not any(fnmatch.fnmatchcase(str(row["test_name"]), entry["test-name"]) for entry in expected_skips)
+    ]
+    passed = any(row["result"] == "PASSED" for row in rows) and not unexpected_skips and all(
+        row["status"] == "FINISHED" and row["result"] in {"PASSED", "SKIPPED"} for row in rows
+    )
+    return {
+        "schema": "elevenid.official-oidf-module-results/v1",
+        "source_policy": "unmodified", "modules": rows,
+        "counts": dict(Counter(str(row["result"]) for row in rows)),
+        "pending_review": pending_review, "unexpected_skips": unexpected_skips,
+        "passed": passed,
+    }
+
+
 def write_evidence(
     output: Path,
     manifest: dict,
@@ -456,7 +499,7 @@ def write_evidence(
     stack_manifest: Path | None,
     execution_mode: str,
     expected_skips: list[dict] | None = None,
-) -> None:
+) -> int:
     """Write non-secret provenance alongside an official suite export.
 
     Configurations can contain private signing keys, so evidence records their
@@ -473,12 +516,15 @@ def write_evidence(
             "sha256": file_sha256(stack_manifest),
             "release": raw_stack.get("release"),
         }
+    effective_skips = expected_skips if expected_skips is not None else applicable_expected_skips(config)
+    module_summary = strict_module_summary(output, effective_skips)
+    (output / "module-results.json").write_text(json.dumps(module_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    qualified_exit = exit_code or (0 if module_summary["passed"] else 1)
     artifacts = [
         {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
         for path in sorted(output.rglob("*"))
         if path.is_file() and path.name != "evidence.json"
     ]
-    effective_skips = expected_skips if expected_skips is not None else applicable_expected_skips(config)
     evidence = {
         "schema": "elevenid.official-interop-evidence/v1",
         "official_runner": manifest["official_runner"],
@@ -493,10 +539,12 @@ def write_evidence(
             ),
             "expected_skips": effective_skips,
         },
-        "result": {"exit_code": exit_code, "passed": exit_code == 0},
+        "result": {"exit_code": qualified_exit, "process_exit_code": exit_code, "passed": qualified_exit == 0},
+        "module_results": module_summary,
         "artifacts": artifacts,
     }
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return qualified_exit
 
 
 def execution_mode(profile_name: str, profile: dict, *, allow_planned: bool, stack_manifest: Path | None) -> str:
@@ -602,7 +650,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         validate_runner(runner, manifest)
         write_failure_diagnostics(output)
         write_browser_automation_diagnostics(output)
-        write_evidence(
+        return write_evidence(
             output,
             manifest,
             args.profile,
@@ -613,7 +661,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             mode,
             expected_skips,
         )
-        return result
 
     interaction_script = args.interaction_script.resolve()
     if not interaction_script.is_file():
@@ -688,8 +735,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     validate_runner(runner, manifest)
     write_failure_diagnostics(output)
     write_browser_automation_diagnostics(output)
-    write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
-    return result
+    return write_evidence(output, manifest, args.profile, config, runner, result, args.stack_manifest, mode, expected_skips)
 
 
 def parse_args() -> argparse.Namespace:
