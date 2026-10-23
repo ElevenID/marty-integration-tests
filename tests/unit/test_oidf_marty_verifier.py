@@ -174,8 +174,10 @@ def test_url_query_rejects_request_object_transports(
         )
 
 
-def test_signed_post_forwards_outer_method_and_leaves_wallet_nonce_to_official_wallet(
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_signed_request_leaves_retrieval_and_wallet_nonce_to_official_wallet(
     monkeypatch: pytest.MonkeyPatch,
+    method: str,
 ) -> None:
     calls: list[str] = []
 
@@ -187,7 +189,7 @@ def test_signed_post_forwards_outer_method_and_leaves_wallet_nonce_to_official_w
     monkeypatch.setattr(
         oidf_verifier,
         "decode_request_object",
-        lambda *_args, **_kwargs: pytest.fail("POST-only request_uri must not be fetched with GET"),
+        lambda *_args, **_kwargs: pytest.fail("the adapter must not prefetch the wallet request"),
     )
 
     oidf_verifier.call_mock_wallet(
@@ -195,32 +197,33 @@ def test_signed_post_forwards_outer_method_and_leaves_wallet_nonce_to_official_w
         "https://marty.example/request.jwt",
         request_method="request_uri_signed",
         conformance_insecure=False,
-        outer_parameters={"client_id": "x509_hash:abc", "request_uri_method": "post"},
+        outer_parameters={"client_id": "x509_hash:abc", "request_uri_method": method},
     )
 
     query = parse_qs(urlparse(calls[0]).query)
     assert query == {
         "client_id": ["x509_hash:abc"],
         "request_uri": ["https://marty.example/request.jwt"],
-        "request_uri_method": ["post"],
+        "request_uri_method": [method],
     }
     assert "wallet_nonce" not in query
 
 
-def test_signed_get_rejects_outer_and_signed_client_id_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_get_without_outer_client_id_uses_the_request_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(oidf_verifier, "request_json", lambda url, **_kwargs: calls.append(url) or (200, {}))
     monkeypatch.setattr(
         oidf_verifier,
         "decode_request_object",
         lambda *_args, **_kwargs: {"client_id": "signed-client"},
     )
-    with pytest.raises(RuntimeError, match="does not match"):
-        oidf_verifier.call_mock_wallet(
-            "https://runner.example/authorize",
-            "https://marty.example/request.jwt",
-            request_method="request_uri_signed",
-            conformance_insecure=False,
-            outer_parameters={"client_id": "outer-client"},
-        )
+    oidf_verifier.call_mock_wallet(
+        "https://runner.example/authorize",
+        "https://marty.example/request.jwt",
+        request_method="request_uri_signed",
+        conformance_insecure=False,
+    )
+    assert parse_qs(urlparse(calls[0]).query)["client_id"] == ["signed-client"]
 
 
 def test_native_url_query_forwards_the_unchanged_direct_parameters(
@@ -297,15 +300,15 @@ def failed_request(message: str) -> Callable[..., tuple[int, object]]:
     return request
 
 
-def test_finished_module_cannot_suppress_client_id_binding_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_finished_module_cannot_suppress_missing_legacy_client_id(monkeypatch: pytest.MonkeyPatch) -> None:
     configure_main(
         monkeypatch,
-        "openid4vp://authorize?client_id=outer-client&request_uri=https%3A%2F%2Fmarty.example%2Frequest.jwt",
+        "openid4vp://authorize?request_uri=https%3A%2F%2Fmarty.example%2Frequest.jwt",
     )
     monkeypatch.setattr(
         oidf_verifier,
         "decode_request_object",
-        lambda *_args, **_kwargs: {"client_id": "different-signed-client"},
+        lambda *_args, **_kwargs: {},
     )
     monkeypatch.setattr(
         oidf_verifier,
@@ -313,7 +316,7 @@ def test_finished_module_cannot_suppress_client_id_binding_failure(monkeypatch: 
         lambda *_args, **_kwargs: pytest.fail("validation failures must not consult finished state"),
     )
 
-    with pytest.raises(RuntimeError, match="does not match"):
+    with pytest.raises(RuntimeError, match="no client_id"):
         oidf_verifier.main()
 
 

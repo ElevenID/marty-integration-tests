@@ -1603,6 +1603,23 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             environment,
         )
         result = result or evidence_result
+        if evidence_result == 0:
+            attachment_result = run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "oidf_marty_review_images.py"),
+                    "--profile", profile,
+                    "--oidf-runner", str(args.oidf_runner),
+                    "--official-output", str(args.output_dir / "raw" / profile),
+                    "--capture-report", str(args.output_dir / "raw" / profile / "marty-verification-evidence.json"),
+                    "--private-images", str(args.output_dir / "private" / "verification-evidence"),
+                    "--flow-audit-dir", str(args.output_dir / "private" / "oidf-flow-audit"),
+                    "--private-export", str(args.output_dir / "private" / "official-review-evidence-export"),
+                    "--output", str(args.output_dir / "raw" / profile / "official-real-ui-images.json"),
+                ],
+                environment,
+            )
+            result = result or attachment_result
     finally:
         compose_log = args.output_dir / "private" / "compose.log"
         run(

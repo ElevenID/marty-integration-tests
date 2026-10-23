@@ -32,7 +32,7 @@ def test_flow_body_selects_post_only_for_the_official_signed_post_module(
 ) -> None:
     monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
     monkeypatch.setenv("OIDF_MARTY_TRUST_PROFILE_ID", "trust-1")
-    monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
+    monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "standard")
     payload = {
         "test_id": "module-1",
         "test_name": "oid4vp-1final-verifier-request-uri-method-post",
@@ -44,21 +44,23 @@ def test_flow_body_selects_post_only_for_the_official_signed_post_module(
         "trust_profile_id": "trust-1",
         "issuer_did": "did:web:verifier.example",
         "expiry_minutes": 15,
-        "oid4vp_profile": "haip",
+        "oid4vp_profile": "standard",
         "request_transport": "request_uri",
         "request_uri_method": "post",
     }
 
 
-def test_flow_body_selects_post_for_the_haip_module_with_official_variant_suffix(
+@pytest.mark.parametrize("module", ["happy-flow", "request-uri-method-post", "invalid-credential-signature"])
+def test_flow_body_selects_post_for_haip_wallet_nonce_exchange(
     monkeypatch: pytest.MonkeyPatch,
+    module: str,
 ) -> None:
     monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
     monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
     payload = {
         "test_id": "module-1",
         "test_name": (
-            "oid4vp-1final-verifier-request-uri-method-post"
+            f"oid4vp-1final-verifier-{module}"
             "[client_id_prefix=x509_hash][request_method=request_uri_signed][vp_profile=haip]"
         ),
         "request_method": "request_uri_signed",
@@ -79,7 +81,7 @@ def test_flow_body_does_not_force_other_transports_to_post(
     test_name: str,
 ) -> None:
     monkeypatch.setenv("OIDF_MARTY_PRESENTATION_POLICY_ID", "policy-1")
-    monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "haip")
+    monkeypatch.setenv("OIDF_MARTY_VERIFIER_PROFILE", "standard")
 
     body = oidf_start.flow_body(
         {

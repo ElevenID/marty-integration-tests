@@ -349,21 +349,19 @@ def call_mock_wallet(
 
     retrieval_method = outer.get("request_uri_method")
     outer_client_id = outer.get("client_id")
-    if retrieval_method == "post":
-        # Do not pre-fetch a POST-only request URI with GET.  The official
-        # mock wallet creates wallet_nonce, POSTs it to Marty, and verifies
-        # that the returned signed JAR carries the same nonce.
-        if not outer_client_id:
-            raise RuntimeError("POST request_uri authorization request has no outer client_id")
+    if outer_client_id:
+        # Relay the authorization request to the real wallet. It owns request
+        # retrieval, wallet_nonce and signed/outer client_id verification.
+        # Prefetching here consumes requests and breaks HAIP nonce binding.
         client_id = outer_client_id
+    elif retrieval_method == "post":
+        raise RuntimeError("POST request_uri authorization request has no outer client_id")
     else:
         claims = decode_request_object(request_uri, insecure=marty_insecure)
         signed_client_id = claims.get("client_id")
         if not isinstance(signed_client_id, str) or not signed_client_id:
             raise RuntimeError("signed request object has no client_id")
-        if outer_client_id and outer_client_id != signed_client_id:
-            raise RuntimeError("outer client_id does not match signed request object client_id")
-        client_id = outer_client_id or signed_client_id
+        client_id = signed_client_id
     parameters = {"client_id": client_id, "request_uri": request_uri}
     if retrieval_method is not None:
         parameters["request_uri_method"] = retrieval_method

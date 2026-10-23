@@ -471,9 +471,9 @@ def write_browser_automation_diagnostics(output: Path) -> list[dict[str, object]
     return diagnostics
 
 
-def exported_module_info(output: Path) -> list[dict[str, Any]]:
-    """Read upstream module metadata once through the same export boundary."""
-    infos = []
+def exported_module_documents(output: Path) -> list[dict[str, Any]]:
+    """Read unchanged upstream module documents through one export boundary."""
+    documents = []
     for archive in sorted(output.glob("*.zip")):
         with zipfile.ZipFile(archive) as exported:
             for path in exported.namelist():
@@ -482,8 +482,12 @@ def exported_module_info(output: Path) -> list[dict[str, Any]]:
                 raw = json.loads(exported.read(path))
                 if not isinstance(raw, dict) or not isinstance(raw.get("testInfo"), dict):
                     continue
-                infos.append(raw["testInfo"])
-    return infos
+                documents.append(raw)
+    return documents
+
+
+def exported_module_info(output: Path) -> list[dict[str, Any]]:
+    return [document["testInfo"] for document in exported_module_documents(output)]
 
 
 def strict_module_summary(output: Path, expected_skips: list[dict]) -> dict[str, object]:
@@ -539,6 +543,7 @@ def compare_plan_coverage(infos: list[dict[str, Any]], plan: Any, selection: str
     if not isinstance(plan_id, str) or not re.fullmatch(r"[A-Za-z0-9]{1,180}", plan_id):
         raise ValueError("invalid official plan identity")
     expected: dict[str, tuple[str, dict[str, str]]] = {}
+    module_bindings = []
     modules = plan.get("modules")
     if not isinstance(modules, list) or not modules:
         raise ValueError("official plan contains no modules")
@@ -553,7 +558,11 @@ def compare_plan_coverage(infos: list[dict[str, Any]], plan: Any, selection: str
             or not SAFE_MODULE.fullmatch(module_name)
             or module_name in expected
             or not isinstance(extra_variant, dict)
-            or not all(isinstance(k, str) and isinstance(v, str) for k, v in extra_variant.items())
+            or not all(
+                isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", k)
+                and isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", v)
+                for k, v in extra_variant.items()
+            )
             or not isinstance(instances, list)
             or len(instances) != 1
             or not isinstance(instances[0], str)
@@ -561,6 +570,15 @@ def compare_plan_coverage(infos: list[dict[str, Any]], plan: Any, selection: str
         ):
             raise ValueError("official plan has missing or ambiguous module instances")
         expected[module_name] = (instances[0], {**variant, **extra_variant})
+        module_bindings.append({
+            "test_name": module_name,
+            "test_id": instances[0],
+            # Match stock run-test-plan.py's callback naming exactly. The raw
+            # TestInfo name stays undecorated; never strip unverified suffixes.
+            "interaction_name": module_name + "".join(
+                f"[{key}={extra_variant[key]}]" for key in sorted(extra_variant)
+            ),
+        })
     if len({identity for identity, _ in expected.values()}) != len(expected):
         raise ValueError("official plan reuses an instance identity")
     exported = set()
@@ -585,6 +603,7 @@ def compare_plan_coverage(infos: list[dict[str, Any]], plan: Any, selection: str
         "expected_modules": sorted(expected),
         "missing_modules": missing,
         "exported_module_count": len(exported),
+        "module_bindings": sorted(module_bindings, key=lambda row: row["test_name"]),
         "binding_sha256": sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest(),
     }
 
