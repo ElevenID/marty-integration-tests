@@ -4,6 +4,7 @@
 Official module results remain unchanged. Screenshots need review; collecting
 them never promotes REVIEW to PASSED. Raw results and images stay private.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,7 +25,12 @@ from oidf_marty_browser_smoke import (  # noqa: E402
     hosted_browser_launch_options,
     open_org_console,
 )
-from oidf_marty_public_login import authenticated_json_request, public_origin, required_env  # noqa: E402
+from oidf_marty_public_login import (  # noqa: E402
+    PublicGatewayHttpError,
+    authenticated_json_request,
+    public_origin,
+    required_env,
+)
 from oidf_marty_start_verification import gateway_session_id  # noqa: E402
 from oidf_sd_jwt_diagnostic_audit import FLOW_ID, _private_mappings  # noqa: E402
 
@@ -32,18 +38,54 @@ if TYPE_CHECKING:
     from playwright.sync_api import Page
 
 
-def outcome_projection(result: object, flow_id: str) -> dict[str, str]:
+def outcome_projection(result: object, flow_id: str, *, instance_readback: bool = False) -> dict[str, str]:
     """Expose only bounded server facts, with an exact instance binding."""
-    if not FLOW_ID.fullmatch(flow_id) or not isinstance(result, dict) or result.get("instance_id") != flow_id:
+    identity_field = "id" if instance_readback else "instance_id"
+    if not FLOW_ID.fullmatch(flow_id) or not isinstance(result, dict) or result.get(identity_field) != flow_id:
         raise ValueError("verification evidence belongs to a different flow")
-    return {
-        key: value if isinstance(value := result.get(key), str) and value in allowed else "UNKNOWN"
+    projected = {
+        key: value
+        if isinstance(value := result.get(key), str)
+        and (value := value.lower() if key == "status" else value) in allowed
+        else "UNKNOWN"
         for key, allowed in {
-            "status": {"completed", "failed", "pending", "awaiting_wallet", "expired", "cancelled"},
+            "status": {
+                "completed",
+                "failed",
+                "pending",
+                "in_progress",
+                "awaiting_wallet",
+                "awaiting_approval",
+                "awaiting_evidence",
+                "expired",
+                "cancelled",
+            },
             "result": {"passed", "failed", "partial"},
             "decision": {"allow", "deny", "manual_review"},
         }.items()
     }
+    if instance_readback:
+        projected.update(result="UNKNOWN", decision="UNKNOWN")
+    return projected
+
+
+def read_flow_evidence(
+    base_url: str,
+    session_id: str,
+    flow_id: str,
+    *,
+    review_required: bool,
+) -> tuple[object, dict[str, str], str]:
+    try:
+        result = authenticated_json_request(base_url, session_id, f"/v1/flows/instances/{flow_id}/result")
+        return result, outcome_projection(result, flow_id), "verification_result"
+    except PublicGatewayHttpError as error:
+        if error.status != 409 or review_required:
+            raise
+        # Invalid wallet submissions can leave the transaction awaiting a new
+        # attempt. Record that state; do not invent a terminal deny decision.
+        result = authenticated_json_request(base_url, session_id, f"/v1/flows/instances/{flow_id}")
+        return result, outcome_projection(result, flow_id, instance_readback=True), "instance_result_pending"
 
 
 def capture_success_page(page: Page, flow_id: str, outcome: dict[str, str], destination: Path) -> str:
@@ -109,8 +151,13 @@ def main() -> int:
                 row: dict[str, object] = {"test_name": name, "capture_status": "PENDING", "screenshot": None}
                 rows.append(row)
                 try:
-                    result = authenticated_json_request(base_url, session_id, f"/v1/flows/instances/{flow_id}/result")
-                    outcome = outcome_projection(result, flow_id)
+                    result, outcome, source = read_flow_evidence(
+                        base_url,
+                        session_id,
+                        flow_id,
+                        review_required=name in pending,
+                    )
+                    row["readback_source"] = source
                     row.update(outcome)
                     digest = hashlib.sha256(name.encode()).hexdigest()
                     write_private_json(args.private_output / f"{digest}.json", result)
@@ -129,10 +176,20 @@ def main() -> int:
         finally:
             browser.close()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps({
-        "schema": "elevenid.marty-verification-evidence/v1",
-        "official_results_modified": False, "review_pending": pending, "modules": rows,
-    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(
+            {
+                "schema": "elevenid.marty-verification-evidence/v1",
+                "official_results_modified": False,
+                "review_pending": pending,
+                "modules": rows,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return 2 if any(row["capture_status"] == "FAILED" for row in rows) else 0
 
 
