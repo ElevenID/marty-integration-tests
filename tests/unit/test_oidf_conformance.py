@@ -26,6 +26,7 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert issuer["status"] == "active"
     assert "[credential_format=sd_jwt_vc]" in issuer["test_plan"]
     assert "[client_auth_type=private_key_jwt]" in issuer["test_plan"]
+    assert "[grant_management=disabled]" in issuer["test_plan"]
     assert "not an OIDF certification claim" in issuer["qualification"]
     assert "private_key_jwt clients end to end" in issuer["qualification"]
     verifier = manifest["profiles"]["oid4vp-verifier"]
@@ -130,13 +131,13 @@ def test_official_runner_rejects_untracked_local_test_shims(tmp_path: Path) -> N
         oidf.validate_runner(tmp_path, manifest)
 
 
-def test_optional_encryption_skip_is_documented_narrowly() -> None:
+def test_plain_issuer_profile_does_not_expect_an_absent_upstream_encryption_case() -> None:
     skips = json.loads((ROOT / "conformance" / "expected-skips.json").read_text(encoding="utf-8"))
-    encryption = next(
-        item for item in skips if item["test-name"] == "oid4vci-1_0-issuer-fail-unsupported-encryption-algorithm"
-    )
-    assert encryption["variant"] == {"vci_credential_encryption": "plain"}
-    assert encryption["expires"] == "2027-01-01"
+    assert {item["test-name"] for item in skips} == {
+        "oid4vci-1_0-issuer-metadata-test-signed",
+        "oid4vci-1_0-issuer-batch-issuance",
+    }
+    assert "[vci_credential_encryption=plain]" in oidf.load_manifest()["profiles"]["oid4vci-issuer"]["test_plan"]
 
 
 def test_invalid_key_attestation_signature_is_not_expected_to_skip() -> None:
