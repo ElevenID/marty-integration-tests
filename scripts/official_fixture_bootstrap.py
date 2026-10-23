@@ -489,12 +489,10 @@ def bootstrap_browser_issuance(
         compliance,
         "browser issuance compliance profile",
     )
-    credential = request(
+    credential_template_id = create_active_credential_template(
         gateway_url,
         session_id,
-        "/v1/credential-templates",
-        method="POST",
-        json_body=browser_credential_template_payload(
+        browser_credential_template_payload(
             organization_id,
             compliance_profile_id,
             issuer_did,
@@ -502,19 +500,9 @@ def bootstrap_browser_issuance(
             gateway_url=gateway_url,
             run_id=run_id,
         ),
-    )
-    credential_template_id = response_id(
-        credential,
         "browser issuance credential template",
+        request=request,
     )
-    activated_credential = request(
-        gateway_url,
-        session_id,
-        f"/v1/credential-templates/{credential_template_id}/activate",
-        method="POST",
-    )
-    if response_id(activated_credential, "activated browser credential template") != credential_template_id:
-        raise RuntimeError("activated browser credential template id changed unexpectedly")
 
     application = request(
         gateway_url,
@@ -901,6 +889,29 @@ def response_id(value: object, resource: str) -> str:
     return identifier
 
 
+def create_active_credential_template(
+    gateway_url: str,
+    session_id: str,
+    payload: dict[str, object],
+    resource: str,
+    *,
+    request: Callable[..., object],
+) -> str:
+    """Use the public lifecycle for every issuer and verifier fixture role."""
+    created = request(
+        gateway_url, session_id, "/v1/credential-templates",
+        method="POST", json_body=payload,
+    )
+    template_id = response_id(created, resource)
+    activated = request(
+        gateway_url, session_id, f"/v1/credential-templates/{template_id}/activate",
+        method="POST",
+    )
+    if response_id(activated, f"activated {resource}") != template_id:
+        raise RuntimeError(f"activated {resource} id changed unexpectedly")
+    return template_id
+
+
 def create_disposable_vc_api_key(
     gateway_url: str,
     session_id: str,
@@ -1172,12 +1183,10 @@ def bootstrap_eudi(
         ("mdl", "MobileDrivingLicense"),
         ("open_badge", "OpenBadge"),
     ):
-        created_template = request(
+        result[f"eudi_{name}_template_id"] = create_active_credential_template(
             gateway_url,
             session_id,
-            "/v1/credential-templates",
-            method="POST",
-            json_body=eudi_template_payload(
+            eudi_template_payload(
                 organization_id,
                 compliance_profile_id,
                 issuer_did,
@@ -1186,10 +1195,8 @@ def bootstrap_eudi(
                 gateway_url=gateway_url,
                 run_id=run_id,
             ),
-        )
-        result[f"eudi_{name}_template_id"] = response_id(
-            created_template,
             f"EUDI {name} credential template",
+            request=request,
         )
     return result
 
@@ -1331,30 +1338,11 @@ def bootstrap(
             run_id=run_id,
             mdoc=mdoc,
         )
-        created_template = request(
-            gateway_url,
-            session_id,
-            "/v1/credential-templates",
-            method="POST",
-            json_body=created_template_payload,
+        template_id = create_active_credential_template(
+            gateway_url, session_id, created_template_payload,
+            f"{prefix} credential template", request=request,
         )
-        template_id = response_id(created_template, f"{prefix} credential template")
         credential_configuration_id: str | None = None
-        if oid4vci or w3c:
-            activated_template = request(
-                gateway_url,
-                session_id,
-                f"/v1/credential-templates/{template_id}/activate",
-                method="POST",
-            )
-            if (
-                response_id(
-                    activated_template,
-                    f"activated {prefix} credential template",
-                )
-                != template_id
-            ):
-                raise RuntimeError(f"activated {prefix} credential template id changed unexpectedly")
         if oid4vci:
             issuer_metadata = request(
                 gateway_url,
@@ -1369,12 +1357,10 @@ def bootstrap(
             )
         presentation_template_id = template_id
         if w3c:
-            created_presentation_template = request(
+            presentation_template_id = create_active_credential_template(
                 gateway_url,
                 session_id,
-                "/v1/credential-templates",
-                method="POST",
-                json_body=template_payload(
+                template_payload(
                     organization_id,
                     compliance_profile_id,
                     profile_payload["issuer_did"],
@@ -1383,19 +1369,9 @@ def bootstrap(
                     run_id=run_id,
                     presentation=True,
                 ),
-            )
-            presentation_template_id = response_id(
-                created_presentation_template,
                 f"{prefix} presentation template",
+                request=request,
             )
-            activated_presentation_template = request(
-                gateway_url,
-                session_id,
-                f"/v1/credential-templates/{presentation_template_id}/activate",
-                method="POST",
-            )
-            if response_id(activated_presentation_template, "activated W3C presentation template") != presentation_template_id:
-                raise RuntimeError("activated W3C presentation template id changed unexpectedly")
         w3c_trust_profile_id: str | None = None
         if w3c:
             issuer_did = str(profile_payload["issuer_did"])
