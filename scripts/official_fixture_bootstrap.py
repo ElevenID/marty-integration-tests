@@ -40,6 +40,11 @@ OFFICIAL_MDOC_SIGNER_CERTIFICATE = re.compile(
     r'"""(?P<certificate>-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)"""',
     re.DOTALL,
 )
+OFFICIAL_MDOC_IACA_CERTIFICATE = re.compile(
+    r'const\s+val\s+IACA_ROOT_CERT_PEM\s*:\s*String\s*=\s*"""'
+    r'(?P<certificate>-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)"""',
+    re.DOTALL,
+)
 
 
 def compliance_profile_payload(
@@ -672,22 +677,27 @@ def official_mdoc_trust_anchor(
     *,
     now: datetime | None = None,
 ) -> str:
-    """Read the mock mdoc issuer certificate from the exact OIDF runner source.
+    """Read public mdoc trust material from the exact OIDF runner source.
 
     The verifier plan's mdoc wallet does not use ``credential.signing_jwk``.
-    It provisions a separate document signer in ``TestAppUtils`` and includes
-    that public certificate in IssuerAuth. Reading it from the checked-out,
-    commit-pinned runner keeps the Trust Profile aligned when the official
-    runner rotates its disposable certificate.
+    Current upstream generates a document signer under the published IACA in
+    ``TestKeysAndCerts``. Read only that public root for the Trust Profile.
+    Retain the older inline certificate reader for source-bound audit replay.
     """
-    candidates = sorted(
+    iaca_source = runner_source / "src/main/kotlin/net/openid/conformance/util/TestKeysAndCerts.kt"
+    current_iaca = iaca_source.is_file()
+    candidates = [iaca_source] if current_iaca else sorted(
         runner_source.glob(
             "src/main/kotlin/**/TestAppUtils.kt",
         )
     )
     matches: list[str] = []
     for source in candidates:
-        match = OFFICIAL_MDOC_SIGNER_CERTIFICATE.search(source.read_text(encoding="utf-8"))
+        pattern = OFFICIAL_MDOC_IACA_CERTIFICATE if current_iaca else OFFICIAL_MDOC_SIGNER_CERTIFICATE
+        found = list(pattern.finditer(source.read_text(encoding="utf-8")))
+        if len(found) > 1:
+            raise ValueError("official mdoc source contains ambiguous public trust certificates")
+        match = found[0] if found else None
         if match is not None:
             certificate = "\n".join(line.strip() for line in match.group("certificate").strip().splitlines())
             certificate += "\n"
@@ -699,6 +709,15 @@ def official_mdoc_trust_anchor(
         raise ValueError("exact OIDF runner source must expose exactly one documentSignerCert mdoc trust anchor")
     certificate_pem = matches[0]
     certificate = x509.load_pem_x509_certificate(certificate_pem.encode("ascii"))
+    if current_iaca:
+        # Current upstream generates a separate end-entity document signer.
+        # Trust its published IACA, never substitute that CA as the signer.
+        try:
+            is_ca = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+        except x509.ExtensionNotFound:
+            is_ca = False
+        if not is_ca:
+            raise ValueError("official OIDF mdoc IACA root certificate must be a CA")
     checked_at = now or datetime.now(UTC)
     if checked_at.tzinfo is None:
         raise ValueError("OIDF mdoc certificate validation time must be timezone-aware")

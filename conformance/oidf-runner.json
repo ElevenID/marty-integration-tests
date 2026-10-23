@@ -2,8 +2,8 @@
   "schema": "elevenid.oidf-conformance-runner/v1",
   "official_runner": {
     "repository": "https://gitlab.com/openid/conformance-suite.git",
-    "release": "release-v5.2.2",
-    "commit": "321bc5bc53601b9690b54c023c0cbfac0f0230f2",
+    "release": "release-v5.3.3",
+    "commit": "7d420f716e49d44f8a6b04f0a3e240ad6d68ab55",
     "source_policy": "unmodified",
     "review_cadence": "monthly"
   },
@@ -13,7 +13,7 @@
       "test_plan": "oid4vci-1_0-issuer-test-plan[sender_constrain=dpop][client_auth_type=private_key_jwt][vci_authorization_code_flow_variant=issuer_initiated][credential_format=sd_jwt_vc][authorization_request_type=simple][openid=plain_oauth][fapi_request_method=unsigned][vci_grant_type=pre_authorization_code][vci_credential_encryption=plain][fapi_profile=vci][fapi_response_mode=plain_response]",
       "configuration_example": "conformance/marty-issuer.example.json",
       "target": "Marty's public credential-issuer URL through the gateway",
-      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact OIDF release-v5.2.2 runs validate registered private_key_jwt clients end to end and exercise the issuer's tenant-bound key-attestation policy through Marty's public issuer path. Three optional, unadvertised capabilities remain explicit expiring skips."
+      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Qualification requires fresh unchanged OIDF release-v5.3.3 runs validating registered private_key_jwt clients end to end and exercising the issuer's tenant-bound key-attestation policy through Marty's public issuer path. Three optional, unadvertised capabilities remain explicit expiring skips."
     },
     "oid4vp-verifier": {
       "status": "active",
@@ -27,7 +27,7 @@
       "test_plan": "oid4vp-1final-verifier-test-plan[vp_profile=plain_vp][credential_format=sd_jwt_vc][response_mode=direct_post][request_method=url_query][client_id_prefix=redirect_uri]",
       "configuration_example": "conformance/marty-verifier.example.json",
       "target": "Marty's public verifier URL through the gateway using direct unsigned OID4VP authorization parameters",
-      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact unmodified OIDF release-v5.2.2 evidence is required for the upstream direct unsigned url_query variant with no expected failures or skips. This remains distinct from Marty's signed by-value Request Object transport."
+      "qualification": "Active interoperability evidence only, not an OIDF certification claim. Exact unmodified OIDF release-v5.3.3 evidence is required for the upstream direct unsigned url_query variant with no expected failures or skips. This remains distinct from Marty's signed by-value Request Object transport."
     },
     "oid4vp-mdoc-verifier": {
       "status": "active",
@@ -38,7 +38,7 @@
       "upstream_fixture_review": {
         "tracking_issue": "https://github.com/ElevenID/marty-integration-tests/issues/243",
         "upstream_profile_issue": "https://gitlab.com/openid/conformance-suite/-/work_items/1891",
-        "runner_release": "release-v5.2.2",
+        "runner_release": "release-v5.3.3",
         "certificate_not_before": "2026-08-03T16:12:01+00:00",
         "certificate_not_after": "2027-08-03T16:12:01+00:00",
         "certificate_sha256": "6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53",
