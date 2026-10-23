@@ -1051,11 +1051,14 @@ def test_oidf_final_lane_emits_browser_runtime_diagnostic_after_browser_failure(
     assert json.loads(diagnostic_report.read_text(encoding="utf-8"))["source_policy"] == "unmodified"
 
 
+@pytest.mark.parametrize("capture_exit", [0, 2])
 def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capture_exit: int,
 ) -> None:
     official_command: list[str] = []
+    evidence_command: list[str] = []
     suite_environment: dict[str, str] = {}
 
     def fake_run(
@@ -1066,6 +1069,9 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
         if "oidf_conformance.py" in " ".join(command):
             official_command.extend(command)
             suite_environment.update(environment)
+        if "oidf_marty_verification_evidence.py" in " ".join(command):
+            evidence_command.extend(command)
+            return capture_exit
         return 0
 
     monkeypatch.setattr(lane, "run", fake_run)
@@ -1114,7 +1120,7 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
             args,
             {"OIDF_MARTY_GATEWAY_URL": "https://marty.test"},
         )
-        == 0
+        == capture_exit
     )
     assert official_command[official_command.index("--profile") + 1] == ("oid4vp-url-query-verifier")
     assert "--allow-planned-profile" not in official_command
@@ -1126,6 +1132,10 @@ def test_oidf_url_query_lane_runs_the_exact_active_direct_query_profile(
     assert json.loads(suite_environment["OIDF_MARTY_OFFICIAL_SIGNER_PUBLIC_JWK"])["x"] == (
         "credential-public-x"
     )
+    assert evidence_command[evidence_command.index("--module-results") + 1] == str(
+        tmp_path / "output/raw/oid4vp-url-query-verifier/module-results.json"
+    )
+    assert suite_environment["OIDF_MARTY_FLOW_AUDIT_DIR"] == str(tmp_path / "output/private/oidf-flow-audit")
     assert discarded == [tmp_path / "haip"]
 
 
@@ -1234,7 +1244,7 @@ def test_oidf_mdoc_lane_selects_the_iso_mdl_profile(
     assert suite_environment["OIDF_MARTY_ORGANIZATION_ID"] == "org-1"
     assert suite_environment["OIDF_MARTY_PRESENTATION_POLICY_ID"] == "mdoc-policy-1"
     assert suite_environment["OIDF_MARTY_VERIFIER_PROFILE"] == "standard"
-    assert "OIDF_MARTY_FLOW_AUDIT_DIR" not in suite_environment
+    assert suite_environment["OIDF_MARTY_FLOW_AUDIT_DIR"] == str(tmp_path / "output/private/oidf-flow-audit")
     assert diagnostics == [tmp_path / "output" / "private" / "compose.log"]
 
 

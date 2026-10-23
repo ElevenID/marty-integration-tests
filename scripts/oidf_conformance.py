@@ -245,7 +245,7 @@ def requires_interaction_hook(test_name: str, expected_skips: list[dict]) -> boo
 
 
 def write_failure_diagnostics(output: Path) -> list[dict[str, object]]:
-    """Extract a deliberately small, public-safe view of official failures.
+    """Extract a deliberately small, public-safe view of failures and blocking warnings.
 
     The official export ZIPs remain byte-for-byte unchanged and authoritative.
     This owned diagnostic records only module/condition/block identifiers plus
@@ -343,6 +343,30 @@ def write_failure_diagnostics(output: Path) -> list[dict[str, object]]:
                     if entry.get("startBlock") is True and entry.get("src") == "-START-BLOCK-":
                         if isinstance(block_id, str) and isinstance(entry.get("msg"), str):
                             blocks[block_id] = entry["msg"]
+                        continue
+                    if (
+                        entry.get("result") == "WARNING"
+                        and entry.get("src") == "VP1FinalCheckForUnexpectedParametersInVpClientMetadata"
+                        and SAFE_MODULE.fullmatch(module)
+                    ):
+                        parameters = entry.get("unknown_params")
+                        diagnostics.append(
+                            {
+                                "module": module,
+                                "condition": "VP1FinalCheckForUnexpectedParametersInVpClientMetadata",
+                                "result": "WARNING",
+                                "error_category": "unexpected-client-metadata",
+                                "unexpected_parameters": sorted(
+                                    {
+                                        value
+                                        for value in parameters
+                                        if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value)
+                                    }
+                                )
+                                if isinstance(parameters, list)
+                                else [],
+                            }
+                        )
                         continue
                     if entry.get("result") != "FAILURE":
                         continue

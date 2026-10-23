@@ -826,3 +826,28 @@ def test_plan_coverage_rejects_foreign_partial_or_ambiguous_evidence(mutation: s
 
 def test_plan_coverage_unavailable_readback_cannot_qualify(tmp_path: Path) -> None:
     assert oidf.official_plan_coverage(tmp_path, "official-plan")["complete"] is False
+
+
+def test_failure_diagnostics_exposes_metadata_warning_names_without_private_payloads(tmp_path: Path) -> None:
+    with zipfile.ZipFile(tmp_path / "official.zip", "w") as exported:
+        exported.writestr(
+            "module.json",
+            json.dumps(
+                {
+                    "testInfo": {"testName": "oid4vp-1final-verifier-happy-flow"},
+                    "results": [
+                        {
+                            "result": "WARNING",
+                            "src": "VP1FinalCheckForUnexpectedParametersInVpClientMetadata",
+                            "unknown_params": ["logo_uri", "client_name", "https://secret.invalid/private-value"],
+                            "parameters": {"client_name": "private-value"},
+                            "msg": "private-value",
+                        }
+                    ],
+                }
+            ),
+        )
+    diagnostics = oidf.write_failure_diagnostics(tmp_path)
+    assert diagnostics[0]["result"] == "WARNING"
+    assert diagnostics[0]["unexpected_parameters"] == ["client_name", "logo_uri"]
+    assert "private-value" not in json.dumps(diagnostics)
