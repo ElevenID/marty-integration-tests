@@ -46,11 +46,15 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert "[credential_format=iso_mdl]" in mdoc["test_plan"]
     assert "[response_mode=direct_post]" in mdoc["test_plan"]
     assert "not certification" in mdoc["qualification"]
-    assert "strict Marty releases correctly reject" in mdoc["qualification"]
+    assert "Preserve strict document-signer validation" in mdoc["qualification"]
+    assert "distinguish REVIEW from PASSED" in mdoc["qualification"]
     fixture = mdoc["upstream_fixture_review"]
     assert fixture["tracking_issue"].endswith("/issues/243")
     assert fixture["upstream_profile_issue"].endswith("/work_items/1891")
-    assert fixture["runner_release"] == manifest["official_runner"]["release"]
+    assert fixture["state"] == "historical-fixture-replaced-upstream"
+    assert fixture["runner_release"] == "release-v5.2.2"
+    assert fixture["resolved_runner_release"] == manifest["official_runner"]["release"]
+    assert fixture["resolved_runner_commit"] == manifest["official_runner"]["commit"]
     assert fixture["certificate_not_before"] == "2026-08-03T16:12:01+00:00"
     assert fixture["certificate_not_after"] == "2027-08-03T16:12:01+00:00"
     assert fixture["certificate_sha256"] == "6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53"
