@@ -12,7 +12,6 @@ import argparse
 import base64
 import json
 import os
-from pathlib import Path
 import re
 import runpy
 import secrets
@@ -21,6 +20,7 @@ import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
@@ -29,8 +29,9 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from official_suite_compose import RUN_ID, project_names  # noqa: E402
 
-RUN_ID = re.compile(r"[a-z0-9][a-z0-9-]{1,46}[a-z0-9]\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 REQUIRED = re.compile(r"\$\{([A-Z][A-Z0-9_]*):\?[^}]*\}")
 EXTENDS = re.compile(r"^\s*file:\s*(docker-compose[^\s]+\.yml)\s*$", re.MULTILINE)
@@ -200,7 +201,7 @@ def checked_release(args: argparse.Namespace) -> tuple[dict[str, str], list[str]
         if images.get(key) not in references:
             raise ValueError(f"{key} differs from the attested release")
     source = runpy.run_path(str(args.marty_ui / "scripts" / "conformance_stack.py"))
-    project = f"marty-conformance-{args.run_id}"
+    project = project_names(args.run_id)["marty"]
     compose = source["compose_command"](project)
     return images, compose, source
 
@@ -459,7 +460,7 @@ def main() -> int:
     private.mkdir(mode=0o700, parents=True, exist_ok=False)
     if stat.S_IMODE(private.stat().st_mode) != 0o700:
         raise RuntimeError("disposable KMS directory is not private")
-    project = f"marty-conformance-{args.run_id}"
+    project = project_names(args.run_id)["marty"]
     material = json.loads((args.material / "environment.json").read_text(encoding="utf-8"))["environment"]
     if not isinstance(material, dict) or not material.get("OIDF_PUBLIC_BASE_URL", "").startswith("https://"):
         raise ValueError("official TLS material is incomplete")

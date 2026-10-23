@@ -1,5 +1,5 @@
-import importlib.util
 import base64
+import importlib.util
 import json
 import os
 import stat
@@ -8,12 +8,20 @@ from types import SimpleNamespace
 
 import pytest
 
-
 SOURCE = Path(__file__).parents[2] / "scripts" / "official_kms_bootstrap.py"
 SPEC = importlib.util.spec_from_file_location("official_kms_bootstrap", SOURCE)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
+
+
+@pytest.mark.parametrize("run_id", ["local-oid4vp-url-query-20261023-r1", "production/stack"])
+def test_invalid_suite_identity_is_rejected_before_release_reads_or_provisioning(
+    tmp_path: Path, run_id: str,
+) -> None:
+    args = SimpleNamespace(run_id=run_id, stack_manifest=tmp_path / "must-not-be-read.json")
+    with pytest.raises(ValueError, match="official run id is invalid"):
+        MODULE.checked_release(args)
 
 
 def test_bootstrap_discovers_required_inputs_in_extended_native_service(tmp_path: Path) -> None:

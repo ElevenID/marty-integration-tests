@@ -44,6 +44,7 @@ from haip_test_certificates import (  # noqa: E402
 )
 from official_process_environment import subprocess_environment  # noqa: E402
 from official_suite_checkout import verify_checkout  # noqa: E402
+from official_suite_compose import RUN_ID  # noqa: E402
 from oidf_mdoc_binding_audit import audit as audit_oidf_mdoc_binding  # noqa: E402
 from oidf_sd_jwt_diagnostic_audit import audit as audit_oidf_sd_jwt_diagnostics  # noqa: E402
 from render_stack_env import (  # noqa: E402
@@ -62,7 +63,6 @@ LANES = {
     "w3c-v2",
     "eudi",
 }
-RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 DIGEST_IMAGE = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 W3C_API_KEY = re.compile(r"^mk_test_[A-Za-z0-9_-]{1,120}$")
 W3C_CONFORMANCE_RATE_LIMIT_RPM = "100000"
