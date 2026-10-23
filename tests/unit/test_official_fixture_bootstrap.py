@@ -215,6 +215,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "revocation-2"},
             {"id": "revocation-2"},
             {"id": "template-2"},
+            {"id": "template-2"},
+            {"id": "template-3"},
             {"id": "template-3"},
             {"id": "w3c-trust-1"},
             {"id": "w3c-issuer-entity-1"},
@@ -330,9 +332,11 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
         "credential_format": "JSON_LD",
         "algorithm": "EdDSA",
     }
+    assert calls[18][0] == "/v1/credential-templates/template-2/activate"
+    assert calls[20][0] == "/v1/credential-templates/template-3/activate"
     assert calls[17][2]["credential_payload_format"] == "ldp_vc"
-    assert calls[18][2]["credential_payload_format"] == "ldp_vc"
-    assert calls[19] == (
+    assert calls[19][2]["credential_payload_format"] == "ldp_vc"
+    assert calls[21] == (
         "/v1/trust-profiles",
         "POST",
         fixtures.w3c_trust_profile_payload(
@@ -341,7 +345,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             run_id="run-1",
         ),
     )
-    assert calls[20] == (
+    assert calls[22] == (
         "/v1/issuer-entities",
         "POST",
         fixtures.w3c_issuer_entity_payload(
@@ -350,7 +354,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             run_id="run-1",
         ),
     )
-    assert calls[21] == (
+    assert calls[23] == (
         "/v1/trust-profiles/w3c-trust-1/issuers",
         "POST",
         {
@@ -363,25 +367,25 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             },
         },
     )
-    assert calls[22][0:2] == (
+    assert calls[24][0:2] == (
         "/v1/trust-profiles/w3c-trust-1/activate",
         "POST",
     )
-    assert calls[23][2]["holder_binding"] == {"required": False}
-    assert calls[27][0].startswith("/v1/api-keys?organization_id=")
-    assert calls[27][2] == {
+    assert calls[25][2]["holder_binding"] == {"required": False}
+    assert calls[29][0].startswith("/v1/api-keys?organization_id=")
+    assert calls[29][2] == {
         "name": "Official W3C VC API run-1",
         "description": "Disposable key for one official VCDM v2 suite run",
         "scopes": ["credentials:issue", "credentials:read"],
         "is_test": True,
     }
-    assert calls[23][2]["trust_profile_id"] == "w3c-trust-1"
-    requirement = calls[23][2]["credential_requirements"][0]
+    assert calls[25][2]["trust_profile_id"] == "w3c-trust-1"
+    requirement = calls[25][2]["credential_requirements"][0]
     assert requirement["credential_template_id"] == "template-2"
     assert requirement["credential_payload_format"] == "w3c_vcdm_v2_di"
     assert requirement["trust_profile_id"] == "w3c-trust-1"
     assert requirement["requested_claims"] == [{"claim_name": "id", "display_name": "id", "required": False}]
-    assert calls[25][2]["holder_binding"] == {
+    assert calls[27][2]["holder_binding"] == {
         "required": True,
         "binding_methods": ["DEVICE_KEY"],
         "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
@@ -391,8 +395,8 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             "replay_detection_required": False,
         },
     }
-    assert "trust_profile_id" not in calls[25][2]
-    assert calls[25][2]["credential_requirements"] == []
+    assert "trust_profile_id" not in calls[27][2]
+    assert calls[27][2]["credential_requirements"] == []
 
 
 def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() -> None:
@@ -951,6 +955,9 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     assert credential_template["issuer_did"] == "did:web:issuer.example.com"
     assert presentation_template["issuer_did"] == "did:web:issuer.example.com"
     for template in (credential_template, presentation_template):
+        assert template["credential_type"] == "VerifiableCredential"
+        assert template["schema_uri"] == {"type": "object"}
+        assert template["claims"] == []
         assert "issuer_profile_id" not in template
         assert "signing_service_id" not in template
         assert "signing_key_reference" not in template
