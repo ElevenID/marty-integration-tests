@@ -1,4 +1,4 @@
-# Immutable image overrides for the official OIDF release-v5.2.2 runner.
+# Immutable image overrides for the official OIDF release-v5.3.3 runner.
 #
 # The upstream docker-compose-prebuilt.yml defaults to mutable `latest` tags.
 # This overlay is deliberately separate so its image digests can be updated in
@@ -9,6 +9,6 @@ services:
   mongodb:
     image: mongo@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
   server:
-    image: registry.gitlab.com/openid/conformance-suite@sha256:0922ac24e43acdc55d87d38a9038ff9954bbdb4e4998e762d6e0ff423424fd3d
+    image: registry.gitlab.com/openid/conformance-suite@sha256:377ab51f011d821c4b6f7729053e85adf062d691e51a3615f40507fd900a2436
   nginx:
-    image: registry.gitlab.com/openid/conformance-suite/nginx@sha256:39f2f3727fb879e7bec0038ea1c93389bf86b96a34f8631465708adfb633a3f2
+    image: registry.gitlab.com/openid/conformance-suite/nginx@sha256:d80183af68cb51c72c86b498780d94d6192cbc6adcc70a7d28ac6a01eff0d0db

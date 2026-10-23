@@ -43,10 +43,10 @@ def issuer_identity_response(
     }
 
 
-def mdoc_trust_anchor_pem(*, not_before: datetime, not_after: datetime) -> str:
+def mdoc_trust_anchor_pem(*, not_before: datetime, not_after: datetime, ca: bool | None = None) -> str:
     private_key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "OIDF mdoc fixture")])
-    certificate = (
+    builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(subject)
@@ -54,8 +54,10 @@ def mdoc_trust_anchor_pem(*, not_before: datetime, not_after: datetime) -> str:
         .serial_number(x509.random_serial_number())
         .not_valid_before(not_before)
         .not_valid_after(not_after)
-        .sign(private_key, hashes.SHA256())
     )
+    if ca is not None:
+        builder = builder.add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True)
+    certificate = builder.sign(private_key, hashes.SHA256())
     return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
 
 
@@ -591,7 +593,7 @@ def test_oidf_mdoc_fixture_uses_the_public_mdoc_contract() -> None:
     assert policy["holder_binding"] == {
         "required": True,
         "binding_methods": ["DEVICE_KEY"],
-        "proof_profiles": ["MDOC_DEVICE_AUTHENTICATION"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
         "proof_freshness": {
             "challenge_required": True,
             "audience_binding_required": True,
@@ -1185,6 +1187,62 @@ def test_mdoc_trust_anchor_rejects_expired_official_fixture(tmp_path: Path) -> N
             tmp_path,
             now=datetime(2026, 1, 2, tzinfo=UTC),
         )
+
+
+@pytest.mark.parametrize("ca", [True, False])
+def test_current_runner_uses_its_iaca_without_confusing_ca_and_document_signer(tmp_path: Path, ca: bool) -> None:
+    certificate = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC), not_after=datetime(2035, 1, 1, tzinfo=UTC), ca=ca
+    )
+    source = tmp_path / "src/main/kotlin/net/openid/conformance/util/TestKeysAndCerts.kt"
+    source.parent.mkdir(parents=True)
+    source.write_text(f'const val IACA_ROOT_CERT_PEM: String = """{certificate.rstrip()}"""', encoding="utf-8")
+    # Current root wins over obsolete inline signer material from older releases.
+    write_mdoc_runner_certificate(tmp_path, MDOC_TRUST_ANCHOR_PEM)
+    if ca:
+        assert fixtures.official_mdoc_trust_anchor(tmp_path, now=datetime(2026, 1, 1, tzinfo=UTC)) == certificate
+    else:
+        with pytest.raises(ValueError, match="IACA root certificate must be a CA"):
+            fixtures.official_mdoc_trust_anchor(tmp_path, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+
+@pytest.mark.parametrize("ca", [True, False])
+def test_mdoc_public_trust_uses_root_or_direct_pin_semantics(ca: bool) -> None:
+    certificate = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC), not_after=datetime(2035, 1, 1, tzinfo=UTC), ca=ca
+    )
+    payload = fixtures.trust_profile_payload("org-1", None, run_id="run-1", mdoc_trust_anchor_pem=certificate)
+    assert payload["trust_sources"][0]["source_type"] == ("ROOT_CA" if ca else "PINNED_ISSUER")
+    assert payload["trust_sources"][0]["certificate_pem"] == certificate
+
+
+def test_mdoc_root_bootstrap_does_not_invent_a_document_signer_relationship() -> None:
+    certificate = mdoc_trust_anchor_pem(
+        not_before=datetime(2025, 1, 1, tzinfo=UTC), not_after=datetime(2035, 1, 1, tzinfo=UTC), ca=True
+    )
+    calls = []
+    responses = iter([
+        issuer_identity_response(key_purpose="mdoc_dsc", credential_format="MDOC"),
+        issuer_identity_response(key_purpose="oid4vp_request_signing", credential_format="MDOC"),
+        {"identity": issuer_identity_response()["identity"], "public_jwk": PUBLIC_SIGNING_JWK},
+        *({"id": value} for value in ["compliance-1", "revocation-1", "revocation-1", "template-1",
+                                      "template-1", "policy-1", "policy-1", "trust-1", "trust-1"]),
+    ])
+
+    def request(_gateway: str, _session: str, path: str, *, method: str, json_body: dict | None = None) -> object:
+        assert path != "/v1/issuer-entities"
+        assert not path.endswith("/issuers")
+        calls.append((path, method, json_body))
+        return next(responses)
+
+    result = fixtures.bootstrap(
+        "https://marty.test", "real-session", organization_id=fixtures.DEFAULT_ORGANIZATION,
+        run_id="run-1", mode="oid4vp-mdoc", oidf_mdoc_trust_anchor_pem=certificate, request=request,
+    )
+    trust = next(body for path, _method, body in calls if path == "/v1/trust-profiles")
+    assert trust["trust_sources"][0]["source_type"] == "ROOT_CA"
+    assert result["oid4vp_mdoc_trust_profile_id"] == "trust-1"
+    assert "oid4vp_mdoc_status_issuer_id" not in result
 
 
 def test_mdoc_bootstrap_requires_the_runner_document_certificate() -> None:

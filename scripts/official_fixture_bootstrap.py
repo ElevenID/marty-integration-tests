@@ -40,6 +40,11 @@ OFFICIAL_MDOC_SIGNER_CERTIFICATE = re.compile(
     r'"""(?P<certificate>-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)"""',
     re.DOTALL,
 )
+OFFICIAL_MDOC_IACA_CERTIFICATE = re.compile(
+    r'const\s+val\s+IACA_ROOT_CERT_PEM\s*:\s*String\s*=\s*"""'
+    r'(?P<certificate>-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)"""',
+    re.DOTALL,
+)
 
 
 def compliance_profile_payload(
@@ -597,7 +602,9 @@ def policy_payload(
         holder_binding.update(
             {
                 "binding_methods": ["DEVICE_KEY"],
-                "proof_profiles": ["MDOC_DEVICE_AUTHENTICATION" if mdoc else "OID4VP_VERIFIABLE_PRESENTATION"],
+                # MDOC supplies DEVICE_KEY holder authentication inside the
+                # same OID4VP presentation protocol profile as other formats.
+                "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
                 "proof_freshness": {
                     "challenge_required": True,
                     "audience_binding_required": True,
@@ -667,27 +674,39 @@ def official_signer_public_jwk(config_path: Path) -> dict[str, str]:
     }
 
 
+def _certificate_is_ca(certificate: x509.Certificate) -> bool:
+    try:
+        return certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    except x509.ExtensionNotFound:
+        return False
+
+
 def official_mdoc_trust_anchor(
     runner_source: Path,
     *,
     now: datetime | None = None,
 ) -> str:
-    """Read the mock mdoc issuer certificate from the exact OIDF runner source.
+    """Read public mdoc trust material from the exact OIDF runner source.
 
     The verifier plan's mdoc wallet does not use ``credential.signing_jwk``.
-    It provisions a separate document signer in ``TestAppUtils`` and includes
-    that public certificate in IssuerAuth. Reading it from the checked-out,
-    commit-pinned runner keeps the Trust Profile aligned when the official
-    runner rotates its disposable certificate.
+    Current upstream generates a document signer under the published IACA in
+    ``TestKeysAndCerts``. Read only that public root for the Trust Profile.
+    Retain the older inline certificate reader for source-bound audit replay.
     """
-    candidates = sorted(
+    iaca_source = runner_source / "src/main/kotlin/net/openid/conformance/util/TestKeysAndCerts.kt"
+    current_iaca = iaca_source.is_file()
+    candidates = [iaca_source] if current_iaca else sorted(
         runner_source.glob(
             "src/main/kotlin/**/TestAppUtils.kt",
         )
     )
     matches: list[str] = []
     for source in candidates:
-        match = OFFICIAL_MDOC_SIGNER_CERTIFICATE.search(source.read_text(encoding="utf-8"))
+        pattern = OFFICIAL_MDOC_IACA_CERTIFICATE if current_iaca else OFFICIAL_MDOC_SIGNER_CERTIFICATE
+        found = list(pattern.finditer(source.read_text(encoding="utf-8")))
+        if len(found) > 1:
+            raise ValueError("official mdoc source contains ambiguous public trust certificates")
+        match = found[0] if found else None
         if match is not None:
             certificate = "\n".join(line.strip() for line in match.group("certificate").strip().splitlines())
             certificate += "\n"
@@ -699,6 +718,10 @@ def official_mdoc_trust_anchor(
         raise ValueError("exact OIDF runner source must expose exactly one documentSignerCert mdoc trust anchor")
     certificate_pem = matches[0]
     certificate = x509.load_pem_x509_certificate(certificate_pem.encode("ascii"))
+    # Current upstream generates a separate end-entity document signer.
+    # Trust its published IACA, never substitute that CA as the signer.
+    if current_iaca and not _certificate_is_ca(certificate):
+        raise ValueError("official OIDF mdoc IACA root certificate must be a CA")
     checked_at = now or datetime.now(UTC)
     if checked_at.tzinfo is None:
         raise ValueError("OIDF mdoc certificate validation time must be timezone-aware")
@@ -730,6 +753,8 @@ def trust_profile_payload(
         if public_jwk is not None:
             raise ValueError("mdoc trust must use the runner document certificate, not its SD-JWT JWK")
         ssl.PEM_cert_to_DER_cert(mdoc_trust_anchor_pem)
+        certificate = x509.load_pem_x509_certificate(mdoc_trust_anchor_pem.encode("ascii"))
+        is_ca = _certificate_is_ca(certificate)
         return {
             "organization_id": organization_id,
             "name": f"Official OIDF mdoc signer {run_id}",
@@ -742,7 +767,7 @@ def trust_profile_payload(
             "allowed_algorithms": ["ES256"],
             "trust_sources": [
                 {
-                    "source_type": "PINNED_ISSUER",
+                    "source_type": "ROOT_CA" if is_ca else "PINNED_ISSUER",
                     "certificate_pem": mdoc_trust_anchor_pem,
                     "description": (
                         "Public test certificate extracted from the exact commit-pinned OIDF conformance runner; "
@@ -1511,11 +1536,16 @@ def bootstrap(
                 ),
             )
             trust_profile_id = response_id(created_trust_profile, "OID4VP trust profile")
-            # A pinned key proves a signature but cannot authorize its issuer.
-            # Materialize the exact commit-pinned signer as a governed entity
-            # and relationship before activation, so verification cannot fall
-            # back to an allowlist or infer trust from JWK possession.
-            if mdoc:
+            # Govern direct signer pins through an exact issuer relationship.
+            # An explicit ROOT_CA instead authorizes its authenticated certificate
+            # chain. Registering that CA as a leaf signer would deny every real
+            # descendant whose certificate fingerprint is necessarily different.
+            mdoc_root = mdoc and _certificate_is_ca(
+                x509.load_pem_x509_certificate(oidf_mdoc_trust_anchor_pem.encode("ascii"))
+            )
+            if mdoc_root:
+                issuer_payload = None
+            elif mdoc:
                 assert oidf_mdoc_trust_anchor_pem is not None
                 issuer_payload = mdoc_issuer_entity_payload(
                     organization_id,
@@ -1535,41 +1565,42 @@ def bootstrap(
                 issuer_resource = "OID4VP SD-JWT issuer entity"
                 relationship_resource = "OID4VP SD-JWT issuer relationship"
                 relationship_source = "official-oidf-commit-pinned-sd-jwt-signer"
-            created_issuer = request(
-                gateway_url,
-                session_id,
-                "/v1/issuer-entities",
-                method="POST",
-                json_body=issuer_payload,
-            )
-            issuer_entity_id = response_id(created_issuer, issuer_resource)
-            linked_issuer = request(
-                gateway_url,
-                session_id,
-                f"/v1/trust-profiles/{trust_profile_id}/issuers",
-                method="POST",
-                json_body={
-                    "issuer_id": issuer_entity_id,
-                    "trust_level": 100,
-                    "relationship_status": "TRUSTED",
-                    "cascade_revocation_policy": "AUTO_CASCADE",
-                    "metadata": {
-                        "source": relationship_source,
-                    },
-                },
-            )
-            response_id(linked_issuer, relationship_resource)
-            if mdoc:
-                result[f"{prefix}_status_issuer_id"] = issuer_payload["issuer_id"]
-            else:
-                result[f"{prefix}_trusted_issuer_id"] = issuer_payload["issuer_id"]
-                # The per-module interaction adapter uses the same public key
-                # to create an exact governed IssuerEntity for the runner's
-                # dynamic test-instance issuer URL. Private key material was
-                # already removed by ``official_signer_public_jwk``.
-                result[f"{prefix}_credential_issuer_public_jwk"] = dict(
-                    oidf_signer_public_jwk
+            if issuer_payload is not None:
+                created_issuer = request(
+                    gateway_url,
+                    session_id,
+                    "/v1/issuer-entities",
+                    method="POST",
+                    json_body=issuer_payload,
                 )
+                issuer_entity_id = response_id(created_issuer, issuer_resource)
+                linked_issuer = request(
+                    gateway_url,
+                    session_id,
+                    f"/v1/trust-profiles/{trust_profile_id}/issuers",
+                    method="POST",
+                    json_body={
+                        "issuer_id": issuer_entity_id,
+                        "trust_level": 100,
+                        "relationship_status": "TRUSTED",
+                        "cascade_revocation_policy": "AUTO_CASCADE",
+                        "metadata": {
+                            "source": relationship_source,
+                        },
+                    },
+                )
+                response_id(linked_issuer, relationship_resource)
+                if mdoc:
+                    result[f"{prefix}_status_issuer_id"] = issuer_payload["issuer_id"]
+                else:
+                    result[f"{prefix}_trusted_issuer_id"] = issuer_payload["issuer_id"]
+                    # The per-module interaction adapter uses the same public key
+                    # to create an exact governed IssuerEntity for the runner's
+                    # dynamic test-instance issuer URL. Private key material was
+                    # already removed by ``official_signer_public_jwk``.
+                    result[f"{prefix}_credential_issuer_public_jwk"] = dict(
+                        oidf_signer_public_jwk
+                    )
             activated_trust_profile = request(
                 gateway_url,
                 session_id,
