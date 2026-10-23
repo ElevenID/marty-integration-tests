@@ -23,6 +23,14 @@ from uuid import uuid4
 REDIRECT_CODES = {301, 302, 303, 307, 308}
 
 
+class PublicGatewayHttpError(RuntimeError):
+    """Preserve a public HTTP status without parsing private exception text."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status = status
+
+
 def required_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -190,7 +198,7 @@ def authenticated_json_request(
             json_body=json_body,
         )
     if not 200 <= status < 300:
-        raise RuntimeError(f"public gateway {method} {path} returned HTTP {status}: {body[:300]}")
+        raise PublicGatewayHttpError(status, f"public gateway {method} {path} returned HTTP {status}: {body[:300]}")
     import json
 
     try:

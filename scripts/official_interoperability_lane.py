@@ -1592,6 +1592,19 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
             environment,
         )
         result = browser_result or official_result
+        if args.lane == "oid4vp-final":
+            evidence_result = run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "oidf_marty_verification_evidence.py"),
+                    "--flow-audit-dir", str(args.output_dir / "private" / "oidf-flow-audit"),
+                    "--module-results", str(args.output_dir / "raw" / profile / "module-results.json"),
+                    "--private-output", str(args.output_dir / "private" / "verification-evidence"),
+                    "--output", str(args.output_dir / "raw" / profile / "marty-verification-evidence.json"),
+                ],
+                environment,
+            )
+            result = result or evidence_result
     finally:
         compose_log = args.output_dir / "private" / "compose.log"
         run(

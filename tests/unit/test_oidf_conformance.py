@@ -463,9 +463,16 @@ def test_verifier_configuration_profile_must_match_the_official_plan(tmp_path: P
         oidf.validate_config(config, "oid4vp-verifier")
 
 
-@pytest.mark.parametrize("module_result,expected_exit", [("PASSED", 0), ("REVIEW", 1)])
+@pytest.mark.parametrize(
+    ("module_result", "coverage_complete", "expected_exit"),
+    [("PASSED", True, 0), ("REVIEW", True, 1), ("PASSED", False, 1)],
+)
 def test_evidence_records_non_secret_provenance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module_result: str, expected_exit: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    module_result: str,
+    coverage_complete: bool,
+    expected_exit: int,
 ) -> None:
     runner = tmp_path / "runner"
     runner.mkdir()
@@ -475,13 +482,27 @@ def test_evidence_records_non_secret_provenance(
     output = tmp_path / "report"
     output.mkdir()
     with zipfile.ZipFile(output / "official-result.zip", "w") as exported:
-        exported.writestr("module.json", json.dumps({"testInfo": {
-            "testName": "oid4vp-1final-verifier-happy-flow", "status": "FINISHED", "result": module_result,
-        }, "results": []}))
+        exported.writestr(
+            "module.json",
+            json.dumps(
+                {
+                    "testInfo": {
+                        "testName": "oid4vp-1final-verifier-happy-flow",
+                        "status": "FINISHED",
+                        "result": module_result,
+                    },
+                    "results": [],
+                }
+            ),
+        )
     stack = tmp_path / "stack.json"
     stack.write_text('{"schema":"marty.stack/v1","release":"marty-ui@1.0.0"}', encoding="utf-8")
     monkeypatch.setattr(oidf, "git_revision", lambda _path: "a" * 40)
-    assert oidf.write_evidence(output, oidf.load_manifest(), "oid4vp-verifier", config, runner, 0, stack, "pre-activation") == expected_exit
+    monkeypatch.setattr(oidf, "official_plan_coverage", lambda *_args: {"complete": coverage_complete})
+    assert (
+        oidf.write_evidence(output, oidf.load_manifest(), "oid4vp-verifier", config, runner, 0, stack, "pre-activation")
+        == expected_exit
+    )
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["result"] == {"exit_code": expected_exit, "process_exit_code": 0, "passed": expected_exit == 0}
     assert evidence["execution_mode"] == "pre-activation"
@@ -679,18 +700,37 @@ def test_tls_proxy_uses_only_oidf_approved_tls12_ciphers() -> None:
     assert "ECDHE-RSA-AES128-SHA" not in config
 
 
-@pytest.mark.parametrize("status,result,expected", [
-    ("FINISHED", "PASSED", True), ("FINISHED", "REVIEW", False),
-    ("FINISHED", "WARNING", False), ("FINISHED", "FAILED", False),
-    ("INTERRUPTED", "PASSED", False), ("WAITING", None, False),
-])
+@pytest.mark.parametrize(
+    ("status", "result", "expected"),
+    [
+        ("FINISHED", "PASSED", True),
+        ("FINISHED", "REVIEW", False),
+        ("FINISHED", "WARNING", False),
+        ("FINISHED", "FAILED", False),
+        ("INTERRUPTED", "PASSED", False),
+        ("WAITING", None, False),
+    ],
+)
 def test_strict_module_summary_preserves_official_review_and_completion(
-    tmp_path: Path, status: str, result: object, expected: bool,
+    tmp_path: Path,
+    status: str,
+    result: object,
+    expected: bool,
 ) -> None:
     with zipfile.ZipFile(tmp_path / "official.zip", "w") as exported:
-        exported.writestr("test.json", json.dumps({"testInfo": {
-            "testName": "oid4vp-1final-verifier-happy-flow", "status": status, "result": result,
-        }, "results": []}))
+        exported.writestr(
+            "test.json",
+            json.dumps(
+                {
+                    "testInfo": {
+                        "testName": "oid4vp-1final-verifier-happy-flow",
+                        "status": status,
+                        "result": result,
+                    },
+                    "results": [],
+                }
+            ),
+        )
     summary = oidf.strict_module_summary(tmp_path, [])
     assert summary["passed"] is expected
     assert bool(summary["pending_review"]) is (result == "REVIEW")
@@ -699,14 +739,90 @@ def test_strict_module_summary_preserves_official_review_and_completion(
 def test_strict_module_summary_rejects_missing_results_and_undeclared_skips(tmp_path: Path) -> None:
     assert oidf.strict_module_summary(tmp_path, [])["passed"] is False
     with zipfile.ZipFile(tmp_path / "official.zip", "w") as exported:
-        exported.writestr("test.json", json.dumps({"testInfo": {
-            "testName": "oid4vci-1_0-issuer-batch-issuance", "status": "FINISHED", "result": "SKIPPED",
-        }, "results": []}))
+        exported.writestr(
+            "test.json",
+            json.dumps(
+                {
+                    "testInfo": {
+                        "testName": "oid4vci-1_0-issuer-batch-issuance",
+                        "status": "FINISHED",
+                        "result": "SKIPPED",
+                    },
+                    "results": [],
+                }
+            ),
+        )
     assert oidf.strict_module_summary(tmp_path, [])["passed"] is False
     expected_skips = [{"test-name": "oid4vci-1_0-issuer-batch-issuance"}]
     assert oidf.strict_module_summary(tmp_path, expected_skips)["passed"] is False
     with zipfile.ZipFile(tmp_path / "official.zip", "a") as exported:
-        exported.writestr("happy.json", json.dumps({"testInfo": {
-            "testName": "oid4vci-1_0-issuer-happy-flow", "status": "FINISHED", "result": "PASSED",
-        }, "results": []}))
+        exported.writestr(
+            "happy.json",
+            json.dumps(
+                {
+                    "testInfo": {
+                        "testName": "oid4vci-1_0-issuer-happy-flow",
+                        "status": "FINISHED",
+                        "result": "PASSED",
+                    },
+                    "results": [],
+                }
+            ),
+        )
     assert oidf.strict_module_summary(tmp_path, expected_skips)["passed"] is True
+
+
+def plan_and_exports() -> tuple[dict, list[dict]]:
+    plan = {
+        "_id": "plan1",
+        "planName": "official-plan",
+        "variant": {"format": "sd_jwt_vc"},
+        "config": {"private_key": "must-not-export"},
+        "modules": [
+            {"testModule": name, "variant": {}, "instances": [identity]}
+            for name, identity in [("happy", "test1"), ("negative", "test2")]
+        ],
+    }
+    infos = [
+        {"testName": name, "testId": identity, "_id": identity, "planId": "plan1", "variant": {"format": "sd_jwt_vc"}}
+        for name, identity in [("happy", "test1"), ("negative", "test2")]
+    ]
+    return plan, infos
+
+
+def test_plan_coverage_requires_every_live_plan_module_and_keeps_config_private() -> None:
+    plan, infos = plan_and_exports()
+    selection = "official-plan[format=sd_jwt_vc]"
+    coverage = oidf.compare_plan_coverage(infos, plan, selection)
+    assert coverage["complete"] is True
+    assert coverage["expected_modules"] == ["happy", "negative"]
+    assert "must-not-export" not in json.dumps(coverage)
+    partial = oidf.compare_plan_coverage(infos[:1], plan, selection)
+    assert partial["complete"] is False
+    assert partial["missing_modules"] == ["negative"]
+    assert oidf.compare_plan_coverage([], plan, selection)["complete"] is False
+
+
+@pytest.mark.parametrize("mutation", ["plan", "profile", "variant", "identity", "duplicate", "unrun", "unexpected"])
+def test_plan_coverage_rejects_foreign_partial_or_ambiguous_evidence(mutation: str) -> None:
+    plan, infos = plan_and_exports()
+    if mutation == "plan":
+        infos[0]["planId"] = "otherplan"
+    elif mutation == "profile":
+        plan["planName"] = "other-profile"
+    elif mutation == "variant":
+        infos[0]["variant"] = {"format": "other"}
+    elif mutation == "identity":
+        infos[0]["testId"] = "another-attempt"
+    elif mutation == "duplicate":
+        infos.append(infos[0])
+    elif mutation == "unrun":
+        plan["modules"][1]["instances"] = []
+    else:
+        infos[0]["testName"] = "unselected-module"
+    with pytest.raises(ValueError, match="official"):
+        oidf.compare_plan_coverage(infos, plan, "official-plan[format=sd_jwt_vc]")
+
+
+def test_plan_coverage_unavailable_readback_cannot_qualify(tmp_path: Path) -> None:
+    assert oidf.official_plan_coverage(tmp_path, "official-plan")["complete"] is False
