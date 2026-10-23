@@ -88,6 +88,14 @@ def compliance_profile_payload(
     }
 
 
+def issuer_did_for_gateway(gateway_url: str, organization_id: str | None = None) -> str:
+    """Separate the deployed default identity from organization test identities."""
+    domain = urlparse(gateway_url).hostname
+    if not domain:
+        raise ValueError("gateway URL has no hostname for the disposable issuer DID")
+    return f"did:web:{domain}" + (f":orgs:{organization_id}" if organization_id else "")
+
+
 def issuer_identity_payload(
     organization_id: str,
     *,
@@ -99,12 +107,9 @@ def issuer_identity_payload(
     key_attestation_trust_anchor_pem: str | None = None,
 ) -> dict[str, Any]:
     """Request a DID identity while leaving all custody selection to Marty."""
-    domain = urlparse(gateway_url).hostname
-    if not domain:
-        raise ValueError("gateway URL has no hostname for the disposable issuer DID")
     result: dict[str, Any] = {
         "organization_id": organization_id,
-        "issuer_did": f"did:web:{domain}:orgs:{organization_id}",
+        "issuer_did": issuer_did_for_gateway(gateway_url, organization_id),
         "key_purpose": key_purpose,
         "credential_format": credential_format or ("JSON_LD" if w3c else "SD_JWT_VC"),
         "algorithm": algorithm,
@@ -970,10 +975,12 @@ def oid4vci_configuration_id(
     return matches[0]
 
 
-def issuer_identity_response(value: object) -> dict[str, object]:
+def issuer_identity_response(value: object, *, require_fresh: bool = False) -> dict[str, object]:
     """Validate the provider-neutral public issuer-identity response."""
     if not isinstance(value, dict):
         raise RuntimeError("public API returned a non-object for issuer identity")
+    if require_fresh and value.get("created") is not True:
+        raise RuntimeError("attested official fixture reused an identity with an unverified existing policy")
     identity = value.get("identity", value)
     if not isinstance(identity, dict) or not str(identity.get("issuer_did") or "").startswith("did:"):
         raise RuntimeError("public API returned an invalid issuer identity")
@@ -1070,7 +1077,7 @@ def bootstrap_eudi(
             method="POST",
             json_body=payload,
         )
-        identity = issuer_identity_response(created)
+        identity = issuer_identity_response(created, require_fresh=trust_wallet_attester)
         if identity.get("issuer_did") != payload["issuer_did"]:
             raise RuntimeError("issuer identity response changed the requested DID")
         if attach_certificate:
@@ -1251,7 +1258,7 @@ def bootstrap(
             method="POST",
             json_body=profile_payload,
         )
-        issuer_identity_response(created_issuer_identity)
+        issuer_identity_response(created_issuer_identity, require_fresh=oid4vci)
         request_profile_payload: dict[str, Any] | None = None
         request_issuer_public_jwk: dict[str, str] | None = None
         if not w3c and not oid4vci:

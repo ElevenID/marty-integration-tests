@@ -97,6 +97,14 @@ def test_mdoc_mode_is_a_supported_public_fixture_mode() -> None:
     assert parsed.mode == "oid4vp-mdoc"
 
 
+@pytest.mark.parametrize("created", [False, None, "true"])
+def test_attested_fixture_rejects_an_existing_or_unproven_identity(created: object) -> None:
+    response = issuer_identity_response()
+    response["created"] = created
+    with pytest.raises(RuntimeError, match="unverified existing policy"):
+        fixtures.issuer_identity_response(response, require_fresh=True)
+
+
 def test_oid4vci_bootstrap_creates_only_issuer_resources() -> None:
     calls: list[tuple[str, str, dict | None]] = []
     responses = iter(
