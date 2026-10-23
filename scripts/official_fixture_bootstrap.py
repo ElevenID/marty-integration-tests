@@ -718,11 +718,10 @@ def official_mdoc_trust_anchor(
         raise ValueError("exact OIDF runner source must expose exactly one documentSignerCert mdoc trust anchor")
     certificate_pem = matches[0]
     certificate = x509.load_pem_x509_certificate(certificate_pem.encode("ascii"))
-    if current_iaca:
-        # Current upstream generates a separate end-entity document signer.
-        # Trust its published IACA, never substitute that CA as the signer.
-        if not _certificate_is_ca(certificate):
-            raise ValueError("official OIDF mdoc IACA root certificate must be a CA")
+    # Current upstream generates a separate end-entity document signer.
+    # Trust its published IACA, never substitute that CA as the signer.
+    if current_iaca and not _certificate_is_ca(certificate):
+        raise ValueError("official OIDF mdoc IACA root certificate must be a CA")
     checked_at = now or datetime.now(UTC)
     if checked_at.tzinfo is None:
         raise ValueError("OIDF mdoc certificate validation time must be timezone-aware")
