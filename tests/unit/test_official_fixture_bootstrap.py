@@ -230,7 +230,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {
                 "id": "w3c-api-key-1",
                 "key": "mk_test_fixture",
-                "scopes": ["credentials:issue", "credentials:read"],
+                "scopes": ["credentials:issue", "credentials:read", "trust:read"],
             },
         ]
     )
@@ -377,7 +377,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert calls[30][2] == {
         "name": "Official W3C VC API run-1",
         "description": "Disposable key for one official VCDM v2 suite run",
-        "scopes": ["credentials:issue", "credentials:read"],
+        "scopes": ["credentials:issue", "credentials:read", "trust:read"],
         "is_test": True,
     }
     assert calls[26][2]["trust_profile_id"] == "w3c-trust-1"
@@ -924,6 +924,26 @@ def test_new_issuer_did_resolution_does_not_retry_other_errors(
             credential_format="SD_JWT_VC",
             algorithm="ES256",
             request=request,
+        )
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [
+        ["credentials:issue", "credentials:read"],
+        ["credentials:issue", "credentials:read", "trust:write"],
+        ["credentials:issue", "credentials:read", "trust:read", "admin:full"],
+        ["credentials:issue", "credentials:read", "trust:read", "trust:read"],
+    ],
+)
+def test_w3c_api_key_rejects_missing_or_excess_permissions(scopes: list[str]) -> None:
+    def request(*_args: object, **_kwargs: object) -> object:
+        return {"id": "test-key", "key": "mk_test_fixture", "scopes": scopes}
+
+    with pytest.raises(RuntimeError, match="least-privilege"):
+        fixtures.create_disposable_vc_api_key(
+            "https://marty.test", "session", organization_id=fixtures.DEFAULT_ORGANIZATION,
+            run_id="scope-contract", request=request,
         )
 
 
