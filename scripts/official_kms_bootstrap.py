@@ -77,6 +77,7 @@ RUNTIME_CREDENTIALS = (
     "DEVICE_REGISTRATION_SIGNING_KEYS_KEY", "FLOW_APPLICATION_EVENT_HMAC_KEY",
     "FLOW_WEBHOOK_SECRET", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY", "TOKEN_HMAC_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
 )
 def role_environment(tls: Path, extra: Path) -> dict[str, str]:
     """Describe every scoped workload KMS input from the same role inventory."""
