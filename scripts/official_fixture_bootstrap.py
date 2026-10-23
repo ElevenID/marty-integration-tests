@@ -921,6 +921,9 @@ def create_disposable_vc_api_key(
     request: Callable[..., object],
 ) -> tuple[str, str]:
     """Create the least-privilege key used by the official W3C client."""
+    # VC-API verification delegates to a saved Presentation Policy. Its native
+    # authorization requires trust:read as well as the Gateway credential scope.
+    # Keep this explicit rather than broadening production API-key permissions.
     created = request(
         gateway_url,
         session_id,
@@ -929,7 +932,7 @@ def create_disposable_vc_api_key(
         json_body={
             "name": f"Official W3C VC API {run_id}",
             "description": "Disposable key for one official VCDM v2 suite run",
-            "scopes": ["credentials:issue", "credentials:read"],
+            "scopes": ["credentials:issue", "credentials:read", "trust:read"],
             "is_test": True,
         },
     )
@@ -940,8 +943,8 @@ def create_disposable_vc_api_key(
         not isinstance(raw_key, str)
         or not raw_key.startswith("mk_test_")
         or not isinstance(scopes, list)
-        or len(scopes) != 2
-        or set(scopes) != {"credentials:issue", "credentials:read"}
+        or len(scopes) != 3
+        or set(scopes) != {"credentials:issue", "credentials:read", "trust:read"}
     ):
         raise RuntimeError("public API did not return the expected least-privilege test key")
     return key_id, raw_key
