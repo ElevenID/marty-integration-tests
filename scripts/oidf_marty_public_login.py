@@ -18,6 +18,7 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlencode, urljoin, urlparse
+from uuid import uuid4
 
 REDIRECT_CODES = {301, 302, 303, 307, 308}
 
@@ -174,13 +175,18 @@ def authenticated_json_request(
     """
     if not path.startswith("/") or path.startswith("//"):
         raise ValueError("public gateway path must be origin-relative")
+    headers = {"Accept": "application/json", "Cookie": f"sessionId={session_id}"}
+    if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        # A fresh logical mutation gets its own key at the shared transport
+        # boundary, including APIs that require idempotency before validation.
+        headers["Idempotency-Key"] = str(uuid4())
     with tempfile.TemporaryDirectory(prefix="marty-oidf-api-cookie-") as temp_dir:
         status, _, body = curl_request(
             f"{origin}{path}",
             cookie_jar=Path(temp_dir) / "cookies.txt",
             origin=origin,
             method=method,
-            headers={"Accept": "application/json", "Cookie": f"sessionId={session_id}"},
+            headers=headers,
             json_body=json_body,
         )
     if not 200 <= status < 300:
