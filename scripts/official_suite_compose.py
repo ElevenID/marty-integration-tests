@@ -19,6 +19,8 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import FrameType
+from typing import Any
 
 import httpx
 
@@ -39,6 +41,7 @@ from haip_test_certificates import (
     validate_verifier_environment,
 )
 from local_hostname_resolution import resolve_hosts_to
+from official_process_environment import subprocess_environment
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
@@ -92,7 +95,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--marty-ui", type=Path, required=True, help="pinned marty-ui checkout")
     result.add_argument("--stack-manifest", type=Path, help="attested released stack manifest")
     result.add_argument("--release-ui-revision", help="exact released UI source commit")
-    result.add_argument("--marty-prestarted", action="store_true", help="resume the exact KMS-bootstrapped Marty project")
+    result.add_argument("--marty-prestarted", action="store_true",
+                        help="resume the exact KMS-bootstrapped Marty project")
     result.add_argument("--oidf-runner", type=Path, help="pinned official OIDF runner checkout")
     result.add_argument("--oidf", action="store_true", help="include the official OIDF runner project")
     result.add_argument("--eudi", action="store_true", help="include the EUDI reference project")
@@ -313,7 +317,7 @@ def child_environment(
     eudi_material: Path | None = None,
     validate_eudi: bool = True,
 ) -> dict[str, str]:
-    environment = os.environ.copy()
+    environment = subprocess_environment(os.environ)
     material_mode = environment.get("EUDI_TEST_MATERIAL_MODE", "external").strip() or "external"
     if eudi_material is not None:
         try:
@@ -372,9 +376,11 @@ def configure_project_environment(environment: dict[str, str], projects: dict[st
     )
 
 
-def run(command: list[str], environment: dict[str, str]) -> int:
+def run(command: list[str], environment: dict[str, str], *, native_attestation: bool = False) -> int:
     print("+", subprocess.list2cmdline(command), flush=True)
-    return subprocess.run(command, check=False, env=environment).returncode
+    return subprocess.run(command, check=False, env=subprocess_environment(
+        environment, native_attestation=native_attestation,
+    )).returncode
 
 
 def diagnose_released_native_model(args: argparse.Namespace, project: str,
@@ -399,7 +405,7 @@ def diagnose_released_native_model(args: argparse.Namespace, project: str,
         native = runpy.run_path(str(ui / "scripts/conformance_native.py"))
         locations: list[str] = []
 
-        def trace(frame, event, detail):
+        def trace(frame: FrameType, event: str, detail: Any) -> Callable[..., Any]:
             if event == "exception":
                 error_type = detail[0]
                 source = Path(frame.f_code.co_filename)
@@ -736,7 +742,8 @@ def execute(args: argparse.Namespace) -> int:
         # asking the disposable test CA to certify the profile's public DID key.
         # Marty private key material never leaves the signing service/KMS path.
         started.append("marty")
-        result = run(marty_command(args, projects, "up", include_haip=False), environment)
+        result = run(marty_command(args, projects, "up", include_haip=False), environment,
+                     native_attestation=True)
         if result:
             if not args.retain_on_up_failure:
                 stop_started(
@@ -762,6 +769,7 @@ def execute(args: argparse.Namespace) -> int:
         result = run(
             marty_command(args, projects, "up", include_haip=True, resume=True),
             environment,
+            native_attestation=True,
         )
         if result:
             if not args.retain_on_up_failure:
@@ -772,7 +780,7 @@ def execute(args: argparse.Namespace) -> int:
     for name, command in up_entries:
         # Include a partially created project in cleanup if its up command fails.
         started.append(name)
-        result = run(command(), environment)
+        result = run(command(), environment, native_attestation=name == "marty")
         if result:
             if name == "marty":
                 diagnose_released_native_model(args, projects["marty"], environment)

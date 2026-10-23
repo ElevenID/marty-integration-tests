@@ -42,6 +42,7 @@ from haip_test_certificates import (  # noqa: E402
     issue_verifier_certificate,
     load_verifier_environment,
 )
+from official_process_environment import subprocess_environment  # noqa: E402
 from official_suite_checkout import verify_checkout  # noqa: E402
 from oidf_mdoc_binding_audit import audit as audit_oidf_mdoc_binding  # noqa: E402
 from oidf_sd_jwt_diagnostic_audit import audit as audit_oidf_sd_jwt_diagnostics  # noqa: E402
@@ -780,8 +781,10 @@ def oid4vci_issuer_config(
     return config, request
 
 
-def run(command: list[str], environment: dict[str, str], *, capture: Path | None = None) -> int:
+def run(command: list[str], environment: dict[str, str], *, capture: Path | None = None,
+        native_attestation: bool = False) -> int:
     print("+", subprocess.list2cmdline(command), flush=True)
+    environment = subprocess_environment(environment, native_attestation=native_attestation)
     if capture is None:
         return subprocess.run(command, env=environment, check=False).returncode
     completed = subprocess.run(command, env=environment, check=False, text=True, capture_output=True)
@@ -1381,7 +1384,7 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
     args.release_ui_revision = str(metadata["marty_commit"])
     stack_environment = load_stack_environment(args.stack_env)
     validate_stack_binding(args.stack_manifest, metadata, stack_environment)
-    environment = os.environ.copy()
+    environment = subprocess_environment(os.environ)
     environment.update(stack_environment)
     kms_env = getattr(args, "kms_env", None)
     kms_values = None
@@ -1465,7 +1468,7 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
         haip=True,
         retain_on_up_failure=True,
     )
-    started = run(up, environment) == 0
+    started = run(up, environment, native_attestation=True) == 0
     if not started:
         try:
             emit_keycloak_initializer_diagnostic(args.run_id)
@@ -1648,7 +1651,7 @@ def run_oid4vci_issuer(
     environment: dict[str, str],
 ) -> int:
     """Run the active official issuer plan against the public Marty boundary."""
-    started = run(compose_command(args, "up", oidf=True), environment) == 0
+    started = run(compose_command(args, "up", oidf=True), environment, native_attestation=True) == 0
     if not started:
         emit_keycloak_initializer_diagnostic(args.run_id)
         return 1
@@ -1739,7 +1742,7 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
         base.append("--resume")
     result = 1
     try:
-        if run([*base, "up"], environment):
+        if run([*base, "up"], environment, native_attestation=True):
             emit_keycloak_initializer_diagnostic(args.run_id)
             return 1
         wait_for_public_stack(environment)
@@ -1806,7 +1809,7 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(wallet_attester_file)
     environment["EUDI_KEY_ATTESTATION_TRUST_ANCHOR_FILE"] = str(key_attestation_root)
     up = compose_command(args, "up", eudi=True, haip=True)
-    started = run(up, environment) == 0
+    started = run(up, environment, native_attestation=True) == 0
     if not started:
         emit_keycloak_initializer_diagnostic(args.run_id)
         return 1

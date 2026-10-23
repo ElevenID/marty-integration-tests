@@ -1271,6 +1271,7 @@ def test_base_environment_binds_eudi_vct_to_verified_gateway_origin(
     )
     monkeypatch.setenv("MARTY_CONFORMANCE_ADMIN_PASSWORD", "admin-password")
     monkeypatch.setenv("MARTY_CONFORMANCE_REVIEWER_PASSWORD", "reviewer-password")
+    monkeypatch.setenv("GH_TOKEN", "synthetic-read-only-attestation-token")
     args = SimpleNamespace(
         lane="eudi",
         run_id="run-1",
@@ -1287,6 +1288,7 @@ def test_base_environment_binds_eudi_vct_to_verified_gateway_origin(
     environment, _ = lane.base_environment(args)
 
     assert environment["EUDI_TEST_VCT_ORIGIN"] == environment["OIDF_MARTY_GATEWAY_URL"]
+    assert "GH_TOKEN" not in environment
 
 
 def test_base_environment_rejects_loopback_request_uri_hostname(

@@ -14,6 +14,20 @@ WORKFLOW = ROOT / ".github" / "workflows" / "official-interoperability.yml"
 PYTHON_LOCK = ROOT / "requirements" / "official-py312.lock"
 
 
+def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    runtime = text.split("      - name: Run official lane\n", 1)[1].split(
+        "      - name: Record locally built EUDI harness digest", 1
+    )[0]
+    assert re.search(r"        env:\n(?:          #.*\n)*          GH_TOKEN: \$\{\{ github.token \}\}\n", runtime)
+    assert "official_interoperability_lane.py" in runtime
+    job_environment = text.split("    env:\n", 1)[1].split("    steps:\n", 1)[0]
+    assert "GH_TOKEN" not in job_environment
+    permissions = text.split("\npermissions:\n", 1)[1].split("\nconcurrency:", 1)[0]
+    assert permissions.strip()
+    assert all(re.fullmatch(r"[a-z-]+: read", line.strip()) for line in permissions.splitlines() if line.strip())
+
+
 @pytest.mark.parametrize(("overrides", "allowed"), [
     ({}, True),
     ({"GITHUB_REPOSITORY": "other/product"}, False),
