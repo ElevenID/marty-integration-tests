@@ -123,7 +123,9 @@ def capture_success_page(
     if dialog.get_by_role("alert").count():
         raise ValueError("verification evidence dialog contains an error")
     progress["stage"] = "success_screenshot"
-    page.screenshot(path=str(destination), full_page=True)
+    # Finish finite UI transitions before capture so a dialog mid-fade does
+    # not obscure the actual result. This changes capture timing, not the DOM.
+    page.screenshot(path=str(destination), full_page=True, animations="disabled")
     destination.chmod(0o600)
     digest = hashlib.sha256(destination.read_bytes()).hexdigest()
     dialog.get_by_role("button", name="Close", exact=True).click()
@@ -141,7 +143,7 @@ def capture_failure_diagnostics(page: Page, destination: Path, error: Exception,
     html.write_text(page.content(), encoding="utf-8")
     screenshot = destination.with_suffix(".png")
     screenshot.touch(mode=0o600, exist_ok=False)
-    page.screenshot(path=str(screenshot), full_page=True, timeout=10_000)
+    page.screenshot(path=str(screenshot), full_page=True, animations="disabled", timeout=10_000)
 
 
 def main() -> int:
