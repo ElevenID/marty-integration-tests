@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlsplit
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Locator, Page, Request, Response
+    from playwright.sync_api import Browser, BrowserContext, Locator, Page, Request, Response
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -58,6 +58,16 @@ def browser_resolver_args(base_url: str, address: str) -> list[str]:
         raise ValueError("browser gateway URL has no hostname")
     ipaddress.ip_address(address)
     return [f"--host-resolver-rules=MAP {hostname} {address}"]
+
+
+def authenticated_browser_context(browser: Browser, base_url: str, session_id: str) -> BrowserContext:
+    """Use a real public-login cookie in the disposable HTTPS browser context."""
+    context = browser.new_context(ignore_https_errors=True)
+    context.add_cookies(
+        [{"name": "sessionId", "value": session_id, "url": base_url,
+          "secure": True, "httpOnly": True, "sameSite": "Lax"}]
+    )
+    return context
 
 
 def wait_for_verification_identity(page: Page, button: Locator, *, timeout_ms: int = 30_000) -> None:
@@ -460,19 +470,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             **hosted_browser_launch_options(),
         )
-        context = browser.new_context(ignore_https_errors=True)
-        context.add_cookies(
-            [
-                {
-                    "name": "sessionId",
-                    "value": session_id,
-                    "url": base_url,
-                    "secure": True,
-                    "httpOnly": True,
-                    "sameSite": "Lax",
-                }
-            ]
-        )
+        context = authenticated_browser_context(browser, base_url, session_id)
         page = context.new_page()
 
         def record_request(request: Request) -> None:
