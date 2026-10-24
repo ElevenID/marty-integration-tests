@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,32 @@ SPEC = importlib.util.spec_from_file_location("official_kms_bootstrap", SOURCE)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
+
+
+@pytest.mark.parametrize("ending", ["", "\n"])
+def test_openbao_alias_is_a_separate_record_without_replacing_existing_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str,
+) -> None:
+    hosts = tmp_path / "hosts"
+    original = "127.0.0.1 localhost\nff02::2 ip6-allrouters" + ending
+    hosts.write_text(original, encoding="ascii")
+    popen = MODULE.subprocess.Popen
+
+    def append_in_private_file(command: list[str], **kwargs: object) -> object:
+        assert command == ["sudo", "tee", "-a", "/etc/hosts"]
+        return popen([
+            sys.executable, "-c",
+            "import pathlib,sys; "
+            "pathlib.Path(sys.argv[1]).open('ab').write(sys.stdin.buffer.read())",
+            str(hosts),
+        ], **kwargs)
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", append_in_private_file)
+    MODULE.append_openbao_host("172.26.0.2")
+    actual = hosts.read_text(encoding="ascii")
+    assert actual.startswith(original)
+    assert actual.splitlines()[-1].split() == ["172.26.0.2", "openbao"]
+    assert "ff02::2 ip6-allrouters" in actual.splitlines()
 
 
 @pytest.mark.parametrize("run_id", ["local-oid4vp-url-query-20261023-r1", "production/stack"])
