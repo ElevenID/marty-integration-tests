@@ -299,6 +299,17 @@ def openbao_network(container: str, project: str) -> tuple[str, str]:
     return matches[0]
 
 
+def append_openbao_host(address: str) -> None:
+    # Docker-generated hosts files can end without a newline. Start a new
+    # record explicitly so this IPv4 address cannot become part of an IPv6
+    # alias, which would resolve OpenBao to the preceding record's address.
+    with subprocess.Popen(["sudo", "tee", "-a", "/etc/hosts"], stdin=subprocess.PIPE,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as hosts:
+        hosts.communicate(f"\n{address} openbao\n".encode("ascii"), timeout=10)
+        if hosts.returncode:
+            raise RuntimeError("runner cannot resolve its disposable OpenBao origin")
+
+
 def scoped_transit_signing_token(bao, key_name: str, policy_name: str,
                                  authority: str, challenge: bytes) -> str:
     """Issue and exercise a bounded Transit signer token for one key."""
@@ -482,11 +493,7 @@ def main() -> int:
         network, address = openbao_network(container, project)
         # The ephemeral GitHub runner already modifies /etc/hosts for the
         # official TLS origins. Keep the product's OpenBao hostname for TLS SNI.
-        with subprocess.Popen(["sudo", "tee", "-a", "/etc/hosts"], stdin=subprocess.PIPE,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as hosts:
-            hosts.communicate(f"{address} openbao\n".encode("ascii"), timeout=10)
-            if hosts.returncode:
-                raise RuntimeError("runner cannot resolve its disposable OpenBao origin")
+        append_openbao_host(address)
         run([
             "docker", "run", "--rm", "--pull=never", "--network", network,
             "--user", f"{os.getuid()}:{os.getgid()}", "--read-only", "--cap-drop", "ALL",
