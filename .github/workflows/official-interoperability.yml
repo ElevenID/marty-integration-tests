@@ -30,10 +30,20 @@ on:
         type: boolean
         required: false
         default: false
+      review_recipient:
+        description: Public native age recipient for private screenshot/export delivery; never an identity key
+        type: string
+        required: false
+        default: ''
   schedule:
     - cron: "41 5 8 * *"
   workflow_dispatch:
     inputs:
+      review_recipient:
+        description: Optional public age recipient; defaults to the repository review recipient variable
+        type: string
+        required: false
+        default: ''
       lane:
         description: Official suite lane to run
         type: choice
@@ -70,6 +80,7 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"
       OFFICIAL_SUITE_RUN_ID: ${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+      REVIEW_RECIPIENT: ${{ inputs.review_recipient || vars.OFFICIAL_REVIEW_RECIPIENT || '' }}
     steps:
       - name: Validate candidate caller before fetching source
         env:
@@ -90,6 +101,9 @@ jobs:
             [[ "$HARNESS_REVISION" =~ ^[0-9a-f]{40}$ ]]
             [[ "$CANDIDATE_MANIFEST_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "$CANDIDATE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            if [[ "$COLLECT_ONLY" == true ]]; then
+              [[ "$REVIEW_RECIPIENT" =~ ^age1[0-9a-z]{58}$ ]]
+            fi
           else
             test "$GITHUB_REPOSITORY" = ElevenID/marty-integration-tests
             test -z "$CANDIDATE_MANIFEST_SHA256$CANDIDATE_TAG$HARNESS_REVISION"
@@ -295,6 +309,7 @@ jobs:
             --stack-metadata work/stack/stack-metadata.json
             --material-report work/material/report.json
             --harness-image-report work/eudi-harness-image.json
+            --github-output "$GITHUB_OUTPUT"
           )
           python scripts/sanitize_official_evidence.py "${sanitize_args[@]}"
 
@@ -307,6 +322,34 @@ jobs:
           path: work/sanitized/${{ matrix.lane }}/summary.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Install the digest-pinned private review encryptor
+        if: always() && steps.summary.outcome == 'success' && steps.summary.outputs.has_reviews == 'true' && env.REVIEW_RECIPIENT != ''
+        run: python scripts/official_review_crypto.py --output work/review-crypto
+
+      - name: Encrypt exact private review images and unchanged exports
+        if: always() && steps.summary.outcome == 'success' && steps.summary.outputs.has_reviews == 'true' && env.REVIEW_RECIPIENT != ''
+        shell: bash
+        run: >-
+          python scripts/official_review_delivery.py encrypt
+          --summary "work/sanitized/${{ matrix.lane }}/summary.json"
+          --raw work/evidence/raw
+          --private-images work/evidence/private/verification-evidence
+          --private-exports work/evidence/private/official-review-evidence-export
+          --recipient "$REVIEW_RECIPIENT" --execution-id "$OFFICIAL_SUITE_RUN_ID"
+          --attempt "$GITHUB_RUN_ATTEMPT" --age work/review-crypto/age
+          --output "work/review-delivery/${{ matrix.lane }}"
+
+      - name: Upload only encrypted private review delivery
+        if: always() && hashFiles(format('work/review-delivery/{0}/review-delivery.json', matrix.lane)) != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: official-review-private-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            work/review-delivery/${{ matrix.lane }}/review.tar.age
+            work/review-delivery/${{ matrix.lane }}/review-delivery.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Enforce lane result
         if: always()

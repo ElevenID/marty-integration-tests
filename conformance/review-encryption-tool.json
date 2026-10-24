@@ -1,0 +1,15 @@
+{
+  "schema": "elevenid.review-encryption-tool/v1",
+  "version": "v1.3.2",
+  "repository": "https://github.com/FiloSottile/age",
+  "assets": {
+    "linux-amd64": {
+      "name": "age-v1.3.2-linux-amd64.tar.gz",
+      "sha256": "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
+    },
+    "windows-amd64": {
+      "name": "age-v1.3.2-windows-amd64.zip",
+      "sha256": "f48d8f8f9ebe903ab5027ed067652f2cc1db94bc206976430133b905dcd8e8c7"
+    }
+  }
+}

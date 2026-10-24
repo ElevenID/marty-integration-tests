@@ -38,6 +38,8 @@ def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
     ({"CANDIDATE_MANIFEST_SHA256": "latest"}, False),
     ({"CANDIDATE_TAG": "v1.2.3;true"}, False),
     ({"COLLECT_ONLY": "true"}, True),
+    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": ""}, False),
+    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": "AGE-SECRET-KEY-DO-NOT-ACCEPT"}, False),
     ({"CANDIDATE_ARTIFACT": "", "CANDIDATE_MANIFEST_SHA256": "",
       "CANDIDATE_TAG": "", "HARNESS_REVISION": "",
       "GITHUB_REPOSITORY": "ElevenID/marty-integration-tests"}, True),
@@ -62,7 +64,7 @@ def test_actual_candidate_caller_guard(
                    "CANDIDATE_ARTIFACT": "stack-release-official-candidate-99",
                    "CANDIDATE_MANIFEST_SHA256": "sha256:" + "a" * 64,
                    "CANDIDATE_TAG": "v1.2.3", "HARNESS_REVISION": "b" * 40,
-                   "LANE": "all", "COLLECT_ONLY": "false", **overrides}
+                   "LANE": "all", "COLLECT_ONLY": "false", "REVIEW_RECIPIENT": "age1" + "a" * 58, **overrides}
     result = subprocess.run([bash, "--noprofile", "--norc"], input=script,
                             env=environment, text=True, capture_output=True, check=False)
     assert (result.returncode == 0) == allowed, result.stderr
@@ -133,10 +135,31 @@ def test_workflow_attests_released_inputs_and_never_uploads_raw_evidence() -> No
     assert "matrix.lane == 'eudi'" in verifier_material
     assert "haip_test_certificates.py" in verifier_material
     assert "sanitize_official_evidence.py" in text
-    upload = text.split("- name: Upload sanitized evidence", 1)[1].split("- name: Enforce lane result", 1)[0]
+    upload = text.split("- name: Upload sanitized evidence", 1)[1].split(
+        "- name: Install the digest-pinned private review encryptor", 1
+    )[0]
     assert "work/sanitized/" in upload
     assert "work/evidence" not in upload
     assert "work/material" not in upload
+
+
+def test_private_review_upload_is_ciphertext_only_and_never_an_identity_or_plaintext_export() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    upload = text.split("      - name: Upload only encrypted private review delivery\n", 1)[1].split(
+        "      - name: Enforce lane result", 1
+    )[0]
+    paths = upload.split("          path: |\n", 1)[1].split("          if-no-files-found:", 1)[0]
+    assert [line.strip() for line in paths.splitlines()] == [
+        "work/review-delivery/${{ matrix.lane }}/review.tar.age",
+        "work/review-delivery/${{ matrix.lane }}/review-delivery.json",
+    ]
+    assert "review-delivery.json" in upload.split("        uses:", 1)[0]
+    encryption = text.split("      - name: Encrypt exact private review images and unchanged exports\n", 1)[1].split(
+        "      - name: Upload only encrypted private review delivery", 1
+    )[0]
+    assert '--recipient "$REVIEW_RECIPIENT"' in encryption
+    assert "identity" not in encryption
+    assert "has_reviews == 'true'" in encryption
 
 
 def test_workflow_installs_only_frozen_verified_tooling() -> None:

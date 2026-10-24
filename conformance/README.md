@@ -26,8 +26,21 @@ The exported official-suite results, actual API readbacks and screenshots remain
 private in the run's evidence directory and are not committed. CI uploads only
 sanitized summaries. Those summaries include a pending-review inventory bound
 to the unchanged export, exact test instances, capture receipt and image hashes.
-Private CI review delivery is still required before accepting a review; do not
-upload unencrypted raw exports or screenshots to a public repository artifact.
+CI encrypts private screenshots and unchanged original/re-exported evidence to
+`OFFICIAL_REVIEW_RECIPIENT`, a public native age recipient configured as a
+repository variable or explicit workflow input. The standard age executable is
+installed from the digest-pinned official archive in
+`review-encryption-tool.json`; it is not an application image build. Candidate
+collection requires a recipient before protocol setup. Standalone/monthly runs
+keep strict raw-result enforcement and can use the same repository variable.
+No private identity is passed to CI, stored in an artifact, or committed.
+The operator-owned review identity protects review artifacts; product signing
+keys remain in remote KMS custody.
+
+Only `review.tar.age` and a public-safe delivery receipt are uploaded as
+`official-review-private-<lane>-<run-id>-<origin-attempt>`. Images, API readbacks
+and raw exports are never uploaded as plaintext. Review inputs are not an
+approval and do not change stock REVIEW results.
 
 A stock OIDF `REVIEW` result is not an automatic pass. Attaching the real verifier
 image does not approve it, and the original result remains `REVIEW` after an
@@ -39,6 +52,46 @@ must reject actual failures, incomplete coverage, unbound screenshots and
 unresolved reviews before promotion. Missing dispatch, summary or upload still
 fails collection. A review-only gate retry should reuse the exact immutable
 seven-lane snapshot; it must not reclassify stale or locally overlaid runs.
+
+## Open private review images
+
+Keep the age identity in the operator's private credential location with
+operator-only access. Install the pinned local tool with:
+
+```bash
+python scripts/official_review_crypto.py --output /private/review-tools
+```
+
+The tools are `age` and `age-keygen` (`.exe` on Windows). A new operator can use
+`age-keygen -o /private/review-identity.txt` then
+`age-keygen -y /private/review-identity.txt` to obtain the
+public recipient. Share only that public recipient through
+`OFFICIAL_REVIEW_RECIPIENT`. Preserve the private identity through the existing
+secure credential mechanism.
+
+Download the exact private artifact from the candidate run, using the origin
+attempt in its frozen `review-request.json`, alongside the frozen public
+summary. Decrypt and generate the local review page:
+
+```bash
+gh run download RUN_ID --repo ElevenID/marty-ui \
+  --name official-review-private-LANE-RUN_ID-ORIGIN_ATTEMPT \
+  --dir /private/review-delivery
+python scripts/official_review_delivery.py open \
+  --artifact /private/review-delivery \
+  --summary /private/frozen/official-summaries/official-LANE-RUN_ID-ORIGIN_ATTEMPT/summary.json \
+  --identity /private/review-identity.txt --age /private/review-tools/age \
+  --output /private/review-view
+```
+
+Open `/private/review-view/index.html`. The viewer verifies the ciphertext,
+whole public-summary bytes, archive members and every actual screenshot hash
+before writing the images. It displays separate cases and keeps technical
+references in collapsed details. Wrong identities, tampering and stale summaries
+fail closed. Raw exports remain encrypted and are not written by the viewer.
+The page and readback stay PENDING until the normal protected-main disposition
+process in the product's `docs/official-release-gate.md` is completed. Local
+native overlays remain local feedback and cannot qualify a release.
 
 ## Run the official issuer plan
 

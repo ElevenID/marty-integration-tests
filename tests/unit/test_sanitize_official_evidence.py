@@ -185,6 +185,25 @@ def test_historical_receipts_join_ids_without_rewriting_old_bytes(tmp_path: Path
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("has_reviews", [False, True])
+def test_explicit_workflow_output_tracks_actual_review_inputs_without_changing_verdicts(
+    tmp_path: Path, has_reviews: bool,
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    if has_reviews:
+        path, evidence, receipt = review_fixture(raw)
+        write_review_fixture(path, evidence, receipt)
+    output = tmp_path / "step-output"
+    output.write_text("earlier=value\n", encoding="utf-8")
+    assert sanitizer.main(["--input", str(raw), "--output", str(tmp_path / "public"),
+                           "--lane", "oid4vp-mdoc", "--harness-commit", "a" * 40,
+                           "--exit-code", "1", "--github-output", str(output)]) == 0
+    assert output.read_text().splitlines() == ["earlier=value", f"has_reviews={str(has_reviews).lower()}"]
+    summary = json.loads((tmp_path / "public/summary.json").read_text())
+    assert summary["result"] == {"exit_code": 1, "passed": False}
+
+
 def test_sanitizer_emits_only_safe_structured_summary(tmp_path: Path) -> None:
     raw = tmp_path / "raw"
     raw.mkdir()
