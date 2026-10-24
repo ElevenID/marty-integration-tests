@@ -129,6 +129,7 @@ async def dtc_mdoc_resources(authenticated_gateway_client: GatewayClient, dtc_te
         compliance = await authenticated_gateway_client.create_compliance_profile(
             organization_id=dtc_test_org["id"],
             name="EUDI DTC mDoc",
+            activate=True,
             compliance_code="ICAO_DTC",
             credential_format="mso_mdoc",
             frameworks=["icao_doc_9303"],
