@@ -471,6 +471,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--stack-metadata", type=Path)
     result.add_argument("--material-report", type=Path)
     result.add_argument("--harness-image-report", type=Path)
+    result.add_argument("--github-output", type=Path)
     return result
 
 
@@ -489,6 +490,9 @@ def main(argv: list[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
     destination = output / "summary.json"
     destination.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.github_output:
+        with args.github_output.open("a", encoding="utf-8") as outputs:
+            outputs.write(f"has_reviews={str(bool(summary['review_requests'])).lower()}\n")
     print(destination)
     return 0
 
