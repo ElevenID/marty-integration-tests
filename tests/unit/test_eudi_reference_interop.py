@@ -142,7 +142,7 @@ def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
     }
     observed = {
         evidence_id: {"status": "passed", "classname": "suite", "testcase": evidence_id}
-        for evidence_id in eudi.REQUIRED_EVIDENCE_CLAIMS
+        for evidence_id in eudi.required_assertion_ids(eudi.load_manifest())
     }
     eudi.write_evidence(
         output,
@@ -154,7 +154,13 @@ def test_eudi_evidence_records_pinned_components(tmp_path: Path) -> None:
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["result"] == {"exit_code": 0, "passed": True, "skipped": 0}
     assert evidence["components"]["verifier_endpoint"]["image"].startswith("ghcr.io/")
-    assert evidence["observed_evidence"] == observed
+    assert evidence["observed_evidence"] == {
+        key: value for key, value in observed.items() if key in eudi.REQUIRED_EVIDENCE_CLAIMS
+    }
+    assert evidence["observed_product_evidence"] == {
+        key: value for key, value in observed.items() if key in eudi.REQUIRED_PRODUCT_EVIDENCE
+    }
+    assert evidence["coverage"] == eudi.load_manifest()["coverage"]
 
 
 def test_eudi_stack_manifest_records_immutable_marty_images(tmp_path: Path) -> None:
@@ -219,6 +225,38 @@ def test_eudi_junit_requires_each_stable_evidence_id_exactly_once(tmp_path: Path
 
     assert set(observed) == set(eudi.REQUIRED_EVIDENCE_CLAIMS)
     assert all(record["status"] == "passed" for record in observed.values())
+
+
+@pytest.mark.parametrize("mutation", [None, "missing", "failure", "skipped", "duplicate"])
+def test_eudi_requires_the_separate_product_control_to_pass_once(tmp_path: Path, mutation: str | None) -> None:
+    product_id = next(iter(eudi.REQUIRED_PRODUCT_EVIDENCE))
+    cases: list[tuple[str | None, str | None]] = list(_passing_evidence_cases())
+    if mutation != "missing":
+        cases.append((product_id, mutation if mutation in {"failure", "skipped"} else None))
+    if mutation == "duplicate":
+        cases.append((product_id, None))
+    report = tmp_path / "junit.xml"
+    report.write_text(_junit_document(cases), encoding="utf-8")
+    required = eudi.required_assertion_ids(eudi.load_manifest())
+    if mutation is None:
+        assert set(eudi.junit_required_evidence(report, required)) == required
+    else:
+        with pytest.raises(ValueError, match="missing required|did not pass|duplicate"):
+            eudi.junit_required_evidence(report, required)
+
+
+def test_product_control_cannot_be_promoted_into_eudi_coverage() -> None:
+    manifest = eudi.load_manifest()
+    product_id = next(iter(eudi.REQUIRED_PRODUCT_EVIDENCE))
+    manifest["required_product_evidence"][product_id]["claims"] = ["issuance:mso_mdoc"]
+    with pytest.raises(ValueError, match="separate product evidence contract"):
+        eudi.required_assertion_ids(manifest)
+
+
+def test_green_eudi_writer_cannot_omit_the_product_control(tmp_path: Path) -> None:
+    observed = {key: {"status": "passed"} for key in eudi.REQUIRED_EVIDENCE_CLAIMS}
+    with pytest.raises(ValueError, match="every stable evidence assertion"):
+        eudi.write_evidence(tmp_path, eudi.load_manifest(), {}, 0, observed_evidence=observed)
 
 
 def test_eudi_junit_failure_summary_exposes_no_failure_text(tmp_path: Path) -> None:
@@ -620,6 +658,7 @@ def test_eudi_pytest_command_resolves_only_public_test_hosts(tmp_path: Path) -> 
         str(eudi.ROOT / "scripts" / "pytest_with_local_resolution.py"),
     ]
     assert command.count("--resolve-host") == 1
+    assert "junit_family=xunit1" in command
     assert "marty-oidf.test" in command
     assert "attacker.test" not in command
     assert command[-4:] == [
