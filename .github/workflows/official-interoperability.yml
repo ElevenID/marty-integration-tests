@@ -25,6 +25,11 @@ on:
         type: string
         required: false
         default: ''
+      collect_only:
+        description: Collect raw candidate verdicts for the caller's independent release gate; never qualification
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: "41 5 8 * *"
   workflow_dispatch:
@@ -73,6 +78,7 @@ jobs:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           HARNESS_REVISION: ${{ inputs.harness_revision }}
           LANE: ${{ inputs.lane || 'all' }}
+          COLLECT_ONLY: ${{ inputs.collect_only || false }}
         shell: bash
         run: |
           set -euo pipefail
@@ -87,6 +93,7 @@ jobs:
           else
             test "$GITHUB_REPOSITORY" = ElevenID/marty-integration-tests
             test -z "$CANDIDATE_MANIFEST_SHA256$CANDIDATE_TAG$HARNESS_REVISION"
+            test "$COLLECT_ONLY" != true
           fi
 
       - name: Checkout integration harness
@@ -273,6 +280,7 @@ jobs:
           --output work/eudi-harness-image.json
 
       - name: Build public-safe evidence
+        id: summary
         if: always()
         env:
           LANE_EXIT_CODE: ${{ steps.lane.outputs.exit_code || '99' }}
@@ -291,6 +299,7 @@ jobs:
           python scripts/sanitize_official_evidence.py "${sanitize_args[@]}"
 
       - name: Upload sanitized evidence
+        id: upload
         if: always() && hashFiles(format('work/sanitized/{0}/summary.json', matrix.lane)) != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -303,11 +312,24 @@ jobs:
         if: always()
         env:
           LANE_EXIT_CODE: ${{ steps.lane.outputs.exit_code }}
+          COLLECT_ONLY: ${{ inputs.collect_only || false }}
+          SUMMARY_OUTCOME: ${{ steps.summary.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         shell: bash
         run: |
           if [[ -z "$LANE_EXIT_CODE" ]]; then
             echo "Official lane did not reach its dispatcher." >&2
             exit 1
+          fi
+          if [[ "$COLLECT_ONLY" == true ]]; then
+            # Only the protected-main candidate caller can opt in. A successful
+            # collection is not a passing suite: preserve every raw exit/result
+            # and require the independent Rust gate before any promotion. This
+            # lets a review-only gate retry reuse the immutable seven-lane set.
+            test "$SUMMARY_OUTCOME" = success || exit 1
+            test "$UPLOAD_OUTCOME" = success || exit 1
+            echo "::notice::Official raw exit is $LANE_EXIT_CODE; candidate qualification remains the independent caller gate's responsibility."
+            exit 0
           fi
           exit "$LANE_EXIT_CODE"
 

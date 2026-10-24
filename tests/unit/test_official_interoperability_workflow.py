@@ -37,9 +37,13 @@ def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
     ({"HARNESS_REVISION": "main"}, False),
     ({"CANDIDATE_MANIFEST_SHA256": "latest"}, False),
     ({"CANDIDATE_TAG": "v1.2.3;true"}, False),
+    ({"COLLECT_ONLY": "true"}, True),
     ({"CANDIDATE_ARTIFACT": "", "CANDIDATE_MANIFEST_SHA256": "",
       "CANDIDATE_TAG": "", "HARNESS_REVISION": "",
       "GITHUB_REPOSITORY": "ElevenID/marty-integration-tests"}, True),
+    ({"CANDIDATE_ARTIFACT": "", "CANDIDATE_MANIFEST_SHA256": "",
+      "CANDIDATE_TAG": "", "HARNESS_REVISION": "", "COLLECT_ONLY": "true",
+      "GITHUB_REPOSITORY": "ElevenID/marty-integration-tests"}, False),
     ({"CANDIDATE_ARTIFACT": "", "CANDIDATE_MANIFEST_SHA256": "",
       "CANDIDATE_TAG": "", "HARNESS_REVISION": ""}, False),
 ])
@@ -58,10 +62,38 @@ def test_actual_candidate_caller_guard(
                    "CANDIDATE_ARTIFACT": "stack-release-official-candidate-99",
                    "CANDIDATE_MANIFEST_SHA256": "sha256:" + "a" * 64,
                    "CANDIDATE_TAG": "v1.2.3", "HARNESS_REVISION": "b" * 40,
-                   "LANE": "all", **overrides}
+                   "LANE": "all", "COLLECT_ONLY": "false", **overrides}
     result = subprocess.run([bash, "--noprofile", "--norc"], input=script,
                             env=environment, text=True, capture_output=True, check=False)
     assert (result.returncode == 0) == allowed, result.stderr
+
+
+@pytest.mark.parametrize(("raw_exit", "collect", "summary", "upload", "allowed"), [
+    ("0", "false", "success", "success", True),
+    ("1", "false", "success", "success", False),
+    ("1", "true", "success", "success", True),
+    ("2", "true", "success", "success", True),  # Collection, never qualification.
+    ("", "true", "success", "success", False),
+    ("1", "true", "failure", "success", False),
+    ("1", "true", "success", "skipped", False),
+])
+def test_actual_collection_mode_keeps_standalone_enforcement_and_requires_evidence(
+    raw_exit: str, collect: str, summary: str, upload: str, allowed: bool,
+) -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    step = text.split("      - name: Enforce lane result\n", 1)[1]
+    script = textwrap.dedent(step.split("      - name: Erase disposable bootstrap authorities", 1)[0]
+                             .split("        run: |\n", 1)[1])
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    assert bash
+    result = subprocess.run([bash, "--noprofile", "--norc"], input=script,
+                            env={**os.environ, "LANE_EXIT_CODE": raw_exit, "COLLECT_ONLY": collect,
+                                 "SUMMARY_OUTCOME": summary, "UPLOAD_OUTCOME": upload},
+                            text=True, capture_output=True, check=False)
+    assert (result.returncode == 0) == allowed, result.stderr
+    if collect == "true" and allowed:
+        assert f"Official raw exit is {raw_exit}" in result.stdout
 
 
 def test_workflow_is_manual_and_monthly_with_isolated_standard_runner_lanes() -> None:
