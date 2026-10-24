@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Bind release tag to protected main
@@ -42,7 +42,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/check_release_lineage.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --expected-commit "$GITHUB_SHA"
       - name: Install uv without a tag-scoped dependency cache
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa
         with:
           version: "0.11.3"
           enable-cache: false
@@ -71,7 +71,7 @@ jobs:
             --prefix="marty-integration-tests-${version}/" \
             --output="release-assets/marty-integration-tests-${version}-source.tar.gz" \
             HEAD
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           path: .
           format: spdx-json
