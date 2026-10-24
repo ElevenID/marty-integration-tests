@@ -67,7 +67,7 @@ def compliance_profile_payload(
             "organization_id": organization_id,
             "name": f"Official W3C VC Data Model v2 {run_id}",
             "compliance_code": "W3C_VC",
-            "credential_format": "jwt_vc",
+            "credential_format": "JSON_LD",
             "frameworks": ["w3c_vc"],
             "system_profile": False,
         }
@@ -478,21 +478,13 @@ def bootstrap_browser_issuance(
     request: Callable[..., object],
 ) -> dict[str, str]:
     """Create the disposable product-path resources separately from OIDF."""
-    compliance = request(
-        gateway_url,
-        session_id,
-        "/v1/compliance-profiles",
-        method="POST",
-        json_body=compliance_profile_payload(
+    compliance_profile_id = create_active_compliance_profile(
+        gateway_url, session_id, compliance_profile_payload(
             organization_id,
             w3c=False,
             run_id=f"browser-{run_id}",
             oid4vci=True,
-        ),
-    )
-    compliance_profile_id = response_id(
-        compliance,
-        "browser issuance compliance profile",
+        ), "browser issuance compliance profile", request=request,
     )
     credential_template_id = create_active_credential_template(
         gateway_url,
@@ -914,27 +906,44 @@ def response_id(value: object, resource: str) -> str:
     return identifier
 
 
-def create_active_credential_template(
+def create_active_resource(
     gateway_url: str,
     session_id: str,
     payload: dict[str, object],
     resource: str,
     *,
+    collection: str,
     request: Callable[..., object],
 ) -> str:
     """Use the public lifecycle for every issuer and verifier fixture role."""
     created = request(
-        gateway_url, session_id, "/v1/credential-templates",
+        gateway_url, session_id, collection,
         method="POST", json_body=payload,
     )
-    template_id = response_id(created, resource)
+    identifier = response_id(created, resource)
     activated = request(
-        gateway_url, session_id, f"/v1/credential-templates/{template_id}/activate",
+        gateway_url, session_id, f"{collection}/{identifier}/activate",
         method="POST",
     )
-    if response_id(activated, f"activated {resource}") != template_id:
+    if response_id(activated, f"activated {resource}") != identifier:
         raise RuntimeError(f"activated {resource} id changed unexpectedly")
-    return template_id
+    return identifier
+
+
+def create_active_compliance_profile(
+    gateway_url: str, session_id: str, payload: dict[str, object], resource: str,
+    *, request: Callable[..., object],
+) -> str:
+    return create_active_resource(gateway_url, session_id, payload, resource,
+                                  collection="/v1/compliance-profiles", request=request)
+
+
+def create_active_credential_template(
+    gateway_url: str, session_id: str, payload: dict[str, object], resource: str,
+    *, request: Callable[..., object],
+) -> str:
+    return create_active_resource(gateway_url, session_id, payload, resource,
+                                  collection="/v1/credential-templates", request=request)
 
 
 def create_disposable_vc_api_key(
@@ -1168,14 +1177,11 @@ def bootstrap_eudi(
         request=request,
     )
 
-    created_compliance = request(
-        gateway_url,
-        session_id,
-        "/v1/compliance-profiles",
-        method="POST",
-        json_body=eudi_compliance_profile_payload(organization_id, run_id=run_id),
+    compliance_profile_id = create_active_compliance_profile(
+        gateway_url, session_id,
+        eudi_compliance_profile_payload(organization_id, run_id=run_id),
+        "EUDI compliance profile", request=request,
     )
-    compliance_profile_id = response_id(created_compliance, "EUDI compliance profile")
     created_revocation = request(
         gateway_url,
         session_id,
@@ -1312,22 +1318,14 @@ def bootstrap(
                 algorithm="ES256",
                 request=request,
             )
-        created_compliance_profile = request(
-            gateway_url,
-            session_id,
-            "/v1/compliance-profiles",
-            method="POST",
-            json_body=compliance_profile_payload(
+        compliance_profile_id = create_active_compliance_profile(
+            gateway_url, session_id, compliance_profile_payload(
                 organization_id,
                 w3c=w3c,
                 run_id=run_id,
                 oid4vci=oid4vci,
                 mdoc=mdoc,
-            ),
-        )
-        compliance_profile_id = response_id(
-            created_compliance_profile,
-            f"{prefix} compliance profile",
+            ), f"{prefix} compliance profile", request=request,
         )
         created_revocation_profile = request(
             gateway_url,
