@@ -232,6 +232,7 @@ async def vp_sd_jwt_resources(authenticated_gateway_client: GatewayClient, vp_te
     compliance = await authenticated_gateway_client.create_compliance_profile(
         organization_id=vp_test_org["id"],
         name="EUDI VP SD-JWT",
+        activate=True,
         compliance_code="EUDI_PID",
         credential_format="sd_jwt_vc",
         frameworks=["eudi"],
@@ -299,6 +300,7 @@ async def vp_mdoc_resources(authenticated_gateway_client: GatewayClient, vp_test
         compliance = await authenticated_gateway_client.create_compliance_profile(
             organization_id=vp_test_org["id"],
             name="EUDI VP mDoc",
+            activate=True,
             compliance_code="AAMVA_MDL",
             credential_format="mso_mdoc",
             frameworks=["aamva", "iso_18013_5"],

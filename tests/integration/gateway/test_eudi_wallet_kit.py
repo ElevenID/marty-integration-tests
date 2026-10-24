@@ -103,6 +103,7 @@ async def eudi_sd_jwt_compliance_profile(
     return await authenticated_gateway_client.create_compliance_profile(
         organization_id=eudi_test_org["id"],
         name="EUDI Wallet Kit SD-JWT",
+        activate=True,
         compliance_code="EUDI_PID",
         credential_format="sd_jwt_vc",
         frameworks=["eudi"],

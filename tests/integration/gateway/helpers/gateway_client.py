@@ -10,7 +10,7 @@ import base64
 import json
 import logging
 import os
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -410,6 +410,20 @@ class GatewayClient:
     # Credential Templates
     # =============================================================================
 
+    async def _activate_created_resource(
+        self,
+        created: Dict[str, Any],
+        resource: str,
+        action: Callable[[str], Awaitable[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        resource_id = created.get("id")
+        if not isinstance(resource_id, str) or not resource_id.strip():
+            raise ValueError(f"created {resource} has no public id")
+        activated = await action(resource_id)
+        if activated.get("id") != resource_id or activated.get("status") != "ACTIVE":
+            raise ValueError(f"{resource} activation did not confirm the same active {resource}")
+        return activated
+
     async def create_credential_template(
         self,
         organization_id: str,
@@ -503,13 +517,7 @@ class GatewayClient:
         )
         if not activate:
             return created
-        template_id = created.get("id")
-        if not isinstance(template_id, str) or not template_id.strip():
-            raise ValueError("created credential template has no public id")
-        activated = await self.activate_credential_template(template_id)
-        if activated.get("id") != template_id or activated.get("status") != "ACTIVE":
-            raise ValueError("credential template activation did not confirm the same active template")
-        return activated
+        return await self._activate_created_resource(created, "template", self.activate_credential_template)
 
     async def get_credential_template(self, template_id: str) -> Dict[str, Any]:
         """Get credential template by ID"""
@@ -569,6 +577,7 @@ class GatewayClient:
         frameworks: Optional[List[str]] = None,
         trust_profile_constraints: Optional[Dict[str, Any]] = None,
         system_profile: bool = False,
+        activate: bool = False,
     ) -> Dict[str, Any]:
         """
         Create a compliance profile.
@@ -581,6 +590,8 @@ class GatewayClient:
             frameworks: List of regulatory frameworks
             trust_profile_constraints: Trust profile constraint object
             system_profile: Whether this is a system-provided profile
+            activate: Explicit public activation before using this profile in a template.
+                Defaults to draft for lifecycle and rejection tests.
 
         Returns:
             Compliance profile object
@@ -595,11 +606,18 @@ class GatewayClient:
         }
         if trust_profile_constraints is not None:
             payload["trust_profile_constraints"] = trust_profile_constraints
-        return await self._request(
+        created = await self._request(
             "POST",
             "/v1/compliance-profiles",
             json=payload,
         )
+        if not activate:
+            return created
+        return await self._activate_created_resource(created, "compliance profile", self.activate_compliance_profile)
+
+    async def activate_compliance_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Activate a compliance profile through its scoped public gateway route."""
+        return await self._request("POST", f"/v1/compliance-profiles/{profile_id}/activate")
 
     async def get_compliance_profile(self, profile_id: str) -> Dict[str, Any]:
         """Get compliance profile by ID"""
