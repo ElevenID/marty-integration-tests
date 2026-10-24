@@ -22,8 +22,23 @@ The current local Docker context is safe because project identity—not a contex
 alias—is the isolation boundary. `MARTY_CONFORMANCE_DOCKER_CONTEXT` remains an
 optional way to select a remote engine.
 
-The exported official-suite results are evidence. They contain test identifiers
-and URLs, so they are retained as a private CI artifact and are not committed.
+The exported official-suite results, actual API readbacks and screenshots remain
+private in the run's evidence directory and are not committed. CI uploads only
+sanitized summaries. Those summaries include a pending-review inventory bound
+to the unchanged export, exact test instances, capture receipt and image hashes.
+Private CI review delivery is still required before accepting a review; do not
+upload unencrypted raw exports or screenshots to a public repository artifact.
+
+A stock OIDF `REVIEW` result is not an automatic pass. Attaching the real verifier
+image does not approve it, and the original result remains `REVIEW` after an
+accepted disposition. Scheduled and standalone runs enforce the raw lane exit.
+Only the validated protected-main product candidate caller may opt into
+`collect_only`: this reports completed evidence collection, retaining nonzero
+raw exits and failed results, for its independent Rust release gate. That caller
+must reject actual failures, incomplete coverage, unbound screenshots and
+unresolved reviews before promotion. Missing dispatch, summary or upload still
+fails collection. A review-only gate retry should reuse the exact immutable
+seven-lane snapshot; it must not reclassify stale or locally overlaid runs.
 
 ## Run the official issuer plan
 
@@ -67,9 +82,11 @@ Marty's public-wallet flow supports `client_auth_type=none`, while the active
 official interoperability profile deliberately exercises registered
 `private_key_jwt` clients. The disposable organization owns the two official
 wallet public keys; Marty rejects missing, invalid, expired, replayed,
-wrong-audience, and cross-client assertions. OIDF release-v5.2.2 drives that
-normal public issuer path. Three optional capabilities Marty does not advertise
-remain explicit, owned, expiring skips. The disposable issuer profile requires
+wrong-audience, and cross-client assertions. The pinned OIDF release-v5.3.3 drives that
+normal public issuer path. Two optional capabilities Marty does not advertise
+remain explicit, owned, expiring skips. The upstream plan omits its
+encryption-only negative for the selected plain credential-response variant;
+that is upstream variant selection, not an additional local skip. The disposable issuer profile requires
 key attestation, trusts only the lane's short-lived attester CA, and advertises
 that policy in the production credential-issuer metadata. The unchanged OIDF
 runner then creates the valid attestation and corrupts its signature for the
@@ -126,9 +143,10 @@ environment to use its own approved transport without changing the runner.
 
 ## OID4VP verifier and HAIP readiness
 
-The verifier profiles are intentionally not active until they pass. Their
-adapters are already versioned here so that no one needs to create a hidden
-test wallet or a verification bypass. The command named by
+The active profiles in `oidf-runner.json` select executable interoperability
+lanes; active selection does not mean any particular candidate has passed.
+Their adapters use the normal product paths without a hidden test wallet or
+verification bypass. The command named by
 `OIDF_VERIFIER_COMMAND` receives this JSON on standard input:
 
 ```json
@@ -140,11 +158,12 @@ test wallet or a verification bypass. The command named by
 }
 ```
 
-Run a planned verifier profile only with `--allow-planned-profile` and an
-attested `--stack-manifest`. This produces evidence marked
-`execution_mode: pre-activation`; it does not advertise support or change the
-profile status. Change the profile to `active` only after the exported official
-result passes every applicable module and its review is merged.
+Profiles that are still planned require `--allow-planned-profile` and an
+attested `--stack-manifest`. Such evidence is marked
+`execution_mode: pre-activation` and cannot qualify a release. For active lanes,
+qualification still requires complete current-candidate evidence, every
+applicable negative and positive operation, and authenticated dispositions for
+all manual reviews.
 
 It must start a normal, authenticated `POST /v1/flows/verify` gateway flow
 using the disposable organization and policy, then write JSON containing its
