@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import zipfile
 from collections import Counter
 from hashlib import sha256
@@ -637,6 +638,57 @@ def official_plan_coverage(output: Path, selection: str) -> dict[str, object]:
         return {"complete": False, "error_class": type(error).__name__}
 
 
+def artifact_inventory(output: Path) -> list[dict[str, str]]:
+    """Hash regular artifacts only; never follow a link outside owned output."""
+    if output.is_symlink():
+        raise ValueError("official artifact directory must not be a symlink")
+    artifacts = []
+    for path in sorted(output.rglob("*")):
+        if path.is_symlink() or not (path.is_dir() or path.is_file()):
+            raise ValueError("official artifacts must be regular files or directories")
+        if path.is_file() and path != output / "evidence.json":
+            artifacts.append({"path": path.relative_to(output).as_posix(), "sha256": file_sha256(path)})
+    return artifacts
+
+
+def finalize_evidence_artifacts(output: Path) -> dict:
+    """Append late capture/stock-image receipts without changing any verdict.
+
+    The stock ZIP, module table and every previously hashed artifact must remain
+    byte-identical. This is inventory finalization, never REVIEW approval.
+    """
+    path = output / "evidence.json"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("official evidence must be a regular file")
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(evidence, dict) or evidence.get("schema") != "elevenid.official-interop-evidence/v1":
+        raise ValueError("official evidence schema is invalid")
+    original = evidence.get("artifacts")
+    if not isinstance(original, list) or not original or any(
+        not isinstance(row, dict) or not isinstance(row.get("path"), str)
+        or not isinstance(row.get("sha256"), str) for row in original
+    ):
+        raise ValueError("original official artifact inventory is invalid")
+    expected = {row["path"]: row["sha256"] for row in original}
+    artifacts = artifact_inventory(output)
+    current = {row["path"]: row["sha256"] for row in artifacts}
+    if len(expected) != len(original) or any(current.get(name) != digest for name, digest in expected.items()):
+        raise ValueError("an original official artifact changed or disappeared")
+    evidence["artifacts"] = artifacts
+    pending = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output,
+                                         prefix=".finalize-evidence-", delete=False) as target:
+            pending = Path(target.name)
+            json.dump(evidence, target, indent=2, sort_keys=True)
+            target.write("\n")
+        pending.replace(path)
+    finally:
+        if pending is not None:
+            pending.unlink(missing_ok=True)
+    return evidence
+
+
 def write_evidence(
     output: Path,
     manifest: dict,
@@ -673,11 +725,7 @@ def write_evidence(
         json.dumps(module_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     qualified_exit = exit_code or (0 if module_summary["passed"] else 1)
-    artifacts = [
-        {"path": str(path.relative_to(output)).replace("\\", "/"), "sha256": file_sha256(path)}
-        for path in sorted(output.rglob("*"))
-        if path.is_file() and path.name != "evidence.json"
-    ]
+    artifacts = artifact_inventory(output)
     evidence = {
         "schema": "elevenid.official-interop-evidence/v1",
         "official_runner": manifest["official_runner"],
