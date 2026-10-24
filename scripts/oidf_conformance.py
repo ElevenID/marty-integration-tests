@@ -531,13 +531,17 @@ def strict_module_summary(output: Path, expected_skips: list[dict]) -> dict[str,
     }
 
 
-def compare_plan_coverage(infos: list[dict[str, Any]], plan: Any, selection: str) -> dict[str, object]:
-    """Bind every exported instance to the complete, live upstream plan."""
+def parse_variant_selection(selection: str) -> tuple[str, dict[str, str]]:
     name, _, suffix = selection.partition("[")
     pairs = re.findall(r"\[([A-Za-z0-9_]+)=([A-Za-z0-9_.:-]+)\]", "[" + suffix if suffix else "")
     if selection != name + "".join(f"[{key}={value}]" for key, value in pairs) or len(dict(pairs)) != len(pairs):
         raise ValueError("invalid official plan selection")
-    variant = dict(pairs)
+    return name, dict(pairs)
+
+
+def compare_plan_coverage(infos: list[dict[str, Any]], plan: Any, selection: str) -> dict[str, object]:
+    """Bind every exported instance to the complete, live upstream plan."""
+    name, variant = parse_variant_selection(selection)
     if not isinstance(plan, dict) or plan.get("planName") != name or plan.get("variant") != variant:
         raise ValueError("live official plan does not match the selected profile")
     plan_id = plan.get("_id")
@@ -607,6 +611,37 @@ def compare_plan_coverage(infos: list[dict[str, Any]], plan: Any, selection: str
         "module_bindings": sorted(module_bindings, key=lambda row: row["test_name"]),
         "binding_sha256": sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest(),
     }
+
+
+def recorded_plan_coverage(output: Path, recorded: dict, selection: str) -> dict[str, object]:
+    """Recheck saved live-plan bindings after teardown, not a new live proof.
+
+    The original producer observes the live plan. Its hash-bound receipt and
+    evidence preserve that observation; this verifies the recorded projection
+    still agrees with the unchanged export, including HAIP callback variants.
+    """
+    infos = exported_module_info(output)
+    plan_ids = {info.get("planId") for info in infos}
+    if len(plan_ids) != 1 or not isinstance(recorded, dict):
+        raise ValueError("recorded official plan identity is missing")
+    name, variant = parse_variant_selection(selection)
+    bindings = recorded.get("module_bindings")
+    if not isinstance(bindings, list) or any(not isinstance(row, dict) for row in bindings):
+        raise ValueError("recorded official module bindings are missing")
+    modules = []
+    for row in bindings:
+        label = row.get("interaction_name")
+        if not isinstance(label, str):
+            raise ValueError("recorded official interaction label is missing")
+        module_name, extra_variant = parse_variant_selection(label)
+        if module_name != row.get("test_name"):
+            raise ValueError("recorded official interaction belongs to another module")
+        modules.append({"testModule": module_name, "instances": [row.get("test_id")], "variant": extra_variant})
+    plan = {"_id": next(iter(plan_ids)), "planName": name, "variant": variant, "modules": modules}
+    observed = compare_plan_coverage(infos, plan, selection)
+    if observed != recorded:
+        raise ValueError("recorded official coverage differs from the unchanged export")
+    return observed
 
 
 def official_plan_coverage(output: Path, selection: str) -> dict[str, object]:

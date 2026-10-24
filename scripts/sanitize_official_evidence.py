@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -18,6 +19,12 @@ if str(SCRIPTS) not in sys.path:
 from eudi_runtime_diagnostic_contract import (  # noqa: E402
     EUDI_RUNTIME_DIAGNOSTIC_CATEGORIES,
     EUDI_RUNTIME_DIAGNOSTIC_SCHEMA,
+)
+from oidf_conformance import (  # noqa: E402
+    exported_module_info,
+    load_manifest,
+    recorded_plan_coverage,
+    strict_module_summary,
 )
 
 SCHEMA = "elevenid.sanitized-official-interop/v1"
@@ -65,6 +72,8 @@ SENSITIVE_KEY = re.compile(
 )
 JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?\b")
 SECRET_MARKERS = ("-----BEGIN PRIVATE KEY-----", "-----BEGIN EC PRIVATE KEY-----", "sessionId=")
+HEX_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+OFFICIAL_ID = re.compile(r"[A-Za-z0-9]{1,180}\Z")
 
 
 def _safe_string(value: str) -> tuple[str, int]:
@@ -115,6 +124,131 @@ def junit_summary(path: Path) -> dict[str, int]:
 
 def load_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def pending_review_request(evidence_path: Path, evidence: dict) -> dict | None:
+    """Project hash-bound review inputs, never an approval or a passing verdict.
+
+    Raw exports, API results and pixels stay private. A later authenticated
+    disposition must bind the complete summary bytes as well as these hashes.
+    Reuse the runner's export/coverage readers instead of trusting a capture's
+    self-reported module list. Historical receipts without IDs are joined to
+    their exact original export; newer receipts must agree with those IDs.
+    """
+    receipt_path = evidence_path.parent / "official-real-ui-images.json"
+    if not receipt_path.exists():
+        return None
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise ValueError("review receipt must be a regular owned file")
+    receipt_bytes = receipt_path.read_bytes()
+    if len(receipt_bytes) > 512 * 1024:
+        raise ValueError("review receipt exceeds its size limit")
+    receipt = json.loads(receipt_bytes)
+    if not isinstance(receipt, dict):
+        raise ValueError("review receipt is malformed")
+    # Preserve failed runs' ordinary diagnostics without offering review inputs
+    # that an approval could accidentally treat as complete.
+    if receipt.get("state") == "FAILED":
+        return None
+    if receipt.get("state") == "NO_REVIEW_IMAGES_REQUIRED":
+        if evidence.get("module_results", {}).get("pending_review"):
+            raise ValueError("review receipt omits pending modules")
+        return None
+    receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
+    artifacts = evidence.get("artifacts", [])
+    bindings = [row for row in artifacts if row.get("path") == receipt_path.name]
+    if len(bindings) != 1 or bindings[0].get("sha256") != "sha256:" + receipt_sha:
+        raise ValueError("review receipt is not bound to the original evidence inventory")
+    if (
+        receipt.get("schema") != "elevenid.official-real-ui-images/v1"
+        or receipt.get("state") != "ATTACHED"
+        or receipt.get("review_status") != "PENDING"
+        or receipt.get("original_exports_unchanged") is not True
+        or receipt.get("module_outcomes_unchanged") is not True
+        or not isinstance(receipt.get("official_export_sha256"), str)
+        or not HEX_DIGEST.fullmatch(receipt["official_export_sha256"])
+    ):
+        raise ValueError("review receipt does not establish unchanged pending evidence")
+    manifest = load_manifest()
+    if (
+        evidence.get("schema") != "elevenid.official-interop-evidence/v1"
+        or evidence.get("execution_mode") != "active"
+        or evidence.get("official_runner") != manifest["official_runner"]
+    ):
+        raise ValueError("review evidence does not use the pinned unmodified official runner")
+    profile = manifest["profiles"].get(evidence.get("profile"))
+    if not isinstance(profile, dict):
+        raise ValueError("review evidence has an unknown official profile")
+    archives = sorted(evidence_path.parent.glob("*.zip"))
+    export_bindings = [row for row in artifacts if str(row.get("path", "")).endswith(".zip")]
+    if not archives or {p.name for p in archives} != {row.get("path") for row in export_bindings}:
+        raise ValueError("review evidence has missing or foreign original exports")
+    for archive in archives:
+        entries = [row for row in export_bindings if row["path"] == archive.name]
+        if (
+            archive.is_symlink()
+            or not archive.is_file()
+            or len(entries) != 1
+            or entries[0].get("sha256") != "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+        ):
+            raise ValueError("review original export differs from its evidence hash")
+    expected_skips = evidence.get("exclusions", {}).get("expected_skips", [])
+    observed = strict_module_summary(evidence_path.parent, expected_skips)
+    coverage = recorded_plan_coverage(
+        evidence_path.parent, evidence.get("module_results", {}).get("plan_coverage"), profile["test_plan"]
+    )
+    observed["plan_coverage"] = coverage
+    if evidence.get("module_results") != observed or not coverage["complete"]:
+        raise ValueError("review evidence differs from its complete original module export")
+    if receipt.get("plan_binding_sha256") != coverage["binding_sha256"]:
+        raise ValueError("review receipt belongs to another official plan")
+    infos = {row["testName"]: row for row in exported_module_info(evidence_path.parent)}
+    pending = set(observed["pending_review"])
+    rows = receipt.get("modules")
+    if (
+        not pending
+        or not isinstance(rows, list)
+        or any(not isinstance(row, dict) for row in rows)
+        or any(not isinstance(row.get("test_name"), str) for row in rows)
+        or len(rows) != len(pending)
+        or {row.get("test_name") for row in rows} != pending
+    ):
+        raise ValueError("review images do not cover the exact pending module set")
+    modules = []
+    for row in rows:
+        info = infos[row["test_name"]]
+        if (
+            row.get("readback_hash_matched") is not True
+            or row.get("review_status") != "PENDING"
+            or not isinstance(row.get("screenshot_sha256"), str)
+            or not HEX_DIGEST.fullmatch(row["screenshot_sha256"])
+            or any(
+                not isinstance(info.get(key), str) or not OFFICIAL_ID.fullmatch(info[key])
+                for key in ["testId", "planId"]
+            )
+            or info.get("_id") != info["testId"]
+            or row.get("test_id", info["testId"]) != info["testId"]
+            or row.get("plan_id", info["planId"]) != info["planId"]
+        ):
+            raise ValueError("review image lacks its exact official identity and readback")
+        modules.append(
+            {
+                "test_name": info["testName"],
+                "test_id": info["testId"],
+                "plan_id": info["planId"],
+                "official_result": "REVIEW",
+                "screenshot_sha256": "sha256:" + row["screenshot_sha256"],
+            }
+        )
+    return {
+        "schema": "elevenid.official-review-request/v1",
+        "status": "PENDING",
+        "original_evidence_sha256": "sha256:" + hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+        "capture_receipt_sha256": "sha256:" + receipt_sha,
+        "official_export_sha256": "sha256:" + receipt["official_export_sha256"],
+        "plan_binding_sha256": "sha256:" + coverage["binding_sha256"],
+        "modules": sorted(modules, key=lambda item: item["test_name"]),
+    }
 
 
 def sd_jwt_diagnostic_report(value: object) -> dict[str, object]:
@@ -246,6 +380,7 @@ def build_summary(
         redactions += count
 
     evidence: list[dict[str, object]] = []
+    review_requests: list[dict[str, object]] = []
     junit: list[dict[str, object]] = []
     browser_evidence: object | None = None
     verifier_diagnostics: object | None = None
@@ -292,7 +427,14 @@ def build_summary(
             )
             redactions += count
         for path in sorted(input_dir.rglob("evidence.json")):
-            clean, count = sanitize(load_json(path))
+            raw_evidence = load_json(path)
+            if isinstance(raw_evidence, dict):
+                request = pending_review_request(path, raw_evidence)
+                if request is not None:
+                    if lane in {"w3c-v2", "eudi", "oid4vci-issuer"}:
+                        raise ValueError("review image evidence is not permitted for this lane")
+                    review_requests.append({"source": path.relative_to(input_dir).as_posix(), **request})
+            clean, count = sanitize(raw_evidence)
             redactions += count
             evidence.append({"source": path.relative_to(input_dir).as_posix(), "evidence": clean})
         for path in sorted(input_dir.rglob("*.xml")):
@@ -313,6 +455,7 @@ def build_summary(
         "browser_evidence": browser_evidence,
         "verifier_diagnostics": verifier_diagnostics,
         "official_evidence": evidence,
+        "review_requests": review_requests,
         "junit": junit,
         "redactions": redactions,
     }

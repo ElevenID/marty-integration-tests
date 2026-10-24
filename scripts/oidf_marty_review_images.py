@@ -182,6 +182,8 @@ def attach_image(server: str, headers: dict[str, str], case: dict, *, insecure: 
     checked_info()
     return {
         "test_name": case["test_name"],
+        "test_id": case["test_id"],
+        "plan_id": case["plan_id"],
         "screenshot_sha256": case["sha256"],
         "readback_hash_matched": True,
         "reused_existing_image": reused,
