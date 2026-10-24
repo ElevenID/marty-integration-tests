@@ -7,7 +7,7 @@ import binascii
 import hashlib
 import io
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -54,6 +54,71 @@ def _require_map(value: Any, *, label: str) -> dict[Any, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{label} must be a CBOR map")
     return dict(value)
+
+
+def _collection_entries(stream: io.BytesIO, major: int) -> Iterator[None]:
+    """Walk only container boundaries; cbor2 still decodes every CBOR value."""
+    first = stream.read(1)
+    if not first or first[0] >> 5 != major:
+        raise ValueError("mDoc wire container has the wrong CBOR type")
+    additional = first[0] & 31
+    if additional == 31:
+        while True:
+            marker = stream.read(1)
+            if marker == b"\xff":
+                return
+            if not marker:
+                raise ValueError("mDoc wire container is truncated")
+            stream.seek(-1, io.SEEK_CUR)
+            yield None
+    else:
+        if additional < 24:
+            count = additional
+        elif additional <= 27:
+            width = 1 << (additional - 24)
+            encoded = stream.read(width)
+            if len(encoded) != width:
+                raise ValueError("mDoc wire container length is truncated")
+            count = int.from_bytes(encoded, "big")
+        else:
+            raise ValueError("mDoc wire container length is invalid")
+        if count > len(stream.getbuffer()) - stream.tell():
+            raise ValueError("mDoc wire container length exceeds the credential")
+        for _ in range(count):
+            yield None
+
+
+def _issuer_item_wire_bytes(raw: bytes, namespace: str, expected_items: list | tuple) -> list[bytes]:
+    """Retain each original #6.24(bstr) span, including its outer encoding.
+
+    ISO 18013-5 valueDigests cover IssuerSignedItemBytes, not its inner map.
+    Re-encoding the decoded tag could also change a valid non-minimal outer
+    header. Decode the already-validated structure while retaining wire spans.
+    """
+    stream = io.BytesIO(raw)
+    decoder = cbor2.CBORDecoder(stream)
+    items: list[bytes] = []
+    seen: set[str] = set()
+    for _ in _collection_entries(stream, 5):
+        key = decoder.decode()
+        if key in seen:
+            raise ValueError("mDoc wire structure repeats an IssuerSigned key")
+        seen.add(key)
+        if key != "nameSpaces":
+            decoder.decode()
+            continue
+        for _ in _collection_entries(stream, 5):
+            if decoder.decode() != namespace:
+                raise ValueError("mDoc wire namespace differs from decoded namespace")
+            for _ in _collection_entries(stream, 4):
+                start = stream.tell()
+                item = decoder.decode()
+                if len(items) >= len(expected_items) or item != expected_items[len(items)]:
+                    raise ValueError("mDoc wire items differ from decoded items")
+                items.append(raw[start:stream.tell()])
+    if len(items) != len(expected_items) or stream.read(1):
+        raise ValueError("mDoc wire item inventory is incomplete")
+    return items
 
 
 def _decode_mobile_security_object_bytes(payload: bytes) -> dict[Any, Any]:
@@ -224,8 +289,9 @@ def validate_issuer_signed_mdoc(
     digest table, checks validity, and compares the expected production claims.
     """
     checked_at = (now or datetime.now(UTC)).astimezone(UTC)
+    credential_bytes = _decode_base64(credential)
     issuer_signed = _require_map(
-        _decode_cbor_exact(_decode_base64(credential), label="mDoc credential"),
+        _decode_cbor_exact(credential_bytes, label="mDoc credential"),
         label="mDoc IssuerSigned",
     )
     if set(issuer_signed) != {"nameSpaces", "issuerAuth"}:
@@ -237,6 +303,7 @@ def validate_issuer_signed_mdoc(
     raw_items = namespaces[expected_namespace]
     if not isinstance(raw_items, (list, tuple)) or not raw_items:
         raise ValueError("mDoc namespace must contain IssuerSignedItemBytes")
+    item_wire_bytes = _issuer_item_wire_bytes(credential_bytes, expected_namespace, raw_items)
 
     item_bytes_by_digest: dict[int, bytes] = {}
     claims: dict[str, Any] = {}
@@ -264,7 +331,7 @@ def validate_issuer_signed_mdoc(
             raise ValueError(f"mDoc item {index} has insufficient digest salt")
         if not isinstance(element, str) or not element or element in claims:
             raise ValueError(f"mDoc item {index} has an invalid or duplicate elementIdentifier")
-        item_bytes_by_digest[digest_id] = tagged_item.value
+        item_bytes_by_digest[digest_id] = item_wire_bytes[index]
         claims[element] = item["elementValue"]
 
     issuer_auth = issuer_signed["issuerAuth"]
