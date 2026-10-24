@@ -220,7 +220,7 @@ async def dtc_mdoc_template(
         }
     )
     with eudi_stage("dtc-credential-template"):
-        return await authenticated_gateway_client.create_credential_template(**template_data)
+        return await authenticated_gateway_client.create_credential_template(**template_data, activate=True)
 
 
 @pytest.fixture
@@ -581,7 +581,7 @@ class TestDtcWalletEndToEnd:
                 "revocation_profile_id": dtc_mdoc_resources["revocation_profile_id"],
             }
         )
-        template = await authenticated_gateway_client.create_credential_template(**template_data)
+        template = await authenticated_gateway_client.create_credential_template(**template_data, activate=True)
         logger.info("[DTC E2E] Template created: %s", template["id"])
 
         # 2. Issue DTC credential

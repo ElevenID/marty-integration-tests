@@ -429,6 +429,7 @@ class GatewayClient:
         credential_payload_format: Optional[str] = None,
         wallet_configs: Optional[List[Dict[str, str]]] = None,
         compliance_profile_id: Optional[str] = None,
+        activate: bool = False,
     ) -> Dict[str, Any]:
         """
         Create a credential template (master issuance configuration).
@@ -451,6 +452,8 @@ class GatewayClient:
                 'ietf_sd_jwt', 'w3c_vcdm_v2_jwt_vc'). Server default: 'w3c_vcdm_v2_sd_jwt'.
             wallet_configs: Per-wallet deep-link configs, e.g.
                 [{"wallet_id": "marty", "deep_link_scheme": "openid-credential-offer://"}]
+            activate: Explicitly activate through the public lifecycle after creation.
+                Defaults to a draft so lifecycle and rejection tests keep their meaning.
 
         Returns:
             Credential template object
@@ -493,11 +496,20 @@ class GatewayClient:
         if wallet_configs is not None:
             payload["wallet_configs"] = wallet_configs
 
-        return await self._request(
+        created = await self._request(
             "POST",
             "/v1/credential-templates",
             json=payload,
         )
+        if not activate:
+            return created
+        template_id = created.get("id")
+        if not isinstance(template_id, str) or not template_id.strip():
+            raise ValueError("created credential template has no public id")
+        activated = await self.activate_credential_template(template_id)
+        if activated.get("id") != template_id or activated.get("status") != "active":
+            raise ValueError("credential template activation did not confirm the same active template")
+        return activated
 
     async def get_credential_template(self, template_id: str) -> Dict[str, Any]:
         """Get credential template by ID"""
