@@ -21,6 +21,7 @@ from official_fixture_bootstrap import write_private_json  # noqa: E402
 from oidf_conformance import (  # noqa: E402
     exported_module_documents,
     exported_module_info,
+    finalize_evidence_artifacts,
     load_manifest,
     official_plan_coverage,
     validate_runner,
@@ -292,6 +293,14 @@ def main() -> int:
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if receipt["state"] != "FAILED":
+        try:
+            finalize_evidence_artifacts(args.official_output)
+        except Exception as error:  # noqa: BLE001 - no private paths/API data in public diagnostics
+            receipt.update(state="FAILED", error_class=type(error).__name__)
+            args.output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            write_private_json(args.private_images.parent / (args.output.stem + "-inventory-private-error.json"),
+                               {"error_class": type(error).__name__, "error": str(error)})
     print(
         json.dumps({"state": receipt["state"], "images": len(receipt.get("modules", [])), "review_status": "PENDING"})
     )

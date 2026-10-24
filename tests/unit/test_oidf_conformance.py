@@ -833,6 +833,66 @@ def test_plan_coverage_unavailable_readback_cannot_qualify(tmp_path: Path) -> No
     assert oidf.official_plan_coverage(tmp_path, "official-plan")["complete"] is False
 
 
+def sealed_evidence(output: Path) -> dict:
+    (output / "official.zip").write_bytes(b"unchanged stock export fixture")
+    (output / "module-results.json").write_text('{"counts":{"REVIEW":1}}', encoding="utf-8")
+    evidence = {
+        "schema": "elevenid.official-interop-evidence/v1",
+        "result": {"passed": False, "exit_code": 1, "process_exit_code": 0},
+        "module_results": {"pending_review": ["happy"], "passed": False},
+        "artifacts": oidf.artifact_inventory(output),
+    }
+    (output / "evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
+    return evidence
+
+
+def test_final_inventory_binds_late_receipts_without_approving_review(tmp_path: Path) -> None:
+    original = sealed_evidence(tmp_path)
+    stock = (tmp_path / "official.zip").read_bytes()
+    late = tmp_path / "official-real-ui-images.json"
+    late.write_text('{"state":"ATTACHED","review_status":"PENDING"}', encoding="utf-8")
+    finalized = oidf.finalize_evidence_artifacts(tmp_path)
+    assert finalized["result"] == original["result"]
+    assert finalized["module_results"] == original["module_results"]
+    assert (tmp_path / "official.zip").read_bytes() == stock
+    assert {row["path"]: row["sha256"] for row in finalized["artifacts"]}[late.name] == oidf.file_sha256(late)
+    assert oidf.finalize_evidence_artifacts(tmp_path) == finalized
+
+
+@pytest.mark.parametrize("mutation", ["export", "module-results", "missing", "duplicate"])
+def test_final_inventory_rejects_changed_originals_without_rewriting_evidence(tmp_path: Path, mutation: str) -> None:
+    original = sealed_evidence(tmp_path)
+    if mutation == "export":
+        (tmp_path / "official.zip").write_bytes(b"different execution")
+    elif mutation == "module-results":
+        (tmp_path / "module-results.json").write_text('{"counts":{"PASSED":1}}', encoding="utf-8")
+    elif mutation == "missing":
+        (tmp_path / "official.zip").unlink()
+    else:
+        original["artifacts"].append(original["artifacts"][0])
+        (tmp_path / "evidence.json").write_text(json.dumps(original), encoding="utf-8")
+    before = (tmp_path / "evidence.json").read_bytes()
+    with pytest.raises(ValueError, match="original official artifact"):
+        oidf.finalize_evidence_artifacts(tmp_path)
+    assert (tmp_path / "evidence.json").read_bytes() == before
+
+
+def test_final_inventory_does_not_follow_late_symlink_artifacts(tmp_path: Path) -> None:
+    output = tmp_path / "owned"
+    output.mkdir()
+    sealed_evidence(output)
+    outside = tmp_path / "outside.json"
+    outside.write_text("private fixture not to hash", encoding="utf-8")
+    try:
+        (output / "late.json").symlink_to(outside)
+    except OSError:
+        pytest.skip("host cannot create symlinks; Linux lane must cover this custody boundary")
+    before = (output / "evidence.json").read_bytes()
+    with pytest.raises(ValueError, match="regular files"):
+        oidf.finalize_evidence_artifacts(output)
+    assert (output / "evidence.json").read_bytes() == before
+
+
 def test_plan_callback_names_bind_sorted_module_variants_without_changing_raw_names() -> None:
     plan, infos = plan_and_exports()
     extra = {"vp_profile": "haip", "client_id_prefix": "x509_hash", "request_method": "request_uri_signed"}
