@@ -228,7 +228,7 @@ jobs:
         run: |
           python scripts/eudi_test_material.py generate --output work/material --marty-port 18443 --staging-ca-key work/material/official-ca.key
           python scripts/eudi_test_material.py validate --material work/material
-          python -c "import json; from urllib.parse import urlsplit; data=json.load(open('work/material/report.json', encoding='utf-8')); hosts=sorted({urlsplit(value).hostname for value in data['urls'].values()} | {'localhost.emobix.co.uk'}); print('127.0.0.1 ' + ' '.join(host for host in hosts if host and host != 'localhost'))" | sudo tee -a /etc/hosts
+          python scripts/official_runner_hosts.py --material-report work/material/report.json --install
 
       - name: Prepare disposable verifier trust material
         if: matrix.lane == 'oid4vp-final' || matrix.lane == 'oid4vp-url-query' || matrix.lane == 'oid4vp-mdoc' || matrix.lane == 'haip' || matrix.lane == 'eudi'

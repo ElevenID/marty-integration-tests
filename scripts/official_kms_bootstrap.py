@@ -31,6 +31,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from official_suite_compose import RUN_ID, project_names  # noqa: E402
+from official_runner_hosts import append_host_aliases  # noqa: E402
 
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 REQUIRED = re.compile(r"\$\{([A-Z][A-Z0-9_]*):\?[^}]*\}")
@@ -300,14 +301,7 @@ def openbao_network(container: str, project: str) -> tuple[str, str]:
 
 
 def append_openbao_host(address: str) -> None:
-    # Docker-generated hosts files can end without a newline. Start a new
-    # record explicitly so this IPv4 address cannot become part of an IPv6
-    # alias, which would resolve OpenBao to the preceding record's address.
-    with subprocess.Popen(["sudo", "tee", "-a", "/etc/hosts"], stdin=subprocess.PIPE,
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as hosts:
-        hosts.communicate(f"\n{address} openbao\n".encode("ascii"), timeout=10)
-        if hosts.returncode:
-            raise RuntimeError("runner cannot resolve its disposable OpenBao origin")
+    append_host_aliases(address, ["openbao"])
 
 
 def scoped_transit_signing_token(bao, key_name: str, policy_name: str,
