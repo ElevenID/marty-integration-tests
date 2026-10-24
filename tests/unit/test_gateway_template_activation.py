@@ -9,12 +9,12 @@ from tests.integration.gateway.helpers.gateway_client import GatewayClient
 @pytest.mark.asyncio
 async def test_default_template_creation_stays_draft() -> None:
     client = GatewayClient("https://gateway.example")
-    client._request = AsyncMock(return_value={"id": "template-1", "status": "draft"})
+    client._request = AsyncMock(return_value={"id": "template-1", "status": "DRAFT"})
     try:
         result = await client.create_credential_template(
             "org-1", "Template", "OpenBadge", issuer_did="did:web:issuer.example",
         )
-        assert result["status"] == "draft"
+        assert result["status"] == "DRAFT"
         assert client._request.await_count == 1
         assert "activate" not in client._request.call_args.kwargs["json"]
     finally:
@@ -24,8 +24,8 @@ async def test_default_template_creation_stays_draft() -> None:
 @pytest.mark.asyncio
 async def test_active_template_requires_public_transition() -> None:
     client = GatewayClient("https://gateway.example")
-    active = {"id": "template-1", "status": "active", "name": "Template"}
-    client._request = AsyncMock(side_effect=[{"id": "template-1", "status": "draft"}, active])
+    active = {"id": "template-1", "status": "ACTIVE", "name": "Template"}
+    client._request = AsyncMock(side_effect=[{"id": "template-1", "status": "DRAFT"}, active])
     try:
         result = await client.create_credential_template(
             "org-1", "Template", "OpenBadge", issuer_did="did:web:issuer.example", activate=True,
@@ -54,8 +54,9 @@ async def test_activation_rejects_missing_created_identity(created: dict[str, st
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("activated", [
-    {"id": "other", "status": "active"},
-    {"id": "template-1", "status": "draft"},
+    {"id": "other", "status": "ACTIVE"},
+    {"id": "template-1", "status": "DRAFT"},
+    {"id": "template-1", "status": "active"},
     {"id": "template-1"},
 ])
 async def test_activation_requires_same_active_identity(activated: dict[str, str]) -> None:

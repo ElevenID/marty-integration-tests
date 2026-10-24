@@ -507,7 +507,7 @@ class GatewayClient:
         if not isinstance(template_id, str) or not template_id.strip():
             raise ValueError("created credential template has no public id")
         activated = await self.activate_credential_template(template_id)
-        if activated.get("id") != template_id or activated.get("status") != "active":
+        if activated.get("id") != template_id or activated.get("status") != "ACTIVE":
             raise ValueError("credential template activation did not confirm the same active template")
         return activated
 
