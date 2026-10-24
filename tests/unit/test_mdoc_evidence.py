@@ -36,6 +36,9 @@ def _encoded_mdoc(
     *,
     tag_mobile_security_object: bool = True,
     legacy_protected_x5chain: bool = False,
+    hash_inner_items: bool = False,
+    non_minimal_item_tag: bool = False,
+    indefinite_containers: bool = False,
 ) -> str:
     key = ec.generate_private_key(ec.SECP256R1())
     ca_key = ec.generate_private_key(ec.SECP256R1())
@@ -65,6 +68,7 @@ def _encoded_mdoc(
     )
 
     items: list[cbor2.CBORTag] = []
+    item_encodings: list[bytes] = []
     digests: dict[int, bytes] = {}
     for digest_id, (name, value) in enumerate(CLAIMS.items()):
         encoded_value = cbor2.CBORTag(1004, value) if name == "birth_date" else value
@@ -76,8 +80,14 @@ def _encoded_mdoc(
                 "elementValue": encoded_value,
             }
         )
-        items.append(cbor2.CBORTag(24, item_bytes))
-        digests[digest_id] = hashlib.sha256(item_bytes).digest()
+        tagged_item = cbor2.CBORTag(24, item_bytes)
+        items.append(tagged_item)
+        wire_item = cbor2.dumps(tagged_item)
+        if non_minimal_item_tag:
+            assert wire_item.startswith(b"\xd8\x18")
+            wire_item = b"\xd9\x00\x18" + wire_item[2:]
+        item_encodings.append(wire_item)
+        digests[digest_id] = hashlib.sha256(item_bytes if hash_inner_items else wire_item).digest()
 
     encoded_mso = cbor2.dumps(
         {
@@ -114,7 +124,22 @@ def _encoded_mdoc(
             [protected, unprotected_headers, mso_bytes, signature],
         ),
     }
-    return base64.urlsafe_b64encode(cbor2.dumps(issuer_signed)).rstrip(b"=").decode("ascii")
+    if non_minimal_item_tag or indefinite_containers:
+        # Preserve intentionally non-preferred tag headers and legal indefinite
+        # containers instead of silently normalizing them through re-encoding.
+        end = b"\xff" if indefinite_containers else b""
+        wire = (
+            (b"\xbf" if indefinite_containers else b"\xa2")
+            + cbor2.dumps("nameSpaces")
+            + (b"\xbf" if indefinite_containers else b"\xa1")
+            + cbor2.dumps(NAMESPACE)
+            + (b"\x9f" if indefinite_containers else bytes([0x80 + len(items)]))
+            + b"".join(item_encodings) + end + end
+            + cbor2.dumps("issuerAuth") + cbor2.dumps(issuer_signed["issuerAuth"]) + end
+        )
+    else:
+        wire = cbor2.dumps(issuer_signed)
+    return base64.urlsafe_b64encode(wire).rstrip(b"=").decode("ascii")
 
 
 def _validate(credential: str) -> dict[str, object]:
@@ -156,6 +181,17 @@ def test_valid_mdoc_proves_signature_digests_validity_and_claims() -> None:
     assert evidence["claims"] == CLAIMS
     assert evidence["certificate_chain_length"] == 2
     assert len(evidence["certificate_chain_sha256"]) == 2
+
+
+def test_signed_mso_hashing_only_inner_item_is_rejected() -> None:
+    with pytest.raises(ValueError, match="digest mismatch"):
+        _validate(_encoded_mdoc(hash_inner_items=True))
+
+
+@pytest.mark.parametrize("indefinite", [False, True])
+def test_original_item_wrapper_bytes_are_verified_without_reencoding(indefinite: bool) -> None:
+    evidence = _validate(_encoded_mdoc(non_minimal_item_tag=True, indefinite_containers=indefinite))
+    assert evidence["claims"] == CLAIMS
 
 
 def test_cbor_mapping_implementations_are_normalized_for_validation() -> None:
