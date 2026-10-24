@@ -145,6 +145,7 @@ async def open_badge_template(
 ):
     """Create an open_badge credential template dynamically."""
     return await authenticated_gateway_client.create_credential_template(
+        activate=True,
         organization_id=eudi_test_org["id"],
         name="EUDI WK Open Badge",
         credential_type="OpenBadge",
@@ -171,6 +172,7 @@ async def passport_template(
 ):
     """Create a passport credential template dynamically."""
     return await authenticated_gateway_client.create_credential_template(
+        activate=True,
         organization_id=eudi_test_org["id"],
         name="EUDI WK Passport",
         credential_type="Passport",

@@ -383,6 +383,7 @@ async def sd_jwt_dl_template(
 ):
     """SD-JWT driver's license template for VP testing."""
     return await authenticated_gateway_client.create_credential_template(
+        activate=True,
         organization_id=vp_test_org["id"],
         name="VP Test DL (SD-JWT)",
         credential_type="DriversLicense",
@@ -408,6 +409,7 @@ async def mdl_mdoc_template(
     """mDL mDoc template for mDoc/mDL VP testing."""
     with eudi_stage("mdoc-credential-template"):
         return await authenticated_gateway_client.create_credential_template(
+            activate=True,
             organization_id=vp_test_org["id"],
             name="VP Test mDL (mDoc)",
             credential_type="org.iso.18013.5.1.mDL",
@@ -1304,6 +1306,7 @@ class TestEndToEndIssuanceAndPresentation:
         record_property("evidence_id", "marty.rust-revocation.sd-jwt-lifecycle.v1")
         # 1. Create credential template
         template = await authenticated_gateway_client.create_credential_template(
+            activate=True,
             organization_id=vp_test_org["id"],
             name=f"Lifecycle Test ({uuid.uuid4().hex[:6]})",
             credential_type="IdentityCredential",
