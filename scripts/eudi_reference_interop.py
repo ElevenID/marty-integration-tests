@@ -54,6 +54,24 @@ REQUIRED_EVIDENCE_CLAIMS = {
         {"wallet_key_attestation:jwt_proof_x5c_profile_trust"}
     ),
 }
+REQUIRED_PRODUCT_EVIDENCE = {
+    "marty.rust-revocation.sd-jwt-lifecycle.v1": {
+        "scope": "marty-product-only",
+        "description": (
+            "Rust status-list revocation lifecycle; additional product control, not EUDI library conformance."
+        ),
+    },
+}
+
+
+def required_assertion_ids(manifest: dict[str, Any]) -> set[str]:
+    """Require the product sentinel without adding it to EUDI coverage claims."""
+    required = manifest.get("required_evidence")
+    if not isinstance(required, dict) or set(required) != set(REQUIRED_EVIDENCE_CLAIMS):
+        raise ValueError("EUDI manifest must declare the complete stable evidence contract")
+    if manifest.get("required_product_evidence") != REQUIRED_PRODUCT_EVIDENCE:
+        raise ValueError("EUDI manifest must declare the exact separate product evidence contract")
+    return set(required) | set(REQUIRED_PRODUCT_EVIDENCE)
 
 
 def coverage_claims(coverage: Any) -> set[str]:
@@ -136,9 +154,8 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
             "EUDI negative coverage is incomplete: "
             + ", ".join(sorted(missing_negative_claims))
         )
-    required_evidence = data.get("required_evidence")
-    if not isinstance(required_evidence, dict) or set(required_evidence) != set(REQUIRED_EVIDENCE_CLAIMS):
-        raise ValueError("EUDI manifest must declare the complete stable evidence contract")
+    required_assertion_ids(data)
+    required_evidence = data["required_evidence"]
     bound_claim_counts: dict[str, int] = {}
     for evidence_id, expected_claims in REQUIRED_EVIDENCE_CLAIMS.items():
         record = required_evidence.get(evidence_id)
@@ -519,7 +536,7 @@ def write_evidence(
     failure_summary: list[dict[str, object]] | None = None,
 ) -> None:
     observed_evidence = observed_evidence or {}
-    required_ids = set(manifest["required_evidence"])
+    required_ids = required_assertion_ids(manifest)
     if result == 0 and (
         set(observed_evidence) != required_ids
         or any(record.get("status") != "passed" for record in observed_evidence.values())
@@ -535,7 +552,13 @@ def write_evidence(
         "components": manifest["components"],
         "coverage": manifest["coverage"],
         "required_evidence": manifest["required_evidence"],
-        "observed_evidence": observed_evidence,
+        "observed_evidence": {
+            key: value for key, value in observed_evidence.items() if key in manifest["required_evidence"]
+        },
+        "required_product_evidence": manifest["required_product_evidence"],
+        "observed_product_evidence": {
+            key: value for key, value in observed_evidence.items() if key in REQUIRED_PRODUCT_EVIDENCE
+        },
         "failure_summary": failure_summary or [],
         "compatibility_only": manifest.get("compatibility_only", {}),
         "planned_coverage": manifest.get("planned_coverage", {}),
@@ -630,6 +653,8 @@ def eudi_pytest_command(
 ) -> list[str]:
     pytest_args = [
         "-q",
+        "-o",
+        "junit_family=xunit1",
         "--junitxml",
         str(output / "junit.xml"),
         "tests/integration/gateway/test_eudi_interop.py",
@@ -682,7 +707,7 @@ def run(args: argparse.Namespace) -> int:
         failure_summary = junit_failure_summary(junit_path)
         observed_evidence = junit_required_evidence(
             junit_path,
-            set(manifest["required_evidence"]),
+            required_assertion_ids(manifest),
         )
     except (ElementTree.ParseError, ValueError) as exc:
         result = 1

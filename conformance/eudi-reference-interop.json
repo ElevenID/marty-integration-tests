@@ -94,6 +94,12 @@
       "claims": ["wallet_key_attestation:jwt_proof_x5c_profile_trust"]
     }
   },
+  "required_product_evidence": {
+    "marty.rust-revocation.sd-jwt-lifecycle.v1": {
+      "scope": "marty-product-only",
+      "description": "Rust status-list revocation lifecycle; additional product control, not EUDI library conformance."
+    }
+  },
   "compatibility_only": {
     "negative_response_mutation": {
       "evidence": [
