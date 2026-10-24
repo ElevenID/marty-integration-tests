@@ -114,10 +114,13 @@ def capture_success_page(
     if response.status != 200 or outcome_projection(response.json(), flow_id) != outcome:
         raise ValueError("browser verification evidence does not match the public result")
     dialog = page.get_by_role("dialog")
-    progress["stage"] = "dialog_flow_identity"
-    dialog.get_by_text(flow_id, exact=True).wait_for(timeout=30_000)
     progress["stage"] = "dialog_result_loaded"
     dialog.get_by_label("Loading verification result").wait_for(state="hidden", timeout=30_000)
+    progress["stage"] = "dialog_flow_identity"
+    summary = dialog.locator('[data-testid="verification-result-summary"]')
+    summary.wait_for(timeout=30_000)
+    if summary.get_attribute("data-verification-instance-id") != flow_id:
+        raise ValueError("browser verification summary belongs to a different flow")
     progress["stage"] = "dialog_verified_outcome"
     dialog.get_by_text("Verified", exact=True).first.wait_for(timeout=30_000)
     if dialog.get_by_role("alert").count():
