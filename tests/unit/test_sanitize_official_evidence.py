@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,173 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load official evidence sanitizer")
 sanitizer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sanitizer)
+
+
+def review_fixture(tmp_path: Path) -> tuple[Path, dict, dict]:
+    from oidf_conformance import compare_plan_coverage, parse_variant_selection
+
+    profile = "oid4vp-mdoc-verifier"
+    manifest = sanitizer.load_manifest()
+    selection = manifest["profiles"][profile]["test_plan"]
+    plan_name, variant = parse_variant_selection(selection)
+    modules = ["oid4vp-1final-verifier-happy-flow", "oid4vp-1final-verifier-invalid-session-transcript"]
+    infos = [
+        {
+            "_id": f"test{i}",
+            "testId": f"test{i}",
+            "planId": "plan1",
+            "testName": name,
+            "variant": variant,
+            "status": "FINISHED",
+            "result": "REVIEW" if i == 0 else "PASSED",
+        }
+        for i, name in enumerate(modules)
+    ]
+    plan = {
+        "_id": "plan1",
+        "planName": plan_name,
+        "variant": variant,
+        "modules": [{"testModule": name, "instances": [f"test{i}"], "variant": {}} for i, name in enumerate(modules)],
+    }
+    archive = tmp_path / "unit-fixture-only.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        for i, info in enumerate(infos):
+            output.writestr(f"test{i}.json", json.dumps({"testInfo": info, "private-token": "do-not-publish"}))
+    evidence = {
+        "schema": "elevenid.official-interop-evidence/v1",
+        "profile": profile,
+        "execution_mode": "active",
+        "official_runner": manifest["official_runner"],
+        "result": {"passed": False, "exit_code": 1},
+        "exclusions": {"expected_skips": [], "expected_failures": []},
+        "module_results": sanitizer.strict_module_summary(tmp_path, []),
+        "artifacts": [{"path": archive.name, "sha256": "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()}],
+    }
+    coverage = compare_plan_coverage(infos, plan, selection)
+    evidence["module_results"]["plan_coverage"] = coverage
+    receipt = {
+        "schema": "elevenid.official-real-ui-images/v1",
+        "state": "ATTACHED",
+        "review_status": "PENDING",
+        "original_exports_unchanged": True,
+        "module_outcomes_unchanged": True,
+        "official_export_sha256": "e" * 64,
+        "plan_binding_sha256": coverage["binding_sha256"],
+        "private_data": "do-not-publish",
+        "modules": [
+            {
+                "test_name": modules[0],
+                "test_id": "test0",
+                "plan_id": "plan1",
+                "readback_hash_matched": True,
+                "review_status": "PENDING",
+                "screenshot_sha256": "a" * 64,
+            }
+        ],
+    }
+    return tmp_path / "evidence.json", evidence, receipt
+
+
+def write_review_fixture(path: Path, evidence: dict, receipt: dict) -> None:
+    receipt_path = path.parent / "official-real-ui-images.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    evidence["artifacts"] = [row for row in evidence["artifacts"] if row["path"] != receipt_path.name]
+    evidence["artifacts"].append(
+        {"path": receipt_path.name, "sha256": "sha256:" + hashlib.sha256(receipt_path.read_bytes()).hexdigest()}
+    )
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+
+def test_review_inventory_is_private_safe_and_never_changes_verdicts(tmp_path: Path) -> None:
+    path, evidence, receipt = review_fixture(tmp_path)
+    write_review_fixture(path, evidence, receipt)
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    result = sanitizer.build_summary(tmp_path, lane="oid4vp-mdoc", harness_commit="a" * 40, exit_code=1)
+    assert result["result"] == {"exit_code": 1, "passed": False}
+    assert result["official_evidence"][0]["evidence"]["module_results"]["pending_review"]
+    (request,) = result["review_requests"]
+    assert request["status"] == "PENDING"
+    assert request["original_evidence_sha256"] == "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    assert request["modules"] == [
+        {
+            "test_name": "oid4vp-1final-verifier-happy-flow",
+            "test_id": "test0",
+            "plan_id": "plan1",
+            "official_result": "REVIEW",
+            "screenshot_sha256": "sha256:" + "a" * 64,
+        }
+    ]
+    assert "do-not-publish" not in json.dumps(request)
+    assert before == {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-image",
+        "duplicate-image",
+        "wrong-instance",
+        "wrong-plan",
+        "wrong-coverage",
+        "wrong-counts",
+        "wrong-readback",
+        "wrong-receipt-hash",
+        "changed-export",
+        "missing-export",
+        "extra-export",
+        "modified-runner",
+        "malformed-digest",
+        "approved-flag",
+        "omitted-review",
+    ],
+)
+def test_review_inventory_rejects_stale_or_unbound_evidence(tmp_path: Path, mutation: str) -> None:
+    path, evidence, receipt = review_fixture(tmp_path)
+    row = receipt["modules"][0]
+    if mutation == "missing-image":
+        receipt["modules"] = []
+    elif mutation == "duplicate-image":
+        receipt["modules"].append(dict(row))
+    elif mutation == "wrong-instance":
+        row["test_id"] = "anotherattempt"
+    elif mutation == "wrong-plan":
+        row["plan_id"] = "anotherplan"
+    elif mutation == "wrong-coverage":
+        evidence["module_results"]["plan_coverage"]["exported_module_count"] = 1
+    elif mutation == "wrong-counts":
+        evidence["module_results"]["counts"]["REVIEW"] = 0
+    elif mutation == "wrong-readback":
+        row["readback_hash_matched"] = False
+    elif mutation == "modified-runner":
+        evidence["official_runner"]["source_policy"] = "modified"
+    elif mutation == "malformed-digest":
+        row["screenshot_sha256"] = "not-a-digest"
+    elif mutation == "approved-flag":
+        receipt["review_status"] = "APPROVED"
+    elif mutation == "omitted-review":
+        receipt["state"] = "NO_REVIEW_IMAGES_REQUIRED"
+    write_review_fixture(path, evidence, receipt)
+    if mutation == "wrong-receipt-hash":
+        (tmp_path / "official-real-ui-images.json").write_text(json.dumps(receipt) + " ", encoding="utf-8")
+    elif mutation == "changed-export":
+        with (tmp_path / "unit-fixture-only.zip").open("ab") as output:
+            output.write(b"changed")
+    elif mutation == "missing-export":
+        (tmp_path / "unit-fixture-only.zip").unlink()
+    elif mutation == "extra-export":
+        (tmp_path / "unbound.zip").write_bytes(b"unbound")
+    with pytest.raises(ValueError, match="review|recorded"):
+        sanitizer.pending_review_request(path, evidence)
+
+
+def test_historical_receipts_join_ids_without_rewriting_old_bytes(tmp_path: Path) -> None:
+    path, evidence, receipt = review_fixture(tmp_path)
+    del receipt["modules"][0]["test_id"], receipt["modules"][0]["plan_id"]
+    write_review_fixture(path, evidence, receipt)
+    before = path.read_bytes()
+    result = sanitizer.pending_review_request(path, evidence)
+    assert result["modules"][0]["test_id"] == "test0"
+    assert path.read_bytes() == before
 
 
 def test_sanitizer_emits_only_safe_structured_summary(tmp_path: Path) -> None:
