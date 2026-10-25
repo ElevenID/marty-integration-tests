@@ -1320,7 +1320,8 @@ def test_active_fixture_rejects_wrong_activation_identity(activation: object, fa
 
 
 @pytest.mark.parametrize(
-    "mode", ["sd-jwt", "mdoc", "w3c-issuer", "w3c-verifier", "browser", "Passport", "MobileDrivingLicense", "OpenBadge"],
+    "mode",
+    ["sd-jwt", "mdoc", "w3c-issuer", "w3c-verifier", "browser", "Passport", "MobileDrivingLicense", "OpenBadge"],
 )
 def test_all_template_roles_use_persisted_public_claims_instead_of_schema_uri(mode: str) -> None:
     arguments = (fixtures.DEFAULT_ORGANIZATION, "compliance-1", "did:web:issuer.example.com", "revocation-1")
