@@ -507,7 +507,8 @@ def test_oidf_fixture_matches_the_official_runner_pid_contract() -> None:
     )
     assert template["credential_type"] == "PID"
     assert template["vct"] == "urn:eudi:pid:1"
-    assert template["schema_uri"]["required"] == ["family_name", "given_name", "birthdate"]
+    assert "schema_uri" not in template
+    assert all(claim["required"] for claim in template["claims"])
     assert [claim["name"] for claim in template["claims"]] == [
         "family_name",
         "given_name",
@@ -1003,7 +1004,7 @@ def test_w3c_fixture_separates_credential_and_presentation_verification() -> Non
     assert presentation_template["issuer_did"] == "did:web:issuer.example.com"
     for template in (credential_template, presentation_template):
         assert template["credential_type"] == "VerifiableCredential"
-        assert template["schema_uri"] == {"type": "object", "properties": {"id": {"type": "string"}}}
+        assert "schema_uri" not in template
         assert template["claims"] == [{"name": "id", "display_name": "Subject identifier", "required": False}]
         assert "issuer_profile_id" not in template
         assert "signing_service_id" not in template
@@ -1316,3 +1317,46 @@ def test_active_fixture_rejects_wrong_activation_identity(activation: object, fa
             "https://marty.test", "session", {"organization_id": fixtures.DEFAULT_ORGANIZATION},
             "test template", request=lambda *_a, **_kw: next(replies),
         )
+
+
+@pytest.mark.parametrize(
+    "mode", ["sd-jwt", "mdoc", "w3c-issuer", "w3c-verifier", "browser", "Passport", "MobileDrivingLicense", "OpenBadge"],
+)
+def test_all_template_roles_use_persisted_public_claims_instead_of_schema_uri(mode: str) -> None:
+    arguments = (fixtures.DEFAULT_ORGANIZATION, "compliance-1", "did:web:issuer.example.com", "revocation-1")
+    if mode in {"Passport", "MobileDrivingLicense", "OpenBadge"}:
+        template = fixtures.eudi_template_payload(
+            *arguments, credential_type=mode, gateway_url="https://marty.test", run_id="run-1",
+        )
+        assert [(claim["name"], claim["required"]) for claim in template["claims"][:3]] == [
+            ("given_name", True), ("family_name", True), ("date_of_birth", True),
+        ]
+        if mode == "Passport":
+            assert template["claims"][3] == {
+                "name": "document_number", "display_name": "Document Number", "required": False,
+            }
+    elif mode == "browser":
+        template = fixtures.browser_credential_template_payload(
+            *arguments, gateway_url="https://marty.test", run_id="run-1",
+        )
+        assert [claim["name"] for claim in template["claims"] if claim["required"]] == ["email"]
+        assert {claim["name"] for claim in template["claims"]} == {
+            "email", "given_name", "family_name", "member_id", "organization_id", "role",
+        }
+    else:
+        template = fixtures.template_payload(
+            *arguments, w3c=mode.startswith("w3c"), mdoc=mode == "mdoc",
+            presentation=mode == "w3c-verifier", run_id="run-1",
+        )
+        if mode == "mdoc":
+            assert template["doctype"] == "org.iso.18013.5.1.mDL"
+            assert [(claim["name"], claim["namespace"], claim["required"]) for claim in template["claims"]] == [
+                ("family_name", "org.iso.18013.5.1", True),
+                ("given_name", "org.iso.18013.5.1", True),
+                ("birth_date", "org.iso.18013.5.1", True),
+            ]
+    assert "schema_uri" not in template
+    assert template["claims"]
+    assert template["compliance_profile_id"] == "compliance-1"
+    assert template["revocation_profile_id"] == "revocation-1"
+    assert template["issuer_did"] == "did:web:issuer.example.com"

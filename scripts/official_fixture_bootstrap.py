@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Create disposable official-suite fixtures through Marty's public API."""
+"""Create disposable official-suite fixtures through Marty's public API.
+
+Credential templates declare their shape through public claims, vct and doctype.
+Do not send schema_uri: it has no domain/storage representation and the gateway
+rejects non-null values rather than silently accepting an unenforced schema.
+"""
 
 from __future__ import annotations
 
@@ -179,21 +184,12 @@ def eudi_template_payload(
     if credential_type not in {"Passport", "MobileDrivingLicense", "OpenBadge"}:
         raise ValueError("unsupported EUDI fixture credential type")
     gateway_origin = gateway_url.rstrip("/")
-    properties: dict[str, object] = {
-        "given_name": {"type": "string"},
-        "family_name": {"type": "string"},
-        "date_of_birth": {"type": "string", "format": "full-date"},
-        "test_id": {"type": "string"},
-        "source": {"type": "string"},
-        "wallet_profile": {"type": "string"},
-    }
     claims = [
         {"name": "given_name", "display_name": "Given Name", "required": True},
         {"name": "family_name", "display_name": "Family Name", "required": True},
         {"name": "date_of_birth", "display_name": "Date of Birth", "required": True},
     ]
     if credential_type == "Passport":
-        properties["document_number"] = {"type": "string"}
         claims.append({"name": "document_number", "display_name": "Document Number", "required": False})
     return {
         "organization_id": organization_id,
@@ -205,11 +201,6 @@ def eudi_template_payload(
         "compliance_profile_id": compliance_profile_id,
         "issuer_did": issuer_did,
         "revocation_profile_id": revocation_profile_id,
-        "schema_uri": {
-            "type": "object",
-            "properties": properties,
-            "required": ["given_name", "family_name", "date_of_birth"],
-        },
         "claims": claims,
     }
 
@@ -273,7 +264,6 @@ def template_payload(
             # The unchanged official suite uses generic VCDM credentials,
             # including the minimal subject containing only an id. Do not
             # impose Marty's product-specific identity claims on that role.
-            "schema_uri": {"type": "object", "properties": {"id": {"type": "string"}}},
             "claims": [{"name": "id", "display_name": "Subject identifier", "required": False}],
         }
     if mdoc:
@@ -290,15 +280,6 @@ def template_payload(
             "compliance_profile_id": compliance_profile_id,
             "issuer_did": issuer_did,
             "revocation_profile_id": revocation_profile_id,
-            "schema_uri": {
-                "namespaces": {
-                    "org.iso.18013.5.1": {
-                        "family_name": {"type": "string"},
-                        "given_name": {"type": "string"},
-                        "birth_date": {"type": "string", "format": "full-date"},
-                    }
-                }
-            },
             "claims": [
                 {
                     "name": "family_name",
@@ -330,15 +311,6 @@ def template_payload(
         "compliance_profile_id": compliance_profile_id,
         "issuer_did": issuer_did,
         "revocation_profile_id": revocation_profile_id,
-        "schema_uri": {
-            "type": "object",
-            "properties": {
-                "family_name": {"type": "string"},
-                "given_name": {"type": "string"},
-                "birthdate": {"type": "string", "format": "full-date"},
-            },
-            "required": ["family_name", "given_name", "birthdate"],
-        },
         "claims": [
             {"name": "family_name", "display_name": "Family Name", "required": True},
             {"name": "given_name", "display_name": "Given Name", "required": True},
@@ -371,18 +343,6 @@ def browser_credential_template_payload(
         "compliance_profile_id": compliance_profile_id,
         "issuer_did": issuer_did,
         "revocation_profile_id": revocation_profile_id,
-        "schema_uri": {
-            "type": "object",
-            "properties": {
-                "email": {"type": "string", "format": "email"},
-                "given_name": {"type": "string"},
-                "family_name": {"type": "string"},
-                "member_id": {"type": "string"},
-                "organization_id": {"type": "string"},
-                "role": {"type": "string"},
-            },
-            "required": ["email"],
-        },
         "claims": [
             {"name": "email", "display_name": "Email", "required": True},
             {"name": "given_name", "display_name": "Given Name", "required": False},
