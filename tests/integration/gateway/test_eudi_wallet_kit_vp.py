@@ -418,24 +418,6 @@ async def mdl_mdoc_template(
             vct="org.iso.18013.5.1.mDL",
             doctype="org.iso.18013.5.1.mDL",
             supported_formats=["mdoc"],
-            schema={
-                "namespaces": {
-                    "org.iso.18013.5.1": {
-                        "family_name": {"type": "string", "required": True},
-                        "given_name": {"type": "string", "required": True},
-                        "birth_date": {"type": "string", "format": "full-date", "required": True},
-                        "issue_date": {"type": "string", "format": "full-date", "required": True},
-                        "expiry_date": {"type": "string", "format": "full-date", "required": True},
-                        "issuing_country": {"type": "string", "required": True},
-                        "issuing_authority": {"type": "string", "required": True},
-                        "document_number": {"type": "string", "required": True},
-                        "driving_privileges": {"type": "array", "required": True},
-                        "un_distinguishing_sign": {"type": "string", "required": True},
-                        "age_over_18": {"type": "boolean", "required": False},
-                        "age_over_21": {"type": "boolean", "required": False},
-                    }
-                }
-            },
             claims=[
                 {
                     "name": "given_name",

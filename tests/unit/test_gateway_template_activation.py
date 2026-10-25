@@ -123,3 +123,41 @@ async def test_compliance_activation_requires_same_active_identity(activated: di
             await client.create_compliance_profile("org-1", "Profile", activate=True)
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schema", [{}, {"namespaces": {"com.icao.dtc": {}}}])
+async def test_legacy_schema_is_rejected_before_public_request(schema: dict) -> None:
+    client = GatewayClient("https://gateway.example")
+    client._request = AsyncMock()
+    try:
+        with pytest.raises(ValueError, match="declare credential claims"):
+            await client.create_credential_template(
+                "org-1", "Template", "com.icao.dtc", issuer_did="did:web:issuer.example", schema=schema,
+            )
+        client._request.assert_not_awaited()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_dtc_compatibility_fixture_sends_namespaced_claims_without_schema_uri() -> None:
+    from tests.integration.gateway.helpers.test_data import TestDataBuilder
+
+    client = GatewayClient("https://gateway.example")
+    client._request = AsyncMock(return_value={"id": "template-1", "status": "DRAFT"})
+    try:
+        template = TestDataBuilder.dtc_template("org-1", compliance_profile_id="compliance-1")
+        assert "schema" not in template
+        await client.create_credential_template(**template, issuer_did="did:web:issuer.example")
+        sent = client._request.call_args.kwargs["json"]
+        assert "schema_uri" not in sent
+        assert sent["doctype"] == "com.icao.dtc"
+        assert [claim["name"] for claim in sent["claims"]] == [
+            "data_group_1", "data_group_2", "sod", "document_number", "issuing_authority", "expiry_date",
+        ]
+        assert all(claim["required"] and claim["mdoc_namespace"] == "com.icao.dtc"
+                   and claim["mdoc_element_identifier"] == claim["name"] for claim in sent["claims"])
+        assert sent["compliance_profile_id"] == "compliance-1"
+    finally:
+        await client.close()

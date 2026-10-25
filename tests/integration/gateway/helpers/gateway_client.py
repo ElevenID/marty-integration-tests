@@ -456,7 +456,7 @@ class GatewayClient:
             vct: Verifiable Credential Type identifier (required)
             doctype: ISO 18013 document type for mdoc templates
             supported_formats: List of credential formats (mdoc, sd_jwt_vc, jwt_vc)
-            schema: JSON schema for the credential
+            schema: Unsupported legacy argument; declare the public claims instead.
             claims: List of claim definitions
             application_template_id: Optional reference to Application Template
             trust_profile_id: Optional reference to Trust Profile
@@ -472,6 +472,10 @@ class GatewayClient:
         Returns:
             Credential template object
         """
+        if schema is not None:
+            raise ValueError(
+                "schema_uri has no public domain representation; declare credential claims instead"
+            )
         payload = {
             "organization_id": organization_id,
             "name": name,
@@ -501,8 +505,6 @@ class GatewayClient:
                 "key, certificate, or custody service."
             )
         payload["issuer_did"] = issuer_did
-        if schema:
-            payload["schema_uri"] = schema
         if zk_predicate_claims:
             payload["zk_predicate_claims"] = zk_predicate_claims
         if credential_payload_format is not None:

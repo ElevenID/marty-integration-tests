@@ -1052,52 +1052,6 @@ class TestDataBuilder:
             "vct": "com.icao.dtc",
             "doctype": "com.icao.dtc",
             "supported_formats": ["mdoc"],
-            "schema": {
-                "namespaces": {
-                    "com.icao.dtc": {
-                        "data_group_1": {
-                            "type": "object",
-                            "description": "MRZ mirror data",
-                            "required": True,
-                        },
-                        "data_group_2": {
-                            "type": "string",
-                            "format": "base64",
-                            "description": "Facial biometric",
-                            "required": True,
-                        },
-                        "data_group_11": {
-                            "type": "object",
-                            "description": "Additional personal details",
-                            "required": False,
-                        },
-                        "data_group_12": {
-                            "type": "object",
-                            "description": "Optional details",
-                            "required": False,
-                        },
-                        "sod": {
-                            "type": "string",
-                            "format": "base64",
-                            "description": "Document Security Object",
-                            "required": True,
-                        },
-                        "document_number": {
-                            "type": "string",
-                            "required": True,
-                        },
-                        "issuing_authority": {
-                            "type": "string",
-                            "required": True,
-                        },
-                        "expiry_date": {
-                            "type": "string",
-                            "format": "full-date",
-                            "required": True,
-                        },
-                    }
-                }
-            },
             "claims": [
                 {
                     "name": "data_group_1",
