@@ -1,0 +1,51 @@
+name: Verify release lookup with the Actions token
+
+on:
+  workflow_dispatch:
+    inputs:
+      fixture_tag:
+        description: Existing unreleased tag for an owned asset-free draft visibility fixture
+        required: true
+        default: v1.2.91
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-lookup-preflight
+  cancel-in-progress: false
+
+jobs:
+  release-lookup-probe:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Require the exact accepted main source
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Exercise owned draft visibility and cleanup without publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIXTURE_TAG: ${{ inputs.fixture_tag }}
+        run: python scripts/probe_release_lookup.py --fixture-tag "$FIXTURE_TAG" --output "$RUNNER_TEMP/release-lookup-preflight.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: release-lookup-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-lookup-preflight.json
+          if-no-files-found: error
+          retention-days: 14
