@@ -40,6 +40,7 @@ import pytest
 
 from .helpers.eudi_attestation import required_eudi_key_attestation_policy
 from .helpers.eudi_stage import eudi_stage, require_presentation_accepted
+from .helpers.eudi_expiry import wait_for_public_expiry
 from .helpers.eudi_wallet_kit_client import (
     EUDIWalletHarnessError,
     EUDIWalletKitClient,
@@ -969,7 +970,9 @@ class TestOID4VPSdJwtPresentation:
         # The public API deliberately rejects zero- or negative-duration
         # requests, so manufacturing an already-expired request would bypass
         # the contract this interoperability lane is meant to validate.
-        await asyncio.sleep(61)
+        observed = await wait_for_public_expiry(authenticated_gateway_client, flow["expires_at"])
+        record_property("request_expires_at", flow["expires_at"])
+        record_property("expiry_observed_http_date", observed.isoformat())
 
         result = await wallet_kit.submit_presentation(
             authorization_request_uri=flow["request_uri"],
