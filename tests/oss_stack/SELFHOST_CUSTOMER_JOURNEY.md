@@ -43,3 +43,51 @@ bind the test revision and result to the exact ZIP, image lock, source SHA,
 installed service graph, migration ledger, KMS custody evidence, clean state,
 and owned teardown.
 Currently no published self-host bundle provides that evidence.
+
+## Machine API-key component
+
+`selfhost_machine_customer_journey.py` is a separate explicit target. The
+existing PKCE test and its assertions remain in place. Both modes share the
+same issuance, wallet presentation, verification, credential revocation,
+status and revoked-presentation checks.
+
+The machine component requires only these explicit inputs:
+
+| Variable | Value |
+| --- | --- |
+| `SELFHOST_GATEWAY_URL` | The owned disposable public gateway |
+| `SELFHOST_ORG_ID` | Exact provisioned organization UUID |
+| `SELFHOST_ISSUER_DID`, `SELFHOST_VERIFIER_DID` | Installed managed public identities |
+| `SELFHOST_OPERATOR_API_KEY_FILE` | Absolute private regular file containing an already provisioned organization operator key with `admin:full` |
+
+The operator key configures profiles, policy and template through public APIs and
+creates a one-hour test key with explicit `credentials:issue`, `credentials:read`,
+`credentials:revoke` and `flows:execute` scopes. The narrower key performs the
+credential lifecycle. It must be denied API-key inventory access and access to
+another organization on a route it can read in its own organization. The operator
+retires the generated key in a `finally` path; a fresh request with that retired
+key must return 401. The supplied operator key is not retired by this component.
+
+Gateway requests carry `X-API-Key`; browser cookies and Authorization fallback
+are rejected before a request is sent. Redirect following and ambient proxy
+configuration are disabled for those requests. Holder protocol authentication
+continues to use the existing wallet client and its normal consent/protocol rules.
+
+```bash
+python -m pytest -q tests/oss_stack/selfhost_machine_customer_journey.py
+```
+
+Missing inputs fail the selected component. This does not provision the initial
+tenant or operator key, detect a running console, qualify a published CLI/SDK,
+or establish installation support. The release harness must prove approved
+bootstrap and console absence, bind the exact runtime/test/client artifacts,
+verify real KMS custody and clean start, and complete owned project teardown.
+Persisted profiles and credential history follow that disposable project
+lifecycle; public retirement of every created configuration remains a separate
+acceptance requirement. Hermetic tests of inputs, credential switching and
+failure cleanup are not evidence that the live journey passed.
+
+Test migration record: the original 25 assertion obligations are retained in
+`exercise_customer_journey` and the original PKCE wrapper, with only the selected
+runtime client parameterized. The new component adds key/tenant/scope controls;
+no original test, protocol assertion or release qualification is retired.
