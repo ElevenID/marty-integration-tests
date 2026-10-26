@@ -111,6 +111,40 @@ tag, and provenance before applying its real PostgreSQL migrations and exercisin
 purpose-scoped VDS-NC canonical decision path. It does not replace the UI stack's
 `/v1/verify` orchestration service and is not official conformance or certification.
 
+## Release controls
+
+Tag publication requires protected-main ancestry, complete draft/published-release
+absence and all seven existing official interoperability lanes. Write-scoped jobs
+retain the `release` environment. Publication creates a new release with all
+assets; it cannot adopt or update an existing draft. Corrections use a new version.
+
+After accepting the preflight workflow on main, exercise the actual Actions token
+before tagging the next version:
+
+```bash
+gh workflow run release-preflight.yml --repo ElevenID/marty-integration-tests \
+  --ref main -f fixture_tag=v1.2.91
+```
+
+The fixture tag must already exist and have no release. The probe creates one
+uniquely marked, asset-free draft, requires lookup to identify and refuse that
+exact draft, and removes it only while its identity, body, tag and draft state
+remain unchanged. It verifies the existing tag before and after; no assets are
+uploaded or published. A bounded wait allows delayed lookup visibility, while
+foreign identities and lookup errors fail immediately. The receipt retains the
+owner nonce and any known ID for recovery; changed or preexisting drafts remain
+untouched. Inspect the receipt and independently verify cleanup and the tag ref
+before proceeding. This preflight does not qualify the pinned platform or replace
+any official lane. The failed v1.2.91 tag remains unchanged; a corrected suite
+release still requires a qualified platform pin and a fresh version.
+
+Standalone lookup requires user push visibility and exhaustive paginated draft
+listing. Actions jobs use explicit trusted-workflow context with declared
+`contents:write`; the user-role `permissions.push` field is not an installation
+token permission check. Development dependencies include PyYAML so workflow
+structure and environment/official-lane requirements are tested without the
+optional browser suite.
+
 ## Contributing
 
 Add tests under `tests/integration/`, reuse existing fixtures, and mark optional wallet or interoperability suites with their existing pytest markers. New public tests must remain runnable without private checkouts, commerce services, customer data, or organization credentials.

@@ -12,8 +12,30 @@ permissions:
   contents: read
 
 jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Bind release tag to protected main before official qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check_release_lineage.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --expected-commit "$GITHUB_SHA"
+      - name: Refuse an existing draft or published release before official qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check_release_absent.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --actions-write-token
+
   official-interoperability:
     name: Require the complete pinned official suite
+    needs: verify-source
     permissions:
       contents: read
       packages: read
@@ -23,7 +45,7 @@ jobs:
       lane: all
 
   release:
-    needs: official-interoperability
+    needs: [verify-source, official-interoperability]
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -34,6 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -49,7 +72,7 @@ jobs:
       - name: Reject any existing release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/check_release_absent.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
+        run: python scripts/check_release_absent.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --actions-write-token
       - name: Validate version and test the public suite
         shell: bash
         run: |
@@ -90,15 +113,13 @@ jobs:
             mv ../SHA256SUMS SHA256SUMS
             cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
           )
+      - name: Recheck complete release absence before attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check_release_absent.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --actions-write-token
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: release-assets/**
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
-        with:
-          generate_release_notes: true
-          files: release-assets/**
-          draft: true
-          overwrite_files: false
       - name: Revalidate release tag lineage before publication
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,4 +127,6 @@ jobs:
       - name: Publish complete immutable release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+        run: |
+          python scripts/check_release_absent.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --actions-write-token
+          gh release create "$GITHUB_REF_NAME" --verify-tag --target "$GITHUB_SHA" --generate-notes --latest release-assets/*
