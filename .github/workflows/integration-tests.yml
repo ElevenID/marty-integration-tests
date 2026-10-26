@@ -57,4 +57,6 @@ jobs:
             tests/integration/gateway/test_two_organization_isolation.py \
             tests/oss_stack/test_application_approval_boundary.py \
             tests/oss_stack/test_application_offer_recovery.py \
+            tests/oss_stack/selfhost_customer_journey.py \
+            tests/oss_stack/selfhost_machine_customer_journey.py \
             --collect-only -q

@@ -104,8 +104,20 @@ class GatewayClient:
         auth-protected endpoints.
         """
         self._session_id = session_id
+        self.client.headers.pop("X-API-Key", None)
         self.client.cookies.set("sessionId", session_id)
         logger.debug("Gateway client: session cookie set (%s...)", session_id[:8])
+
+    def set_api_key(self, api_key: str) -> None:
+        """Use a machine key and discard any previous browser credentials."""
+        if not api_key or api_key.strip() != api_key or any(char.isspace() for char in api_key):
+            raise ValueError("API key must be a nonempty token without whitespace")
+        self._auth_token = None
+        self._session_id = None
+        self.client.cookies.clear()
+        self.client.headers.pop("Cookie", None)
+        self.client.headers.pop("Authorization", None)
+        self.client.headers["X-API-Key"] = api_key
 
     async def authenticate(
         self,
