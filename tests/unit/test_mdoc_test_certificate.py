@@ -9,8 +9,10 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 from tests.integration.gateway.helpers.mdoc_test_certificate import (
+    TEST_CERTIFICATE_COUNTRY,
     create_disposable_mdoc_certificate_chain,
     p256_public_key_from_jwk,
 )
@@ -37,6 +39,14 @@ def test_certificate_wraps_issuer_profile_did_public_key_and_has_valid_chain() -
     trust_anchor = x509.load_pem_x509_certificate(material.trust_anchor_pem.encode("ascii"))
 
     assert trust_anchor == root
+    assert TEST_CERTIFICATE_COUNTRY == "US"
+    assert [attribute.value for attribute in leaf.subject.get_attributes_for_oid(NameOID.COUNTRY_NAME)] == [
+        TEST_CERTIFICATE_COUNTRY
+    ]
+    assert [attribute.value for attribute in root.subject.get_attributes_for_oid(NameOID.COUNTRY_NAME)] == [
+        TEST_CERTIFICATE_COUNTRY
+    ]
+    assert leaf.issuer == root.subject
     assert leaf.public_key().public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
