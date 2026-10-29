@@ -17,6 +17,16 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
+# Explicit synthetic test profile; never a claim of issuer jurisdiction.
+TEST_CERTIFICATE_COUNTRY = "US"
+
+
+def _test_certificate_subject(common_name: str) -> x509.Name:
+    return x509.Name([
+        x509.NameAttribute(NameOID.COUNTRY_NAME, TEST_CERTIFICATE_COUNTRY),
+        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+    ])
+
 
 @dataclass(frozen=True)
 class MdocCertificateMaterial:
@@ -64,7 +74,7 @@ def create_disposable_issuer_certificate_chain(
     checked_at = (now or datetime.now(UTC)).astimezone(UTC)
     signer_public_key = p256_public_key_from_jwk(jwk)
     ca_private_key = ec.generate_private_key(ec.SECP256R1())
-    ca_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"ElevenID EUDI test CA {organization_id}")])
+    ca_subject = _test_certificate_subject(f"ElevenID EUDI test CA {organization_id}")
     ca_certificate = (
         x509.CertificateBuilder()
         .subject_name(ca_subject)
@@ -91,7 +101,7 @@ def create_disposable_issuer_certificate_chain(
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_private_key.public_key()), critical=False)
         .sign(ca_private_key, hashes.SHA256())
     )
-    leaf_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"Marty {profile_label} {organization_id}")])
+    leaf_subject = _test_certificate_subject(f"Marty {profile_label} {organization_id}")
     leaf_certificate = (
         x509.CertificateBuilder()
         .subject_name(leaf_subject)
