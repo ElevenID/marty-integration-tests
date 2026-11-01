@@ -1934,6 +1934,10 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--stack-env", type=Path, required=True)
     result.add_argument("--kms-env", type=Path, required=True)
     result.add_argument("--material", type=Path, required=True)
+    result.add_argument(
+        "--local-native-functional-binding", type=Path,
+        help="exact reviewed Auth/Gateway/Signing binary and loader binding for local issuer feedback only",
+    )
     result.add_argument("--haip-material", type=Path)
     result.add_argument("--oidf-runner", type=Path)
     result.add_argument("--w3c-suite", type=Path)
@@ -1954,6 +1958,13 @@ def main(argv: list[str] | None = None) -> int:
     args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     environment, _metadata = base_environment(args)
+    if args.local_native_functional_binding:
+        if args.lane != "oid4vci-issuer":
+            raise ValueError("local native functional binding is limited to the issuer lane")
+        binding = args.local_native_functional_binding.resolve(strict=True)
+        if args.local_native_functional_binding.is_symlink() or not binding.is_file():
+            raise ValueError("local native functional binding must be a regular file")
+        environment["MARTY_LOCAL_NATIVE_FUNCTIONAL_BINDING"] = str(binding)
     official_checkout = (
         ("w3c", args.w3c_suite)
         if args.lane == "w3c-v2"

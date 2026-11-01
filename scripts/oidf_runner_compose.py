@@ -10,6 +10,7 @@ Marty's private network and it never uses ``docker network connect``.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import stat
@@ -109,6 +110,39 @@ def main(argv: list[str] | None = None) -> int:
     overlays = ["--file", str(OVERLAY)]
     if args.prebuilt:
         overlays = ["--file", str(PREBUILT_OVERLAY), *overlays]
+    local_functional = bool(environment.get("MARTY_LOCAL_NATIVE_FUNCTIONAL_BINDING", "").strip())
+    if local_functional and args.arguments[0] in {"up", "cache-check"}:
+        if not args.prebuilt or not docker_endpoint_is_local(environment):
+            raise ValueError("local native functional suite requires a prebuilt local Docker runner")
+        if args.arguments[0] == "up" and not (
+            "--no-build" in args.arguments and "--pull" in args.arguments
+            and args.arguments[args.arguments.index("--pull") + 1:args.arguments.index("--pull") + 2] == ["never"]
+        ):
+            raise ValueError("local native functional suite must disable image builds and pulls")
+        base = ["compose", "--project-name", args.project, "--file", str(compose), *overlays]
+        rendered = subprocess.run(
+            docker_command([*base, "config", "--format", "json"]), env=environment,
+            capture_output=True, text=True, check=False,
+        )
+        if rendered.returncode:
+            raise ValueError("official runner Compose model cannot be rendered")
+        model = json.loads(rendered.stdout)
+        services = model.get("services", {})
+        if not isinstance(services, dict) or not services:
+            raise ValueError("official runner Compose services are missing")
+        images = {row.get("image") for row in services.values() if isinstance(row, dict)}
+        if None in images or any(not isinstance(ref, str) or not re.search(r"@sha256:[0-9a-f]{64}$", ref)
+                              for ref in images):
+            raise ValueError("official runner images must be immutable")
+        for image in sorted(images):
+            cached = subprocess.run(
+                docker_command(["image", "inspect", image, "--format", "{{.Id}}"]),
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            if cached.returncode or not re.fullmatch(r"sha256:[0-9a-f]{64}", cached.stdout.strip()):
+                raise ValueError("an official runner image is not cached locally")
+        if args.arguments[0] == "cache-check":
+            return 0
     command = docker_command(
         [
             "compose",
