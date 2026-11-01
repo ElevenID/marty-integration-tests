@@ -18,6 +18,16 @@ sanitizer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sanitizer)
 
 
+def test_local_native_functional_result_cannot_enter_official_release_summary(tmp_path: Path) -> None:
+    evidence = {"schema": "elevenid.official-interop-evidence/v1",
+                "runtime_scope": "LOCAL_FUNCTIONAL_ONLY", "release_qualified": False,
+                "result": {"passed": True, "exit_code": 0},
+                "marty": {"local_native_functional_binding": {"sha256": "a" * 64}}}
+    (tmp_path / "evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
+    with pytest.raises(ValueError, match="cannot enter the official release summary"):
+        sanitizer.build_summary(tmp_path, lane="oid4vci-issuer", harness_commit="b" * 40, exit_code=0)
+
+
 def review_fixture(tmp_path: Path) -> tuple[Path, dict, dict]:
     from oidf_conformance import compare_plan_coverage, parse_variant_selection
 
