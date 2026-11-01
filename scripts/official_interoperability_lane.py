@@ -1694,18 +1694,55 @@ def run_oidf(args: argparse.Namespace, environment: dict[str, str]) -> int:
     return result
 
 
+def local_native_attestation(args: argparse.Namespace, environment: dict[str, str], phase: str) -> dict[str, Any]:
+    output = args.output_dir / "private" / f"local-native-{phase}.json"
+    command = [sys.executable, str(args.marty_ui / "scripts" / "local_native_runtime_attestation.py"),
+               "--project", f"marty-conformance-{args.run_id}",
+               "--binding", str(args.local_native_functional_binding), "--output", str(output)]
+    if run(command, environment):
+        raise RuntimeError(f"local native {phase} process attestation failed")
+    return json.loads(output.read_text(encoding="utf-8"))
+
+
+def require_stable_local_native_attestation(before: dict[str, Any], after: dict[str, Any]) -> None:
+    if (after.get("schema") != before.get("schema")
+            or after.get("project") != before.get("project")
+            or after.get("roles") != before.get("roles")
+            or after.get("bindingSha256") != before.get("bindingSha256")
+            or after.get("state") != "FUNCTIONAL_ONLY"
+            or after.get("releaseQualified") is not False):
+        raise RuntimeError("local native process or binding identity changed during official issuer test")
+
+
+def down_local_native_issuer(args: argparse.Namespace, environment: dict[str, str]) -> None:
+    if run(compose_command(args, "down", oidf=True), environment):
+        raise RuntimeError("local native issuer project cleanup failed")
+
+
 def run_oid4vci_issuer(
     args: argparse.Namespace,
     environment: dict[str, str],
 ) -> int:
     """Run the active official issuer plan against the public Marty boundary."""
-    started = run(compose_command(args, "up", oidf=True), environment, native_attestation=True) == 0
+    try:
+        started = run(compose_command(args, "up", oidf=True), environment, native_attestation=True) == 0
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        if args.local_native_functional_binding:
+            down_local_native_issuer(args, environment)
+        raise
     if not started:
-        emit_keycloak_initializer_diagnostic(args.run_id)
+        try:
+            emit_keycloak_initializer_diagnostic(args.run_id)
+        finally:
+            if args.local_native_functional_binding:
+                down_local_native_issuer(args, environment)
         return 1
     result = 1
+    native_before = None
     try:
         wait_for_public_stack(environment)
+        if args.local_native_functional_binding:
+            native_before = local_native_attestation(args, environment, "before")
         key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(args.output_dir)
         fixtures = bootstrap_fixtures(
             args,
@@ -1755,15 +1792,47 @@ def run_oid4vci_issuer(
             suite_environment,
         )
     finally:
-        compose_log = args.output_dir / "private" / "compose.log"
-        run(
-            compose_command(args, "logs", oidf=True),
-            environment,
-            capture=compose_log,
-        )
-        if result:
-            emit_oid4vci_runtime_diagnostic(compose_log)
-        run(compose_command(args, "down", oidf=True), environment)
+        native_error = None
+        if native_before is not None:
+            try:
+                native_after = local_native_attestation(args, environment, "after")
+                require_stable_local_native_attestation(native_before, native_after)
+                raw_root = args.output_dir / "raw" / "oid4vci-issuer"
+                raw_hashes = []
+                if raw_root.is_dir():
+                    for path in sorted(raw_root.rglob("*")):
+                        if path.is_file():
+                            if path.is_symlink() or not path.resolve().is_relative_to(raw_root.resolve()):
+                                raise ValueError("official issuer raw result escaped its private run directory")
+                            digest = sha256()
+                            with path.open("rb") as source:
+                                for block in iter(lambda: source.read(1024 * 1024), b""):
+                                    digest.update(block)
+                            raw_hashes.append({"path": str(path.relative_to(raw_root)),
+                                               "sha256": digest.hexdigest(), "bytes": path.stat().st_size})
+                write_private_json(args.output_dir / "private" / "local-native-test-binding.json",
+                                   {"schema": "elevenid.local-native-test-binding/v1",
+                                    "state": "FUNCTIONAL_ONLY", "releaseQualified": False,
+                                    "officialIssuerExitCode": result, "rawResults": raw_hashes,
+                                    "before": native_before, "after": native_after})
+            except (OSError, ValueError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
+                native_error = exc
+        if args.local_native_functional_binding:
+            try:
+                compose_log = args.output_dir / "private" / "compose.log"
+                run(compose_command(args, "logs", oidf=True), environment, capture=compose_log)
+                if result:
+                    emit_oid4vci_runtime_diagnostic(compose_log)
+            finally:
+                down_local_native_issuer(args, environment)
+        else:
+            compose_log = args.output_dir / "private" / "compose.log"
+            run(compose_command(args, "logs", oidf=True), environment, capture=compose_log)
+            if result:
+                emit_oid4vci_runtime_diagnostic(compose_log)
+            run(compose_command(args, "down", oidf=True), environment)
+        if native_error is not None:
+            raise native_error
     return result
 
 
