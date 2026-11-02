@@ -1,0 +1,52 @@
+{
+  "observed_at": "2026-11-01T11:58:28.359842+00:00",
+  "schema": "elevenid.official-suite-upstream-review/v1",
+  "upstreams": {
+    "didcomm_independent_implementation": {
+      "latest_commit": "a1611baa011620a6ca62649b105c2b8c898f2653",
+      "latest_release": "VTI-Eucalyptus",
+      "pinned_commit": "2bec127b171b8fcf69a6c0e6aedca516a3e201b7",
+      "pinned_release": "v0.15.8"
+    },
+    "eudi_verifier_endpoint": {
+      "latest_commit": "19537e72a633b25c94b7450bf582760f52ab2cc9",
+      "latest_release": "v0.12.0",
+      "pinned_commit": "2bc0bd98a81742db321e96d31d88142128006422",
+      "pinned_release": "v0.11.0"
+    },
+    "eudi_wallet_kit_mdoc": {
+      "latest_commit": "a015c9d93874fe6e09df1354006353ce6f94751d",
+      "latest_release": "0.102.0",
+      "pinned_commit": "7c0988bee3384d13a0732e0c33336ae0faf3b863",
+      "pinned_release": "0.100.0"
+    },
+    "eudi_wallet_kit_oid4vci": {
+      "latest_commit": "b38a96d7fd58ff6c61b345841b4ca8f39dad9c3d",
+      "latest_release": "v0.15.0",
+      "pinned_commit": "07dc0b96dcd5c56197414c80c0fb70ce0d4f377d",
+      "pinned_release": "v0.13.0"
+    },
+    "eudi_wallet_kit_oid4vp": {
+      "latest_commit": "d9ad51b4ea152606c37f25831e55fc73e0666e84",
+      "latest_release": "v0.16.2",
+      "pinned_commit": "4a695477b66040229c347d3255099b9f702ec929",
+      "pinned_release": "v0.15.1"
+    },
+    "eudi_wallet_kit_sd_jwt": {
+      "latest_commit": "147bec3f605eef878de1c22a32c41a5c74305258",
+      "latest_release": "v0.20.2",
+      "pinned_commit": "e8a94cb6114efc73812843fb1338913eac427675",
+      "pinned_release": "v0.20.1"
+    },
+    "oidf": {
+      "latest_commit": "23353b36957d6466010de767c812d2c91ed37638",
+      "latest_release": "release-v5.3.4",
+      "pinned_commit": "7d420f716e49d44f8a6b04f0a3e240ad6d68ab55",
+      "pinned_release": "release-v5.3.3"
+    },
+    "w3c_vc_data_model_v2": {
+      "latest_commit": "62836458636bd1b8309214626ec8fc85de43f8bd",
+      "pinned_commit": "e92936564867da9150b99b167fe1c73b9370ad6c"
+    }
+  }
+}
