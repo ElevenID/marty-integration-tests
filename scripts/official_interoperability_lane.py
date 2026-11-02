@@ -1724,24 +1724,25 @@ def run_oid4vci_issuer(
     environment: dict[str, str],
 ) -> int:
     """Run the active official issuer plan against the public Marty boundary."""
+    local_binding = getattr(args, "local_native_functional_binding", None)
     try:
         started = run(compose_command(args, "up", oidf=True), environment, native_attestation=True) == 0
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-        if args.local_native_functional_binding:
+        if local_binding:
             down_local_native_issuer(args, environment)
         raise
     if not started:
         try:
             emit_keycloak_initializer_diagnostic(args.run_id)
         finally:
-            if args.local_native_functional_binding:
+            if local_binding:
                 down_local_native_issuer(args, environment)
         return 1
     result = 1
     native_before = None
     try:
         wait_for_public_stack(environment)
-        if args.local_native_functional_binding:
+        if local_binding:
             native_before = local_native_attestation(args, environment, "before")
         key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(args.output_dir)
         fixtures = bootstrap_fixtures(
@@ -1817,7 +1818,7 @@ def run_oid4vci_issuer(
                                     "before": native_before, "after": native_after})
             except (OSError, ValueError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
                 native_error = exc
-        if args.local_native_functional_binding:
+        if local_binding:
             try:
                 compose_log = args.output_dir / "private" / "compose.log"
                 run(compose_command(args, "logs", oidf=True), environment, capture=compose_log)
