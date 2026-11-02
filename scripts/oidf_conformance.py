@@ -724,6 +724,27 @@ def finalize_evidence_artifacts(output: Path) -> dict:
     return evidence
 
 
+def local_native_functional_evidence(path: Path) -> dict[str, object]:
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ValueError("local functional binding path is not an absolute regular file")
+    binding = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(binding, dict)
+            or binding.get("schema") != "elevenid.local-native-functional-binding/v1"
+            or binding.get("state") != "FUNCTIONAL_ONLY"
+            or not isinstance(binding.get("roles"), dict)
+            or set(binding["roles"]) != {"auth", "gateway", "signing-keys"}):
+        raise ValueError("local functional binding is not closed")
+    roles = {}
+    for role, row in binding["roles"].items():
+        if not isinstance(row, dict) or not SHA.fullmatch(str(row.get("sourceRevision", ""))):
+            raise ValueError("local functional source revision is not bound")
+        binary = row.get("binary")
+        if not isinstance(binary, dict) or not re.fullmatch(r"[0-9a-f]{64}", str(binary.get("sha256", ""))):
+            raise ValueError("local functional binary digest is not bound")
+        roles[role] = {"source_revision": row["sourceRevision"], "binary_sha256": binary["sha256"]}
+    return {"path": str(path), "sha256": file_sha256(path), "roles": roles}
+
+
 def write_evidence(
     output: Path,
     manifest: dict,
@@ -779,6 +800,11 @@ def write_evidence(
         "module_results": module_summary,
         "artifacts": artifacts,
     }
+    local_binding = os.environ.get("MARTY_LOCAL_NATIVE_FUNCTIONAL_BINDING", "").strip()
+    if local_binding:
+        evidence["runtime_scope"] = "LOCAL_FUNCTIONAL_ONLY"
+        evidence["release_qualified"] = False
+        evidence["marty"]["local_native_functional_binding"] = local_native_functional_evidence(Path(local_binding))
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return qualified_exit
 

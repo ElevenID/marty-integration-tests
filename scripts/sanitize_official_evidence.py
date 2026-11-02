@@ -429,6 +429,11 @@ def build_summary(
         for path in sorted(input_dir.rglob("evidence.json")):
             raw_evidence = load_json(path)
             if isinstance(raw_evidence, dict):
+                if (raw_evidence.get("runtime_scope") == "LOCAL_FUNCTIONAL_ONLY"
+                        or raw_evidence.get("release_qualified") is False
+                        or (isinstance(raw_evidence.get("marty"), dict)
+                            and raw_evidence["marty"].get("local_native_functional_binding"))):
+                    raise ValueError("local native functional evidence cannot enter the official release summary")
                 request = pending_review_request(path, raw_evidence)
                 if request is not None:
                     if lane in {"w3c-v2", "eudi", "oid4vci-issuer"}:
