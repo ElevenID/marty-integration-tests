@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import ast
 import json
 import subprocess
 import sys
@@ -18,6 +17,10 @@ spec = importlib.util.spec_from_file_location("local_oidf_runner", SCRIPTS / "oi
 assert spec and spec.loader
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+lane_spec = importlib.util.spec_from_file_location("local_official_lane", SCRIPTS / "official_interoperability_lane.py")
+assert lane_spec and lane_spec.loader
+lane = importlib.util.module_from_spec(lane_spec)
+lane_spec.loader.exec_module(lane)
 
 
 def test_local_issuer_runner_requires_cached_digest_images_and_no_pull(tmp_path: Path, monkeypatch) -> None:
@@ -73,12 +76,7 @@ def test_local_evidence_binds_three_sources_and_refuses_release_shape(tmp_path: 
         module.local_native_functional_evidence(binding)
 
 
-def test_partial_local_up_always_downs_exact_project_even_if_diagnostic_fails() -> None:
-    source = ast.parse((SCRIPTS / "official_interoperability_lane.py").read_text(encoding="utf-8"))
-    selected = [node for node in source.body if isinstance(node, ast.FunctionDef)
-                and node.name in {"run_oid4vci_issuer", "down_local_native_issuer"}]
-    code = compile(ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])),
-                   "official_interoperability_lane.py", "exec")
+def test_partial_local_up_always_downs_exact_project_even_if_diagnostic_fails(monkeypatch) -> None:
     calls: list[str] = []
 
     def run(command, _environment, **_kwargs):
@@ -88,26 +86,20 @@ def test_partial_local_up_always_downs_exact_project_even_if_diagnostic_fails() 
     def failed_diagnostic(_run_id):
         raise RuntimeError("diagnostic failed")
 
-    namespace = {"argparse": __import__("argparse"), "subprocess": subprocess, "run": run,
-                 "compose_command": lambda _args, action, **_kwargs: [action],
-                 "emit_keycloak_initializer_diagnostic": failed_diagnostic}
-    exec(code, namespace)
+    monkeypatch.setattr(lane, "run", run)
+    monkeypatch.setattr(lane, "compose_command", lambda _args, action, **_kwargs: [action])
+    monkeypatch.setattr(lane, "emit_keycloak_initializer_diagnostic", failed_diagnostic)
     args = SimpleNamespace(run_id="owned", local_native_functional_binding="private-binding")
     with pytest.raises(RuntimeError, match="diagnostic failed"):
-        namespace["run_oid4vci_issuer"](args, {})
+        lane.run_oid4vci_issuer(args, {})
     assert calls == ["up", "down"]
 
 
-def test_local_log_failure_still_cleans_project_and_failed_down_surfaces(tmp_path: Path) -> None:
-    source = ast.parse((SCRIPTS / "official_interoperability_lane.py").read_text(encoding="utf-8"))
-    selected = [node for node in source.body if isinstance(node, ast.FunctionDef)
-                and node.name in {"run_oid4vci_issuer", "down_local_native_issuer"}]
-    namespace = {"argparse": __import__("argparse"), "subprocess": subprocess,
-                 "compose_command": lambda _args, action, **_kwargs: [action],
-                 "wait_for_public_stack": lambda _env: (_ for _ in ()).throw(RuntimeError("readiness failed")),
-                 "emit_oid4vci_runtime_diagnostic": lambda _path: None}
-    exec(compile(ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])),
-                 "official_interoperability_lane.py", "exec"), namespace)
+def test_local_log_failure_still_cleans_project_and_failed_down_surfaces(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(lane, "compose_command", lambda _args, action, **_kwargs: [action])
+    monkeypatch.setattr(lane, "wait_for_public_stack",
+                        lambda _env: (_ for _ in ()).throw(RuntimeError("readiness failed")))
+    monkeypatch.setattr(lane, "emit_oid4vci_runtime_diagnostic", lambda _path: None)
     args = SimpleNamespace(run_id="owned", local_native_functional_binding="private-binding",
                            output_dir=tmp_path)
     calls: list[str] = []
@@ -118,9 +110,9 @@ def test_local_log_failure_still_cleans_project_and_failed_down_surfaces(tmp_pat
             raise OSError("log capture failed")
         return 0
 
-    namespace["run"] = log_failed
+    monkeypatch.setattr(lane, "run", log_failed)
     with pytest.raises(OSError, match="log capture failed"):
-        namespace["run_oid4vci_issuer"](args, {})
+        lane.run_oid4vci_issuer(args, {})
     assert calls == ["up", "logs", "down"]
     calls.clear()
 
@@ -128,9 +120,9 @@ def test_local_log_failure_still_cleans_project_and_failed_down_surfaces(tmp_pat
         calls.append(command[0])
         return 1 if command[0] == "down" else 0
 
-    namespace["run"] = down_failed
+    monkeypatch.setattr(lane, "run", down_failed)
     with pytest.raises(RuntimeError, match="cleanup failed"):
-        namespace["run_oid4vci_issuer"](args, {})
+        lane.run_oid4vci_issuer(args, {})
     assert calls == ["up", "logs", "down"]
     calls.clear()
 
@@ -140,20 +132,14 @@ def test_local_log_failure_still_cleans_project_and_failed_down_surfaces(tmp_pat
             raise OSError("startup transport timed out")
         return 0
 
-    namespace["run"] = timed_out
+    monkeypatch.setattr(lane, "run", timed_out)
     with pytest.raises(OSError, match="timed out"):
-        namespace["run_oid4vci_issuer"](args, {})
+        lane.run_oid4vci_issuer(args, {})
     assert calls == ["up", "down"]
 
 
 def test_native_binding_drift_rejected_after_official_issuer_test() -> None:
-    source = ast.parse((SCRIPTS / "official_interoperability_lane.py").read_text(encoding="utf-8"))
-    selected = next(node for node in source.body if isinstance(node, ast.FunctionDef)
-                    and node.name == "require_stable_local_native_attestation")
-    namespace: dict = {}
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[selected], type_ignores=[])),
-                 "official_interoperability_lane.py", "exec"), namespace)
-    check = namespace["require_stable_local_native_attestation"]
+    check = lane.require_stable_local_native_attestation
     before = {"schema": "elevenid.local-native-runtime-attestation/v1", "project": "marty-conformance-owned",
               "roles": {"auth": {"cid": "a" * 64}}, "bindingSha256": "b" * 64,
               "state": "FUNCTIONAL_ONLY", "releaseQualified": False}
