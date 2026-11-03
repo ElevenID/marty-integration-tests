@@ -131,7 +131,7 @@ jobs:
           --requirement requirements/official-py312.lock
 
       - name: Verify runner-provided released-stack browser
-        if: matrix.lane == 'oid4vp-final'
+        if: matrix.lane == 'oid4vp-final' || matrix.lane == 'oid4vp-url-query' || matrix.lane == 'oid4vp-mdoc' || matrix.lane == 'haip'
         shell: bash
         run: |
           set -euo pipefail
