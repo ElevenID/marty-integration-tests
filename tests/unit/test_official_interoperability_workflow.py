@@ -38,8 +38,9 @@ def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
     ({"CANDIDATE_MANIFEST_SHA256": "latest"}, False),
     ({"CANDIDATE_TAG": "v1.2.3;true"}, False),
     ({"COLLECT_ONLY": "true"}, True),
-    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": ""}, False),
-    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": "AGE-SECRET-KEY-DO-NOT-ACCEPT"}, False),
+    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": ""}, True),
+    # Candidate collection never consults or consumes a diagnostic recipient.
+    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": "unused-diagnostic-setting"}, True),
     ({"CANDIDATE_ARTIFACT": "", "CANDIDATE_MANIFEST_SHA256": "",
       "CANDIDATE_TAG": "", "HARNESS_REVISION": "",
       "GITHUB_REPOSITORY": "ElevenID/marty-integration-tests"}, True),
@@ -64,7 +65,7 @@ def test_actual_candidate_caller_guard(
                    "CANDIDATE_ARTIFACT": "stack-release-official-candidate-99",
                    "CANDIDATE_MANIFEST_SHA256": "sha256:" + "a" * 64,
                    "CANDIDATE_TAG": "v1.2.3", "HARNESS_REVISION": "b" * 40,
-                   "LANE": "all", "COLLECT_ONLY": "false", "REVIEW_RECIPIENT": "age1" + "a" * 58, **overrides}
+                   "LANE": "all", "COLLECT_ONLY": "false", "REVIEW_RECIPIENT": "", **overrides}
     result = subprocess.run([bash, "--noprofile", "--norc"], input=script,
                             env=environment, text=True, capture_output=True, check=False)
     assert (result.returncode == 0) == allowed, result.stderr
@@ -160,6 +161,19 @@ def test_private_review_upload_is_ciphertext_only_and_never_an_identity_or_plain
     assert '--recipient "$REVIEW_RECIPIENT"' in encryption
     assert "identity" not in encryption
     assert "has_reviews == 'true'" in encryption
+
+
+def test_private_diagnostic_delivery_is_only_an_explicit_standalone_opt_in() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    reusable = text.split("  workflow_call:", 1)[1].split("  schedule:", 1)[0]
+    assert "review_recipient" not in reusable
+    assert "vars.OFFICIAL_REVIEW_RECIPIENT" not in text
+    recipient = next(line.strip() for line in text.splitlines() if line.strip().startswith("REVIEW_RECIPIENT:"))
+    assert "github.event_name == 'workflow_dispatch'" in recipient
+    assert "github.repository == 'ElevenID/marty-integration-tests'" in recipient
+    assert "inputs.review_recipient || ''" in recipient
+    caller = text.split("      - name: Validate candidate caller", 1)[1].split("      - name: Checkout", 1)[0]
+    assert "REVIEW_RECIPIENT" not in caller
 
 
 def test_workflow_installs_only_frozen_verified_tooling() -> None:

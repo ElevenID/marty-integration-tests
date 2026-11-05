@@ -21,11 +21,14 @@ from eudi_runtime_diagnostic_contract import (  # noqa: E402
     EUDI_RUNTIME_DIAGNOSTIC_SCHEMA,
 )
 from oidf_conformance import (  # noqa: E402
+    exported_module_documents,
     exported_module_info,
     load_manifest,
+    parse_variant_selection,
     recorded_plan_coverage,
     strict_module_summary,
 )
+from oidf_marty_automated_assessment import positive_review_obligation, validate_assessment  # noqa: E402
 
 SCHEMA = "elevenid.sanitized-official-interop/v1"
 BROWSER_SCHEMA = "elevenid.released-browser-smoke/v1"
@@ -129,8 +132,8 @@ def load_json(path: Path) -> object:
 def pending_review_request(evidence_path: Path, evidence: dict) -> dict | None:
     """Project hash-bound review inputs, never an approval or a passing verdict.
 
-    Raw exports, API results and pixels stay private. A later authenticated
-    disposition must bind the complete summary bytes as well as these hashes.
+    Raw exports, API results and pixels stay private. Product-owned automated
+    observations are additive; the unchanged official result remains REVIEW.
     Reuse the runner's export/coverage readers instead of trusting a capture's
     self-reported module list. Historical receipts without IDs are joined to
     their exact original export; newer receipts must agree with those IDs.
@@ -215,6 +218,10 @@ def pending_review_request(evidence_path: Path, evidence: dict) -> dict | None:
     ):
         raise ValueError("review images do not cover the exact pending module set")
     modules = []
+    flow_bindings: set[str] = set()
+    documents = exported_module_documents(evidence_path.parent)
+    _, plan_variant = parse_variant_selection(profile["test_plan"])
+    labels = {row["test_name"]: row["interaction_name"] for row in coverage["module_bindings"]}
     for row in rows:
         info = infos[row["test_name"]]
         if (
@@ -231,15 +238,31 @@ def pending_review_request(evidence_path: Path, evidence: dict) -> dict | None:
             or row.get("plan_id", info["planId"]) != info["planId"]
         ):
             raise ValueError("review image lacks its exact official identity and readback")
-        modules.append(
-            {
-                "test_name": info["testName"],
-                "test_id": info["testId"],
-                "plan_id": info["planId"],
-                "official_result": "REVIEW",
-                "screenshot_sha256": "sha256:" + row["screenshot_sha256"],
-            }
-        )
+        module = {
+            "test_name": info["testName"],
+            "test_id": info["testId"],
+            "plan_id": info["planId"],
+            "official_result": "REVIEW",
+            "screenshot_sha256": "sha256:" + row["screenshot_sha256"],
+        }
+        # Historical manual tooling can still read its original receipts. New
+        # production qualification requires this closed, source-audited object.
+        if "automated_assessment" in row:
+            assessment = validate_assessment(row["automated_assessment"])
+            matches = [doc for doc in documents if doc["testInfo"]["testName"] == info["testName"]]
+            if len(matches) != 1:
+                raise ValueError("automated verification has ambiguous original module logs")
+            condition = positive_review_obligation(
+                matches[0],
+                profile=evidence["profile"],
+                expected_variant={**plan_variant, **parse_variant_selection(labels[info["testName"]])[1]},
+                runner_commit=manifest["official_runner"]["commit"],
+            )
+            if assessment["upstream_condition"] != condition or assessment["flow_instance_sha256"] in flow_bindings:
+                raise ValueError("automated verification has inconsistent or reused flow bindings")
+            flow_bindings.add(assessment["flow_instance_sha256"])
+            module["automated_assessment"] = assessment
+        modules.append(module)
     return {
         "schema": "elevenid.official-review-request/v1",
         "status": "PENDING",
