@@ -30,17 +30,12 @@ on:
         type: boolean
         required: false
         default: false
-      review_recipient:
-        description: Public native age recipient for private screenshot/export delivery; never an identity key
-        type: string
-        required: false
-        default: ''
   schedule:
     - cron: "41 5 8 * *"
   workflow_dispatch:
     inputs:
       review_recipient:
-        description: Optional public age recipient; defaults to the repository review recipient variable
+        description: Optional encrypted diagnostics for this standalone run; not required for release qualification
         type: string
         required: false
         default: ''
@@ -80,7 +75,9 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"
       OFFICIAL_SUITE_RUN_ID: ${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-      REVIEW_RECIPIENT: ${{ inputs.review_recipient || vars.OFFICIAL_REVIEW_RECIPIENT || '' }}
+      # A release consumes bounded machine assertions. Private diagnostic
+      # delivery is an explicit standalone opt-in, never a candidate dependency.
+      REVIEW_RECIPIENT: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-integration-tests' && inputs.review_recipient || '' }}
     steps:
       - name: Validate candidate caller before fetching source
         env:
@@ -101,9 +98,6 @@ jobs:
             [[ "$HARNESS_REVISION" =~ ^[0-9a-f]{40}$ ]]
             [[ "$CANDIDATE_MANIFEST_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "$CANDIDATE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-            if [[ "$COLLECT_ONLY" == true ]]; then
-              [[ "$REVIEW_RECIPIENT" =~ ^age1[0-9a-z]{58}$ ]]
-            fi
           else
             test "$GITHUB_REPOSITORY" = ElevenID/marty-integration-tests
             test -z "$CANDIDATE_MANIFEST_SHA256$CANDIDATE_TAG$HARNESS_REVISION"
@@ -368,7 +362,8 @@ jobs:
             # Only the protected-main candidate caller can opt in. A successful
             # collection is not a passing suite: preserve every raw exit/result
             # and require the independent Rust gate before any promotion. This
-            # lets a review-only gate retry reuse the immutable seven-lane set.
+            # retains the complete original seven-lane evidence for the
+            # caller's deterministic qualification of known REVIEW cases.
             test "$SUMMARY_OUTCOME" = success || exit 1
             test "$UPLOAD_OUTCOME" = success || exit 1
             echo "::notice::Official raw exit is $LANE_EXIT_CODE; candidate qualification remains the independent caller gate's responsibility."

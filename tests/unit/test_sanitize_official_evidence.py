@@ -28,21 +28,25 @@ def test_local_native_functional_result_cannot_enter_official_release_summary(tm
         sanitizer.build_summary(tmp_path, lane="oid4vci-issuer", harness_commit="b" * 40, exit_code=0)
 
 
-def review_fixture(tmp_path: Path) -> tuple[Path, dict, dict]:
+def review_fixture(tmp_path: Path, *, profile: str = "oid4vp-mdoc-verifier") -> tuple[Path, dict, dict]:
     from oidf_conformance import compare_plan_coverage, parse_variant_selection
 
-    profile = "oid4vp-mdoc-verifier"
     manifest = sanitizer.load_manifest()
     selection = manifest["profiles"][profile]["test_plan"]
     plan_name, variant = parse_variant_selection(selection)
-    modules = ["oid4vp-1final-verifier-happy-flow", "oid4vp-1final-verifier-invalid-session-transcript"]
+    extra_variant = (
+        {"client_id_prefix": "x509_hash", "request_method": "request_uri_signed", "vp_profile": "haip"}
+        if profile == "oid4vp-haip-verifier" else {}
+    )
+    negative = "invalid-session-transcript" if profile == "oid4vp-mdoc-verifier" else "invalid-kb-jwt-signature"
+    modules = ["oid4vp-1final-verifier-happy-flow", "oid4vp-1final-verifier-" + negative]
     infos = [
         {
             "_id": f"test{i}",
             "testId": f"test{i}",
             "planId": "plan1",
             "testName": name,
-            "variant": variant,
+            "variant": {**variant, **extra_variant},
             "status": "FINISHED",
             "result": "REVIEW" if i == 0 else "PASSED",
         }
@@ -52,7 +56,9 @@ def review_fixture(tmp_path: Path) -> tuple[Path, dict, dict]:
         "_id": "plan1",
         "planName": plan_name,
         "variant": variant,
-        "modules": [{"testModule": name, "instances": [f"test{i}"], "variant": {}} for i, name in enumerate(modules)],
+        "modules": [
+            {"testModule": name, "instances": [f"test{i}"], "variant": extra_variant} for i, name in enumerate(modules)
+        ],
     }
     archive = tmp_path / "unit-fixture-only.zip"
     with zipfile.ZipFile(archive, "w") as output:
@@ -193,6 +199,102 @@ def test_historical_receipts_join_ids_without_rewriting_old_bytes(tmp_path: Path
     result = sanitizer.pending_review_request(path, evidence)
     assert result["modules"][0]["test_id"] == "test0"
     assert path.read_bytes() == before
+
+
+def automated_review_fixture(
+    tmp_path: Path, *, log_mutation: str | None = None, profile: str = "oid4vp-mdoc-verifier",
+) -> tuple[Path, dict, dict]:
+    """Unit fixture only: the assertion policy must inspect raw logs, not a claimed assessment."""
+    path, evidence, receipt = review_fixture(tmp_path, profile=profile)
+    flow = "12345678-1234-1234-1234-123456789abc"
+    receipt["modules"][0]["automated_assessment"] = {
+        "policy": "marty.official-verifier-outcome/v1",
+        "upstream_condition": "ExpectVerifierSuccessfulVerificationPage",
+        "api_outcome": {"status": "completed", "result": "passed", "decision": "allow"},
+        "browser_result_match": True,
+        "ui_instance_match": True,
+        "ui_decision": "allow",
+        "ui_verified_visible": True,
+        "ui_error_absent": True,
+        "flow_instance_sha256": "sha256:" + hashlib.sha256(flow.encode()).hexdigest(),
+    }
+    archive = tmp_path / "unit-fixture-only.zip"
+    with zipfile.ZipFile(archive) as source:
+        docs = [(name, json.loads(source.read(name))) for name in source.namelist()]
+    for _, doc in docs:
+        info = doc["testInfo"]
+        if info["result"] != "REVIEW":
+            continue
+        doc["results"] = [{
+            "testId": info["testId"],
+            "src": "ExpectVerifierSuccessfulVerificationPage",
+            "result": "REVIEW",
+            "requirements": ["OID4VP-1FINAL-8.2"],
+            "msg": "private raw log must not be copied",
+        }]
+        if log_mutation in {"WARNING", "FAILURE", "REVIEW"}:
+            doc["results"].append({"testId": info["testId"], "src": "AnotherCondition", "result": log_mutation})
+        elif log_mutation == "negative":
+            doc["results"][0]["src"] = "ExpectVerifierRejectedPresentationPage"
+    with zipfile.ZipFile(archive, "w") as output:
+        for name, doc in docs:
+            output.writestr(name, json.dumps(doc))
+    evidence["artifacts"][0]["sha256"] = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+    return path, evidence, receipt
+
+
+def test_automated_observations_remain_bounded_with_original_review_and_export_bytes(tmp_path: Path) -> None:
+    path, evidence, receipt = automated_review_fixture(tmp_path)
+    write_review_fixture(path, evidence, receipt)
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    result = sanitizer.pending_review_request(path, evidence)
+    assert result["status"] == "PENDING"
+    assert result["modules"][0]["official_result"] == "REVIEW"
+    assert result["modules"][0]["automated_assessment"] == receipt["modules"][0]["automated_assessment"]
+    assert "private raw log" not in json.dumps(result)
+    assert before == {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+
+
+def test_haip_assessment_preserves_complete_verified_module_variant_bindings(tmp_path: Path) -> None:
+    path, evidence, receipt = automated_review_fixture(tmp_path, profile="oid4vp-haip-verifier")
+    write_review_fixture(path, evidence, receipt)
+    label = evidence["module_results"]["plan_coverage"]["module_bindings"][0]["interaction_name"]
+    assert label.endswith("[client_id_prefix=x509_hash][request_method=request_uri_signed][vp_profile=haip]")
+    result = sanitizer.pending_review_request(path, evidence)
+    assert result["modules"][0]["automated_assessment"]["policy"] == "marty.official-verifier-outcome/v1"
+    evidence["module_results"]["plan_coverage"]["module_bindings"][0]["interaction_name"] = label.replace("haip", "other")
+    write_review_fixture(path, evidence, receipt)
+    with pytest.raises(ValueError, match="recorded|live plan"):
+        sanitizer.pending_review_request(path, evidence)
+
+
+@pytest.mark.parametrize("log_mutation", ["WARNING", "FAILURE", "REVIEW", "negative"])
+def test_claimed_machine_success_cannot_conceal_original_log_obligations(
+    tmp_path: Path, log_mutation: str,
+) -> None:
+    path, evidence, receipt = automated_review_fixture(tmp_path, log_mutation=log_mutation)
+    write_review_fixture(path, evidence, receipt)
+    with pytest.raises(ValueError, match="warning|failure|unknown REVIEW"):
+        sanitizer.pending_review_request(path, evidence)
+
+
+@pytest.mark.parametrize("mutation", ["null", "private-field", "non-boolean", "different-policy", "wrong-outcome"])
+def test_public_assessment_rejects_missing_or_unbounded_claims(tmp_path: Path, mutation: str) -> None:
+    path, evidence, receipt = automated_review_fixture(tmp_path)
+    assessment = receipt["modules"][0]["automated_assessment"]
+    if mutation == "null":
+        receipt["modules"][0]["automated_assessment"] = None
+    elif mutation == "private-field":
+        assessment["private_key"] = "must-not-publish"
+    elif mutation == "non-boolean":
+        assessment["ui_verified_visible"] = 1
+    elif mutation == "different-policy":
+        assessment["policy"] = "accept-any-review"
+    elif mutation == "wrong-outcome":
+        assessment["api_outcome"]["decision"] = "deny"
+    write_review_fixture(path, evidence, receipt)
+    with pytest.raises(ValueError, match="automated verification"):
+        sanitizer.pending_review_request(path, evidence)
 
 
 @pytest.mark.parametrize("has_reviews", [False, True])
