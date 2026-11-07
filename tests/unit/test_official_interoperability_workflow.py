@@ -28,6 +28,24 @@ def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
     assert all(re.fullmatch(r"[a-z-]+: read", line.strip()) for line in permissions.splitlines() if line.strip())
 
 
+def test_candidate_operator_is_authenticated_before_disposable_kms_mutation() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    operator = text.index("- name: Download exact candidate native operator")
+    proof = text.index("- name: Download exact candidate operator provenance")
+    admission = text.index("- name: Authenticate source-matched native operator before KMS mutation")
+    bootstrap = text.index("- name: Bootstrap disposable KMS-only released stack")
+    assert operator < proof < admission < bootstrap
+    guarded = text[operator:bootstrap]
+    assert guarded.count("if: inputs.candidate_artifact != ''") == 3
+    assert "operator-catalog-amd64-${{ github.run_id }}" in guarded
+    assert "operator-installer-provenance-amd64-${{ github.run_id }}" in guarded
+    assert "verify_subject(binary, proof" in guarded
+    assert "source_sha=os.environ['GITHUB_SHA']" in guarded
+    assert "run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT'])" in guarded
+    assert "MARTY_DEPLOY_BIN_SHA256" in guarded
+    assert "MARTY_DEPLOY_RELEASE_TAG" in guarded
+
+
 @pytest.mark.parametrize(("overrides", "allowed"), [
     ({}, True),
     ({"GITHUB_REPOSITORY": "other/product"}, False),
