@@ -56,6 +56,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   packages: read
   attestations: read
 
@@ -196,6 +197,63 @@ jobs:
           ref: ${{ github.sha }}
           path: work/marty-ui
           persist-credentials: false
+
+      - name: Download exact candidate native operator
+        if: inputs.candidate_artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: operator-catalog-amd64-${{ github.run_id }}
+          path: work/candidate-operator
+
+      - name: Download exact candidate operator provenance
+        if: inputs.candidate_artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: operator-installer-provenance-amd64-${{ github.run_id }}
+          path: work/candidate-operator-proof
+
+      - name: Authenticate source-matched native operator before KMS mutation
+        if: inputs.candidate_artifact != ''
+        env:
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          chmod 700 work/candidate-operator work/candidate-operator-proof
+          chmod 700 work/candidate-operator/marty-deploy-linux-amd64
+          chmod 600 work/candidate-operator-proof/marty-deploy-linux-amd64.provenance.jsonl
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import sys
+          sys.path.insert(0, str(Path('work/marty-ui/scripts').resolve()))
+          from verify_installer_provenance import verify_subject
+
+          binary = Path('work/candidate-operator/marty-deploy-linux-amd64').resolve()
+          proof = Path('work/candidate-operator-proof/marty-deploy-linux-amd64.provenance.jsonl').resolve()
+          gh = Path(shutil.which('gh') or '').resolve()
+          verify_subject(binary, proof, gh=gh, workflow='.github/workflows/cd.yml',
+                         source_sha=os.environ['GITHUB_SHA'], run_id=int(os.environ['GITHUB_RUN_ID']),
+                         run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']))
+          identity = subprocess.run([str(binary), '--build-identity'],
+                                    capture_output=True, text=True, check=True, timeout=10)
+          if identity.stdout.strip() != os.environ['GITHUB_SHA'] + ':' + os.environ['CANDIDATE_TAG']:
+              raise ValueError('candidate native operator identity differs from the release')
+          with binary.open('rb') as handle:
+              digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+          with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as output:
+              for name, value in (
+                  ('MARTY_DEPLOY_BIN', str(binary)),
+                  ('MARTY_DEPLOY_BIN_SHA256', digest),
+                  ('MARTY_DEPLOY_SOURCE_SHA', os.environ['GITHUB_SHA']),
+                  ('MARTY_DEPLOY_RELEASE_TAG', os.environ['CANDIDATE_TAG']),
+              ):
+                  output.write(f'{name}={value}\n')
+          PY
 
       - name: Checkout exact OIDF runner
         if: matrix.lane == 'oid4vci-issuer' || matrix.lane == 'oid4vp-final' || matrix.lane == 'oid4vp-url-query' || matrix.lane == 'oid4vp-mdoc' || matrix.lane == 'haip'

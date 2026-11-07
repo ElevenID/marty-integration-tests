@@ -5,9 +5,13 @@ import re
 import shutil
 import subprocess
 import textwrap
+import types
+import sys
+import runpy
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "official-interoperability.yml"
@@ -26,6 +30,91 @@ def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
     permissions = text.split("\npermissions:\n", 1)[1].split("\nconcurrency:", 1)[0]
     assert permissions.strip()
     assert all(re.fullmatch(r"[a-z-]+: read", line.strip()) for line in permissions.splitlines() if line.strip())
+
+
+def test_candidate_operator_is_authenticated_before_disposable_kms_mutation() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    operator = text.index("- name: Download exact candidate native operator")
+    proof = text.index("- name: Download exact candidate operator provenance")
+    admission = text.index("- name: Authenticate source-matched native operator before KMS mutation")
+    bootstrap = text.index("- name: Bootstrap disposable KMS-only released stack")
+    assert operator < proof < admission < bootstrap
+    guarded = text[operator:bootstrap]
+    assert guarded.count("if: inputs.candidate_artifact != ''") == 3
+    assert "operator-catalog-amd64-${{ github.run_id }}" in guarded
+    assert "operator-installer-provenance-amd64-${{ github.run_id }}" in guarded
+    assert "verify_subject(binary, proof" in guarded
+    assert "source_sha=os.environ['GITHUB_SHA']" in guarded
+    assert "run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT'])" in guarded
+    assert "MARTY_DEPLOY_BIN_SHA256" in guarded
+    assert "MARTY_DEPLOY_RELEASE_TAG" in guarded
+
+
+@pytest.mark.parametrize(("identity_matches", "proof_accepted", "allowed"), [
+    (True, True, True),
+    (False, True, False),
+    (True, False, False),
+])
+def test_actual_candidate_operator_admission_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    identity_matches: bool, proof_accepted: bool, allowed: bool,
+) -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    step = next(item for item in workflow["jobs"]["run-lane"]["steps"]
+                if item.get("name") == "Authenticate source-matched native operator before KMS mutation")
+    script = step["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    monkeypatch.chdir(tmp_path)
+    admission = tmp_path / "candidate-operator-admission.py"
+    admission.write_text(script, encoding="utf-8")
+    binary = tmp_path / "work/candidate-operator/marty-deploy-linux-amd64"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"synthetic-native-operator")
+    proof = tmp_path / "work/candidate-operator-proof/marty-deploy-linux-amd64.provenance.jsonl"
+    proof.parent.mkdir(parents=True)
+    proof.write_text("synthetic-proof")
+    (tmp_path / "work/marty-ui/scripts").mkdir(parents=True)
+    gh = tmp_path / "gh"
+    gh.write_bytes(b"synthetic-verifier")
+    environment = tmp_path / "github-env"
+    for name, value in {"GITHUB_SHA": "a" * 40, "CANDIDATE_TAG": "v1.2.3",
+                        "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
+                        "GITHUB_ENV": str(environment)}.items():
+        monkeypatch.setenv(name, value)
+    observed = {}
+    executed = []
+
+    def verify_subject(subject, bundle, **kwargs):
+        observed.update(subject=subject, bundle=bundle, **kwargs)
+        if not proof_accepted:
+            raise ValueError("provenance rejected")
+
+    module = types.ModuleType("verify_installer_provenance")
+    module.verify_subject = verify_subject
+    monkeypatch.setitem(sys.modules, "verify_installer_provenance", module)
+    monkeypatch.setattr(shutil, "which", lambda name: str(gh) if name == "gh" else None)
+    def native_run(args, **kwargs):
+        executed.append(args)
+        return types.SimpleNamespace(
+            stdout=("a" * 40 + ":v1.2.3" if identity_matches else "wrong-source:v1.2.3") + "\n")
+    monkeypatch.setattr(subprocess, "run", native_run)
+
+    if allowed:
+        runpy.run_path(str(admission), run_name="__main__")
+        settings = dict(line.split("=", 1) for line in environment.read_text().splitlines())
+        assert settings["MARTY_DEPLOY_BIN"] == str(binary)
+        assert settings["MARTY_DEPLOY_BIN_SHA256"] == __import__("hashlib").sha256(binary.read_bytes()).hexdigest()
+        assert settings["MARTY_DEPLOY_SOURCE_SHA"] == "a" * 40
+        assert settings["MARTY_DEPLOY_RELEASE_TAG"] == "v1.2.3"
+    else:
+        with pytest.raises(ValueError):
+            runpy.run_path(str(admission), run_name="__main__")
+        assert not environment.exists()
+    assert observed["subject"] == binary
+    assert observed["bundle"] == proof
+    assert observed["workflow"] == ".github/workflows/cd.yml"
+    assert observed["source_sha"] == "a" * 40
+    assert observed["run_id"] == 99 and observed["run_attempt"] == 1
+    assert executed == ([] if not proof_accepted else [[str(binary), "--build-identity"]])
 
 
 @pytest.mark.parametrize(("overrides", "allowed"), [
