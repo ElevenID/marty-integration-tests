@@ -64,6 +64,14 @@ ENV_ROLES = {
     "PP": ("pp_workload_server_cert", "pp_tls_kms_token", "workload-tls-presentation-policy-server"),
     "VERIFICATION": ("verification_workload_client_cert", "verification_tls_kms_token", "workload-tls-verification-client"),
     "ENVOY_ISSUANCE": ("envoy_issuance_client_cert", "envoy_issuance_tls_kms_token", "workload-tls-envoy-issuance-client"),
+    "TRUST_PROFILE": ("trust_profile_workload_server_cert", "trust_profile_tls_kms_token", "workload-tls-trust-profile-server"),
+}
+# These registered identities are not emitted by the released selfhost bootstrap.
+# Provision them against the same disposable workload CA without exporting keys.
+EXTRA_WORKLOADS = {
+    "ENVOY_ISSUANCE": ("envoy-issuance-client", "envoy-issuance-bridge",
+                       "spiffe://marty.internal/service/envoy-issuance-bridge", False),
+    "TRUST_PROFILE": ("trust-profile-server", "trust-profile", "", True),
 }
 KEYCLOAK_FILES = {
     "KEYCLOAK_SIGNING_KMS_TOKEN_FILE": "keycloak_signing_kms_token",
@@ -85,7 +93,7 @@ def role_environment(tls: Path, extra: Path) -> dict[str, str]:
     """Describe every scoped workload KMS input from the same role inventory."""
     environment = {}
     for prefix, (certificate, token, key_name) in ENV_ROLES.items():
-        directory = extra if prefix == "ENVOY_ISSUANCE" else tls
+        directory = extra if prefix in EXTRA_WORKLOADS else tls
         environment.update({
             f"{prefix}_TLS_KMS_ADDR": KMS_ORIGIN,
             f"{prefix}_TLS_KMS_KEY_NAME": key_name,
@@ -344,35 +352,34 @@ def provision_nonexportable_transit_key(bao, name: str, purpose: str) -> str:
     return public_key
 
 
-def provision_envoy(ui: Path, private: Path, ca: Path, root: Path) -> None:
+def provision_extra_workloads(ui: Path, private: Path, ca: Path, root: Path) -> None:
     sys.path.insert(0, str(ui / "scripts"))
     from selfhost_openbao_client import Bao, certificate_public_key_der, public_key_der
 
     authority = root.read_text(encoding="ascii").strip()
     bao = Bao(KMS_ORIGIN, ca, authority)
-    name = "workload-tls-envoy-issuance-client"
-    role = "envoy-issuance-client"
-    uri = "spiffe://marty.internal/service/envoy-issuance-bridge"
-    public_key = provision_nonexportable_transit_key(bao, name, "Envoy TLS")
-    bao.request("POST", f"workload-pki/roles/{role}", {
-        "allow_any_name": True, "allow_localhost": True, "allow_ip_sans": True,
-        "allowed_uri_sans": uri, "server_flag": False, "client_flag": True,
-        "key_type": "ec", "key_bits": 256, "max_ttl": "24h",
-        "use_csr_common_name": False, "use_csr_sans": False,
-    })
-    csr = bao.request("POST", f"transit/keys/{name}/csr", {"version": 1})["data"]["csr"]
-    signed = bao.request("POST", f"workload-pki/sign/{role}", {
-        "csr": csr, "common_name": "envoy-issuance-bridge", "uri_sans": uri, "ttl": "8h",
-    })["data"]
-    certificate = signed.get("certificate")
-    if (not isinstance(certificate, str) or "private_key" in signed
-            or certificate_public_key_der(certificate) != public_key_der(public_key)):
-        raise RuntimeError("Envoy certificate is not bound to its remote KMS key")
-    private_file(private / "envoy_issuance_client_cert", certificate)
-    policy_name = f"official-{secrets.token_hex(6)}-{name}"
-    token = scoped_transit_signing_token(bao, name, policy_name, authority,
-                                         b"official-envoy-proof")
-    private_file(private / "envoy_issuance_tls_kms_token", token)
+    for prefix, (role, common_name, uri, server) in EXTRA_WORKLOADS.items():
+        certificate_file, token_file, name = ENV_ROLES[prefix]
+        public_key = provision_nonexportable_transit_key(bao, name, f"{prefix} TLS")
+        bao.request("POST", f"workload-pki/roles/{role}", {
+            "allow_any_name": True, "allow_localhost": True, "allow_ip_sans": True,
+            "allowed_uri_sans": uri, "server_flag": server, "client_flag": not server,
+            "key_type": "ec", "key_bits": 256, "max_ttl": "24h",
+            "use_csr_common_name": False, "use_csr_sans": False,
+        })
+        csr = bao.request("POST", f"transit/keys/{name}/csr", {"version": 1})["data"]["csr"]
+        signed = bao.request("POST", f"workload-pki/sign/{role}", {
+            "csr": csr, "common_name": common_name, "uri_sans": uri, "ttl": "8h",
+        })["data"]
+        certificate = signed.get("certificate")
+        if (not isinstance(certificate, str) or "private_key" in signed
+                or certificate_public_key_der(certificate) != public_key_der(public_key)):
+            raise RuntimeError(f"{prefix} certificate is not bound to its remote KMS key")
+        private_file(private / certificate_file, certificate)
+        policy_name = f"official-{secrets.token_hex(6)}-{name}"
+        token = scoped_transit_signing_token(bao, name, policy_name, authority,
+                                             f"official-{role}-proof".encode("ascii"))
+        private_file(private / token_file, token)
 
 
 def provision_oidf_edge(ui: Path, private: Path, material: Path, ca: Path,
@@ -509,7 +516,7 @@ def main() -> int:
                         "SELFHOST_KEYCLOAK_OUTPUT_DIR": str(keycloak)}
         run([sys.executable, str(args.marty_ui / "scripts" / "provision_selfhost_keycloak_kms.py")],
             env=keycloak_env)
-        provision_envoy(args.marty_ui, extra, ca, root)
+        provision_extra_workloads(args.marty_ui, extra, ca, root)
         edge = provision_oidf_edge(args.marty_ui, extra, args.material, ca, root,
                                    material["OIDF_PUBLIC_BASE_URL"])
         (args.material / "official-ca.key").unlink()
