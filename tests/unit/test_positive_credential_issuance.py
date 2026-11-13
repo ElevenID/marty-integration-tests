@@ -34,7 +34,14 @@ def synthetic_jwt(subject: dict[str, object], *, typ: str = "vc+jwt") -> str:
 
 
 def subject(member_id: str, name: str, description: str) -> dict[str, object]:
-    return {"member_id": member_id, "achievement": {"name": name, "description": description}}
+    return {
+        "member_id": member_id,
+        "achievement": {
+            "name": name,
+            "description": description,
+            "criteria": {"narrative": "Expected criteria"},
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -55,6 +62,7 @@ def test_bad_credential_shape_or_correlation_fails(credential: str) -> None:
             member_id="expected",
             achievement_name="Expected",
             achievement_description="Expected description",
+            achievement_criteria_narrative="Expected criteria",
         )
 
 
@@ -66,7 +74,31 @@ def test_structural_credential_correlation_does_not_claim_signature_verification
         member_id="expected",
         achievement_name="Expected",
         achievement_description="Expected description",
+        achievement_criteria_narrative="Expected criteria",
     )
+
+
+@pytest.mark.parametrize(
+    ("present", "criteria"),
+    [(False, None), (True, None), (True, "criteria"), (True, {}), (True, {"narrative": "Wrong criteria"})],
+)
+def test_missing_malformed_or_uncorrelated_criteria_fails(present: bool, criteria: object) -> None:
+    badge_subject = subject("expected", "Expected", "Expected description")
+    achievement = badge_subject["achievement"]
+    assert isinstance(achievement, dict)
+    if present:
+        achievement["criteria"] = criteria
+    else:
+        del achievement["criteria"]
+    with pytest.raises(AssertionError):
+        journey.assert_member_badge_credential(
+            FormatValidator(),
+            synthetic_jwt(badge_subject),
+            member_id="expected",
+            achievement_name="Expected",
+            achievement_description="Expected description",
+            achievement_criteria_narrative="Expected criteria",
+        )
 
 
 def _record_cleanup(operations: list[str], *, extension_uri: str) -> None:
@@ -99,8 +131,11 @@ async def test_missing_issued_credential_fails_and_cleans_up(
             "role",
             "achievement_name",
             "achievement_description",
+            "achievement_criteria",
             "issued_at",
         } <= claims.keys()
+        assert isinstance(claims["achievement_criteria"], dict)
+        assert claims["achievement_criteria"]["narrative"]
         return {
             "status": 200,
             "body": {
