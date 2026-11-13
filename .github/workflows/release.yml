@@ -37,6 +37,7 @@ jobs:
     name: Require the complete pinned official suite
     needs: verify-source
     permissions:
+      actions: read
       contents: read
       packages: read
       attestations: read
