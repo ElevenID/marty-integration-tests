@@ -210,12 +210,12 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             {"id": "revocation-1"},
             {"id": "template-1"},
             {"id": "template-1"},
-            {"id": "policy-1"},
-            {"id": "policy-1"},
             {"id": "trust-1"},
             {"id": "issuer-entity-1"},
             {"id": "relationship-1"},
             {"id": "trust-1"},
+            {"id": "policy-1"},
+            {"id": "policy-1"},
             issuer_identity_response(credential_format="JSON_LD", algorithm="EdDSA"),
             {"id": "compliance-2"},
             {"id": "compliance-2"},
@@ -305,10 +305,15 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
     assert "issuer_profile_id" not in calls[7][2]
     assert calls[7][2]["revocation_profile_id"] == "revocation-1"
     assert "compliance_profile" not in calls[7][2]
-    assert calls[9][0] == "/v1/presentation-policies"
-    assert calls[10][0] == "/v1/presentation-policies/policy-1/activate"
-    assert calls[11][0] == "/v1/trust-profiles"
-    assert calls[12] == (
+    assert calls[13][0] == "/v1/presentation-policies"
+    policy = calls[13][2]
+    assert policy["trust_profile_id"] == "trust-1"
+    requirement = policy["credential_requirements"][0]
+    assert requirement["trust_profile_id"] == "trust-1"
+    assert all(claim["accept_derived"] is False for claim in requirement["requested_claims"])
+    assert calls[14][0] == "/v1/presentation-policies/policy-1/activate"
+    assert calls[9][0] == "/v1/trust-profiles"
+    assert calls[10] == (
         "/v1/issuer-entities",
         "POST",
         fixtures.sd_jwt_issuer_entity_payload(
@@ -317,7 +322,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             run_id="run-1",
         ),
     )
-    assert calls[13] == (
+    assert calls[11] == (
         "/v1/trust-profiles/trust-1/issuers",
         "POST",
         {
@@ -330,7 +335,7 @@ def test_bootstrap_uses_public_template_and_policy_apis() -> None:
             },
         },
     )
-    assert calls[14][0] == "/v1/trust-profiles/trust-1/activate"
+    assert calls[12][0] == "/v1/trust-profiles/trust-1/activate"
     assert all(method == "POST" for _path, method, _body in calls)
     assert calls[15][0] == "/v1/signing-keys/issuer-identities"
     assert calls[15][2] == {
@@ -425,12 +430,12 @@ def test_oid4vp_bootstrap_adds_separate_disposable_browser_issuance_resources() 
             {"id": "revocation-1"},
             {"id": "template-1"},
             {"id": "template-1"},
-            {"id": "policy-1"},
-            {"id": "policy-1"},
             {"id": "trust-1"},
             {"id": "issuer-entity-1"},
             {"id": "relationship-1"},
             {"id": "trust-1"},
+            {"id": "policy-1"},
+            {"id": "policy-1"},
             {"id": "browser-compliance-1"},
             {"id": "browser-compliance-1"},
             {"id": "browser-credential-1"},
@@ -639,12 +644,12 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             {"id": "revocation-1"},
             {"id": "template-1"},
             {"id": "template-1"},
-            {"id": "policy-1"},
-            {"id": "policy-1"},
             {"id": "trust-1"},
             {"id": "issuer-entity-1"},
             {"id": "relationship-1"},
             {"id": "trust-1"},
+            {"id": "policy-1"},
+            {"id": "policy-1"},
         ]
     )
 
@@ -689,8 +694,10 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
     assert calls[2][0] == "/v1/signing-keys/issuer-identities/resolve"
     assert calls[7][2]["credential_payload_format"] == "MDOC"
     assert calls[7][2]["doctype"] == "org.iso.18013.5.1.mDL"
-    assert calls[9][2]["credential_requirements"][0]["credential_payload_format"] == "MDOC"
-    trust_profile = calls[11][2]
+    assert calls[13][2]["credential_requirements"][0]["credential_payload_format"] == "MDOC"
+    assert calls[13][2]["trust_profile_id"] == "trust-1"
+    assert calls[13][2]["credential_requirements"][0]["trust_profile_id"] == "trust-1"
+    trust_profile = calls[9][2]
     assert trust_profile["supported_formats"] == ["MDOC"]
     assert trust_profile["trust_sources"] == [
         {
@@ -702,8 +709,8 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             ),
         }
     ]
-    assert calls[12][0:2] == ("/v1/issuer-entities", "POST")
-    assert calls[12][2] == {
+    assert calls[10][0:2] == ("/v1/issuer-entities", "POST")
+    assert calls[10][2] == {
         "organization_id": fixtures.DEFAULT_ORGANIZATION,
         "issuer_id": f"x509-sha256:{certificate_sha256}",
         "issuer_type": "GOVERNMENT",
@@ -720,7 +727,7 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             "certificate_sha256": certificate_sha256,
         },
     }
-    assert calls[13] == (
+    assert calls[11] == (
         "/v1/trust-profiles/trust-1/issuers",
         "POST",
         {
@@ -733,7 +740,7 @@ def test_oidf_mdoc_bootstrap_resolves_a_managed_document_signer() -> None:
             },
         },
     )
-    assert calls[14][0:2] == ("/v1/trust-profiles/trust-1/activate", "POST")
+    assert calls[12][0:2] == ("/v1/trust-profiles/trust-1/activate", "POST")
     assert "allowed_issuers" not in trust_profile
     assert "system_issuer_overrides" not in trust_profile
     assert all("issuer_profile_id" not in (body or {}) for _path, _method, body in calls)
@@ -1239,7 +1246,7 @@ def test_mdoc_root_bootstrap_does_not_invent_a_document_signer_relationship() ->
         issuer_identity_response(key_purpose="oid4vp_request_signing", credential_format="MDOC"),
         {"identity": issuer_identity_response()["identity"], "public_jwk": PUBLIC_SIGNING_JWK},
         *({"id": value} for value in ["compliance-1", "compliance-1", "revocation-1", "revocation-1", "template-1",
-                                      "template-1", "policy-1", "policy-1", "trust-1", "trust-1"]),
+                                      "template-1", "trust-1", "trust-1", "policy-1", "policy-1"]),
     ])
 
     def request(_gateway: str, _session: str, path: str, *, method: str, json_body: dict | None = None) -> object:
