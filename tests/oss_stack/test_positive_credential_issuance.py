@@ -27,6 +27,7 @@ def assert_member_badge_credential(
     member_id: str,
     achievement_name: str,
     achievement_description: str,
+    achievement_criteria_narrative: str,
 ) -> None:
     """Check JWT-VC shape and event correlation, not its signature."""
     assert credential
@@ -46,6 +47,9 @@ def assert_member_badge_credential(
     assert isinstance(achievement, dict)
     assert achievement.get("name") == achievement_name
     assert achievement.get("description") == achievement_description
+    criteria = achievement.get("criteria")
+    assert isinstance(criteria, dict)
+    assert criteria.get("narrative") == achievement_criteria_narrative
 
 
 @pytest.mark.asyncio
@@ -58,6 +62,7 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
     issued_at = datetime.now(UTC).isoformat()
     achievement_name = "Disposable member badge"
     achievement_description = "Disposable released-stack issuance check"
+    achievement_criteria_narrative = "Complete the disposable application approval journey"
     event = {
         "event_type": "application.approved",
         "aggregate_id": application_id,
@@ -73,6 +78,7 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
                 "role": "applicant",
                 "achievement_name": achievement_name,
                 "achievement_description": achievement_description,
+                "achievement_criteria": {"narrative": achievement_criteria_narrative},
                 "issued_at": issued_at,
             },
         },
@@ -123,6 +129,7 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
             member_id=application_id,
             achievement_name=achievement_name,
             achievement_description=achievement_description,
+            achievement_criteria_narrative=achievement_criteria_narrative,
         )
     finally:
         _deactivate_disposable_application_flows(extension_uri=extension_uri)
