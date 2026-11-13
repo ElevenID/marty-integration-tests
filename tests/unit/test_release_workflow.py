@@ -72,6 +72,16 @@ def test_owned_fixture_workflow_is_main_only_and_uses_release_environment() -> N
     job = workflow["jobs"]["release-lookup-probe"]
     assert job["if"] == "github.ref == 'refs/heads/main'"
     assert job["environment"] == "release"
+
+
+def test_release_caller_can_delegate_every_permission_requested_by_official_suite() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+    reusable = yaml.safe_load((ROOT / ".github/workflows/official-interoperability.yml").read_text())
+    caller = workflow["jobs"]["official-interoperability"]["permissions"]
+    levels = {"none": 0, "read": 1, "write": 2}
+    for scope, level in reusable["permissions"].items():
+        assert levels[caller.get(scope, "none")] >= levels[level], f"caller cannot delegate {scope}: {level}"
+    assert caller["actions"] == "read"
     assert job["permissions"] == {"contents": "write"}
     assert job["timeout-minutes"] == 10
     script = next(s["run"] for s in job["steps"] if "probe_release_lookup.py" in s.get("run", ""))
