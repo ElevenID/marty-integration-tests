@@ -151,6 +151,21 @@ jobs:
           path: work/marty-ui
           persist-credentials: false
 
+      - name: Install pinned published-operator signature verifier
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+        with:
+          cosign-release: 'v3.1.4'
+
+      - name: Stage signed source-matched released native operator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/stage_released_native_operator.py
+          --pin conformance/stack-under-test.json
+          --marty-ui work/marty-ui
+          --output work/released-native
+          --github-env "$GITHUB_ENV"
+
       - name: Generate disposable TLS material
         run: |
           python scripts/eudi_test_material.py generate --output work/material --marty-port 18443

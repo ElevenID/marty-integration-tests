@@ -255,6 +255,23 @@ jobs:
                   output.write(f'{name}={value}\n')
           PY
 
+      - name: Install pinned published-operator signature verifier
+        if: inputs.candidate_artifact == ''
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+        with:
+          cosign-release: 'v3.1.4'
+
+      - name: Stage signed source-matched released native operator
+        if: inputs.candidate_artifact == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/stage_released_native_operator.py
+          --pin conformance/stack-under-test.json
+          --marty-ui work/marty-ui
+          --output work/released-native
+          --github-env "$GITHUB_ENV"
+
       - name: Checkout exact OIDF runner
         if: matrix.lane == 'oid4vci-issuer' || matrix.lane == 'oid4vp-final' || matrix.lane == 'oid4vp-url-query' || matrix.lane == 'oid4vp-mdoc' || matrix.lane == 'haip'
         run: python scripts/official_suite_checkout.py --suite oidf --output work/oidf-runner
