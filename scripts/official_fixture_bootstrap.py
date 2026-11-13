@@ -579,6 +579,7 @@ def policy_payload(
                 "claim_name": claim,
                 "display_name": claim,
                 "required": required,
+                **({"accept_derived": False} if not w3c else {}),
             }
             for claim, required in claims
         ],
@@ -1426,60 +1427,6 @@ def bootstrap(
                 )
             result["w3c_trust_profile_id"] = w3c_trust_profile_id
             result["w3c_trusted_issuer_id"] = issuer_did
-        policy_roles = ("credential", "presentation") if w3c else (() if oid4vci else ("presentation",))
-        policy_ids: dict[str, str] = {}
-        for role in policy_roles:
-            created_policy = request(
-                gateway_url,
-                session_id,
-                "/v1/presentation-policies",
-                method="POST",
-                json_body=policy_payload(
-                    organization_id,
-                    presentation_template_id if role == "presentation" else template_id,
-                    w3c=w3c,
-                    run_id=run_id,
-                    presentation=role == "presentation",
-                    mdoc=mdoc,
-                    trust_profile_id=w3c_trust_profile_id,
-                ),
-            )
-            policy_id = response_id(created_policy, f"{prefix} {role} policy")
-            activated = request(
-                gateway_url,
-                session_id,
-                f"/v1/presentation-policies/{policy_id}/activate",
-                method="POST",
-            )
-            activated_id = response_id(activated, f"activated {prefix} {role} policy")
-            if activated_id != policy_id:
-                raise RuntimeError(f"activated {prefix} {role} policy id changed unexpectedly")
-            policy_ids[role] = policy_id
-        result[f"{prefix}_template_id"] = template_id
-        if w3c:
-            result["w3c_presentation_template_id"] = presentation_template_id
-            result["w3c_credential_policy_id"] = policy_ids["credential"]
-            result["w3c_presentation_policy_id"] = policy_ids["presentation"]
-        elif not oid4vci:
-            result[f"{prefix}_policy_id"] = policy_ids["presentation"]
-        result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
-        if w3c:
-            result["w3c_issuer_did"] = profile_payload["issuer_did"]
-        elif oid4vci:
-            result["oid4vci_issuer_did"] = profile_payload["issuer_did"]
-            assert credential_configuration_id is not None
-            # OID4VCI credential-configuration identifiers are the keys of
-            # credential_configurations_supported, not Marty's internal
-            # credential-template resource UUIDs.  Keep both identities so
-            # public issuance can address the template while the official
-            # runner selects the advertised protocol configuration.
-            result["oid4vci_credential_configuration_id"] = credential_configuration_id
-        else:
-            assert request_profile_payload is not None
-            assert request_issuer_public_jwk is not None
-            result[f"{prefix}_issuer_did"] = request_profile_payload["issuer_did"]
-            result[f"{prefix}_request_issuer_public_jwk"] = request_issuer_public_jwk
-        result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
         if not w3c and not oid4vci:
             created_trust_profile = request(
                 gateway_url,
@@ -1572,18 +1519,72 @@ def bootstrap(
             if activated_trust_profile_id != trust_profile_id:
                 raise RuntimeError("activated OID4VP trust profile id changed unexpectedly")
             result[f"{prefix}_trust_profile_id"] = trust_profile_id
-            if mode == "oid4vp":
-                result.update(
-                    bootstrap_browser_issuance(
-                        gateway_url,
-                        session_id,
-                        organization_id=organization_id,
-                        issuer_did=profile_payload["issuer_did"],
-                        revocation_profile_id=revocation_profile_id,
-                        run_id=run_id,
-                        request=request,
-                    )
+        policy_roles = ("credential", "presentation") if w3c else (() if oid4vci else ("presentation",))
+        policy_ids: dict[str, str] = {}
+        for role in policy_roles:
+            created_policy = request(
+                gateway_url,
+                session_id,
+                "/v1/presentation-policies",
+                method="POST",
+                json_body=policy_payload(
+                    organization_id,
+                    presentation_template_id if role == "presentation" else template_id,
+                    w3c=w3c,
+                    run_id=run_id,
+                    presentation=role == "presentation",
+                    mdoc=mdoc,
+                    trust_profile_id=(w3c_trust_profile_id if w3c else trust_profile_id),
+                ),
+            )
+            policy_id = response_id(created_policy, f"{prefix} {role} policy")
+            activated = request(
+                gateway_url,
+                session_id,
+                f"/v1/presentation-policies/{policy_id}/activate",
+                method="POST",
+            )
+            activated_id = response_id(activated, f"activated {prefix} {role} policy")
+            if activated_id != policy_id:
+                raise RuntimeError(f"activated {prefix} {role} policy id changed unexpectedly")
+            policy_ids[role] = policy_id
+        result[f"{prefix}_template_id"] = template_id
+        if w3c:
+            result["w3c_presentation_template_id"] = presentation_template_id
+            result["w3c_credential_policy_id"] = policy_ids["credential"]
+            result["w3c_presentation_policy_id"] = policy_ids["presentation"]
+        elif not oid4vci:
+            result[f"{prefix}_policy_id"] = policy_ids["presentation"]
+        result[f"{prefix}_compliance_profile_id"] = compliance_profile_id
+        if w3c:
+            result["w3c_issuer_did"] = profile_payload["issuer_did"]
+        elif oid4vci:
+            result["oid4vci_issuer_did"] = profile_payload["issuer_did"]
+            assert credential_configuration_id is not None
+            # OID4VCI credential-configuration identifiers are the keys of
+            # credential_configurations_supported, not Marty's internal
+            # credential-template resource UUIDs.  Keep both identities so
+            # public issuance can address the template while the official
+            # runner selects the advertised protocol configuration.
+            result["oid4vci_credential_configuration_id"] = credential_configuration_id
+        else:
+            assert request_profile_payload is not None
+            assert request_issuer_public_jwk is not None
+            result[f"{prefix}_issuer_did"] = request_profile_payload["issuer_did"]
+            result[f"{prefix}_request_issuer_public_jwk"] = request_issuer_public_jwk
+        result[f"{prefix}_revocation_profile_id"] = revocation_profile_id
+        if mode == "oid4vp":
+            result.update(
+                bootstrap_browser_issuance(
+                    gateway_url,
+                    session_id,
+                    organization_id=organization_id,
+                    issuer_did=profile_payload["issuer_did"],
+                    revocation_profile_id=revocation_profile_id,
+                    run_id=run_id,
+                    request=request,
                 )
+            )
         if w3c:
             api_key_id, api_key = create_disposable_vc_api_key(
                 gateway_url,
