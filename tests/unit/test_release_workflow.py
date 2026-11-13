@@ -72,6 +72,11 @@ def test_owned_fixture_workflow_is_main_only_and_uses_release_environment() -> N
     job = workflow["jobs"]["release-lookup-probe"]
     assert job["if"] == "github.ref == 'refs/heads/main'"
     assert job["environment"] == "release"
+    assert job["permissions"] == {"contents": "write"}
+    assert job["timeout-minutes"] == 10
+    script = next(s["run"] for s in job["steps"] if "probe_release_lookup.py" in s.get("run", ""))
+    assert '--fixture-tag "$FIXTURE_TAG"' in script
+    assert not any("gh release create" in s.get("run", "") for s in job["steps"])
 
 
 def test_release_caller_can_delegate_every_permission_requested_by_official_suite() -> None:
@@ -82,8 +87,3 @@ def test_release_caller_can_delegate_every_permission_requested_by_official_suit
     for scope, level in reusable["permissions"].items():
         assert levels[caller.get(scope, "none")] >= levels[level], f"caller cannot delegate {scope}: {level}"
     assert caller["actions"] == "read"
-    assert job["permissions"] == {"contents": "write"}
-    assert job["timeout-minutes"] == 10
-    script = next(s["run"] for s in job["steps"] if "probe_release_lookup.py" in s.get("run", ""))
-    assert '--fixture-tag "$FIXTURE_TAG"' in script
-    assert not any("gh release create" in s.get("run", "") for s in job["steps"])
