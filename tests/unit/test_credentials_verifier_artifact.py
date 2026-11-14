@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import sys
 import tarfile
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -16,6 +17,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location(
     "credentials_verifier_artifact",
     ROOT / "scripts" / "credentials_verifier_artifact.py",
