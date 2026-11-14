@@ -102,7 +102,13 @@ jobs:
           else
             test "$GITHUB_REPOSITORY" = ElevenID/marty-integration-tests
             test -z "$CANDIDATE_MANIFEST_SHA256$CANDIDATE_TAG$HARNESS_REVISION"
-            test "$COLLECT_ONLY" != true
+            if [ "$COLLECT_ONLY" = true ]; then
+              # Only this repository's protected release-tag workflow may
+              # collect raw results for its independent released-stack gate.
+              test "$GITHUB_EVENT_NAME" = push
+              [[ "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+              test "$LANE" = all
+            fi
           fi
 
       - name: Checkout integration harness
@@ -390,7 +396,7 @@ jobs:
           name: official-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: work/sanitized/${{ matrix.lane }}/summary.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 14 }}
 
       - name: Install the digest-pinned private review encryptor
         if: always() && steps.summary.outcome == 'success' && steps.summary.outputs.has_reviews == 'true' && env.REVIEW_RECIPIENT != ''
@@ -434,14 +440,12 @@ jobs:
             exit 1
           fi
           if [[ "$COLLECT_ONLY" == true ]]; then
-            # Only the protected-main candidate caller can opt in. A successful
-            # collection is not a passing suite: preserve every raw exit/result
-            # and require the independent Rust gate before any promotion. This
-            # retains the complete original seven-lane evidence for the
-            # caller's deterministic qualification of known REVIEW cases.
+            # Only the validated product candidate or protected release-tag
+            # caller can opt in. A successful collection is not a passing
+            # suite: preserve raw exits and require its independent Rust gate.
             test "$SUMMARY_OUTCOME" = success || exit 1
             test "$UPLOAD_OUTCOME" = success || exit 1
-            echo "::notice::Official raw exit is $LANE_EXIT_CODE; candidate qualification remains the independent caller gate's responsibility."
+            echo "::notice::Official raw exit is $LANE_EXIT_CODE; qualification remains the independent caller gate's responsibility."
             exit 0
           fi
           exit "$LANE_EXIT_CODE"

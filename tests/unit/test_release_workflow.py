@@ -36,7 +36,7 @@ def test_release_lineage_is_checked_before_install_and_rechecked_immediately_bef
         '--tag "$GITHUB_REF_NAME" --expected-commit "$GITHUB_SHA"'
     )
 
-    assert workflow.count(command) == 3
+    assert workflow.count(command) == 4
     first_gate = workflow.index("- name: Bind release tag to protected main")
     dependency_install = workflow.index("- name: Install uv without a tag-scoped dependency cache")
     attestation = workflow.index("- uses: actions/attest-build-provenance@")
@@ -58,13 +58,40 @@ def test_all_official_lanes_and_release_environment_remain_required() -> None:
     assert jobs["verify-source"]["environment"] == "release"
     assert jobs["official-interoperability"]["needs"] == "verify-source"
     assert jobs["official-interoperability"]["with"]["lane"] == "all"
+    assert jobs["official-interoperability"]["with"]["collect_only"] is True
     assert jobs["official-interoperability"]["uses"] == "./.github/workflows/official-interoperability.yml"
-    assert jobs["release"]["needs"] == ["verify-source", "official-interoperability"]
+    gate = jobs["released-official-gate"]
+    assert gate["needs"] == ["verify-source", "official-interoperability"]
+    assert gate["permissions"] == {"contents": "read", "actions": "read", "attestations": "read"}
+    assert jobs["release"]["needs"] == ["verify-source", "official-interoperability", "released-official-gate"]
     assert jobs["release"]["environment"] == "release"
     assert workflow["concurrency"]["cancel-in-progress"] is False
     for name in ("verify-source", "release"):
         checkout = next(s for s in jobs[name]["steps"] if s.get("uses", "").startswith("actions/checkout@"))
         assert checkout["with"]["persist-credentials"] is False
+
+
+def test_released_gate_authenticates_same_run_and_signs_its_receipt() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+    gate = workflow["jobs"]["released-official-gate"]
+    steps = gate["steps"]
+    source = next(s for s in steps if s.get("name") == "Authenticate the exact product gate source on protected main")
+    assert "merge-base --is-ancestor" in source["run"]
+    assert "branches/main --jq .protected" in source["run"]
+    stack = next(s for s in steps if s.get("name") == "Verify the reviewed signed stack release")
+    assert "official_stack_release.py materialize" in stack["run"]
+    build = next(s for s in steps if s.get("name") == "Build the locked public-dependency product gate")
+    assert "cargo build --locked" in build["run"]
+    download = next(s for s in steps if s.get("name") == "Download all seven original same-run summaries")
+    assert 'official-${lane}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}' in download["run"]
+    qualify = next(s for s in steps if s.get("name") == "Qualify unchanged official results and automated verifier evidence")
+    assert "--prepare-released" in qualify["run"] and "--automated-released" in qualify["run"]
+    assert '"$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"' in qualify["run"]
+    assert "official-release-gate.json" in qualify["run"]
+    release = workflow["jobs"]["release"]["steps"]
+    receipt = next(s for s in release if s.get("with", {}).get("name", "").startswith("official-released-gate-"))
+    sign = next(i for i, s in enumerate(release) if s.get("name") == "Sign and checksum release artifacts")
+    assert release.index(receipt) < sign
 
 
 def test_owned_fixture_workflow_is_main_only_and_uses_release_environment() -> None:

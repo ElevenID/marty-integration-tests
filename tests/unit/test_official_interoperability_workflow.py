@@ -18,6 +18,19 @@ WORKFLOW = ROOT / ".github" / "workflows" / "official-interoperability.yml"
 PYTHON_LOCK = ROOT / "requirements" / "official-py312.lock"
 
 
+def test_tag_collection_preserves_raw_results_for_independent_gate() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["run-lane"]["steps"]
+    caller = next(step for step in steps if step.get("name") == "Validate candidate caller before fetching source")
+    assert 'test "$GITHUB_EVENT_NAME" = push' in caller["run"]
+    assert 'refs/tags/v[0-9]+' in caller["run"]
+    assert 'test "$LANE" = all' in caller["run"]
+    enforce = next(step for step in steps if step.get("name") == "Enforce lane result")
+    assert 'test "$SUMMARY_OUTCOME" = success' in enforce["run"]
+    assert 'test "$UPLOAD_OUTCOME" = success' in enforce["run"]
+    assert 'exit "$LANE_EXIT_CODE"' in enforce["run"]
+
+
 def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     runtime = text.split("      - name: Run official lane\n", 1)[1].split(

@@ -44,9 +44,115 @@ jobs:
     uses: ./.github/workflows/official-interoperability.yml
     with:
       lane: all
+      collect_only: true
+
+  released-official-gate:
+    name: Qualify original released-stack official evidence
+    needs: [verify-source, official-interoperability]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    env:
+      PRODUCT_GATE_SHA: f28a928f784d3f7322bcca0857138481a8c6984e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.95.0
+      - name: Require original protected release run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ElevenID/marty-integration-tests
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          [[ "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python scripts/check_release_lineage.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --expected-commit "$GITHUB_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-ui
+          ref: ${{ env.PRODUCT_GATE_SHA }}
+          path: product-gate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Authenticate the exact product gate source on protected main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C product-gate rev-parse HEAD)" = "$PRODUCT_GATE_SHA"
+          test "$(gh api repos/ElevenID/marty-ui/branches/main --jq .protected)" = true
+          main_sha="$(gh api repos/ElevenID/marty-ui/branches/main --jq .commit.sha)"
+          git -C product-gate fetch --no-tags origin "$main_sha"
+          git -C product-gate merge-base --is-ancestor "$PRODUCT_GATE_SHA" "$main_sha"
+      - name: Verify the reviewed signed stack release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          python scripts/official_stack_release.py materialize
+          --pin conformance/stack-under-test.json
+          --output-dir work/released-stack
+          --metadata-output work/released-stack/stack-metadata.json
+      - name: Build the locked public-dependency product gate
+        shell: bash
+        run: >-
+          cargo build --locked --release
+          --manifest-path product-gate/tools/official-suite-validator/Cargo.toml
+          --target-dir work/official-gate-tools
+      - name: Download all seven original same-run summaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for lane in oid4vci-issuer oid4vp-final oid4vp-url-query oid4vp-mdoc haip w3c-v2 eudi; do
+            artifact="official-${lane}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+              --name "$artifact" --dir "work/official-summaries/$artifact"
+          done
+      - name: Qualify unchanged official results and automated verifier evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate=work/official-gate-tools/release/marty-official-suite-validator
+          source="$(jq -er .marty_commit conformance/stack-under-test.json)"
+          mkdir -p work/released-gate
+          "$gate" --prepare-released work/released-stack/stack-manifest.json \
+            "$source" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            work/official-summaries > work/released-gate/official-release-plan.json
+          "$gate" --automated-released work/released-stack/stack-manifest.json \
+            "$source" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            work/official-summaries > work/released-gate/official-release-gate.json
+          plan_sha="$(sha256sum work/released-gate/official-release-plan.json | cut -d' ' -f1)"
+          jq -e --arg source "$source" --arg harness "$GITHUB_SHA" \
+            --argjson run "$GITHUB_RUN_ID" --arg plan "sha256:$plan_sha" \
+            '.schema == "marty.official-released-gate/v1" and
+             .qualification_context == "PUBLISHED_RELEASE" and
+             .source_sha == $source and .harness_sha == $harness and .run_id == $run and
+             .automated_qualification.evidence_run_attempt == 1 and
+             .automated_qualification.request_sha256 == $plan and
+             (.lanes | length) == 7' work/released-gate/official-release-gate.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: official-released-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/released-gate/
+          if-no-files-found: error
+          retention-days: 90
 
   release:
-    needs: [verify-source, official-interoperability]
+    needs: [verify-source, official-interoperability, released-official-gate]
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -95,6 +201,10 @@ jobs:
             --prefix="marty-integration-tests-${version}/" \
             --output="release-assets/marty-integration-tests-${version}-source.tar.gz" \
             HEAD
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: official-released-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-assets
       - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           path: .
