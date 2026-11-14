@@ -55,8 +55,7 @@ jobs:
       actions: read
       attestations: read
     env:
-      # Replace with the protected-main merge commit of product PR #1919.
-      PRODUCT_GATE_SHA: 4f2f971dad48af80684436d56c47055a20fc7d6a
+      PRODUCT_GATE_SHA: f28a928f784d3f7322bcca0857138481a8c6984e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
