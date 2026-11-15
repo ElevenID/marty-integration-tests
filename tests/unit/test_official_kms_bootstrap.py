@@ -90,7 +90,7 @@ def runtime_inputs(tmp_path: Path) -> tuple[dict[str, str], str]:
     for filename in MODULE.KEYCLOAK_FILES.values():
         (keycloak / filename).write_text("scoped", encoding="ascii")
     for prefix, (certificate, token, _) in MODULE.ENV_ROLES.items():
-        directory = extra if prefix == "ENVOY_ISSUANCE" else tls
+        directory = extra if prefix in MODULE.EXTRA_WORKLOADS else tls
         (directory / certificate).write_text("certificate", encoding="ascii")
         (directory / token).write_text("scoped", encoding="ascii")
     for path in (tls / "workload_identity_ca_cert", tmp_path / "openbao_tls_ca_cert",
@@ -111,6 +111,17 @@ def test_runtime_environment_requires_exact_private_kms_inputs(tmp_path: Path) -
     assert values["FLOW_WORKLOAD_SERVER_CERT_FILE"] == str(tls / "flow_workload_server_cert")
     assert values["AUTH_WORKLOAD_SERVER_CERT_FILE"] == str(tls / "auth_workload_server_cert")
     assert values["ENVOY_ISSUANCE_CLIENT_CERT_FILE"] == str(extra / "envoy_issuance_client_cert")
+    assert values["TRUST_PROFILE_WORKLOAD_SERVER_CERT_FILE"] == str(extra / "trust_profile_workload_server_cert")
+    assert values["TRUST_PROFILE_TLS_KMS_TOKEN_FILE"] == str(extra / "trust_profile_tls_kms_token")
+    assert values["TRUST_PROFILE_TLS_KMS_KEY_NAME"] == "workload-tls-trust-profile-server"
+    assert values["TRUST_PROFILE_TLS_KMS_KEY_VERSION"] == "1"
+    with pytest.raises(ValueError, match="missing or unsupported"):
+        MODULE.validate_runtime_environment({key: value for key, value in values.items()
+                                             if key != "TRUST_PROFILE_TLS_KMS_KEY_NAME"}, tmp_path, origin)
+    with pytest.raises(ValueError, match="role input differs"):
+        MODULE.validate_runtime_environment(
+            {**values, "TRUST_PROFILE_TLS_KMS_TOKEN_FILE": values["ISSUANCE_TLS_KMS_TOKEN_FILE"]},
+            tmp_path, origin)
     with pytest.raises(ValueError, match="origin is invalid"):
         MODULE.validate_runtime_environment({**values, "OIDF_TLS_KMS_ADDR": "http://openbao:8200"},
                                             tmp_path, origin)
@@ -217,3 +228,60 @@ def test_shared_transit_key_provisioning_rejects_exportable_key() -> None:
     })
     with pytest.raises(RuntimeError, match="not non-exportable"):
         MODULE.provision_nonexportable_transit_key(Bao(True), "official-edge", "edge")
+
+
+@pytest.mark.parametrize("fault", [None, "wrong-key", "exported-private-key"])
+def test_extra_workloads_bind_trust_server_to_scoped_remote_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str | None,
+) -> None:
+    calls = []
+
+    class Bao:
+        def __init__(self, origin, ca, authority):
+            assert origin == MODULE.KMS_ORIGIN and ca == tmp_path / "ca"
+            assert authority == "bootstrap-authority"
+
+        def request(self, method, path, body=None, *, token=None):
+            calls.append((method, path, body, token))
+            if method == "GET":
+                return {"data": {"type": "ecdsa-p256", "exportable": False,
+                                 "allow_plaintext_backup": False, "latest_version": 1,
+                                 "keys": {"1": {"public_key": "bound-key"}}}}
+            if path.endswith("/csr"):
+                return {"data": {"csr": "remote-csr"}}
+            if path.startswith("workload-pki/sign/"):
+                trust = path.endswith("trust-profile-server")
+                data = {"certificate": "wrong-key" if trust and fault == "wrong-key" else "bound-key"}
+                if trust and fault == "exported-private-key":
+                    data["private_key"] = "must-not-be-written"
+                return {"data": data}
+            if path == "auth/token/create":
+                return {"auth": {"client_token": "scoped-token" * 3}}
+            return {"data": {"signature": "vault:v1:proof"}}
+
+    monkeypatch.setitem(sys.modules, "selfhost_openbao_client", SimpleNamespace(
+        Bao=Bao, certificate_public_key_der=lambda value: value,
+        public_key_der=lambda value: value))
+    root = tmp_path / "authority"
+    root.write_text("bootstrap-authority", encoding="ascii")
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    if fault:
+        with pytest.raises(RuntimeError, match="TRUST_PROFILE certificate is not bound"):
+            MODULE.provision_extra_workloads(tmp_path, extra, tmp_path / "ca", root)
+        assert not (extra / "trust_profile_workload_server_cert").exists()
+        assert not (extra / "trust_profile_tls_kms_token").exists()
+        return
+    MODULE.provision_extra_workloads(tmp_path, extra, tmp_path / "ca", root)
+    assert (extra / "envoy_issuance_client_cert").read_text() == "bound-key"
+    assert (extra / "trust_profile_workload_server_cert").read_text() == "bound-key"
+    assert (extra / "trust_profile_tls_kms_token").read_text() == "scoped-token" * 3
+    role = next(body for _, path, body, _ in calls if path == "workload-pki/roles/trust-profile-server")
+    assert role["server_flag"] is True and role["client_flag"] is False
+    signed = next(body for _, path, body, _ in calls if path == "workload-pki/sign/trust-profile-server")
+    assert signed == {"csr": "remote-csr", "common_name": "trust-profile", "uri_sans": "", "ttl": "8h"}
+    policy = next(body["policy"] for _, path, body, _ in calls
+                  if path.startswith("sys/policies/acl/") and "trust-profile-server" in path)
+    assert policy == (
+        'path "transit/keys/workload-tls-trust-profile-server" { capabilities = ["read"] }\n'
+        'path "transit/sign/workload-tls-trust-profile-server" { capabilities = ["update"] }')

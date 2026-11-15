@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import sys
 import tarfile
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -16,6 +17,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location(
     "credentials_verifier_artifact",
     ROOT / "scripts" / "credentials_verifier_artifact.py",
@@ -264,7 +266,7 @@ def test_workflow_runs_candidate_archive_load_on_pinned_containerd() -> None:
     assert "candidate-containerd-load:" in workflow
     assert "name: Candidate containerd load contract" in workflow
     assert 'RUN_CANDIDATE_DOCKER_TESTS: "true"' in workflow
-    assert workflow.count("docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70") == 1
+    assert workflow.count("docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6") == 1
     assert "version: v29.7.2" in workflow
     assert '"containerd-snapshotter": true' in workflow
     assert "test_candidate_archive_real_containerd_rejects_preexisting_wrong_literal_tag" in workflow

@@ -30,17 +30,12 @@ on:
         type: boolean
         required: false
         default: false
-      review_recipient:
-        description: Public native age recipient for private screenshot/export delivery; never an identity key
-        type: string
-        required: false
-        default: ''
   schedule:
     - cron: "41 5 8 * *"
   workflow_dispatch:
     inputs:
       review_recipient:
-        description: Optional public age recipient; defaults to the repository review recipient variable
+        description: Optional encrypted diagnostics for this standalone run; not required for release qualification
         type: string
         required: false
         default: ''
@@ -61,6 +56,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   packages: read
   attestations: read
 
@@ -80,7 +76,9 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"
       OFFICIAL_SUITE_RUN_ID: ${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-      REVIEW_RECIPIENT: ${{ inputs.review_recipient || vars.OFFICIAL_REVIEW_RECIPIENT || '' }}
+      # A release consumes bounded machine assertions. Private diagnostic
+      # delivery is an explicit standalone opt-in, never a candidate dependency.
+      REVIEW_RECIPIENT: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-integration-tests' && inputs.review_recipient || '' }}
     steps:
       - name: Validate candidate caller before fetching source
         env:
@@ -101,13 +99,16 @@ jobs:
             [[ "$HARNESS_REVISION" =~ ^[0-9a-f]{40}$ ]]
             [[ "$CANDIDATE_MANIFEST_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "$CANDIDATE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-            if [[ "$COLLECT_ONLY" == true ]]; then
-              [[ "$REVIEW_RECIPIENT" =~ ^age1[0-9a-z]{58}$ ]]
-            fi
           else
             test "$GITHUB_REPOSITORY" = ElevenID/marty-integration-tests
             test -z "$CANDIDATE_MANIFEST_SHA256$CANDIDATE_TAG$HARNESS_REVISION"
-            test "$COLLECT_ONLY" != true
+            if [ "$COLLECT_ONLY" = true ]; then
+              # Only this repository's protected release-tag workflow may
+              # collect raw results for its independent released-stack gate.
+              test "$GITHUB_EVENT_NAME" = push
+              [[ "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+              test "$LANE" = all
+            fi
           fi
 
       - name: Checkout integration harness
@@ -118,7 +119,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
           # This job executes release-pinned source after setup. A writable
@@ -131,7 +132,7 @@ jobs:
           --requirement requirements/official-py312.lock
 
       - name: Verify runner-provided released-stack browser
-        if: matrix.lane == 'oid4vp-final'
+        if: matrix.lane == 'oid4vp-final' || matrix.lane == 'oid4vp-url-query' || matrix.lane == 'oid4vp-mdoc' || matrix.lane == 'haip'
         shell: bash
         run: |
           set -euo pipefail
@@ -155,7 +156,7 @@ jobs:
 
       - name: Download current pre-publication candidate
         if: inputs.candidate_artifact != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ inputs.candidate_artifact }}
           path: work/candidate
@@ -190,7 +191,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-ui
-          ref: a10bf3189383ce91002a795a7bc4f03c1d5c3d1a
+          ref: 3ff1328d163f2dca38e369f17bda77b6334808eb
           path: work/marty-ui
           persist-credentials: false
 
@@ -203,6 +204,80 @@ jobs:
           path: work/marty-ui
           persist-credentials: false
 
+      - name: Download exact candidate native operator
+        if: inputs.candidate_artifact != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: operator-catalog-amd64-${{ github.run_id }}
+          path: work/candidate-operator
+
+      - name: Download exact candidate operator provenance
+        if: inputs.candidate_artifact != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: operator-installer-provenance-amd64-${{ github.run_id }}
+          path: work/candidate-operator-proof
+
+      - name: Authenticate source-matched native operator before KMS mutation
+        if: inputs.candidate_artifact != ''
+        env:
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          chmod 700 work/candidate-operator work/candidate-operator-proof
+          chmod 700 work/candidate-operator/marty-deploy-linux-amd64
+          chmod 600 work/candidate-operator-proof/marty-deploy-linux-amd64.provenance.jsonl
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import sys
+          sys.path.insert(0, str(Path('work/marty-ui/scripts').resolve()))
+          from verify_installer_provenance import verify_subject
+
+          binary = Path('work/candidate-operator/marty-deploy-linux-amd64').resolve()
+          proof = Path('work/candidate-operator-proof/marty-deploy-linux-amd64.provenance.jsonl').resolve()
+          gh = Path(shutil.which('gh') or '').resolve()
+          verify_subject(binary, proof, gh=gh, workflow='.github/workflows/cd.yml',
+                         source_sha=os.environ['GITHUB_SHA'], run_id=int(os.environ['GITHUB_RUN_ID']),
+                         run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']))
+          identity = subprocess.run([str(binary), '--build-identity'],
+                                    capture_output=True, text=True, check=True, timeout=10)
+          if identity.stdout.strip() != os.environ['GITHUB_SHA'] + ':' + os.environ['CANDIDATE_TAG']:
+              raise ValueError('candidate native operator identity differs from the release')
+          with binary.open('rb') as handle:
+              digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+          with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as output:
+              for name, value in (
+                  ('MARTY_DEPLOY_BIN', str(binary)),
+                  ('MARTY_DEPLOY_BIN_SHA256', digest),
+                  ('MARTY_DEPLOY_SOURCE_SHA', os.environ['GITHUB_SHA']),
+                  ('MARTY_DEPLOY_RELEASE_TAG', os.environ['CANDIDATE_TAG']),
+              ):
+                  output.write(f'{name}={value}\n')
+          PY
+
+      - name: Install pinned published-operator signature verifier
+        if: inputs.candidate_artifact == ''
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+        with:
+          cosign-release: 'v3.1.4'
+
+      - name: Stage signed source-matched released native operator
+        if: inputs.candidate_artifact == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/stage_released_native_operator.py
+          --pin conformance/stack-under-test.json
+          --marty-ui work/marty-ui
+          --output work/released-native
+          --github-env "$GITHUB_ENV"
+
       - name: Checkout exact OIDF runner
         if: matrix.lane == 'oid4vci-issuer' || matrix.lane == 'oid4vp-final' || matrix.lane == 'oid4vp-url-query' || matrix.lane == 'oid4vp-mdoc' || matrix.lane == 'haip'
         run: python scripts/official_suite_checkout.py --suite oidf --output work/oidf-runner
@@ -213,7 +288,7 @@ jobs:
 
       - name: Set up Node 24 for W3C suite
         if: matrix.lane == 'w3c-v2'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
 
@@ -316,12 +391,12 @@ jobs:
       - name: Upload sanitized evidence
         id: upload
         if: always() && hashFiles(format('work/sanitized/{0}/summary.json', matrix.lane)) != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: official-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: work/sanitized/${{ matrix.lane }}/summary.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 14 }}
 
       - name: Install the digest-pinned private review encryptor
         if: always() && steps.summary.outcome == 'success' && steps.summary.outputs.has_reviews == 'true' && env.REVIEW_RECIPIENT != ''
@@ -342,7 +417,7 @@ jobs:
 
       - name: Upload only encrypted private review delivery
         if: always() && hashFiles(format('work/review-delivery/{0}/review-delivery.json', matrix.lane)) != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: official-review-private-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -365,13 +440,12 @@ jobs:
             exit 1
           fi
           if [[ "$COLLECT_ONLY" == true ]]; then
-            # Only the protected-main candidate caller can opt in. A successful
-            # collection is not a passing suite: preserve every raw exit/result
-            # and require the independent Rust gate before any promotion. This
-            # lets a review-only gate retry reuse the immutable seven-lane set.
+            # Only the validated product candidate or protected release-tag
+            # caller can opt in. A successful collection is not a passing
+            # suite: preserve raw exits and require its independent Rust gate.
             test "$SUMMARY_OUTCOME" = success || exit 1
             test "$UPLOAD_OUTCOME" = success || exit 1
-            echo "::notice::Official raw exit is $LANE_EXIT_CODE; candidate qualification remains the independent caller gate's responsibility."
+            echo "::notice::Official raw exit is $LANE_EXIT_CODE; qualification remains the independent caller gate's responsibility."
             exit 0
           fi
           exit "$LANE_EXIT_CODE"

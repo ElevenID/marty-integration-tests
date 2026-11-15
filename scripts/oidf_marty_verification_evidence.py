@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Capture actual Marty verifier outcomes and UI evidence before lane teardown.
 
-Official module results remain unchanged. Screenshots need review; collecting
-them never promotes REVIEW to PASSED. Raw results and images stay private.
+Official module results remain unchanged. Product-owned API/UI observations
+never promote REVIEW to PASSED. Raw results and images stay private.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from official_fixture_bootstrap import write_private_json  # noqa: E402
+from oidf_marty_automated_assessment import SUCCESS, flow_instance_digest, validate_observations  # noqa: E402
 from oidf_marty_browser_smoke import (  # noqa: E402
     authenticated_browser_context,
     browser_resolver_args,
@@ -95,9 +96,9 @@ def capture_success_page(
     destination: Path,
     *,
     progress: dict[str, str] | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """Capture the real console dialog only after correlated successful results."""
-    if outcome != {"status": "completed", "result": "passed", "decision": "allow"}:
+    if outcome != SUCCESS:
         raise ValueError("a successful verifier screenshot requires a completed allow result")
     if progress is None:
         progress = {}
@@ -121,8 +122,10 @@ def capture_success_page(
     summary.wait_for(timeout=30_000)
     if summary.get_attribute("data-verification-instance-id") != flow_id:
         raise ValueError("browser verification summary belongs to a different flow")
+    if summary.get_attribute("data-verification-decision") != outcome["decision"]:
+        raise ValueError("browser verification decision does not match the public result")
     progress["stage"] = "dialog_verified_outcome"
-    dialog.get_by_text("Verified", exact=True).first.wait_for(timeout=30_000)
+    summary.get_by_text("Verified", exact=True).first.wait_for(state="visible", timeout=30_000)
     if dialog.get_by_role("alert").count():
         raise ValueError("verification evidence dialog contains an error")
     progress["stage"] = "success_screenshot"
@@ -132,7 +135,18 @@ def capture_success_page(
     destination.chmod(0o600)
     digest = hashlib.sha256(destination.read_bytes()).hexdigest()
     dialog.get_by_role("button", name="Close", exact=True).click()
-    return digest
+    return digest, validate_observations(
+        {
+            "api_outcome": dict(outcome),
+            "browser_result_match": True,
+            "ui_instance_match": True,
+            "ui_decision": "allow",
+            "ui_verified_visible": True,
+            "ui_error_absent": True,
+            "flow_instance_sha256": flow_instance_digest(flow_id),
+        },
+        flow_id=flow_id,
+    )
 
 
 def capture_failure_diagnostics(page: Page, destination: Path, error: Exception, stage: str) -> None:
@@ -219,11 +233,15 @@ def main() -> int:
                     write_private_json(args.private_output / f"{digest}.json", result)
                     if name in pending:
                         destination = args.private_output / f"{digest}.png"
+                        screenshot_sha, observations = capture_success_page(
+                            page, flow_id, outcome, destination, progress=progress
+                        )
                         row["screenshot"] = {
-                            "sha256": capture_success_page(page, flow_id, outcome, destination, progress=progress),
+                            "sha256": screenshot_sha,
                             "private_file": destination.name,
                             "review_status": "PENDING",
                         }
+                        row["automated_observations"] = observations
                     row["capture_status"] = "CAPTURED" if name in pending else "RESULT_RECORDED"
                 except Exception as error:  # noqa: BLE001 - retain other modules without exporting private exceptions
                     row.update(

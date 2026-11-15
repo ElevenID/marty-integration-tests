@@ -82,7 +82,7 @@ FAILURE_CATEGORIES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("did-resolution-failed", re.compile(r"(?i)DID resolution failed")),
     (
         "issuer-trust-material-missing",
-        re.compile(r"(?i)issuer is not a DID and has no pinned trust-profile JWK"),
+        re.compile(r"(?i)(?:issuer is not a DID and has no pinned trust-profile JWK|No governed issuer public JWK)"),
     ),
     (
         "native-verifier-unavailable",
@@ -90,6 +90,7 @@ FAILURE_CATEGORIES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     ("unsupported-format", re.compile(r"(?i)unsupported credential format")),
     ("sd-jwt-verification-unclassified", re.compile(r"(?i)SD-JWT verification failed")),
+    ("sd-jwt-verification-unclassified", re.compile(r"(?i)SD-JWT verification rejected the credential")),
 )
 
 DIRECT_POST_CONDITION = "EnsureHttpStatusCodeIs200"
@@ -125,6 +126,57 @@ def _private_mappings(directory: Path) -> dict[str, str]:
     return mappings
 
 
+def _rust_runtime_outcome(line: str) -> tuple[str, dict[str, str]] | None:
+    """Read current Flow tracing JSON, including Docker Compose's line prefix.
+
+    This is diagnostic evidence only. It neither changes protocol outcomes nor
+    admits a failed module. Private fields are reduced to fixed categories.
+    """
+    start = line.find("{")
+    if start < 0:
+        return None
+    try:
+        event = json.loads(line[start:])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(event, dict) or event.get("target") != "marty_flow::verification_submission":
+        return None
+    fields = event.get("fields")
+    if not isinstance(fields, dict):
+        return None
+    message = fields.get("message")
+    if message != "OID4VP presentation authentication rejected":
+        return None
+    flow = fields.get("flow_instance_id")
+    if not isinstance(flow, str) or FLOW_ID.fullmatch(flow.lower()) is None:
+        raise ValueError("native Flow diagnostic has an invalid correlation identifier")
+    values = {
+        "marty_flow_result": "unavailable",
+        "marty_flow_decision": "unavailable",
+        "marty_flow_category": "verification-denied-unclassified",
+    }
+    raw = fields.get("diagnostic")
+    if not isinstance(raw, str) or len(raw) > 262144:
+        raise ValueError("native Flow authentication diagnostic is malformed")
+    try:
+        diagnostic = json.loads(raw)
+    except ValueError:
+        raise ValueError("native Flow authentication diagnostic is malformed") from None
+    if not isinstance(diagnostic, dict):
+        raise ValueError("native Flow authentication diagnostic is malformed")
+    result, decision = diagnostic.get("result"), diagnostic.get("decision")
+    if result not in ("failed", "partial") or decision not in ("deny", "manual_review"):
+        raise ValueError("native Flow authentication diagnostic has an invalid outcome")
+    values["marty_flow_result"] = result
+    values["marty_flow_decision"] = decision
+    reason = diagnostic.get("decision_reason")
+    if isinstance(reason, str):
+        category = classify_failure(reason)
+        if category != "verification-denied-unclassified":
+            values["marty_flow_category"] = category
+    return flow.lower(), values
+
+
 def _runtime_outcomes(compose_log: Path) -> dict[str, dict[str, str]]:
     text = compose_log.read_text(encoding="utf-8", errors="replace")
     outcomes: dict[str, dict[str, str]] = {}
@@ -139,6 +191,15 @@ def _runtime_outcomes(compose_log: Path) -> dict[str, dict[str, str]]:
             ),
         }
         flow = match.group("flow").lower()
+        previous = outcomes.get(flow)
+        if previous is not None and previous != values:
+            raise ValueError("one Marty flow emitted conflicting policy outcomes")
+        outcomes[flow] = values
+    for line in text.splitlines():
+        native = _rust_runtime_outcome(line)
+        if native is None:
+            continue
+        flow, values = native
         previous = outcomes.get(flow)
         if previous is not None and previous != values:
             raise ValueError("one Marty flow emitted conflicting policy outcomes")
@@ -169,8 +230,7 @@ def _official_failure_outcomes(path: Path) -> dict[str, dict[str, object]]:
         direct_post = [
             entry
             for entry in entries
-            if entry.get("condition") == DIRECT_POST_CONDITION
-            and entry.get("block") == DIRECT_POST_BLOCK
+            if entry.get("condition") == DIRECT_POST_CONDITION and entry.get("block") == DIRECT_POST_BLOCK
         ]
         if not direct_post:
             outcomes[module] = {
@@ -179,16 +239,8 @@ def _official_failure_outcomes(path: Path) -> dict[str, dict[str, object]]:
             }
             continue
         statuses = {entry.get("http_status") for entry in direct_post}
-        if (
-            len(statuses) != 1
-            or any(
-                isinstance(status, bool) or not isinstance(status, int)
-                for status in statuses
-            )
-        ):
-            raise ValueError(
-                "Official direct-post failures have conflicting or invalid HTTP status"
-            )
+        if len(statuses) != 1 or any(isinstance(status, bool) or not isinstance(status, int) for status in statuses):
+            raise ValueError("Official direct-post failures have conflicting or invalid HTTP status")
         status = next(iter(statuses))
         if not 100 <= status <= 599:
             raise ValueError("Official direct-post failure HTTP status is out of range")

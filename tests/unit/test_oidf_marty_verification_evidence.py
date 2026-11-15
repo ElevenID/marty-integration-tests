@@ -135,16 +135,48 @@ def test_capture_binds_the_actual_ui_summary_without_requiring_visible_ids(
     response = page.expect_response.return_value.__enter__.return_value.value
     response.status = 200
     response.json.return_value = {"instance_id": FLOW, **outcome}
-    dialog.locator.return_value.get_attribute.return_value = observed
+    dialog.locator.return_value.get_attribute.side_effect = lambda name: (
+        observed if name == "data-verification-instance-id" else "allow"
+    )
     dialog.get_by_role.return_value.count.return_value = 0
     destination = tmp_path / "unit-regression-only.png"
     page.screenshot.side_effect = lambda **kwargs: Path(kwargs["path"]).write_bytes(b"unit regression only")
 
     if observed == FLOW:
-        assert evidence.capture_success_page(page, FLOW, outcome, destination)
-        dialog.locator.return_value.get_attribute.assert_called_once_with("data-verification-instance-id")
+        digest, observations = evidence.capture_success_page(page, FLOW, outcome, destination)
+        assert digest
+        assert observations["flow_instance_sha256"] == evidence.flow_instance_digest(FLOW)
+        assert observations["api_outcome"] == outcome
+        dialog.locator.return_value.get_attribute.assert_any_call("data-verification-instance-id")
+        dialog.locator.return_value.get_attribute.assert_any_call("data-verification-decision")
+        dialog.locator.return_value.get_by_text.assert_called_once_with("Verified", exact=True)
     else:
         with pytest.raises(ValueError, match="different flow"):
             evidence.capture_success_page(page, FLOW, outcome, destination)
         page.screenshot.assert_not_called()
         assert not destination.exists()
+
+
+@pytest.mark.parametrize("mismatch", ["browser-outcome", "ui-decision", "ui-error", "ui-not-visible"])
+def test_machine_observations_require_the_actual_successful_ui_and_matching_api(
+    tmp_path: Path, mismatch: str,
+) -> None:
+    page, dialog = MagicMock(), MagicMock()
+    page.get_by_role.side_effect = lambda role, **_kwargs: dialog if role == "dialog" else MagicMock()
+    outcome = {"status": "completed", "result": "passed", "decision": "allow"}
+    response = page.expect_response.return_value.__enter__.return_value.value
+    response.status = 200
+    response.json.return_value = {"instance_id": FLOW, **outcome}
+    dialog.locator.return_value.get_attribute.side_effect = lambda name: (
+        FLOW if name == "data-verification-instance-id" else ("deny" if mismatch == "ui-decision" else "allow")
+    )
+    dialog.get_by_role.return_value.count.return_value = 1 if mismatch == "ui-error" else 0
+    if mismatch == "browser-outcome":
+        response.json.return_value["decision"] = "deny"
+    elif mismatch == "ui-not-visible":
+        dialog.locator.return_value.get_by_text.return_value.first.wait_for.side_effect = TimeoutError
+    destination = tmp_path / "unit-must-not-be-captured.png"
+    with pytest.raises((ValueError, TimeoutError)):
+        evidence.capture_success_page(page, FLOW, outcome, destination)
+    page.screenshot.assert_not_called()
+    assert not destination.exists()

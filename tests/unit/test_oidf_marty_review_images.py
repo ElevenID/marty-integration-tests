@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import importlib.util
 import json
@@ -15,6 +16,7 @@ assert SPEC.loader
 review = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(review)
 from oidf_marty_start_verification import PRIVATE_FLOW_AUDIT_SCHEMA, private_flow_audit_path  # noqa: E402
+from oidf_marty_automated_assessment import UPSTREAM_CONDITION  # noqa: E402
 
 FLOW = "12345678-1234-1234-1234-123456789abc"
 NAME = "oid4vp-1final-verifier-happy-flow"
@@ -53,10 +55,44 @@ def fixture_case(tmp_path: Path) -> tuple[list[dict], dict, Path, Path]:
                 "capture_status": "CAPTURED",
                 **review.SUCCESS,
                 "screenshot": {"private_file": digest + ".png", "sha256": hashlib.sha256(pixels).hexdigest()},
+                "automated_observations": {
+                    "api_outcome": dict(review.SUCCESS),
+                    "browser_result_match": True,
+                    "ui_instance_match": True,
+                    "ui_decision": "allow",
+                    "ui_verified_visible": True,
+                    "ui_error_absent": True,
+                    "flow_instance_sha256": "sha256:" + hashlib.sha256(FLOW.encode()).hexdigest(),
+                },
             }
         ],
     }
     return infos, capture, images, audit
+
+
+@pytest.mark.parametrize("mutation", [None, "missing-observations", "wrong-flow", "wrong-ui", "missing-obligation"])
+def test_automated_assessment_joins_observations_to_the_private_callback_and_review_obligation(
+    tmp_path: Path, mutation: str | None,
+) -> None:
+    infos, capture, images, audit = fixture_case(tmp_path)
+    obligations = {NAME: UPSTREAM_CONDITION}
+    if mutation == "missing-observations":
+        del capture["modules"][0]["automated_observations"]
+    elif mutation == "wrong-flow":
+        capture["modules"][0]["automated_observations"]["flow_instance_sha256"] = "sha256:" + "0" * 64
+    elif mutation == "wrong-ui":
+        capture["modules"][0]["automated_observations"]["ui_instance_match"] = False
+    elif mutation == "missing-obligation":
+        obligations = {}
+    if mutation is not None:
+        with pytest.raises(ValueError, match="automated verification"):
+            review.captured_cases(infos, capture, images, audit, review_obligations=obligations)
+    else:
+        case = review.captured_cases(infos, capture, images, audit, review_obligations=obligations)[0]
+        assert case["automated_assessment"]["policy"] == "marty.official-verifier-outcome/v1"
+        assert case["automated_assessment"]["upstream_condition"] == UPSTREAM_CONDITION
+        assert case["automated_assessment"]["flow_instance_sha256"] == "sha256:" + hashlib.sha256(FLOW.encode()).hexdigest()
+        assert infos[0]["result"] == "REVIEW"
 
 
 def test_capture_binding_requires_the_exact_test_callback_and_pixels(tmp_path: Path) -> None:
@@ -68,6 +104,28 @@ def test_capture_binding_requires_the_exact_test_callback_and_pixels(tmp_path: P
     infos[0]["testId"] = infos[0]["_id"] = "anotherattempt"
     with pytest.raises(FileNotFoundError):
         review.captured_cases(infos, capture, images, audit)
+
+
+def test_distinct_official_cases_cannot_reuse_one_private_flow(tmp_path: Path) -> None:
+    infos, capture, images, audit = fixture_case(tmp_path)
+    second_name = "oid4vp-1final-verifier-minimal-cnf-jwk"
+    infos.append({**infos[0], "testName": second_name, "testId": "test2", "_id": "test2"})
+    second_row = copy.deepcopy(capture["modules"][0])
+    second_row["test_name"] = second_name
+    digest = hashlib.sha256(second_name.encode()).hexdigest()
+    original_digest = hashlib.sha256(NAME.encode()).hexdigest()
+    for suffix in (".png", ".json"):
+        (images / (digest + suffix)).write_bytes((images / (original_digest + suffix)).read_bytes())
+    second_row["screenshot"]["private_file"] = digest + ".png"
+    capture["modules"].append(second_row)
+    capture["review_pending"].append(second_name)
+    private_flow_audit_path(audit, "test2", FLOW).write_text(json.dumps({
+        "schema": PRIVATE_FLOW_AUDIT_SCHEMA, "test_name": second_name, "flow_instance_id": FLOW,
+    }))
+    with pytest.raises(ValueError, match="reuses a flow"):
+        review.captured_cases(
+            infos, capture, images, audit, review_obligations={NAME: UPSTREAM_CONDITION, second_name: UPSTREAM_CONDITION}
+        )
 
 
 def test_haip_image_uses_exact_variant_label_and_retains_base_module_name(tmp_path: Path) -> None:
@@ -133,7 +191,9 @@ def test_real_image_upload_is_read_back_and_idempotent_without_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     infos, capture, images, audit = fixture_case(tmp_path)
-    case = review.captured_cases(infos, capture, images, audit)[0]
+    case = review.captured_cases(
+        infos, capture, images, audit, review_obligations={NAME: UPSTREAM_CONDITION}
+    )[0]
     logs: list[dict] = []
     uploads = []
 
@@ -157,5 +217,6 @@ def test_real_image_upload_is_read_back_and_idempotent_without_approval(
     assert len(uploads) == 1
     assert first["readback_hash_matched"] is True
     assert first["review_status"] == "PENDING"
+    assert first["automated_assessment"] == case["automated_assessment"]
     assert second["reused_existing_image"] is True
     assert infos[0]["result"] == "REVIEW"

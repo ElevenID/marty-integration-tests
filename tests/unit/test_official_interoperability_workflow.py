@@ -5,13 +5,30 @@ import re
 import shutil
 import subprocess
 import textwrap
+import types
+import sys
+import runpy
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "official-interoperability.yml"
 PYTHON_LOCK = ROOT / "requirements" / "official-py312.lock"
+
+
+def test_tag_collection_preserves_raw_results_for_independent_gate() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["run-lane"]["steps"]
+    caller = next(step for step in steps if step.get("name") == "Validate candidate caller before fetching source")
+    assert 'test "$GITHUB_EVENT_NAME" = push' in caller["run"]
+    assert 'refs/tags/v[0-9]+' in caller["run"]
+    assert 'test "$LANE" = all' in caller["run"]
+    enforce = next(step for step in steps if step.get("name") == "Enforce lane result")
+    assert 'test "$SUMMARY_OUTCOME" = success' in enforce["run"]
+    assert 'test "$UPLOAD_OUTCOME" = success' in enforce["run"]
+    assert 'exit "$LANE_EXIT_CODE"' in enforce["run"]
 
 
 def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
@@ -28,6 +45,91 @@ def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
     assert all(re.fullmatch(r"[a-z-]+: read", line.strip()) for line in permissions.splitlines() if line.strip())
 
 
+def test_candidate_operator_is_authenticated_before_disposable_kms_mutation() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    operator = text.index("- name: Download exact candidate native operator")
+    proof = text.index("- name: Download exact candidate operator provenance")
+    admission = text.index("- name: Authenticate source-matched native operator before KMS mutation")
+    bootstrap = text.index("- name: Bootstrap disposable KMS-only released stack")
+    assert operator < proof < admission < bootstrap
+    guarded = text[operator:bootstrap]
+    assert guarded.count("if: inputs.candidate_artifact != ''") == 3
+    assert "operator-catalog-amd64-${{ github.run_id }}" in guarded
+    assert "operator-installer-provenance-amd64-${{ github.run_id }}" in guarded
+    assert "verify_subject(binary, proof" in guarded
+    assert "source_sha=os.environ['GITHUB_SHA']" in guarded
+    assert "run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT'])" in guarded
+    assert "MARTY_DEPLOY_BIN_SHA256" in guarded
+    assert "MARTY_DEPLOY_RELEASE_TAG" in guarded
+
+
+@pytest.mark.parametrize(("identity_matches", "proof_accepted", "allowed"), [
+    (True, True, True),
+    (False, True, False),
+    (True, False, False),
+])
+def test_actual_candidate_operator_admission_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    identity_matches: bool, proof_accepted: bool, allowed: bool,
+) -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    step = next(item for item in workflow["jobs"]["run-lane"]["steps"]
+                if item.get("name") == "Authenticate source-matched native operator before KMS mutation")
+    script = step["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    monkeypatch.chdir(tmp_path)
+    admission = tmp_path / "candidate-operator-admission.py"
+    admission.write_text(script, encoding="utf-8")
+    binary = tmp_path / "work/candidate-operator/marty-deploy-linux-amd64"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"synthetic-native-operator")
+    proof = tmp_path / "work/candidate-operator-proof/marty-deploy-linux-amd64.provenance.jsonl"
+    proof.parent.mkdir(parents=True)
+    proof.write_text("synthetic-proof")
+    (tmp_path / "work/marty-ui/scripts").mkdir(parents=True)
+    gh = tmp_path / "gh"
+    gh.write_bytes(b"synthetic-verifier")
+    environment = tmp_path / "github-env"
+    for name, value in {"GITHUB_SHA": "a" * 40, "CANDIDATE_TAG": "v1.2.3",
+                        "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
+                        "GITHUB_ENV": str(environment)}.items():
+        monkeypatch.setenv(name, value)
+    observed = {}
+    executed = []
+
+    def verify_subject(subject, bundle, **kwargs):
+        observed.update(subject=subject, bundle=bundle, **kwargs)
+        if not proof_accepted:
+            raise ValueError("provenance rejected")
+
+    module = types.ModuleType("verify_installer_provenance")
+    module.verify_subject = verify_subject
+    monkeypatch.setitem(sys.modules, "verify_installer_provenance", module)
+    monkeypatch.setattr(shutil, "which", lambda name: str(gh) if name == "gh" else None)
+    def native_run(args, **kwargs):
+        executed.append(args)
+        return types.SimpleNamespace(
+            stdout=("a" * 40 + ":v1.2.3" if identity_matches else "wrong-source:v1.2.3") + "\n")
+    monkeypatch.setattr(subprocess, "run", native_run)
+
+    if allowed:
+        runpy.run_path(str(admission), run_name="__main__")
+        settings = dict(line.split("=", 1) for line in environment.read_text().splitlines())
+        assert settings["MARTY_DEPLOY_BIN"] == str(binary)
+        assert settings["MARTY_DEPLOY_BIN_SHA256"] == __import__("hashlib").sha256(binary.read_bytes()).hexdigest()
+        assert settings["MARTY_DEPLOY_SOURCE_SHA"] == "a" * 40
+        assert settings["MARTY_DEPLOY_RELEASE_TAG"] == "v1.2.3"
+    else:
+        with pytest.raises(ValueError):
+            runpy.run_path(str(admission), run_name="__main__")
+        assert not environment.exists()
+    assert observed["subject"] == binary
+    assert observed["bundle"] == proof
+    assert observed["workflow"] == ".github/workflows/cd.yml"
+    assert observed["source_sha"] == "a" * 40
+    assert observed["run_id"] == 99 and observed["run_attempt"] == 1
+    assert executed == ([] if not proof_accepted else [[str(binary), "--build-identity"]])
+
+
 @pytest.mark.parametrize(("overrides", "allowed"), [
     ({}, True),
     ({"GITHUB_REPOSITORY": "other/product"}, False),
@@ -38,8 +140,9 @@ def test_native_runtime_attestation_has_step_scoped_read_only_auth() -> None:
     ({"CANDIDATE_MANIFEST_SHA256": "latest"}, False),
     ({"CANDIDATE_TAG": "v1.2.3;true"}, False),
     ({"COLLECT_ONLY": "true"}, True),
-    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": ""}, False),
-    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": "AGE-SECRET-KEY-DO-NOT-ACCEPT"}, False),
+    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": ""}, True),
+    # Candidate collection never consults or consumes a diagnostic recipient.
+    ({"COLLECT_ONLY": "true", "REVIEW_RECIPIENT": "unused-diagnostic-setting"}, True),
     ({"CANDIDATE_ARTIFACT": "", "CANDIDATE_MANIFEST_SHA256": "",
       "CANDIDATE_TAG": "", "HARNESS_REVISION": "",
       "GITHUB_REPOSITORY": "ElevenID/marty-integration-tests"}, True),
@@ -64,7 +167,7 @@ def test_actual_candidate_caller_guard(
                    "CANDIDATE_ARTIFACT": "stack-release-official-candidate-99",
                    "CANDIDATE_MANIFEST_SHA256": "sha256:" + "a" * 64,
                    "CANDIDATE_TAG": "v1.2.3", "HARNESS_REVISION": "b" * 40,
-                   "LANE": "all", "COLLECT_ONLY": "false", "REVIEW_RECIPIENT": "age1" + "a" * 58, **overrides}
+                   "LANE": "all", "COLLECT_ONLY": "false", "REVIEW_RECIPIENT": "", **overrides}
     result = subprocess.run([bash, "--noprofile", "--norc"], input=script,
                             env=environment, text=True, capture_output=True, check=False)
     assert (result.returncode == 0) == allowed, result.stderr
@@ -160,6 +263,19 @@ def test_private_review_upload_is_ciphertext_only_and_never_an_identity_or_plain
     assert '--recipient "$REVIEW_RECIPIENT"' in encryption
     assert "identity" not in encryption
     assert "has_reviews == 'true'" in encryption
+
+
+def test_private_diagnostic_delivery_is_only_an_explicit_standalone_opt_in() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    reusable = text.split("  workflow_call:", 1)[1].split("  schedule:", 1)[0]
+    assert "review_recipient" not in reusable
+    assert "vars.OFFICIAL_REVIEW_RECIPIENT" not in text
+    recipient = next(line.strip() for line in text.splitlines() if line.strip().startswith("REVIEW_RECIPIENT:"))
+    assert "github.event_name == 'workflow_dispatch'" in recipient
+    assert "github.repository == 'ElevenID/marty-integration-tests'" in recipient
+    assert "inputs.review_recipient || ''" in recipient
+    caller = text.split("      - name: Validate candidate caller", 1)[1].split("      - name: Checkout", 1)[0]
+    assert "REVIEW_RECIPIENT" not in caller
 
 
 def test_workflow_installs_only_frozen_verified_tooling() -> None:

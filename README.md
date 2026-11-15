@@ -147,6 +147,13 @@ optional browser suite.
 
 ## Contributing
 
+The released-verifier harness keeps orchestration and evidence/provenance checks
+in `scripts/credentials_verifier_artifact.py`. Bounded file reads, identity-change
+checks, and raw tar/PAX resource limits live in
+`scripts/credentials_verifier_artifact_io.py`. The entrypoint re-exports the
+existing helper names; CLI commands and evidence schemas are unchanged. Changes
+to either file trigger the same artifact qualification workflow.
+
 Add tests under `tests/integration/`, reuse existing fixtures, and mark optional wallet or interoperability suites with their existing pytest markers. New public tests must remain runnable without private checkouts, commerce services, customer data, or organization credentials.
 
 See `CONTRIBUTING.md`, `SECURITY.md`, and `SUPPORT.md` for project policies.

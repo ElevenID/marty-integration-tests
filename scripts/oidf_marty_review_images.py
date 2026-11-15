@@ -24,7 +24,14 @@ from oidf_conformance import (  # noqa: E402
     finalize_evidence_artifacts,
     load_manifest,
     official_plan_coverage,
+    parse_variant_selection,
     validate_runner,
+)
+from oidf_marty_automated_assessment import (  # noqa: E402
+    POLICY,
+    positive_review_obligation,
+    validate_assessment,
+    validate_observations,
 )
 from oidf_marty_public_login import public_origin, required_env  # noqa: E402
 from oidf_marty_start_verification import gateway_session_id, read_private_flow_audit  # noqa: E402
@@ -53,12 +60,16 @@ def captured_cases(
     capture: dict,
     images: Path,
     flow_audit: Path,
+    *,
+    review_obligations: dict[str, str] | None = None,
 ) -> list[dict]:
     """Bind pixels to the exact official test, private callback and successful result."""
     names = [info.get("testName") for info in infos]
     if len(set(names)) != len(names):
         raise ValueError("ambiguous official module export")
     review = {info["testName"] for info in infos if info.get("result") == "REVIEW"}
+    if review_obligations is not None and set(review_obligations) != review:
+        raise ValueError("automated verification obligations do not cover the exact pending module set")
     if capture.get("official_results_modified") is not False or set(capture.get("review_pending", [])) != review:
         raise ValueError("capture does not match the official review modules")
     rows = capture.get("modules")
@@ -102,16 +113,24 @@ def captured_cases(
         ):
             raise ValueError("review image lacks its exact public result")
         read_private_flow_audit(flow_audit, test_id, flow_id, info.get("interaction_name", name))
-        cases.append(
-            {
-                "test_name": name,
-                "test_id": test_id,
-                "plan_id": plan_id,
-                "flow_id": flow_id,
-                "image": image,
-                "sha256": sha,
-            }
-        )
+        case = {
+            "test_name": name,
+            "test_id": test_id,
+            "plan_id": plan_id,
+            "flow_id": flow_id,
+            "image": image,
+            "sha256": sha,
+        }
+        if review_obligations is not None:
+            observations = validate_observations(row.get("automated_observations"), flow_id=flow_id)
+            case["automated_assessment"] = validate_assessment(
+                {"policy": POLICY, "upstream_condition": review_obligations[name], **observations}, flow_id=flow_id
+            )
+        cases.append(case)
+    if review_obligations is not None:
+        identities = [case["automated_assessment"]["flow_instance_sha256"] for case in cases]
+        if len(identities) != len(set(identities)):
+            raise ValueError("automated verification reuses a flow across pending modules")
     return cases
 
 
@@ -180,7 +199,7 @@ def attach_image(server: str, headers: dict[str, str], case: dict, *, insecure: 
     if not any(image_hash(row.get("img")) == case["sha256"] for row in images()):
         raise ValueError("official persisted image differs from the actual capture")
     checked_info()
-    return {
+    receipt = {
         "test_name": case["test_name"],
         "test_id": case["test_id"],
         "plan_id": case["plan_id"],
@@ -189,6 +208,9 @@ def attach_image(server: str, headers: dict[str, str], case: dict, *, insecure: 
         "reused_existing_image": reused,
         "review_status": "PENDING",
     }
+    if "automated_assessment" in case:
+        receipt["automated_assessment"] = validate_assessment(case["automated_assessment"], flow_id=case["flow_id"])
+    return receipt
 
 
 async def export_plan(
@@ -228,10 +250,23 @@ def main() -> int:
         coverage = official_plan_coverage(args.official_output, manifest["profiles"][args.profile]["test_plan"])
         if not coverage["complete"]:
             raise ValueError("official plan coverage is not complete")
-        capture = json.loads(args.capture_report.read_text(encoding="utf-8"))
+        _, plan_variant = parse_variant_selection(manifest["profiles"][args.profile]["test_plan"])
         labels = {row["test_name"]: row["interaction_name"] for row in coverage["module_bindings"]}
+        obligations = {
+            doc["testInfo"]["testName"]: positive_review_obligation(
+                doc,
+                profile=args.profile,
+                expected_variant={**plan_variant, **parse_variant_selection(labels[doc["testInfo"]["testName"]])[1]},
+                runner_commit=manifest["official_runner"]["commit"],
+            )
+            for doc in exported_module_documents(args.official_output)
+            if doc["testInfo"].get("result") == "REVIEW"
+        }
+        capture = json.loads(args.capture_report.read_text(encoding="utf-8"))
         bound_infos = [dict(info, interaction_name=labels[info["testName"]]) for info in infos]
-        cases = captured_cases(bound_infos, capture, args.private_images, args.flow_audit_dir)
+        cases = captured_cases(
+            bound_infos, capture, args.private_images, args.flow_audit_dir, review_obligations=obligations
+        )
         originals = {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in args.official_output.glob("*.zip")
         }

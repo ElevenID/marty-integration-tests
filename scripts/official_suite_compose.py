@@ -610,10 +610,13 @@ def oidf_command(args: argparse.Namespace, projects: dict[str, str], action: str
         raise ValueError("--oidf requires --oidf-runner")
     compose_args = {
         "up": ["up", "--detach", "--wait"],
+        "cache-check": ["cache-check"],
         "down": ["down", "--volumes", "--remove-orphans"],
         "ps": ["ps"],
         "logs": ["logs", "--no-color"],
     }[action]
+    if action == "up" and os.environ.get("MARTY_LOCAL_NATIVE_FUNCTIONAL_BINDING", "").strip():
+        compose_args.extend(("--pull", "never", "--no-build"))
     return [
         sys.executable,
         str(ROOT / "scripts" / "oidf_runner_compose.py"),
@@ -737,6 +740,10 @@ def execute(args: argparse.Namespace) -> int:
 
     started: list[str] = []
     up_entries = selected
+    if args.oidf and environment.get("MARTY_LOCAL_NATIVE_FUNCTIONAL_BINDING", "").strip():
+        # Check the independent official runner images before Marty creates a project.
+        if run(oidf_command(args, projects, "cache-check"), environment):
+            return 1
     externally_certified = bool(environment.get("VERIFIER_X509_CERT_PEM", "").strip())
     if args.haip and externally_certified:
         configure_haip_environment(

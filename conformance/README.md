@@ -23,24 +23,34 @@ alias—is the isolation boundary. `MARTY_CONFORMANCE_DOCKER_CONTEXT` remains an
 optional way to select a remote engine.
 
 The exported official-suite results, actual API readbacks and screenshots remain
-private in the run's evidence directory and are not committed. CI uploads only
-sanitized summaries. Those summaries include a pending-review inventory bound
-to the unchanged export, exact test instances, capture receipt and image hashes.
-CI encrypts private screenshots and unchanged original/re-exported evidence to
-`OFFICIAL_REVIEW_RECIPIENT`, a public native age recipient configured as a
-repository variable or explicit workflow input. The standard age executable is
-installed from the digest-pinned official archive in
-`review-encryption-tool.json`; it is not an application image build. Candidate
-collection requires a recipient before protocol setup. Standalone/monthly runs
-keep strict raw-result enforcement and can use the same repository variable.
-No private identity is passed to CI, stored in an artifact, or committed.
-The operator-owned review identity protects review artifacts; product signing
-keys remain in remote KMS custody.
+private in the run's evidence directory and are not committed. Candidate CI
+uploads only sanitized summaries with bounded machine observations. The raw
+upstream REVIEW inventory remains bound to unchanged exports, exact test
+instances, capture receipts and image hashes.
 
-Only `review.tar.age` and a public-safe delivery receipt are uploaded as
+The accepted automatic policy addresses the pinned runner's known positive
+successful-verification-page obligation. It checks the original module log for
+that exact review reason and refuses additional review reasons, warnings and
+failures. The exact correlated Marty flow must report completed/passed/allow,
+and the real console must display the same successful API response, instance,
+allow decision and visible verified result without an error. Allowed module
+names and profile variants are explicit; unknown or negative REVIEW cases do
+not qualify automatically. The product independently validates these assertions
+and requires complete coverage of every pending case.
+
+Candidate qualification needs no age recipient, private identity, review PR or
+human-response window. Raw diagnostics stay on the disposable runner. For an
+explicit standalone diagnostic run, the optional `review_recipient` input can
+request encrypted delivery using the standard age executable pinned by
+`review-encryption-tool.json`. This is not enabled by a repository variable and
+cannot be requested by a product candidate caller. No private identity is
+passed to CI, stored in an artifact, or committed.
+
+When explicitly requested, only `review.tar.age` and a public-safe delivery
+receipt are uploaded as
 `official-review-private-<lane>-<run-id>-<origin-attempt>`. Images, API readbacks
-and raw exports are never uploaded as plaintext. Review inputs are not an
-approval and do not change stock REVIEW results.
+and raw exports are never uploaded as plaintext. This optional transport does
+not approve cases or change the stock REVIEW result.
 
 A stock OIDF `REVIEW` result is not an automatic pass. Attaching the real verifier
 image does not approve it, and the original result remains `REVIEW` after an
@@ -49,11 +59,16 @@ Only the validated protected-main product candidate caller may opt into
 `collect_only`: this reports completed evidence collection, retaining nonzero
 raw exits and failed results, for its independent Rust release gate. That caller
 must reject actual failures, incomplete coverage, unbound screenshots and
-unresolved reviews before promotion. Missing dispatch, summary or upload still
-fails collection. A review-only gate retry should reuse the exact immutable
-seven-lane snapshot; it must not reclassify stale or locally overlaid runs.
+unsupported or incomplete automatic assessments before promotion. Missing
+dispatch, summary or upload still fails collection. The caller freezes the
+original seven-lane snapshot; it must not reclassify stale or locally overlaid
+runs.
 
-## Open private review images
+## Optional local review and diagnostics
+
+During local development, inspect the actual images in the private verification
+capture directory directly. Encryption is only needed when explicitly exporting
+that private diagnostic packet from a standalone hosted run.
 
 Keep the age identity in the operator's private credential location with
 operator-only access. Install the pinned local tool with:
@@ -65,21 +80,24 @@ python scripts/official_review_crypto.py --output /private/review-tools
 The tools are `age` and `age-keygen` (`.exe` on Windows). A new operator can use
 `age-keygen -o /private/review-identity.txt` then
 `age-keygen -y /private/review-identity.txt` to obtain the
-public recipient. Share only that public recipient through
-`OFFICIAL_REVIEW_RECIPIENT`. Preserve the private identity through the existing
+public recipient. Supply only that public recipient through the standalone
+`review_recipient` input. Preserve the private identity through the existing
 secure credential mechanism.
 
-Download the exact private artifact from the candidate run, using the origin
-attempt in its frozen `review-request.json`, alongside the frozen public
-summary. Decrypt and generate the local review page:
+For a standalone run that explicitly requested encrypted diagnostics, download
+its exact private artifact and public summary using the original run/attempt.
+Decrypt and generate the local review page:
 
 ```bash
-gh run download RUN_ID --repo ElevenID/marty-ui \
+gh run download RUN_ID --repo ElevenID/marty-integration-tests \
+  --name official-LANE-RUN_ID-ORIGIN_ATTEMPT \
+  --dir /private/review-summary
+gh run download RUN_ID --repo ElevenID/marty-integration-tests \
   --name official-review-private-LANE-RUN_ID-ORIGIN_ATTEMPT \
   --dir /private/review-delivery
 python scripts/official_review_delivery.py open \
   --artifact /private/review-delivery \
-  --summary /private/frozen/official-summaries/official-LANE-RUN_ID-ORIGIN_ATTEMPT/summary.json \
+  --summary /private/review-summary/summary.json \
   --identity /private/review-identity.txt --age /private/review-tools/age \
   --output /private/review-view
 ```
@@ -89,9 +107,11 @@ whole public-summary bytes, archive members and every actual screenshot hash
 before writing the images. It displays separate cases and keeps technical
 references in collapsed details. Wrong identities, tampering and stale summaries
 fail closed. Raw exports remain encrypted and are not written by the viewer.
-The page and readback stay PENDING until the normal protected-main disposition
-process in the product's `docs/official-release-gate.md` is completed. Local
-native overlays remain local feedback and cannot qualify a release.
+The page and readback stay PENDING because the viewer does not change upstream
+results or grant production qualification. Use it for local diagnosis, visual
+review and certification preparation. Production qualification uses the
+deterministic gate described in the product's `docs/official-release-gate.md`.
+Local native overlays remain local feedback and cannot qualify a release.
 
 ## Run the official issuer plan
 

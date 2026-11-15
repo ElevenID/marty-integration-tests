@@ -174,3 +174,98 @@ def test_audit_rejects_unmapped_or_conflicting_official_failure_facts(
     )
     with pytest.raises(ValueError, match="conflicting or invalid HTTP status"):
         audit_module.audit(mapping, compose, official)
+
+
+RUST_FLOW = "12345678-1234-1234-1234-123456789abc"
+
+
+def native_rejection(reason: str | None = None, **overrides: object) -> str:
+    diagnostic = {
+        "result": "failed",
+        "decision": "deny",
+        "decision_reason": reason,
+        "error_codes": ["PRIVATE-error-must-not-leak"],
+        "credential_results": [{"signature_valid": False}],
+    }
+    fields = {
+        "message": "OID4VP presentation authentication rejected",
+        "flow_instance_id": RUST_FLOW,
+        "organization_id": "PRIVATE-tenant",
+        "diagnostic": json.dumps(diagnostic),
+        **overrides,
+    }
+    return "flow-1  | " + json.dumps({"target": "marty_flow::verification_submission", "fields": fields})
+
+
+@pytest.mark.parametrize(
+    ("reason", "category"),
+    [
+        ("No governed issuer public JWK is available for SD-JWT", "issuer-trust-material-missing"),
+        ("SD-JWT verification rejected the credential", "sd-jwt-verification-unclassified"),
+        ("Key Binding JWT nonce does not match PRIVATE-nonce", "key-binding-nonce-invalid"),
+        (None, "verification-denied-unclassified"),
+        ("PRIVATE-customer-data unknown reason", "verification-denied-unclassified"),
+    ],
+)
+def test_native_json_rejection_survives_public_sanitizer(tmp_path: Path, reason: str | None, category: str) -> None:
+    mapping = tmp_path / "mapping"
+    write_mapping(mapping, "oid4vp-1final-verifier-happy-flow", RUST_FLOW)
+    compose = tmp_path / "compose.log"
+    compose.write_text(native_rejection(reason) + "\n", encoding="utf-8")
+    official = tmp_path / "failure-diagnostics.json"
+    write_official_failures(official, [])
+    report = audit_module.audit(mapping, compose, official)
+    row = report["modules"][0]
+    assert row["marty_flow_result"] == "failed"
+    assert row["marty_flow_decision"] == "deny"
+    assert row["marty_flow_category"] == category
+    spec = importlib.util.spec_from_file_location(
+        "native_diagnostic_sanitizer", ROOT / "scripts" / "sanitize_official_evidence.py"
+    )
+    sanitizer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sanitizer)
+    assert sanitizer.sd_jwt_diagnostic_report(report) == report
+    serialized = json.dumps(report)
+    assert "PRIVATE" not in serialized
+    assert RUST_FLOW not in serialized
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"flow_instance_id": "PRIVATE-invalid-id"},
+        {"diagnostic": "not-json PRIVATE"},
+        {"diagnostic": "[]"},
+        {"diagnostic": json.dumps({"result": "passed", "decision": "allow"})},
+        {"diagnostic": json.dumps({"result": "PRIVATE-result", "decision": "deny"})},
+        {"diagnostic": "x" * 262145},
+    ],
+)
+def test_malformed_native_rejection_cannot_become_an_outcome(fields: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="native Flow") as error:
+        audit_module._rust_runtime_outcome(native_rejection(**fields))
+    assert "PRIVATE" not in str(error.value)
+
+
+def test_native_parser_ignores_other_log_owners_and_unrecognized_messages() -> None:
+    line = native_rejection()
+    assert audit_module._rust_runtime_outcome(line.replace("marty_flow::verification_submission", "unrelated")) is None
+    assert (
+        audit_module._rust_runtime_outcome(line.replace("OID4VP presentation authentication rejected", "unrelated"))
+        is None
+    )
+    assert audit_module._rust_runtime_outcome("unrelated {not-json") is None
+
+
+def test_native_conflicting_or_legacy_accepted_outcome_is_refused(tmp_path: Path) -> None:
+    compose = tmp_path / "compose.log"
+    legacy = f"Policy evaluation for {RUST_FLOW}: result=passed decision=allow reason=ok\n"
+    compose.write_text(legacy + native_rejection(), encoding="utf-8")
+    with pytest.raises(ValueError, match="conflicting policy outcomes"):
+        audit_module._runtime_outcomes(compose)
+
+
+def test_repeated_native_rejection_is_consistent(tmp_path: Path) -> None:
+    compose = tmp_path / "compose.log"
+    compose.write_text(native_rejection() + "\n" + native_rejection(), encoding="utf-8")
+    assert len(audit_module._runtime_outcomes(compose)) == 1
