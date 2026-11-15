@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import urllib.request
@@ -21,12 +22,36 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 RECORD = ROOT / "conformance" / "upstream-review.json"
+GIT_TIMEOUT_SECONDS = 30
+
+
+def _git_refs(repository: str, *refs: str) -> dict[str, str]:
+    """Read only the requested refs, rejecting malformed or ambiguous output."""
+    try:
+        output = subprocess.check_output(
+            ["git", "ls-remote", "--", repository, *refs],
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"git ls-remote timed out after {GIT_TIMEOUT_SECONDS}s for {repository}") from exc
+    candidates: dict[str, str] = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            raise RuntimeError(f"malformed git ls-remote output for {repository}")
+        sha, ref = fields
+        if ref not in refs or ref in candidates:
+            raise RuntimeError(f"unexpected or duplicate remote ref for {repository}: {ref}")
+        if re.fullmatch(r"[0-9a-f]{40}", sha) is None or sha == "0" * 40:
+            raise RuntimeError(f"invalid remote object ID for {repository} {ref}")
+        candidates[ref] = sha
+    return candidates
 
 
 def git_head(repository: str, ref: str = "HEAD") -> str:
-    output = subprocess.check_output(["git", "ls-remote", repository, ref], text=True)
-    sha = output.split()[0] if output.split() else ""
-    if len(sha) != 40:
+    sha = _git_refs(repository, ref).get(ref)
+    if sha is None:
         raise RuntimeError(f"no full commit SHA returned for {repository} {ref}")
     return sha
 
@@ -38,16 +63,10 @@ def git_tag_commit(repository: str, tag: str) -> str:
     the peeled value and fall back to the direct value for lightweight tags.
     """
     ref = f"refs/tags/{tag}"
-    output = subprocess.check_output(["git", "ls-remote", repository, ref, f"{ref}^{{}}"], text=True)
-    candidates: dict[str, str] = {}
-    for line in output.splitlines():
-        fields = line.split()
-        if len(fields) == 2:
-            candidates[fields[1]] = fields[0]
-    sha = candidates.get(f"{ref}^{{}}") or candidates.get(ref, "")
-    if len(sha) != 40:
+    candidates = _git_refs(repository, ref, f"{ref}^{{}}")
+    if ref not in candidates:
         raise RuntimeError(f"no full commit SHA returned for {repository} {tag}")
-    return sha
+    return candidates.get(f"{ref}^{{}}", candidates[ref])
 
 
 def latest_oidf_release() -> str:

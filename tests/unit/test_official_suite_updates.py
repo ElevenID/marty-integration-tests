@@ -129,7 +129,10 @@ def test_one_monthly_draft_pr_updater_is_the_only_upstream_update_mechanism() ->
     assert 'branch="automation/official-suite-updates"' in workflow
     assert "automation/official-suite-updates-" not in workflow
     assert "gh pr list --state open" in workflow
-    assert "gh pr edit" in workflow
+    assert "gh pr edit" not in workflow
+    assert "select(.isDraft)" not in workflow
+    assert workflow.index("gh pr list --state open") < workflow.index("git checkout")
+    assert 'git push --force-with-lease="refs/heads/$branch:"' in workflow
     assert "gh pr create --draft" in workflow
     assert "gh pr merge" not in workflow
     assert "--auto-merge" not in workflow
