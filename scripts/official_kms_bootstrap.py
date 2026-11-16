@@ -277,13 +277,28 @@ def wait_openbao_init(compose: list[str], env: dict[str, str], ui: Path) -> str:
         except RuntimeError:
             time.sleep(1)
             continue
-        status = run(["docker", "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}", service], capture=True).stdout.strip()
-        if status == "exited 0":
+        # Inspect only bounded, nonsecret lifecycle fields. Do not print the
+        # full inspect record or initializer logs: they can contain custody
+        # material. Preserve a useful fixed reason through the CLI's safe
+        # error handler before main tears down the disposable project.
+        status = run([
+            "docker", "inspect", "--format",
+            "{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}", service,
+        ], capture=True).stdout.strip()
+        match = re.fullmatch(
+            r"(created|running|restarting|exited|dead|paused|removing) ([0-9]{1,3}) (true|false)", status,
+        )
+        if match is None:
+            raise SafeBootstrapError("released OpenBao initializer state is invalid")
+        lifecycle, exit_code, oom_killed = match.groups()
+        if oom_killed == "true":
+            raise SafeBootstrapError("released OpenBao initializer was OOM-killed")
+        if lifecycle == "exited" and exit_code == "0":
             return container_id(compose, "openbao", env, ui)
-        if status.startswith("exited "):
-            raise RuntimeError("released OpenBao initializer failed")
+        if lifecycle in {"exited", "dead"}:
+            raise SafeBootstrapError(f"released OpenBao initializer failed with exit code {int(exit_code)}")
         time.sleep(1)
-    raise RuntimeError("released OpenBao initializer did not complete")
+    raise SafeBootstrapError("released OpenBao initializer did not complete within 90 seconds")
 
 
 def copy_private_from_container(container: str, source: str, target: Path) -> None:
