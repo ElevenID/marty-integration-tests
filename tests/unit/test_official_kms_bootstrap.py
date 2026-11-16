@@ -16,6 +16,59 @@ assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
 
 
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        ("exited 1 false", "released OpenBao initializer failed with exit code 1"),
+        ("exited 137 true", "released OpenBao initializer was OOM-killed"),
+        ("dead 255 false", "released OpenBao initializer failed with exit code 255"),
+        ("exited 0 true", "released OpenBao initializer was OOM-killed"),
+        ("exited secret-value false", "released OpenBao initializer state is invalid"),
+    ],
+)
+def test_initializer_failure_has_a_safe_reason_without_retrying_or_exposing_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, state: str, reason: str,
+) -> None:
+    commands = []
+    monkeypatch.setattr(MODULE, "container_id", lambda *_args: "a" * 64)
+
+    def inspect(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        commands.append(command)
+        return SimpleNamespace(stdout=state)
+
+    monkeypatch.setattr(MODULE, "run", inspect)
+    with pytest.raises(MODULE.SafeBootstrapError) as failure:
+        MODULE.wait_openbao_init(["docker", "compose"], {}, tmp_path)
+    assert failure.value.code == reason
+    assert "secret-value" not in str(failure.value)
+    assert len(commands) == 1
+    assert commands[0] == [
+        "docker", "inspect", "--format",
+        "{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}", "a" * 64,
+    ]
+
+
+def test_initializer_wait_accepts_only_a_clean_exit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    states = iter(["running 0 false", "exited 0 false"])
+    monkeypatch.setattr(MODULE, "container_id", lambda _compose, service, _env, _ui: service)
+    monkeypatch.setattr(MODULE, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout=next(states)))
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    assert MODULE.wait_openbao_init(["docker", "compose"], {}, tmp_path) == "openbao"
+
+
+def test_initializer_timeout_retains_a_safe_distinct_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    clock = iter([0, 0, 91])
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(MODULE, "container_id", lambda *_args: "a" * 64)
+    monkeypatch.setattr(MODULE, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout="running 0 false"))
+    with pytest.raises(MODULE.SafeBootstrapError) as failure:
+        MODULE.wait_openbao_init(["docker", "compose"], {}, tmp_path)
+    assert failure.value.code == "released OpenBao initializer did not complete within 90 seconds"
+
+
 @pytest.mark.parametrize("ending", ["", "\n"])
 def test_openbao_alias_is_a_separate_record_without_replacing_existing_hosts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str,
