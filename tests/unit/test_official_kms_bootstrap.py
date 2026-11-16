@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,124 @@ SPEC = importlib.util.spec_from_file_location("official_kms_bootstrap", SOURCE)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
+
+
+@pytest.mark.parametrize("stage", ["workload-tls", "keycloak-kms", "extra-workloads", "official-edge", "runtime-files"])
+def test_failed_stage_reports_only_a_closed_label_and_preserves_the_error(
+    capsys: pytest.CaptureFixture[str], stage: str,
+) -> None:
+    error = RuntimeError("do-not-log-authority")
+    with pytest.raises(RuntimeError) as failure, MODULE.bootstrap_stage(stage):
+        raise error
+    assert failure.value is error
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"Official KMS bootstrap stage failed: {stage}\n"
+
+
+def test_successful_stage_is_quiet_and_unknown_stage_never_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    with MODULE.bootstrap_stage("openbao-initialization"):
+        pass
+    assert capsys.readouterr().err == ""
+    with pytest.raises(MODULE.SafeBootstrapError) as failure, MODULE.bootstrap_stage("do-not-log-authority"):
+        pytest.fail("Unsupported stage body was entered")
+    assert MODULE.safe_failure_reason(failure.value) == "unsupported bootstrap stage"
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("do-not-log-authority"),
+        ValueError("do-not-log-authority"),
+        OSError("do-not-log-authority"),
+        subprocess.CalledProcessError(1, ["do-not-log-authority"]),
+        MODULE.HTTPError("https://do-not-log-authority", 403, "private response", {}, None),
+    ],
+)
+def test_unclassified_failures_never_disclose_their_message_or_command(error: BaseException) -> None:
+    error.code = "do-not-log-authority"
+    assert MODULE.safe_failure_reason(error) == type(error).__name__
+
+
+def test_unknown_container_service_is_not_forwarded_to_docker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    def unexpected_command(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Unsupported service reached Docker")
+
+    monkeypatch.setattr(MODULE, "run", unexpected_command)
+    with pytest.raises(MODULE.SafeBootstrapError) as failure:
+        MODULE.container_id(["docker", "compose"], "do-not-log-authority", {}, tmp_path)
+    assert MODULE.safe_failure_reason(failure.value) == "unsupported bootstrap service"
+
+
+def test_missing_initializer_container_still_uses_the_existing_readiness_wait(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    queries = []
+    sleeps = []
+
+    def command(args: list[str], **_kwargs: object) -> SimpleNamespace:
+        queries.append(args)
+        if args[0:2] == ["docker", "inspect"]:
+            return SimpleNamespace(stdout="exited 0 false")
+        if args[-1] == "openbao":
+            return SimpleNamespace(stdout="b" * 64)
+        return SimpleNamespace(stdout="" if len(queries) == 1 else "a" * 64)
+
+    monkeypatch.setattr(MODULE, "run", command)
+    monkeypatch.setattr(MODULE.time, "sleep", sleeps.append)
+    assert MODULE.wait_openbao_init(["docker", "compose"], {}, tmp_path) == "b" * 64
+    assert sleeps == [1]
+    assert sum(args[-1] == "openbao-init" for args in queries) == 2
+
+
+@pytest.mark.parametrize("content", [b"", b"x" * (64 * 1024 + 1)], ids=["empty", "oversized"])
+def test_invalid_custody_copy_keeps_its_safe_reason_and_stages_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, content: bytes,
+) -> None:
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout=content))
+    target = tmp_path / "do-not-log-authority"
+    with pytest.raises(MODULE.SafeRuntimeBootstrapError) as failure:
+        MODULE.copy_private_from_container("a" * 64, "/bao/data/root.token", target)
+    assert isinstance(failure.value, RuntimeError)
+    assert MODULE.safe_failure_reason(failure.value) == "released OpenBao bootstrap input is invalid"
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("fault", ["type", "exportable", "backup", "version", "public-key"])
+def test_key_metadata_refusal_is_safe_even_with_an_untrusted_purpose(fault: str) -> None:
+    metadata = {
+        "type": "ecdsa-p256", "exportable": False, "allow_plaintext_backup": False,
+        "latest_version": 1, "keys": {"1": {"public_key": "public-pem"}},
+    }
+    replacements = {"type": "rsa-2048", "exportable": True, "backup": True, "version": 2, "public-key": {}}
+    fields = {"type": "type", "exportable": "exportable", "backup": "allow_plaintext_backup",
+              "version": "latest_version", "public-key": "keys"}
+    metadata[fields[fault]] = replacements[fault]
+
+    class Bao:
+        def request(self, method: str, _path: str, _body: object = None) -> dict:
+            return {"data": metadata} if method == "GET" else {}
+
+    with pytest.raises(MODULE.SafeRuntimeBootstrapError) as failure:
+        MODULE.provision_nonexportable_transit_key(Bao(), "one-key", "do-not-log-authority")
+    expected = "has no public binding" if fault == "public-key" else "is not non-exportable version one"
+    assert MODULE.safe_failure_reason(failure.value) == f"disposable Transit key {expected}"
+
+
+def test_cli_refusal_prints_only_a_safe_reason_and_creates_no_output(tmp_path: Path) -> None:
+    output = tmp_path / "do-not-log-authority"
+    result = subprocess.run([
+        sys.executable, "-B", str(SOURCE), "--run-id", "not/allowed",
+        "--marty-ui", str(output), "--stack-manifest", str(output),
+        "--stack-env", str(output), "--material", str(output), "--output-dir", str(output),
+    ], capture_output=True, text=True, check=False, timeout=15)
+    assert result.returncode == 2
+    reason = "official disposable KMS bootstrap requires a Linux Docker host" if os.name != "posix" else "ValueError"
+    assert result.stderr.strip() == f"Official KMS bootstrap failed: {reason}"
+    assert not output.exists()
 
 
 @pytest.mark.parametrize(

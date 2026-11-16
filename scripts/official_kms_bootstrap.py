@@ -19,6 +19,8 @@ import stat
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.error import HTTPError
@@ -37,6 +39,10 @@ COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 REQUIRED = re.compile(r"\$\{([A-Z][A-Z0-9_]*):\?[^}]*\}")
 EXTENDS = re.compile(r"^\s*file:\s*(docker-compose[^\s]+\.yml)\s*$", re.MULTILINE)
 KMS_ORIGIN = "https://openbao:8200"
+BOOTSTRAP_STAGES = frozenset({
+    "kms-image-binding", "openbao-initialization", "bootstrap-inputs", "openbao-network",
+    "workload-tls", "keycloak-kms", "extra-workloads", "official-edge", "runtime-files",
+})
 
 
 class SafeBootstrapError(ValueError):
@@ -45,6 +51,31 @@ class SafeBootstrapError(ValueError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+class SafeRuntimeBootstrapError(RuntimeError):
+    """A fixed bootstrap reason retaining existing RuntimeError behavior."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def safe_failure_reason(error: BaseException) -> str:
+    if isinstance(error, (SafeBootstrapError, SafeRuntimeBootstrapError)):
+        return error.code
+    return type(error).__name__
+
+
+@contextmanager
+def bootstrap_stage(stage: str) -> Iterator[None]:
+    if stage not in BOOTSTRAP_STAGES:
+        raise SafeBootstrapError("unsupported bootstrap stage")
+    try:
+        yield
+    except BaseException:
+        print(f"Official KMS bootstrap stage failed: {stage}", file=sys.stderr)
+        raise
 
 
 ENV_ROLES = {
@@ -262,10 +293,12 @@ def require_kms_only_images(compose: list[str], env: dict[str, str], ui: Path,
 
 
 def container_id(compose: list[str], service: str, env: dict[str, str], ui: Path) -> str:
+    if service not in {"openbao", "openbao-init"}:
+        raise SafeBootstrapError("unsupported bootstrap service")
     result = run([*compose, "ps", "--all", "--quiet", service], env=env, cwd=ui, capture=True)
     ids = result.stdout.splitlines()
     if len(ids) != 1 or not re.fullmatch(r"[0-9a-f]{12,64}", ids[0]):
-        raise RuntimeError(f"exact {service} container is unavailable")
+        raise SafeRuntimeBootstrapError(f"exact {service} container is unavailable")
     return ids[0]
 
 
@@ -305,7 +338,7 @@ def copy_private_from_container(container: str, source: str, target: Path) -> No
     result = subprocess.run(["docker", "exec", "--user", "0", container, "cat", source],
                             capture_output=True, check=True, timeout=20)
     if not result.stdout or len(result.stdout) > 64 * 1024:
-        raise RuntimeError("released OpenBao bootstrap input is invalid")
+        raise SafeRuntimeBootstrapError("released OpenBao bootstrap input is invalid")
     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as output:
         output.write(result.stdout)
@@ -314,12 +347,12 @@ def copy_private_from_container(container: str, source: str, target: Path) -> No
 def openbao_network(container: str, project: str) -> tuple[str, str]:
     detail = json.loads(run(["docker", "inspect", container], capture=True).stdout)[0]
     if detail["Config"]["Labels"].get("com.docker.compose.project") != project:
-        raise RuntimeError("OpenBao container belongs to another project")
+        raise SafeRuntimeBootstrapError("OpenBao container belongs to another project")
     networks = detail["NetworkSettings"]["Networks"]
     matches = [(name, value.get("IPAddress", "")) for name, value in networks.items()
                if name.startswith(project + "_") and "openbao" in value.get("Aliases", [])]
     if len(matches) != 1 or not re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", matches[0][1]):
-        raise RuntimeError("OpenBao project network is ambiguous")
+        raise SafeRuntimeBootstrapError("OpenBao project network is ambiguous")
     return matches[0]
 
 
@@ -342,17 +375,20 @@ def scoped_transit_signing_token(bao, key_name: str, policy_name: str,
     })["auth"]
     token = auth.get("client_token")
     if not isinstance(token, str) or len(token) < 20 or token == authority:
-        raise RuntimeError("scoped Transit signer token is invalid")
+        raise SafeRuntimeBootstrapError("scoped Transit signer token is invalid")
     signature = bao.request("POST", f"transit/sign/{key_name}", {
         "input": base64.b64encode(challenge).decode("ascii"),
     }, token=token).get("data", {}).get("signature")
     if not isinstance(signature, str) or not signature:
-        raise RuntimeError("scoped Transit signer token cannot sign")
+        raise SafeRuntimeBootstrapError("scoped Transit signer token cannot sign")
     return token
 
 
 def provision_nonexportable_transit_key(bao, name: str, purpose: str) -> str:
     """Create and attest one version-one P-256 key using the product Bao client."""
+    safe_purpose = (
+        purpose if purpose in {"official edge", "ENVOY_ISSUANCE TLS", "TRUST_PROFILE TLS"} else "disposable Transit"
+    )
     bao.request("POST", f"transit/keys/{name}", {
         "type": "ecdsa-p256", "exportable": False, "allow_plaintext_backup": False,
     })
@@ -360,10 +396,10 @@ def provision_nonexportable_transit_key(bao, name: str, purpose: str) -> str:
     if (metadata.get("type") != "ecdsa-p256" or metadata.get("exportable") is not False
             or metadata.get("allow_plaintext_backup") is not False
             or metadata.get("latest_version") != 1):
-        raise RuntimeError(f"{purpose} key is not non-exportable version one")
+        raise SafeRuntimeBootstrapError(f"{safe_purpose} key is not non-exportable version one")
     public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
     if not isinstance(public_key, str):
-        raise RuntimeError(f"{purpose} key has no public binding")
+        raise SafeRuntimeBootstrapError(f"{safe_purpose} key has no public binding")
     return public_key
 
 
@@ -389,7 +425,7 @@ def provision_extra_workloads(ui: Path, private: Path, ca: Path, root: Path) -> 
         certificate = signed.get("certificate")
         if (not isinstance(certificate, str) or "private_key" in signed
                 or certificate_public_key_der(certificate) != public_key_der(public_key)):
-            raise RuntimeError(f"{prefix} certificate is not bound to its remote KMS key")
+            raise SafeRuntimeBootstrapError(f"{prefix} certificate is not bound to its remote KMS key")
         private_file(private / certificate_file, certificate)
         policy_name = f"official-{secrets.token_hex(6)}-{name}"
         token = scoped_transit_signing_token(bao, name, policy_name, authority,
@@ -415,12 +451,12 @@ def provision_oidf_edge(ui: Path, private: Path, material: Path, ca: Path,
             or csr.public_key().public_bytes(serialization.Encoding.DER,
                                              serialization.PublicFormat.SubjectPublicKeyInfo)
             != public_key_der(public_key)):
-        raise RuntimeError("official edge CSR is not bound to its remote KMS key")
+        raise SafeRuntimeBootstrapError("official edge CSR is not bound to its remote KMS key")
     root_cert = x509.load_pem_x509_certificate((material / "root-ca.pem").read_bytes())
     root_key = serialization.load_pem_private_key((material / "official-ca.key").read_bytes(), password=None)
     if (not isinstance(root_key, ec.EllipticCurvePrivateKey)
             or root_key.public_key().public_numbers() != root_cert.public_key().public_numbers()):
-        raise RuntimeError("disposable fixture CA authority does not match")
+        raise SafeRuntimeBootstrapError("disposable fixture CA authority does not match")
     now = datetime.now(UTC)
     certificate = (x509.CertificateBuilder()
                    .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)]))
@@ -434,7 +470,7 @@ def provision_oidf_edge(ui: Path, private: Path, material: Path, ca: Path,
                    .sign(root_key, hashes.SHA256()))
     pem = certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
     if certificate_public_key_der(pem) != public_key_der(public_key):
-        raise RuntimeError("official edge leaf is not bound to its remote KMS key")
+        raise SafeRuntimeBootstrapError("official edge leaf is not bound to its remote KMS key")
     certificate_path = private / "oidf-edge.crt"
     private_file(certificate_path, pem + root_cert.public_bytes(serialization.Encoding.PEM).decode("ascii"))
     policy_name = f"official-{secrets.token_hex(6)}-oidf-edge"
@@ -467,7 +503,7 @@ def runtime_environment(tls: Path, keycloak: Path, extra: Path, ca: Path,
     environment.update(role_environment(tls, extra))
     for name, value in environment.items():
         if name.endswith("_FILE") and not Path(value).is_file():
-            raise RuntimeError(f"disposable KMS output is missing {name}")
+            raise SafeRuntimeBootstrapError(f"disposable KMS output is missing {name}")
     return environment
 
 
@@ -481,12 +517,12 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
     if os.name != "posix":
-        raise RuntimeError("official disposable KMS bootstrap requires a Linux Docker host")
+        raise SafeRuntimeBootstrapError("official disposable KMS bootstrap requires a Linux Docker host")
     images, compose, _source = checked_release(args)
     private = args.output_dir.resolve()
     private.mkdir(mode=0o700, parents=True, exist_ok=False)
     if stat.S_IMODE(private.stat().st_mode) != 0o700:
-        raise RuntimeError("disposable KMS directory is not private")
+        raise SafeRuntimeBootstrapError("disposable KMS directory is not private")
     project = project_names(args.run_id)["marty"]
     material = json.loads((args.material / "environment.json").read_text(encoding="utf-8"))["environment"]
     if not isinstance(material, dict) or not material.get("OIDF_PUBLIC_BASE_URL", "").startswith("https://"):
@@ -496,49 +532,60 @@ def main() -> int:
     keycloak = private / "keycloak"
     extra = private / "extra"
     try:
-        require_kms_only_images(compose, bootstrap_env, args.marty_ui, images)
-        for directory in (tls, keycloak, extra):
-            directory.mkdir(mode=0o700)
-        run([*compose, "up", "--detach", "--no-build", "--pull", "never", "openbao-init"],
-            env=bootstrap_env, cwd=args.marty_ui)
-        container = wait_openbao_init(compose, bootstrap_env, args.marty_ui)
-        ca = private / "openbao_tls_ca_cert"
-        root = private / "bootstrap-root-token"
-        copy_private_from_container(container, "/bao/data/tls/ca.crt", ca)
-        copy_private_from_container(container, "/bao/data/root.token", root)
-        network, address = openbao_network(container, project)
-        # The ephemeral GitHub runner already modifies /etc/hosts for the
-        # official TLS origins. Keep the product's OpenBao hostname for TLS SNI.
-        append_openbao_host(address)
-        run([
-            "docker", "run", "--rm", "--pull=never", "--network", network,
-            "--user", f"{os.getuid()}:{os.getgid()}", "--read-only", "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,mode=1777",
-            "--mount", f"type=bind,src={ca},dst=/input/ca.crt,readonly",
-            "--mount", f"type=bind,src={root},dst=/input/root.token,readonly",
-            "--mount", f"type=bind,src={tls},dst=/output",
-            "-e", f"BAO_ADDR={KMS_ORIGIN}", "-e", "BAO_CACERT=/input/ca.crt",
-            "-e", "BAO_ROOT_TOKEN_FILE=/input/root.token",
-            "-e", "MARTY_TLS_BOOTSTRAP_PROFILE=selfhost-disposable",
-            "-e", "MARTY_SELFHOST_DISPOSABLE_OPENBAO=1",
-            "-e", f"MARTY_SELFHOST_PROJECT=marty-selfhost-disposable-{secrets.token_hex(5)}",
-            "-e", "SELFHOST_TLS_OUTPUT_DIR=/output",
-            "--entrypoint", "/usr/local/bin/marty-passport-tls-bootstrap",
-            images["MARTY_SERVICES_IMAGE"],
-        ])
-        keycloak_env = {**os.environ, "BAO_ADDR": KMS_ORIGIN, "BAO_CACERT": str(ca),
-                        "BAO_ROOT_TOKEN_FILE": str(root),
-                        "SELFHOST_KEYCLOAK_OUTPUT_DIR": str(keycloak)}
-        run([sys.executable, str(args.marty_ui / "scripts" / "provision_selfhost_keycloak_kms.py")],
-            env=keycloak_env)
-        provision_extra_workloads(args.marty_ui, extra, ca, root)
-        edge = provision_oidf_edge(args.marty_ui, extra, args.material, ca, root,
-                                   material["OIDF_PUBLIC_BASE_URL"])
-        (args.material / "official-ca.key").unlink()
-        environment = runtime_environment(tls, keycloak, extra, ca, material, edge)
-        prepare_runtime_mount_files(environment, private, material["OIDF_PUBLIC_BASE_URL"])
-        private_file(private / ".env.kms", "".join(f"{key}={value}\n" for key, value in sorted(environment.items())))
-        root.unlink()
+        with bootstrap_stage("kms-image-binding"):
+            require_kms_only_images(compose, bootstrap_env, args.marty_ui, images)
+            for directory in (tls, keycloak, extra):
+                directory.mkdir(mode=0o700)
+        with bootstrap_stage("openbao-initialization"):
+            run([*compose, "up", "--detach", "--no-build", "--pull", "never", "openbao-init"],
+                env=bootstrap_env, cwd=args.marty_ui)
+            container = wait_openbao_init(compose, bootstrap_env, args.marty_ui)
+        with bootstrap_stage("bootstrap-inputs"):
+            ca = private / "openbao_tls_ca_cert"
+            root = private / "bootstrap-root-token"
+            copy_private_from_container(container, "/bao/data/tls/ca.crt", ca)
+            copy_private_from_container(container, "/bao/data/root.token", root)
+        with bootstrap_stage("openbao-network"):
+            network, address = openbao_network(container, project)
+            # The ephemeral GitHub runner already modifies /etc/hosts for the
+            # official TLS origins. Keep the product's OpenBao hostname for TLS SNI.
+            append_openbao_host(address)
+        with bootstrap_stage("workload-tls"):
+            run([
+                "docker", "run", "--rm", "--pull=never", "--network", network,
+                "--user", f"{os.getuid()}:{os.getgid()}", "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,mode=1777",
+                "--mount", f"type=bind,src={ca},dst=/input/ca.crt,readonly",
+                "--mount", f"type=bind,src={root},dst=/input/root.token,readonly",
+                "--mount", f"type=bind,src={tls},dst=/output",
+                "-e", f"BAO_ADDR={KMS_ORIGIN}", "-e", "BAO_CACERT=/input/ca.crt",
+                "-e", "BAO_ROOT_TOKEN_FILE=/input/root.token",
+                "-e", "MARTY_TLS_BOOTSTRAP_PROFILE=selfhost-disposable",
+                "-e", "MARTY_SELFHOST_DISPOSABLE_OPENBAO=1",
+                "-e", f"MARTY_SELFHOST_PROJECT=marty-selfhost-disposable-{secrets.token_hex(5)}",
+                "-e", "SELFHOST_TLS_OUTPUT_DIR=/output",
+                "--entrypoint", "/usr/local/bin/marty-passport-tls-bootstrap",
+                images["MARTY_SERVICES_IMAGE"],
+            ])
+        with bootstrap_stage("keycloak-kms"):
+            keycloak_env = {**os.environ, "BAO_ADDR": KMS_ORIGIN, "BAO_CACERT": str(ca),
+                            "BAO_ROOT_TOKEN_FILE": str(root),
+                            "SELFHOST_KEYCLOAK_OUTPUT_DIR": str(keycloak)}
+            run([sys.executable, str(args.marty_ui / "scripts" / "provision_selfhost_keycloak_kms.py")],
+                env=keycloak_env)
+        with bootstrap_stage("extra-workloads"):
+            provision_extra_workloads(args.marty_ui, extra, ca, root)
+        with bootstrap_stage("official-edge"):
+            edge = provision_oidf_edge(args.marty_ui, extra, args.material, ca, root,
+                                       material["OIDF_PUBLIC_BASE_URL"])
+            (args.material / "official-ca.key").unlink()
+        with bootstrap_stage("runtime-files"):
+            environment = runtime_environment(tls, keycloak, extra, ca, material, edge)
+            prepare_runtime_mount_files(environment, private, material["OIDF_PUBLIC_BASE_URL"])
+            private_file(
+                private / ".env.kms", "".join(f"{key}={value}\n" for key, value in sorted(environment.items())),
+            )
+            root.unlink()
         print("Staged disposable KMS-only runtime inputs for the attested released stack.")
         return 0
     except BaseException:
@@ -553,6 +600,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, KeyError, HTTPError) as error:
-        reason = error.code if isinstance(error, SafeBootstrapError) else type(error).__name__
-        print(f"Official KMS bootstrap failed: {reason}", file=sys.stderr)
+        print(f"Official KMS bootstrap failed: {safe_failure_reason(error)}", file=sys.stderr)
         raise SystemExit(2) from None
