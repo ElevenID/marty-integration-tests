@@ -155,7 +155,7 @@ Marty's public-wallet flow supports `client_auth_type=none`, while the active
 official interoperability profile deliberately exercises registered
 `private_key_jwt` clients. The disposable organization owns the two official
 wallet public keys; Marty rejects missing, invalid, expired, replayed,
-wrong-audience, and cross-client assertions. The pinned OIDF release-v5.3.3 drives that
+wrong-audience, and cross-client assertions. The pinned OIDF release-v5.3.4 drives that
 normal public issuer path. Two optional capabilities Marty does not advertise
 remain explicit, owned, expiring skips. The upstream plan omits its
 encryption-only negative for the selected plain credential-response variant;
@@ -954,3 +954,5 @@ separate `expected-skips.json`, which requires a matching test name,
 configuration pattern, rationale, owner, and expiry. The runner fails on a
 new skip, or when an expected skip stops occurring, so neither file is a
 permanent baseline.
+
+OIDF runner upgrades bind the unmodified upstream commit and both prebuilt image digests together. Release-v5.3.4 adds verifier checks for revoked credentials, identifier-list status, missing status information and an unrequested credential type; its mdoc fixtures also serve a document-signer CRL. Fresh affected-profile evidence is required before accepting this upgrade. Earlier runs remain bound to their original runner version.
