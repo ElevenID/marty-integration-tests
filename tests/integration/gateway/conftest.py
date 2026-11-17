@@ -547,7 +547,7 @@ async def sd_jwt_mdl_template(
         compliance_profile_id=str(compliance_profile["id"]),
         revocation_profile_id=str(revocation_profile["id"]),
     )
-    template = await gateway_client.create_credential_template(**template_data)
+    template = await gateway_client.create_credential_template(**template_data, activate=True)
     return template
 
 

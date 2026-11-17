@@ -815,7 +815,6 @@ async def test_public_signing_is_did_first_and_fails_closed(
         "compliance_profile_id": template_data["compliance_profile_id"],
         "revocation_profile_id": template_data["revocation_profile_id"],
         "issuer_did": template_data["issuer_did"],
-        "schema_uri": template_data["schema"],
     }
 
     # Public authoring, issuance, and verification models must reject every
@@ -1117,7 +1116,9 @@ async def test_external_trust_registry_sync_is_atomic_and_tenant_scoped(
     )
     with pytest.raises(GatewayClientError) as invalid_delta:
         await admin.synchronize_trust_profile_registry(profile_id)
-    assert invalid_delta.value.status_code == 502
+    # The native Trust Profile service maps synchronization failures to 503.
+    assert invalid_delta.value.status_code == 503
+    assert "INVALID_CERTIFICATE" in str(invalid_delta.value)
 
     await _configure_registry_fixture(_registry_feed(token="registry-2", sequence=2, entries=[]))
     recovered = await admin.synchronize_trust_profile_registry(profile_id)
@@ -1129,7 +1130,8 @@ async def test_external_trust_registry_sync_is_atomic_and_tenant_scoped(
     await _configure_registry_fixture(_registry_feed(token="registry-rollback", sequence=1, entries=[]))
     with pytest.raises(GatewayClientError) as rollback:
         await admin.synchronize_trust_profile_registry(profile_id)
-    assert rollback.value.status_code == 502
+    assert rollback.value.status_code == 503
+    assert "SEQUENCE_ROLLBACK" in str(rollback.value)
 
     await _configure_registry_fixture(_registry_feed(token="registry-3", sequence=3, entries=[]))
     final = await admin.synchronize_trust_profile_registry(profile_id)
@@ -1178,10 +1180,9 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         assert organization_a_response.status_code == 200, organization_a_response.text
         organization_a = organization_a_response.json()
         assert isinstance(organization_a, dict)
-        # Each test provisions the public state it consumes. The released
-        # stack bootstrap is intentionally not a hidden issuer-identity
-        # fixture, and this call is idempotent when an identity already exists.
-        await _provision_issuer_identity(admin, organization_a)
+        # Provision the exact DID this test consumes rather than relying on
+        # the bootstrap issuer. Repeated setup for this DID remains idempotent.
+        provisioned_issuer_a = await _provision_issuer_identity(admin, organization_a)
         await _provision_issuer_identity(
             admin,
             organization_a,
@@ -1195,11 +1196,15 @@ async def test_two_principals_cannot_cross_tenant_product_boundaries(
         )
         active_issuer_identities_a = issuer_identities_a.get("identities")
         assert isinstance(active_issuer_identities_a, list)
-        assert len(active_issuer_identities_a) == 1, (
-            "The default organization must expose exactly one active VC issuer "
-            f"identity, got {active_issuer_identities_a}"
+        matching_issuer_identities_a = [
+            identity for identity in active_issuer_identities_a
+            if isinstance(identity, dict)
+            and identity.get("issuer_did") == provisioned_issuer_a["issuer_did"]
+        ]
+        assert matching_issuer_identities_a == [provisioned_issuer_a], (
+            "The explicitly provisioned issuer DID must have exactly one active identity"
         )
-        issuer_identity_a = active_issuer_identities_a[0]
+        issuer_identity_a = matching_issuer_identities_a[0]
         assert isinstance(issuer_identity_a, dict)
         _assert_no_private_signing_selectors(issuer_identity_a)
         issuer_did_a = str(issuer_identity_a.get("issuer_did") or "")
