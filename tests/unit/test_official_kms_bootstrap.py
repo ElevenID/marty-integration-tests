@@ -521,3 +521,19 @@ def test_extra_workloads_bind_trust_server_to_scoped_remote_key(
     assert policy == (
         'path "transit/keys/workload-tls-trust-profile-server" { capabilities = ["read"] }\n'
         'path "transit/sign/workload-tls-trust-profile-server" { capabilities = ["update"] }')
+
+
+def test_registration_environment_requires_exact_public_bundle_and_pin_pair(tmp_path: Path) -> None:
+    values, origin = runtime_inputs(tmp_path)
+    path = tmp_path / "eudi-registration.json"
+    path.write_text("{}",encoding="ascii")
+    fields = {"EUDI_VERIFIER_REGISTRATION_RECORD_FILE":str(path),
+              "EUDI_VERIFIER_REGISTRATION_RECORD_SHA256":"a" * 64}
+    MODULE.validate_runtime_environment({**values,**fields},tmp_path,origin)
+    for name in fields:
+        with pytest.raises(ValueError,match="both bootstrap provenance"):
+            MODULE.validate_runtime_environment({**values,name:fields[name]},tmp_path,origin)
+    for name,value in [("EUDI_VERIFIER_REGISTRATION_RECORD_FILE",str(tmp_path/"other.json")),
+                       ("EUDI_VERIFIER_REGISTRATION_RECORD_SHA256","invalid")]:
+        with pytest.raises(ValueError,match="provenance is invalid"):
+            MODULE.validate_runtime_environment({**values,**fields,name:value},tmp_path,origin)

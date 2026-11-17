@@ -340,6 +340,8 @@ def child_environment(
         environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(
             ROOT / "conformance" / "eudi-material" / "cleanup" / "wallet-attester.jwks.json"
         )
+    if needs_eudi and not validate_eudi:
+        environment.setdefault("EUDI_VERIFIER_APPLICATION_JSON", '{"verifier":{"intendedUses":[]}}')
     local_docker = docker_endpoint_is_local(environment) if needs_eudi else True
     if not local_docker and material_mode == "generated":
         raise ValueError(

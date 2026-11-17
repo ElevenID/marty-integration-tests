@@ -324,15 +324,21 @@ jobs:
           echo "MARTY_CONFORMANCE_REVIEWER_PASSWORD=$reviewer_password" >> "$GITHUB_ENV"
 
       - name: Bootstrap disposable KMS-only released stack
+        env:
+          OFFICIAL_LANE: ${{ matrix.lane }}
         shell: bash
-        run: >-
-          python scripts/official_kms_bootstrap.py
-          --run-id "$OFFICIAL_SUITE_RUN_ID"
-          --marty-ui work/marty-ui
-          --stack-manifest work/stack/stack-manifest.json
-          --stack-env work/stack/.env.stack
-          --material work/material
-          --output-dir work/kms
+        run: |
+          registration_args=()
+          if [[ "$OFFICIAL_LANE" == eudi ]]; then
+            registration_args+=(--eudi-registration)
+          fi
+          python scripts/official_kms_bootstrap.py "${registration_args[@]}" \
+            --run-id "$OFFICIAL_SUITE_RUN_ID" \
+            --marty-ui work/marty-ui \
+            --stack-manifest work/stack/stack-manifest.json \
+            --stack-env work/stack/.env.stack \
+            --material work/material \
+            --output-dir work/kms
 
       - name: Run official lane
         id: lane

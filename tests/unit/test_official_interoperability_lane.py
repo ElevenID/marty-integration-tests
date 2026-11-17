@@ -1740,6 +1740,8 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import eudi_registration_fixture
+    monkeypatch.setattr(eudi_registration_fixture, "load_bootstrap_configuration", lambda *_args, **_kwargs: "{}")
     commands: list[list[str]] = []
     lifecycle_environments: list[dict[str, str]] = []
     suite_environment: dict[str, str] = {}
@@ -1806,6 +1808,8 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
             {
                 "OIDF_MARTY_GATEWAY_URL": "https://marty.test",
                 "EUDI_VERIFIER_PUBLIC_URL": "https://verifier.test",
+                "EUDI_VERIFIER_REGISTRATION_RECORD_FILE": "/owned/mock-registration.json",
+                "EUDI_VERIFIER_REGISTRATION_RECORD_SHA256": "a" * 64,
                 "EUDI_WALLET_KIT_URL": "http://wallet-kit:9090",
             },
         )
@@ -1941,3 +1945,11 @@ def test_eudi_startup_failure_preserves_private_logs_then_always_retires(tmp_pat
     assert events[0] == "logs"
     assert events[-1] == "down"
     assert (tmp_path / "private/startup-compose.log").exists()
+
+
+def test_eudi_requires_pinned_registration_before_allocating_fixture(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected_start(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Missing registration must fail before fixture startup")
+    monkeypatch.setattr(lane,"run",unexpected_start)
+    with pytest.raises(ValueError,match="isolated bootstrap registration"):
+        lane.run_eudi(SimpleNamespace(output_dir=tmp_path),{})

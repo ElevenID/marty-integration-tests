@@ -1949,6 +1949,16 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # *after* it merges EUDI material, so EUDI's TLS CA cannot accidentally
     # replace the independent request-object trust anchor.
     environment = dict(environment)
+    from eudi_registration_fixture import load_bootstrap_configuration
+    registration_path = environment.get("EUDI_VERIFIER_REGISTRATION_RECORD_FILE", "")
+    registration_digest = environment.get("EUDI_VERIFIER_REGISTRATION_RECORD_SHA256", "")
+    if not registration_path or not registration_digest:
+        raise ValueError("EUDI lane requires an isolated bootstrap registration with exact-byte provenance")
+    environment["EUDI_VERIFIER_APPLICATION_JSON"] = load_bootstrap_configuration(
+        Path(registration_path),registration_digest,args.run_id,environment["EUDI_VERIFIER_PUBLIC_URL"],
+        client_id_prefix=environment.get("EUDI_VERIFIER_CLIENT_ID_PREFIX", ""),
+        original_client_id=environment.get("EUDI_VERIFIER_ORIGINAL_CLIENT_ID", ""),
+    )
     key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(args.output_dir)
     wallet_attester_file = args.output_dir / "private" / "eudi-wallet-attester.jwks.json"
     write_private_json(wallet_attester_file, key_attestation_jwks)

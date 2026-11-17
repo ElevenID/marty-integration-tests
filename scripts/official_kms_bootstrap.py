@@ -41,7 +41,7 @@ EXTENDS = re.compile(r"^\s*file:\s*(docker-compose[^\s]+\.yml)\s*$", re.MULTILIN
 KMS_ORIGIN = "https://openbao:8200"
 BOOTSTRAP_STAGES = frozenset({
     "kms-image-binding", "openbao-initialization", "bootstrap-inputs", "openbao-network",
-    "workload-tls", "keycloak-kms", "extra-workloads", "official-edge", "runtime-files",
+    "workload-tls", "keycloak-kms", "extra-workloads", "official-edge", "runtime-files", "eudi-registration",
 })
 
 
@@ -168,6 +168,14 @@ def validate_runtime_environment(values: dict[str, str], root: Path, origin: str
         "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE", "FLOW_WORKLOAD_CLIENT_CERT_FILE",
         "ENVOY_ISSUANCE_CLIENT_CERT_FILE", *KEYCLOAK_FILES,
     }
+    registration_fields = {"EUDI_VERIFIER_REGISTRATION_RECORD_FILE", "EUDI_VERIFIER_REGISTRATION_RECORD_SHA256"}
+    if registration_fields & set(values):
+        if not registration_fields <= set(values):
+            raise ValueError("registration fixture requires both bootstrap provenance fields")
+        expected.update(registration_fields)
+        if (values["EUDI_VERIFIER_REGISTRATION_RECORD_FILE"] != str(root / "eudi-registration.json")
+                or not re.fullmatch(r"[0-9a-f]{64}",values["EUDI_VERIFIER_REGISTRATION_RECORD_SHA256"])):
+            raise ValueError("registration fixture bootstrap provenance is invalid")
     role_values = role_environment(root / "tls", root / "extra")
     expected.update(role_values)
     if set(values) != expected:
@@ -216,6 +224,9 @@ def prepare_runtime_mount_files(values: dict[str, str], root: Path, origin: str)
         *(Path(value) for name, value in role_environment(root / "tls", root / "extra").items()
           if name.endswith("_FILE")),
     }
+    if "EUDI_VERIFIER_REGISTRATION_RECORD_FILE" in values:
+        # Public record/certificates/JWT only; no registrar keys or authority token.
+        allowed.add(root / "eudi-registration.json")
     paths = {Path(value) for name, value in values.items() if name.endswith("_FILE")}
     if not paths.issubset(allowed):
         raise ValueError("runtime KMS mount is not an approved leaf export")
@@ -551,6 +562,7 @@ def runtime_environment(tls: Path, keycloak: Path, extra: Path, ca: Path,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--eudi-registration", action="store_true", help="provision an isolated reference-verifier registration before root retirement")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--marty-ui", required=True, type=Path)
     parser.add_argument("--stack-manifest", required=True, type=Path)
@@ -617,12 +629,30 @@ def main() -> int:
                 env=keycloak_env)
         with bootstrap_stage("extra-workloads"):
             provision_extra_workloads(args.marty_ui, extra, ca, root)
+        registration_inputs = {}
+        if getattr(args, "eudi_registration", False):
+            with bootstrap_stage("eudi-registration"):
+                import hashlib
+                from selfhost_openbao_client import Bao
+                from eudi_registration_fixture import canonical, provision
+                authority = root.read_text(encoding="ascii").strip()
+                registrar_bao = Bao(KMS_ORIGIN,ca,authority)
+                registration = provision(registrar_bao,args.run_id,material["EUDI_VERIFIER_PUBLIC_URL"],
+                    provision_key=provision_nonexportable_transit_key,
+                    scoped_signer=scoped_transit_signing_token,authority=authority)
+                content = canonical(registration)
+                private_file(private / "eudi-registration.json",content.decode("ascii"))
+                registration_inputs = {
+                    "EUDI_VERIFIER_REGISTRATION_RECORD_FILE":str(private / "eudi-registration.json"),
+                    "EUDI_VERIFIER_REGISTRATION_RECORD_SHA256":hashlib.sha256(content).hexdigest(),
+                }
         with bootstrap_stage("official-edge"):
             edge = provision_oidf_edge(args.marty_ui, extra, args.material, ca, root,
                                        material["OIDF_PUBLIC_BASE_URL"])
             (args.material / "official-ca.key").unlink()
         with bootstrap_stage("runtime-files"):
             environment = runtime_environment(tls, keycloak, extra, ca, material, edge)
+            environment.update(registration_inputs)
             prepare_runtime_mount_files(environment, private, material["OIDF_PUBLIC_BASE_URL"])
             prepare_public_ca_mount(args.material.resolve())
             private_file(
