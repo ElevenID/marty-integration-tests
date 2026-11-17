@@ -37,6 +37,17 @@ def b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
+def transit_jws_signature(value: object) -> bytes:
+    """OpenBao JWS mode returns unpadded URL-safe Base64 after its version prefix."""
+    if not isinstance(value, str) or not re.fullmatch(r"vault:v1:[A-Za-z0-9_-]{86}", value):
+        raise ValueError("registration fixture Transit JWS encoding is invalid")
+    encoded = value.removeprefix("vault:v1:")
+    signature = base64.urlsafe_b64decode(encoded + "==")
+    if len(signature) != 64 or b64url(signature) != encoded:
+        raise ValueError("registration fixture Transit JWS encoding is not canonical")
+    return signature
+
+
 def record_for(run_id: str, verifier_origin: str) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", run_id):
         raise ValueError("registration fixture run id is invalid")
@@ -302,9 +313,7 @@ def provision(
         },
         token=token,
     )["data"]["signature"]
-    if not isinstance(signed, str) or not signed.startswith("vault:v1:"):
-        raise ValueError("registration fixture signature has invalid provenance")
-    signature = base64.b64decode(signed.removeprefix("vault:v1:"), validate=True)
+    signature = transit_jws_signature(signed)
     bundle = {
         "registration_record": record,
         "registrar_root_certificate": root_pem,

@@ -91,11 +91,7 @@ class SimulatedBao:
             assert data["marshaling_algorithm"] == "jws"
             signature = self.key.sign(base64.b64decode(data["input"]), ec.ECDSA(hashes.SHA256()))
             r, s = decode_dss_signature(signature)
-            return {
-                "data": {
-                    "signature": "vault:v1:" + base64.b64encode(r.to_bytes(32, "big") + s.to_bytes(32, "big")).decode()
-                }
-            }
+            return {"data": {"signature": "vault:v1:" + module.b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))}}
         raise AssertionError("Unexpected simulated request")
 
     def public(self, *_args: object) -> str:
@@ -265,3 +261,18 @@ def test_registration_rejects_over_asking_record() -> None:
     )
     with pytest.raises(ValueError, match="record binding"):
         module.validate_bundle(bundle, RUN, ORIGIN)
+
+
+@pytest.mark.parametrize("signature", [bytes([255]) * 64, bytes(range(64)), bytes([0]) * 64])
+def test_transit_jws_decoder_obeys_urlsafe_unpadded_wire_format(signature: bytes) -> None:
+    encoded = module.b64url(signature)
+    assert module.transit_jws_signature("vault:v1:" + encoded) == signature
+    for invalid in [
+        "vault:v1:" + encoded + "==",
+        "vault:v2:" + encoded,
+        "vault:v1:" + encoded[:-1],
+        "vault:v1:" + base64.b64encode(signature).decode(),
+        None,
+    ]:
+        with pytest.raises(ValueError, match="encoding"):
+            module.transit_jws_signature(invalid)
