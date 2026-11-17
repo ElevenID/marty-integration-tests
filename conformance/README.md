@@ -986,3 +986,16 @@ API/browser evidence. Positive modules remain on the existing closed allowlist.
 New status-fetch/finalization warnings and new negative/status modules receive
 no waiver, skip, expected failure or conversion to an official pass. These
 candidate pins do not qualify any earlier product or suite execution.
+
+The W3C controller records the unchanged command exit code before validating
+source integrity and required roles. Its detached runtime, configuration,
+dependencies and private reports are retained for lifecycle checks instead of
+being force-removed. Successful protocol results do not imply completed cleanup;
+the owner must preserve private data, retire readers and pass the process,
+consumer and filesystem gates before normal Git removal.
+
+An isolated local controller may opt into `MARTY_OFFICIAL_PRIVATE_HOSTS=1`
+only with its own regular, privately writable hosts file, for example a private
+mount-namespace copy. This permits an ordinary append without elevation or
+permission changes; the normal runner retains its existing sudo writer. The
+controller must verify that shared host configuration remains unchanged.

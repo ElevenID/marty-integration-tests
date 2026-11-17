@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -136,20 +137,84 @@ def test_official_suite_executes_in_exact_disposable_worktree(
     runtime = tmp_path / "runtime"
 
     w3c.create_runtime_worktree(canonical, runtime, manifest)
-    try:
-        assert w3c.revision(runtime) == manifest["official_suite"]["commit"]
-        (runtime / "reports" / "related-resource.json").write_text(
-            '{"runtime":true}\n',
-            encoding="utf-8",
-        )
-        assert w3c.validate_runtime_checkout(runtime, manifest) == ["reports/related-resource.json"]
-        w3c.validate_checkout(canonical, manifest)
-        assert (canonical / "reports" / "related-resource.json").read_text(encoding="utf-8") == "{}\n"
-    finally:
-        w3c.remove_runtime_worktree(canonical, runtime)
-
-    assert not runtime.exists()
+    assert w3c.revision(runtime) == manifest["official_suite"]["commit"]
+    (runtime / "reports" / "related-resource.json").write_text(
+        '{"runtime":true}\n',
+        encoding="utf-8",
+    )
+    assert w3c.validate_runtime_checkout(runtime, manifest) == ["reports/related-resource.json"]
+    assert (canonical / "reports" / "related-resource.json").read_text(encoding="utf-8") == "{}\n"
+    lifecycle = w3c.runtime_retention_metadata(canonical, runtime, manifest)
+    assert lifecycle["cleanup"] == "retained_pending_lifecycle_checks"
+    assert runtime.exists()
     w3c.validate_checkout(canonical, manifest)
+
+
+def test_raw_command_failure_is_preserved_before_source_validation_and_runtime_retained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical, manifest = initialize_official_suite(tmp_path / "canonical")
+    output = tmp_path / "evidence"
+    monkeypatch.setattr(w3c, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(w3c, "stack_manifest_metadata", lambda _path: {})
+    monkeypatch.setattr(w3c, "w3c_test_command", lambda _path: [
+        sys.executable, "-c",
+        ("from pathlib import Path; import sys; "
+         "Path('suite.log').write_text('private-log-canary'); sys.exit(7)"),
+    ])
+
+    def failed_validation(_path: Path, _manifest: dict) -> None:
+        raise ValueError("unit source validation failed after the command")
+
+    monkeypatch.setattr(w3c, "validate_runtime_checkout", failed_validation)
+    with pytest.raises(ValueError, match="unit source validation failed"):
+        w3c.run_suite(canonical, "https://adapter.example", "did:web:issuer.example", "org", "template",
+                      "credential-policy", "presentation-policy", output, tmp_path / "stack.json", install=False)
+    raw = json.loads((output / "official-suite-result.json").read_text(encoding="utf-8"))
+    lifecycle = json.loads((output / "runtime-lifecycle.json").read_text(encoding="utf-8"))
+    assert raw["exit_code"] == lifecycle["raw_official_exit_code"] == 7
+    assert lifecycle["cleanup"] == "retained_pending_lifecycle_checks"
+    runtime = Path(lifecycle["runtime_path"])
+    assert (runtime / "suite.log").read_text() == "private-log-canary"
+    assert (runtime / "localConfig.cjs").is_file()
+    assert "private-log-canary" not in json.dumps(lifecycle)
+    w3c.validate_checkout(canonical, manifest)
+
+
+@pytest.mark.parametrize("receipt_collision", [False, True])
+def test_failed_runtime_creation_preserves_registration_original_failure_and_existing_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receipt_collision: bool,
+) -> None:
+    canonical, manifest = initialize_official_suite(tmp_path / "canonical")
+    output = tmp_path / "evidence"
+    output.mkdir()
+    sentinel = output / "runtime-lifecycle.json"
+    if receipt_collision:
+        sentinel.write_text('{"preserved":true}\n', encoding="utf-8")
+    monkeypatch.setattr(w3c, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(w3c, "stack_manifest_metadata", lambda _path: {})
+    validate = w3c.validate_checkout
+
+    def fail_runtime(path: Path, selected: dict) -> None:
+        if path != canonical:
+            raise ValueError("unit runtime creation validation failed")
+        validate(path, selected)
+
+    monkeypatch.setattr(w3c, "validate_checkout", fail_runtime)
+    with pytest.raises(ValueError, match="unit runtime creation validation failed"):
+        w3c.run_suite(canonical, "https://adapter.example", "did:web:issuer.example", "org", "template",
+                      "credential-policy", "presentation-policy", output, tmp_path / "stack.json", install=False)
+    runtime = output.parent / f".w3c-suite-runtime-{w3c.os.getpid()}"
+    assert runtime.is_dir()
+    registration = subprocess.check_output(["git", "-C", str(canonical), "worktree", "list", "--porcelain"], text=True)
+    assert str(runtime).replace("\\", "/") in registration.replace("\\", "/")
+    if receipt_collision:
+        assert sentinel.read_text(encoding="utf-8") == '{"preserved":true}\n'
+    else:
+        lifecycle = json.loads(sentinel.read_text(encoding="utf-8"))
+        assert lifecycle["creation_validated"] is False
+        assert lifecycle["raw_official_exit_code"] is None
+    validate(canonical, manifest)
 
 
 def test_npm_command_uses_the_windows_launcher_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -368,6 +433,7 @@ def test_w3c_evidence_records_no_stale_exclusion_and_preserves_immutable_stack(
     evidence = json.loads((output / "evidence.json").read_text(encoding="utf-8"))
     assert evidence["result"] == {
         "exit_code": 0,
+        "raw_official_exit_code": None,
         "passed": False,
         "evidence_class": "official-unmodified-suite",
         "required_capabilities": ["issuer", "vc_verifier", "vp_verifier"],
@@ -379,6 +445,7 @@ def test_w3c_evidence_records_no_stale_exclusion_and_preserves_immutable_stack(
         "disposable_exact_commit_worktree": True,
         "test_or_assertion_source_modified": False,
         "upstream_owned_runtime_mutations": [],
+        "runtime_lifecycle": None,
     }
     assert evidence["exclusions"] == []
     assert evidence["marty"]["stack_manifest"]["images"][0]["digest"] == "sha256:" + "a" * 64
