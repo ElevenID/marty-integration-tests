@@ -351,6 +351,70 @@ def test_runtime_mount_permissions_preserve_the_private_authority_boundary(tmp_p
     assert stat.S_IMODE(environment_file.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux public certificate bind mounts")
+@pytest.mark.parametrize("fault", [None, "private-key", "symlink", "hardlink", "public-parent", "writable",
+                                   "short-read", "changed"])
+def test_public_ca_mount_preserves_keys_and_refuses_other_material(
+    tmp_path: Path, fault: str | None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    key = MODULE.ec.generate_private_key(MODULE.ec.SECP256R1())
+    name = MODULE.x509.Name([MODULE.x509.NameAttribute(MODULE.NameOID.COMMON_NAME, "owned fixture CA")])
+    now = MODULE.datetime.now(MODULE.UTC)
+    certificate = (MODULE.x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                   .public_key(key.public_key()).serial_number(MODULE.x509.random_serial_number())
+                   .not_valid_before(now - MODULE.timedelta(minutes=1))
+                   .not_valid_after(now + MODULE.timedelta(days=1))
+                   .add_extension(MODULE.x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                   .sign(key, MODULE.hashes.SHA256()))
+    pem = certificate.public_bytes(MODULE.serialization.Encoding.PEM)
+    private = key.private_bytes(MODULE.serialization.Encoding.PEM, MODULE.serialization.PrivateFormat.PKCS8,
+                                MODULE.serialization.NoEncryption())
+    authority = tmp_path / "official-ca.key"
+    MODULE.private_file(authority, private.decode("ascii"))
+    path = tmp_path / "root-ca.pem"
+    MODULE.private_file(path, pem.decode("ascii"))
+    if fault == "private-key":
+        path.write_bytes(pem + private)
+    elif fault == "symlink":
+        path.unlink()
+        path.symlink_to(authority)
+    elif fault == "hardlink":
+        os.link(path, tmp_path / "other")
+    elif fault == "public-parent":
+        tmp_path.chmod(0o755)
+    elif fault == "writable":
+        path.chmod(0o666)
+    elif fault == "short-read":
+        path.write_bytes(pem + private)
+        read = os.read
+        monkeypatch.setattr(MODULE.os, "read", lambda descriptor, _size: read(descriptor, len(pem)))
+    elif fault == "changed":
+        read = os.read
+
+        def change_after_read(descriptor: int, size: int) -> bytes:
+            content = read(descriptor, size)
+            metadata = path.stat()
+            os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1))
+            return content
+
+        monkeypatch.setattr(MODULE.os, "read", change_after_read)
+    if fault:
+        before = path.read_bytes()
+        mode = path.stat().st_mode
+        with pytest.raises((ValueError, OSError)):
+            MODULE.prepare_public_ca_mount(tmp_path)
+        assert path.read_bytes() == before
+        assert path.stat().st_mode == mode
+    else:
+        MODULE.prepare_public_ca_mount(tmp_path)
+        MODULE.prepare_public_ca_mount(tmp_path)
+        assert path.read_bytes() == pem
+        assert stat.S_IMODE(path.stat().st_mode) == 0o444
+    assert authority.read_bytes() == private
+    assert stat.S_IMODE(authority.stat().st_mode) == 0o600
+
+
 def test_scoped_transit_token_proves_only_its_bound_sign_route() -> None:
     class Bao:
         def __init__(self):

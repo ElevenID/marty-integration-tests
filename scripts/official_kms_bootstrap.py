@@ -223,6 +223,48 @@ def prepare_runtime_mount_files(values: dict[str, str], root: Path, origin: str)
         path.chmod(0o444)
 
 
+def prepare_public_ca_mount(material: Path) -> None:
+    """Make the public CA leaf readable by the product's container identity.
+
+    The host directory remains private. No key, keystore or scoped credential
+    is opened or has its permissions changed by this operation.
+    The fixture controller owns all writers until staging is complete.
+    """
+    if sys.platform != "linux":
+        raise ValueError("public CA bind mounts require Linux")
+    if (material.resolve() != material or material.stat().st_uid != os.getuid()
+            or stat.S_IMODE(material.stat().st_mode) != 0o700):
+        raise ValueError("public CA mount requires an owned private material directory")
+    path = material / "root-ca.pem"
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        held = os.fstat(descriptor)
+        if (not stat.S_ISREG(held.st_mode) or held.st_uid != os.getuid() or held.st_nlink != 1
+                or held.st_size > 65536 or stat.S_IMODE(held.st_mode) not in {0o600, 0o444}):
+            raise ValueError("public CA mount has invalid custody")
+        content = os.read(descriptor, 65537)
+        if len(content) != held.st_size or os.read(descriptor, 1):
+            raise ValueError("public CA mount could not be read completely")
+        certificate = x509.load_pem_x509_certificate(content)
+        if certificate.public_bytes(serialization.Encoding.PEM).strip() != content.strip():
+            raise ValueError("public CA mount must contain only one certificate")
+        try:
+            is_ca = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+        except x509.ExtensionNotFound:
+            is_ca = False
+        if not is_ca:
+            raise ValueError("public CA mount is not a CA certificate")
+        def identity(metadata: os.stat_result) -> tuple[int, ...]:
+            return (metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_mode,
+                    metadata.st_nlink, metadata.st_size, metadata.st_ctime_ns, metadata.st_mtime_ns)
+
+        if identity(os.fstat(descriptor)) != identity(held) or identity(path.lstat()) != identity(held):
+            raise ValueError("public CA mount changed during validation")
+        os.fchmod(descriptor, 0o444)
+    finally:
+        os.close(descriptor)
+
+
 def checked_release(args: argparse.Namespace) -> tuple[dict[str, str], list[str], dict]:
     if not RUN_ID.fullmatch(args.run_id):
         raise ValueError("official run id is invalid")
@@ -582,6 +624,7 @@ def main() -> int:
         with bootstrap_stage("runtime-files"):
             environment = runtime_environment(tls, keycloak, extra, ca, material, edge)
             prepare_runtime_mount_files(environment, private, material["OIDF_PUBLIC_BASE_URL"])
+            prepare_public_ca_mount(args.material.resolve())
             private_file(
                 private / ".env.kms", "".join(f"{key}={value}\n" for key, value in sorted(environment.items())),
             )
