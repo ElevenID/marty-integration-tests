@@ -618,6 +618,7 @@ def _execute_with_didcomm_policy(
         run(
             boundary_compose_command(args, "up"),
             lane_environment,
+            native_attestation=True,
         )
         == 0
     )

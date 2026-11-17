@@ -462,7 +462,9 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
         _environment: dict[str, str],
         *,
         capture: Path | None = None,
+        native_attestation: bool = False,
     ) -> int:
+        assert native_attestation is (command == ["compose", "up"])
         calls.append((command, capture))
         return 0
 
@@ -559,6 +561,7 @@ def test_failed_registry_start_is_diagnosed_and_cleaned_up(
         _environment: dict[str, str],
         *,
         capture: Path | None = None,
+        native_attestation: bool = False,
     ) -> int:
         calls.append((command, capture))
         if command == ["registry-compose", "up"]:
