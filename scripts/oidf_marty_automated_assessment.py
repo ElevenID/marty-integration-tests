@@ -6,11 +6,13 @@ successfully verified the presented credential. Negative modules instead use
 ExpectVerifierRejectedPresentationPage and are deliberately outside this policy.
 
 Primary source: https://gitlab.com/openid/conformance-suite/-/tree/
-7d420f716e49d44f8a6b04f0a3e240ad6d68ab55/src/main/java/net/openid/conformance/
+23353b36957d6466010de767c812d2c91ed37638/src/main/java/net/openid/conformance/
 vp1finalverifier (the plan, four positive modules, and abstract verifier test),
 condition/common/ExpectVerifierSuccessfulVerificationPage.java, and
 testmodule/AbstractTestModule.java. REVIEW can mask WARNING in that implementation,
 so every original log entry is inspected, including underlying warnings/failures.
+Release 5.3.4 also runs final status-list fetch checks before finishing. Those
+warnings and the new negative/status modules receive no positive-policy waiver.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import hashlib
 import re
 
 POLICY = "marty.official-verifier-outcome/v1"
-UPSTREAM_COMMIT = "7d420f716e49d44f8a6b04f0a3e240ad6d68ab55"
+UPSTREAM_COMMIT = "23353b36957d6466010de767c812d2c91ed37638"
 UPSTREAM_CONDITION = "ExpectVerifierSuccessfulVerificationPage"
 # Pinned Condition.ConditionResult permits INFO/SUCCESS/REVIEW here; WARNING
 # and FAILURE are disqualifying. AbstractTestModule adds FINISHED as its sole

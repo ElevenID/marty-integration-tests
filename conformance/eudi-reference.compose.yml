@@ -47,7 +47,7 @@ services:
     restart: "no"
 
   eudi-verifier:
-    image: ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint@sha256:2f2772b1df39a529f3683c7e82d10d03221b475e67da7b2d8cb1b9aebe6f71f9
+    image: ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint@sha256:b56390f2078f9ce705f2b20db86fdd52297c0a587dd4110c82f173c223a3a07f
     # Keep Paketo sizing inside a deterministic cgroup while leaving enough
     # native memory for Spring startup on GitHub's hosted kernel. Limiting the
     # visible processors also prevents the JVM from creating host-sized pools.

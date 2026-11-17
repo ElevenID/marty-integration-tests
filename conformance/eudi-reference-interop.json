@@ -4,16 +4,16 @@
   "components": {
     "verifier_endpoint": {
       "repository": "https://github.com/eu-digital-identity-wallet/eudi-srv-verifier-endpoint.git",
-      "release": "v0.11.0",
-      "commit": "2bc0bd98a81742db321e96d31d88142128006422",
-      "image": "ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint@sha256:2f2772b1df39a529f3683c7e82d10d03221b475e67da7b2d8cb1b9aebe6f71f9"
+      "release": "v0.12.0",
+      "commit": "19537e72a633b25c94b7450bf582760f52ab2cc9",
+      "image": "ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint@sha256:b56390f2078f9ce705f2b20db86fdd52297c0a587dd4110c82f173c223a3a07f"
     },
     "wallet_kit": {
       "implementation": "ElevenID HTTP test facade over official EUDI JVM libraries",
       "build": {
         "dockerfile": "services/eudi-wallet-harness/Dockerfile",
-        "builder_image": "docker.io/library/gradle:8.11-jdk17@sha256:91d559b8d55f522de5bc6882f73bcedc4e2cc7b0a58e839a9fa0ed95811a988d",
-        "runtime_image": "docker.io/library/eclipse-temurin:17-jre@sha256:92999aea37688157a53a40bfcb187c30f317422e028045fd5fc5c548fde9e626",
+        "builder_image": "docker.io/library/gradle:9.8.0-jdk21@sha256:4debe478645a3ad9208f3403ac021859fdf4d1a819d59970d75309b098f28f76",
+        "runtime_image": "docker.io/library/eclipse-temurin:21-jre@sha256:ca73b4d3961703d6d7830a4361f49ef0478f8f28b39defc07bb72f4cc7f834f6",
         "public_url_bridge_image": "docker.io/alpine/socat:1.8.0.3@sha256:a26f4bcee25ad4a4096ce91e596c0a2fffcbb51f7fd198dd87a5c86eae66f0e1",
         "dependency_lock": "services/eudi-wallet-harness/gradle.lockfile",
         "dependency_verification": "services/eudi-wallet-harness/gradle/verification-metadata.xml"
@@ -21,41 +21,53 @@
       "libraries": {
         "oid4vp": {
           "repository": "https://github.com/eu-digital-identity-wallet/eudi-lib-jvm-openid4vp-kt.git",
-          "release": "v0.15.1",
-          "version": "0.15.1",
-          "commit": "4a695477b66040229c347d3255099b9f702ec929",
-          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vp-kt:0.15.1"
+          "release": "v0.17.0",
+          "version": "0.17.0",
+          "commit": "03f490f6c87ca98b606df88451b9cb6ddef034d3",
+          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vp-kt:0.17.0"
         },
         "oid4vci": {
           "repository": "https://github.com/eu-digital-identity-wallet/eudi-lib-jvm-openid4vci-kt.git",
-          "release": "v0.13.0",
-          "version": "0.13.0",
-          "commit": "07dc0b96dcd5c56197414c80c0fb70ce0d4f377d",
-          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.13.0"
+          "release": "v0.16.0",
+          "version": "0.16.0",
+          "commit": "b6380bdd059c7e4f162d0db8084a15185162d2ec",
+          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-openid4vci-kt:0.16.0"
         },
         "sd_jwt": {
           "repository": "https://github.com/eu-digital-identity-wallet/eudi-lib-jvm-sdjwt-kt.git",
-          "release": "v0.20.1",
-          "version": "0.20.1",
-          "commit": "e8a94cb6114efc73812843fb1338913eac427675",
-          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-sdjwt-kt:0.20.1"
+          "release": "v0.21.0",
+          "version": "0.21.0",
+          "commit": "b5528b6bb53dd55cb0a1d12265811d38b9959a98",
+          "maven_coordinate": "eu.europa.ec.eudi:eudi-lib-jvm-sdjwt-kt:0.21.0"
         },
         "mdoc": {
           "repository": "https://github.com/openwallet-foundation/multipaz.git",
-          "release": "0.100.0",
-          "version": "0.100.0",
-          "commit": "7c0988bee3384d13a0732e0c33336ae0faf3b863",
-          "maven_coordinate": "org.multipaz:multipaz-jvm:0.100.0"
+          "release": "0.102.0",
+          "version": "0.102.0",
+          "commit": "a015c9d93874fe6e09df1354006353ce6f94751d",
+          "maven_coordinate": "org.multipaz:multipaz-jvm:0.102.0"
         }
       }
     }
   },
   "coverage": {
-    "issuance": ["sd_jwt_vc", "mso_mdoc"],
-    "presentation": ["sd_jwt_vc", "mso_mdoc"],
-    "request_object_trust": ["signed_jar_x509_hash_pkix"],
-    "response_mode": ["direct_post.jwt"],
-    "wallet_key_attestation": ["jwt_proof_x5c_profile_trust"],
+    "issuance": [
+      "sd_jwt_vc",
+      "mso_mdoc"
+    ],
+    "presentation": [
+      "sd_jwt_vc",
+      "mso_mdoc"
+    ],
+    "request_object_trust": [
+      "signed_jar_x509_hash_pkix"
+    ],
+    "response_mode": [
+      "direct_post.jwt"
+    ],
+    "wallet_key_attestation": [
+      "jwt_proof_x5c_profile_trust"
+    ],
     "negative": [
       "missing_holder_binding_key",
       "replayed_response",
@@ -65,10 +77,14 @@
   },
   "required_evidence": {
     "eudi.oid4vci.mdoc-issuance.v1": {
-      "claims": ["issuance:mso_mdoc"]
+      "claims": [
+        "issuance:mso_mdoc"
+      ]
     },
     "eudi.oid4vp.mdoc-device-response.v1": {
-      "claims": ["presentation:mso_mdoc"]
+      "claims": [
+        "presentation:mso_mdoc"
+      ]
     },
     "eudi.oid4vp.haip.resolve-dispatch.v1": {
       "claims": [
@@ -79,19 +95,29 @@
       ]
     },
     "eudi.sd-jwt.missing-holder-binding-key.v1": {
-      "claims": ["negative:missing_holder_binding_key"]
+      "claims": [
+        "negative:missing_holder_binding_key"
+      ]
     },
     "eudi.oid4vp.replayed-response.v1": {
-      "claims": ["negative:replayed_response"]
+      "claims": [
+        "negative:replayed_response"
+      ]
     },
     "eudi.oid4vp.invalid-signature.v1": {
-      "claims": ["negative:invalid_signature"]
+      "claims": [
+        "negative:invalid_signature"
+      ]
     },
     "eudi.oid4vp.expired-request.v1": {
-      "claims": ["negative:expired_request"]
+      "claims": [
+        "negative:expired_request"
+      ]
     },
     "eudi.oid4vci.key-attestation-jwt-proof.v1": {
-      "claims": ["wallet_key_attestation:jwt_proof_x5c_profile_trust"]
+      "claims": [
+        "wallet_key_attestation:jwt_proof_x5c_profile_trust"
+      ]
     }
   },
   "required_product_evidence": {

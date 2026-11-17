@@ -38,10 +38,10 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert manifest["coverage"]["wallet_key_attestation"] == ["jwt_proof_x5c_profile_trust"]
     libraries = manifest["components"]["wallet_kit"]["libraries"]
     assert {name: value["version"] for name, value in libraries.items()} == {
-        "oid4vp": "0.15.1",
-        "oid4vci": "0.13.0",
-        "sd_jwt": "0.20.1",
-        "mdoc": "0.100.0",
+        "oid4vp": "0.17.0",
+        "oid4vci": "0.16.0",
+        "sd_jwt": "0.21.0",
+        "mdoc": "0.102.0",
     }
     assert all(value["maven_coordinate"].endswith(value["version"]) for value in libraries.values())
     build = manifest["components"]["wallet_kit"]["build"]
@@ -98,7 +98,7 @@ def test_eudi_reference_components_are_immutable_and_complete() -> None:
     assert "Issuer.make(vciConfig, credentialOfferUri, httpClient).getOrThrow().first" in issuance_source
     assert 'OfferResolutionStageException("offer-and-issuer-resolution", exception)' in issuance_source
     assert 'System.getenv("EUDI_WALLET_ATTESTER_JWKS_FILE")' in issuance_source
-    assert "ProofSpecification.JwtProof" in issuance_source
+    assert "ProofSpecification.JwtProofWithKeyAttestation" in issuance_source
     assert "stage = staged?.stage" in issuance_source
     assert 'issuanceStage("authorization")' in issuance_source
     assert 'issuanceStage("credential-request")' in issuance_source

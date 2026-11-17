@@ -269,8 +269,8 @@ def test_summary_records_only_executed_independent_didcomm_evidence(
     assert interop["cross_implementation_decryption_passed"] is True
     assert interop["implementation"] == {
         "repository": "https://github.com/affinidi/affinidi-tdk-rs.git",
-        "release": "v0.15.8",
-        "commit": "2bec127b171b8fcf69a6c0e6aedca516a3e201b7",
+        "release": "v0.16.0",
+        "commit": "9eb3b42b81bbd83395a66926c70bcfd276d0f126",
     }
     assert (
         "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"

@@ -242,7 +242,7 @@ object WalletPresentationService {
                         redirectUri = outcome.redirectURI?.toString(),
                         verifierAccepted = true,
                     )
-                    DispatchOutcome.VerifierResponse.Rejected -> PresentationResult(
+                    is DispatchOutcome.VerifierResponse.Rejected -> PresentationResult(
                         success = false,
                         responseMode = request.responseMode.label(),
                         verifierAccepted = false,

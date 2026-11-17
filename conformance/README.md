@@ -851,8 +851,8 @@ used by the EUDI reference wallet, not a mock wallet. The three HTTPS
 endpoints above are the TLS boundaries; do not use private container ports
 from a host-side conformance run.
 
-The manifest records each library independently: OID4VP 0.15.1, OID4VCI
-0.13.0, SD-JWT 0.20.1, and Multipaz 0.100.0, including its Maven coordinate,
+The candidate manifest records each library independently: OID4VP 0.17.0, OID4VCI
+0.16.0, SD-JWT 0.21.0, and Multipaz 0.102.0, including its Maven coordinate,
 official source repository, release tag, and dereferenced commit. The harness build uses
 digest-pinned Gradle and Temurin bases, Gradle dependency locking, and strict
 SHA-256 dependency verification metadata. The monthly upstream review checks
@@ -860,7 +860,7 @@ all four source repositories rather than treating OID4VP as the whole wallet
 kit. Updating a coordinate requires regenerating and reviewing both
 `gradle.lockfile` and `gradle/verification-metadata.xml`.
 
-OID4VCI 0.13.0 uses key-attestation-bound JWT proofs. Each run creates a
+OID4VCI 0.16.0 uses the explicit JWT-with-key-attestation proof specification. Each run creates a
 short-lived external wallet-attester chain, mounts its private material only
 into the wallet harness, and configures the Marty issuer profile to trust only
 that disposable root. Marty issuer keys remain in KMS and all credential
@@ -956,3 +956,33 @@ new skip, or when an expected skip stops occurring, so neither file is a
 permanent baseline.
 
 OIDF runner upgrades bind the unmodified upstream commit and both prebuilt image digests together. Release-v5.3.4 adds verifier checks for revoked credentials, identifier-list status, missing status information and an unrequested credential type; its mdoc fixtures also serve a document-signer CRL. Fresh affected-profile evidence is required before accepting this upgrade. Earlier runs remain bound to their original runner version.
+
+### Current upstream migration candidate
+
+PR #490's migration inputs remain **unqualified until fresh affected official
+and independent product lanes pass**. The November 1 `upstream-review.json`
+is preserved as a historical observation, not an acceptance receipt.
+
+| Component | Candidate | Coordinated input |
+| --- | --- | --- |
+| OIDF | release-v5.3.4 / `23353b36957d6466010de767c812d2c91ed37638` | Unchanged official source and matching runner/nginx image digests |
+| W3C VCDM v2 | `62836458636bd1b8309214626ec8fc85de43f8bd` | Exact upstream package lock; pinned npm 11.11.0 bootstrap retained |
+| EUDI verifier | v0.12.0 / `19537e72a633b25c94b7450bf582760f52ab2cc9` | Matching published image digest |
+| EUDI OID4VCI | v0.16.0 / `b6380bdd059c7e4f162d0db8084a15185162d2ec` | Attested JWT proof API and explicit unsupported-grant failure |
+| EUDI OID4VP | v0.17.0 / `03f490f6c87ca98b606df88451b9cb6ddef034d3` | Typed verifier rejection remains a failed result |
+| EUDI SD-JWT | v0.21.0 / `b5528b6bb53dd55cb0a1d12265811d38b9959a98` | Kotlin 2.4.20, Ktor 3.6.0, serialization 1.11.0 |
+| Multipaz | 0.102.0 / `a015c9d93874fe6e09df1354006353ce6f94751d` | JVM 21 build/runtime and regenerated Gradle lock/checksums |
+| Independent DIDComm | crate 0.16.0 / `9eb3b42b81bbd83395a66926c70bcfd276d0f126` | Registry checksum, Crypto 0.4.0, locked adapter and exact sender-key binding |
+
+The repository-level `VTI-Eucalyptus` snapshot contains DIDComm crate 0.15.10,
+so it is not the selected crate's current release. The updater now observes
+the published crate and checksum-bound Cargo metadata. Cargo VCS metadata is
+a publisher claim, not a signature or proof of archive/source equivalence;
+source adoption requires its own review. The selected crate's 19 source and
+original-manifest blobs were independently matched to the candidate Git commit.
+
+OIDF's original `REVIEW` results stay distinct from Marty's bounded observed
+API/browser evidence. Positive modules remain on the existing closed allowlist.
+New status-fetch/finalization warnings and new negative/status modules receive
+no waiver, skip, expected failure or conversion to an official pass. These
+candidate pins do not qualify any earlier product or suite execution.

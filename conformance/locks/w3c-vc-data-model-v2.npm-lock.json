@@ -3347,13 +3347,13 @@
     },
     "node_modules/vc-test-suite-implementations": {
       "version": "2.0.0",
-      "resolved": "git+ssh://git@github.com/w3c/vc-test-suite-implementations.git#4c994a7a024e643c1e16513744527de3c8daece8",
+      "resolved": "git+ssh://git@github.com/w3c/vc-test-suite-implementations.git#802b73a94209d23837cab83c3292cd7bba064931",
       "license": "BSD-3-Clause",
       "dependencies": {
         "@digitalbazaar/did-method-key": "^3.0.0",
         "@digitalbazaar/ed25519-signature-2020": "^4.0.1",
         "@digitalbazaar/ezcap": "^3.0.1",
-        "@digitalbazaar/http-client": "^3.2.0",
+        "@digitalbazaar/http-client": "^4.3.0",
         "app-root-path": "^3.0.0",
         "bnid": "^3.0.0",
         "lru-cache": "^7.14.0",

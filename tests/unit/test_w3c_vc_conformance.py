@@ -183,7 +183,7 @@ def test_reviewed_lock_pins_the_upstream_implementation_registry_commit() -> Non
     lock = json.loads(w3c.reviewed_package_lock_path(manifest).read_text(encoding="utf-8"))
     implementation_registry = lock["packages"]["node_modules/vc-test-suite-implementations"]
 
-    assert implementation_registry["resolved"].endswith("#4c994a7a024e643c1e16513744527de3c8daece8")
+    assert implementation_registry["resolved"].endswith("#802b73a94209d23837cab83c3292cd7bba064931")
 
 
 def test_npm_payload_integrity_is_pinned_to_the_official_tarball() -> None:

@@ -31,6 +31,18 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
     monkeypatch.setattr(updates, "latest_github_release", lambda _repository: "latest-eudi")
     monkeypatch.setattr(updates, "git_head", lambda *_args: "f" * 40)
     monkeypatch.setattr(updates, "git_tag_commit", lambda *_args: "e" * 40)
+    monkeypatch.setattr(
+        updates,
+        "_released_crate",
+        lambda component: {
+            "pinned_release": component["release"],
+            "latest_release": "v0.16.0",
+            "pinned_commit": component["commit"],
+            "latest_commit": "d" * 40,
+            "pinned_checksum": component["crate_checksum"],
+            "latest_checksum": "a" * 64,
+        },
+    )
     observation = updates.observe()
     assert set(observation["upstreams"]) == {
         "oidf",
@@ -43,7 +55,7 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
         "eudi_wallet_kit_mdoc",
     }
     assert observation["upstreams"]["oidf"] == {
-        "pinned_release": "release-v5.3.3",
+        "pinned_release": updates.load_json("conformance/oidf-runner.json")["official_runner"]["release"],
         "latest_release": "release-v5.3.3",
         "pinned_commit": updates.load_json("conformance/oidf-runner.json")["official_runner"]["commit"],
         "latest_commit": "e" * 40,
@@ -57,9 +69,11 @@ def test_observation_tracks_every_eudi_wallet_library(monkeypatch: pytest.Monkey
     didcomm = didcomm_manifest["independent_implementation"]
     assert observation["upstreams"]["didcomm_independent_implementation"] == {
         "pinned_release": didcomm["release"],
-        "latest_release": "latest-eudi",
+        "latest_release": "v0.16.0",
         "pinned_commit": didcomm["commit"],
-        "latest_commit": "e" * 40,
+        "latest_commit": "d" * 40,
+        "pinned_checksum": didcomm["crate_checksum"],
+        "latest_checksum": "a" * 64,
     }
     eudi_manifest = updates.load_json("conformance/eudi-reference-interop.json")
     verifier = eudi_manifest["components"]["verifier_endpoint"]

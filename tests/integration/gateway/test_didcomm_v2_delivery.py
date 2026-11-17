@@ -48,7 +48,7 @@ DIDCOMM_PRIVATE_AGENT_TESTS = os.getenv("DIDCOMM_PRIVATE_AGENT_TESTS", "").lower
     "true",
     "yes",
 }
-INDEPENDENT_IMPLEMENTATION = "affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.15.8#2bec127b171b8fcf69a6c0e6aedca516a3e201b7"
+INDEPENDENT_IMPLEMENTATION = "affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.16.0#9eb3b42b81bbd83395a66926c70bcfd276d0f126"
 OPTIONAL_ABSENT_OR_NULL_PLAINTEXT_MEMBERS = frozenset({"expires_time", "pthid"})
 AUTHCRYPT_POLICY_FILE_ENV = "MARTY_DIDCOMM_TEST_POLICY_FILE"
 
