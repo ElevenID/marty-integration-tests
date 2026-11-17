@@ -144,17 +144,6 @@ def test_rust_issuance_migration_waits_for_native_credential_template_catalog() 
     assert "organization-service:\n        condition: service_healthy" in issuance_migrations
 
 
-def test_rust_issuance_canvas_completion_uses_a_public_https_base() -> None:
-    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    issuance = service_section(compose, "issuance-service", "issuance-migrations")
-
-    assert "UI_BASE_URL: http://ui" in issuance
-    assert (
-        "CANVAS_LTI_EXPERIENCE_BASE_URL: "
-        "${ISSUER_BASE_URL:-https://oss-ci.elevenid.dev}"
-    ) in issuance
-
-
 def test_oid4vci_services_share_one_external_https_issuer_identifier() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     issuance = compose.split("  issuance-service:\n", 1)[1].split("\n  compliance-profile-service:\n", 1)[0]
@@ -202,3 +191,20 @@ def test_rust_signing_secret_reaches_every_internal_signing_caller() -> None:
     ):
         section = overlay.split(f"  {service}:\n", 1)[1].split(f"\n  {next_service}:\n", 1)[0]
         assert signing_key in section
+
+
+def test_disposable_signing_authority_stays_with_platform_owners() -> None:
+    bootstrap = (ROOT / "scripts/bootstrap_disposable_signing_grants.sh").read_text(encoding="utf-8")
+    overlay = (ROOT / "docker-compose.rust-revocation.yml").read_text(encoding="utf-8")
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    origins = bootstrap.split("origins='", 1)[1].split("'", 1)[0].split()
+    assert set(origins) == {
+        "gateway-service", "gateway-issuer-did", "flow-wallet",
+        "issuance-credential", "issuance-passport",
+    }
+    assert len(origins) == 5
+    assert "for origin in credential passport; do" in bootstrap
+    assert "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE:" in overlay
+    assert "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE:" in overlay
+    for retired in ("ISSUANCE_CANVAS_", "ISSUANCE_READINESS_", "CANVAS_LTI_", "CANVAS_MIRROR_"):
+        assert retired not in overlay + compose

@@ -19,7 +19,7 @@ if [ "$(bao read -field=type transit/keys/integration-secret-envelope-marty-aes2
     exit 1
 fi
 
-origins='gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-readiness issuance-passport'
+origins='gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-passport'
 for origin in $origins; do
     key="marty-sign-grant-${origin}-v1"
     bao write "transit/keys/$key" type=hmac key_size=32 \
@@ -72,7 +72,7 @@ write_token sign-grant-verify /grant-verify/token
 write_token sign-grant-mint-gateway-service /grant-gateway/service
 write_token sign-grant-mint-gateway-issuer-did /grant-gateway/issuer-did
 write_token sign-grant-mint-flow-wallet /grant-flow/token
-for origin in credential canvas readiness passport; do
+for origin in credential passport; do
     write_token "sign-grant-mint-issuance-$origin" "/grant-issuance/$origin"
 done
 for directory in /grant-verify /grant-gateway /grant-flow /grant-issuance; do
