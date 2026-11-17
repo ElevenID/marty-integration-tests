@@ -69,7 +69,9 @@ def _assert_did_resolution_denied(error: GatewayClientError) -> None:
 
 def _assert_public_denial(response: Any, *, foreign_values: tuple[str, ...] = ()) -> None:
     """Require a non-enumerating public denial without foreign tenant data."""
-    assert response.status_code in {403, 404}, response.text
+    assert response.status_code in {403, 404}, (
+        f"{response.request.method} {response.request.url.path}: {response.text}"
+    )
     normalized = response.text.lower()
     for index, value in enumerate(foreign_values, start=1):
         if value:
@@ -584,6 +586,7 @@ async def _employee_badge_template_data(
         compliance_code="ENTERPRISE_VC",
         credential_format="sd_jwt_vc",
         frameworks=["enterprise"],
+        activate=True,
     )
     revocation_profile = await client.create_revocation_profile(
         organization_id=organization_id,
