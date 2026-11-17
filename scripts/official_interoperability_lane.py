@@ -1349,6 +1349,22 @@ def discard_disposable_certificate_authority(material_dir: Path) -> None:
     authority.unlink()
 
 
+def protocol_deployment_bindings(gateway_url: str, run_id: str, organization_id: str) -> dict[str, str]:
+    """Native fixture bindings shared by owned and imported protocol lanes."""
+    from official_fixture_bootstrap import issuer_did_for_gateway
+
+    return {
+        "MARTY_ORG_ID": organization_id,
+        "MARTY_ISSUER_DID": issuer_did_for_gateway(gateway_url),
+        # The beta compatibility adapter and credential-login route are not
+        # protocol-suite authentication. Keep those separate paths fail-closed.
+        "VERIFICATION_GOVERNANCE_JSON": "{}",
+        "CREDENTIAL_LOGIN_POLICY_ID": "official-protocol-only-" + run_id,
+        "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER": "true",
+        "CREDENTIAL_LOGIN_CREATE_USERS": "false",
+    }
+
+
 def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, object]]:
     if args.lane not in LANES:
         raise ValueError(f"unknown lane: {args.lane}")
@@ -1416,24 +1432,12 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
     # Startup provisions a default identity. Protocol fixtures must create
     # their own organization identity with the reviewed attestation policy;
     # idempotent identity creation does not overwrite an existing policy.
-    from official_fixture_bootstrap import issuer_did_for_gateway
-
     organization_id = environment.get(
         "MARTY_CONFORMANCE_ORGANIZATION_ID", "00000000-0000-0000-0000-000000000001"
     )
     environment.update(
         {
-            "MARTY_ORG_ID": organization_id,
-            "MARTY_ISSUER_DID": issuer_did_for_gateway(gateway_url),
-            # Satisfy beta's interpolation without enabling its separate
-            # Credentials compatibility adapter in these protocol suites.
-            "VERIFICATION_GOVERNANCE_JSON": "{}",
-            # These suites authenticate their operator with Keycloak, not
-            # credential login. An unprovisioned run-specific policy keeps
-            # that separate login path fail-closed without borrowing beta's.
-            "CREDENTIAL_LOGIN_POLICY_ID": "official-protocol-only-" + args.run_id,
-            "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER": "true",
-            "CREDENTIAL_LOGIN_CREATE_USERS": "false",
+            **protocol_deployment_bindings(gateway_url, args.run_id, organization_id),
             "OFFICIAL_SUITE_RUN_ID": args.run_id,
             "MARTY_COMMIT": str(metadata["marty_commit"]),
             "MARTY_CONFORMANCE_ORGANIZATION_ID": environment.get(

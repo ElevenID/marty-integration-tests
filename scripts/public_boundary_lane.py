@@ -27,6 +27,7 @@ from official_interoperability_lane import (
     load_material_environment,
     load_stack_environment,
     load_stack_metadata,
+    protocol_deployment_bindings,
     redact_initializer_log,
     run,
     validate_stack_binding,
@@ -259,6 +260,10 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
 
     result.update(
         {
+            **protocol_deployment_bindings(
+                gateway_url, args.run_id,
+                result.get("MARTY_CONFORMANCE_ORGANIZATION_ID", "00000000-0000-0000-0000-000000000001"),
+            ),
             "OFFICIAL_SUITE_RUN_ID": args.run_id,
             "MARTY_COMMIT": str(metadata["marty_commit"]),
             "MARTY_CONFORMANCE_ORGANIZATION_ID": result.get(
