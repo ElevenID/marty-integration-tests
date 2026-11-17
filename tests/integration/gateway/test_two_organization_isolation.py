@@ -684,7 +684,7 @@ async def test_didcomm_delivery_cannot_substitute_a_foreign_transaction(
         name="Organization B DIDComm credential",
         issuer_did=issuer_did_b,
     )
-    template_b = await client.create_credential_template(**template_b_data)
+    template_b = await client.create_credential_template(**template_b_data, activate=True)
     issuance_b = await client.issue_credential(
         organization_id=organization_b["id"],
         credential_template_id=template_b["id"],
@@ -735,7 +735,7 @@ async def test_issuer_did_resolution_is_scoped_to_the_selected_organization(
         name="Organization B DID control",
         issuer_did=issuer_did_b,
     )
-    template_b = await client.create_credential_template(**template_b_data)
+    template_b = await client.create_credential_template(**template_b_data, activate=True)
     issued_b = await client.issue_credential(
         organization_id=organization_b["id"],
         credential_template_id=template_b["id"],
@@ -953,6 +953,7 @@ async def test_public_signing_is_did_first_and_fails_closed(
     retired = await client.client.request(
         "DELETE",
         "/v1/signing-keys/issuer-identities",
+        params={"organization_id": organization_id},
         headers={"X-Organization-ID": organization_id},
         json={
             "organization_id": organization_id,
