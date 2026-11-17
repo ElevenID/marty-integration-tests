@@ -1916,3 +1916,28 @@ def test_w3c_lane_diagnoses_fixture_bootstrap_failure(
 
     assert diagnostics == ["w3c-bootstrap-1"]
     assert commands[-1][-1] == "down"
+
+
+@pytest.mark.parametrize("diagnostic_failure", [False, True])
+def test_eudi_startup_failure_preserves_private_logs_then_always_retires(tmp_path, monkeypatch, diagnostic_failure):
+    args = SimpleNamespace(output_dir=tmp_path, run_id="startup-test")
+    events = []
+    monkeypatch.setattr(lane, "compose_command", lambda args, action, **kw: [action])
+    monkeypatch.setattr(lane, "emit_keycloak_initializer_diagnostic", lambda run_id: events.append("diagnostic"))
+    def fake_run(command, environment, **kw):
+        action = command[0]
+        events.append(action)
+        if action == "logs":
+            capture = kw["capture"]
+            assert capture.is_file()
+            if os.name != "nt":
+                assert capture.stat().st_mode & 0o777 == 0o600
+            if diagnostic_failure:
+                raise OSError("controlled unavailable diagnostics")
+            capture.write_text("private fixture diagnostics", encoding="utf-8")
+        return 0
+    monkeypatch.setattr(lane, "run", fake_run)
+    lane.preserve_eudi_startup_failure(args, {})
+    assert events[0] == "logs"
+    assert events[-1] == "down"
+    assert (tmp_path / "private/startup-compose.log").exists()

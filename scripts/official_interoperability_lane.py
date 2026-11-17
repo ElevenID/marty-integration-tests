@@ -1923,6 +1923,22 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
         run([*base, "down"], environment)
 
 
+def preserve_eudi_startup_failure(args: argparse.Namespace, environment: dict[str, str]) -> None:
+    """Preserve private EUDI service diagnostics before retiring its fixture."""
+    try:
+        capture = args.output_dir / "private" / "startup-compose.log"
+        capture.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(capture, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        run(compose_command(args, "logs", eudi=True, haip=True), environment, capture=capture)
+        emit_keycloak_initializer_diagnostic(args.run_id)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        print("Official EUDI startup diagnostics unavailable.", file=sys.stderr)
+    finally:
+        if run(compose_command(args, "down", eudi=True, haip=True), environment):
+            raise RuntimeError("official EUDI startup cleanup failed")
+
+
 def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # EUDI's official wallet library must exercise the same production HAIP
     # request-object path as a real wallet. The dedicated HAIP chain signs the
@@ -1938,10 +1954,14 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     write_private_json(wallet_attester_file, key_attestation_jwks)
     environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(wallet_attester_file)
     environment["EUDI_KEY_ATTESTATION_TRUST_ANCHOR_FILE"] = str(key_attestation_root)
-    up = compose_command(args, "up", eudi=True, haip=True)
-    started = run(up, environment, native_attestation=True) == 0
+    up = compose_command(args, "up", eudi=True, haip=True, retain_on_up_failure=True)
+    try:
+        started = run(up, environment, native_attestation=True) == 0
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        preserve_eudi_startup_failure(args, environment)
+        raise
     if not started:
-        emit_keycloak_initializer_diagnostic(args.run_id)
+        preserve_eudi_startup_failure(args, environment)
         return 1
     result = 1
     try:

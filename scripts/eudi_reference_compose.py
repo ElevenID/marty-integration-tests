@@ -75,7 +75,11 @@ def main(argv: list[str] | None = None) -> int:
             remote_absolute(os.environ.get(name, ""), name)
 
     bridge = f"{args.marty_project}_oidf-runner"
-    if subprocess.run(docker_command(["network", "inspect", bridge]), check=False).returncode:
+    # Teardown and diagnostics remain valid after the independently owned
+    # Marty bridge has already been retired. Starting still requires it.
+    if args.arguments[0] not in {"down", "logs", "ps"} and subprocess.run(
+        docker_command(["network", "inspect", bridge]), check=False
+    ).returncode:
         raise SystemExit(f"Marty TLS bridge does not exist: {bridge}")
     environment = os.environ.copy()
     environment["OIDF_MARTY_BRIDGE_NETWORK"] = bridge
