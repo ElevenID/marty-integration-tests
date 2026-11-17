@@ -252,10 +252,14 @@ def provision(
             "key_bits": 256,
             "max_ttl": "8h",
             "key_usage": ["DigitalSignature"],
+            "basic_constraints_valid_for_non_ca": True,
             "use_csr_common_name": False,
             "use_csr_sans": False,
         },
     )
+    applied_role = bao.request("GET", f"{mount}/roles/registration").get("data", {})
+    if applied_role.get("basic_constraints_valid_for_non_ca") is not True:
+        raise ValueError("registration fixture explicit end-entity certificate role was not applied")
     issued = bao.request(
         "POST",
         f"{mount}/sign/registration",

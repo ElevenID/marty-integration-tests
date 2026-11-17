@@ -52,7 +52,8 @@ class SimulatedBao:
             .add_extension(x509.BasicConstraints(ca=True, path_length=0), True)
             .sign(self.ca_key, hashes.SHA256())
         )
-        self.calls = []
+        self.calls: list[tuple[str, str, dict[str, Any] | None, dict[str, Any]]] = []
+        self.role: dict[str, Any] = {}
         self.export_root = False
 
     def request(self, method: str, path: str, data: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -60,7 +61,14 @@ class SimulatedBao:
         if path.endswith("/csr"):
             csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([])).sign(self.key, hashes.SHA256())
             return {"data": {"csr": csr.public_bytes(serialization.Encoding.PEM).decode()}}
-        if path.startswith("sys/mounts/") or "/roles/" in path:
+        if path.startswith("sys/mounts/"):
+            return {}
+        if "/roles/" in path:
+            if method == "GET":
+                return {"data": self.role}
+            assert data is not None
+            assert data.get("basic_constraints_valid_for_non_ca") is True
+            self.role = data
             return {}
         if path.endswith("/root/generate/internal"):
             result = {"certificate": self.ca.public_bytes(serialization.Encoding.PEM).decode()}
@@ -80,7 +88,7 @@ class SimulatedBao:
                 .not_valid_before(self.now - timedelta(minutes=1))
                 .not_valid_after(self.now + timedelta(hours=7, minutes=50))
                 .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
-                .add_extension(x509.KeyUsage(True, False, False, False, False, False, False, None, None), True)
+                .add_extension(x509.KeyUsage(True, False, False, False, False, False, False, False, False), True)
                 .sign(self.ca_key, hashes.SHA256())
             )
             return {"data": {"certificate": leaf.public_bytes(serialization.Encoding.PEM).decode()}}
@@ -103,7 +111,7 @@ class SimulatedBao:
 
 
 def provision(bao: SimulatedBao) -> dict[str, Any]:
-    return module.provision(
+    result: dict[str, Any] = module.provision(
         bao,
         RUN,
         ORIGIN,
@@ -111,12 +119,14 @@ def provision(bao: SimulatedBao) -> dict[str, Any]:
         scoped_signer=lambda *_args: "scoped-token",
         authority="private-root-authority",
     )
+    return result
 
 
 def load_config(path: Path, digest: str, run_id: str, origin: str) -> str:
-    return module.load_bootstrap_configuration(
+    result: str = module.load_bootstrap_configuration(
         path, digest, run_id, origin, client_id_prefix="x509_san_dns", original_client_id="verifier.fixture.invalid"
     )
+    return result
 
 
 def test_simulated_producer_emits_only_governed_public_bundle_and_verifiable_jwt() -> None:
@@ -276,3 +286,18 @@ def test_transit_jws_decoder_obeys_urlsafe_unpadded_wire_format(signature: bytes
     ]:
         with pytest.raises(ValueError, match="encoding"):
             module.transit_jws_signature(invalid)
+
+
+def test_registration_rejects_server_that_drops_required_end_entity_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    bao = SimulatedBao()
+    original = bao.request
+
+    def missing_profile(method: str, path: str, data: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+        result = original(method, path, data, **kwargs)
+        if method == "GET" and "/roles/" in path:
+            return {"data": {"basic_constraints_valid_for_non_ca": False}}
+        return result
+
+    monkeypatch.setattr(bao, "request", missing_profile)
+    with pytest.raises(ValueError, match="certificate role was not applied"):
+        provision(bao)
