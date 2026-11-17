@@ -192,7 +192,8 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
             "browser-driven issuance and verification through the shipped UI, "
             "including adversarial organization and policy substitution"
         ),
-    } <= set(summary["coverage"])
+    } <= set(summary["planned_coverage"])
+    assert summary["coverage"] == []
     assert summary["test_source"]["additional_paths"] == [
         lane.DIDCOMM_TEST_PATH,
         lane.DIDCOMM_AUTHCRYPT_TEST_PATH,
@@ -332,6 +333,9 @@ def test_summary_does_not_claim_failed_or_unexecuted_didcomm_evidence(
         "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"
         not in summary["coverage"]
     )
+
+    assert summary["coverage"] == []
+    assert "encrypted DIDComm v2 delivery with holder-key decryption" in summary["planned_coverage"]
 
 
 def test_summary_preserves_didcomm_success_when_an_unrelated_tenant_test_fails(

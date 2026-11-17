@@ -430,7 +430,7 @@ def write_summary(
     didcomm_interop["authcrypt_wrong_sender_key_fail_closed_passed"] = (
         authcrypt_passed
     )
-    coverage = [
+    planned_coverage = [
         "two authenticated principals",
         "organization membership and RBAC",
         "resource-ID substitution",
@@ -469,7 +469,9 @@ def write_summary(
         "encrypted DIDComm v2 delivery with holder-key decryption",
         "public response custody-metadata minimization",
     ]
+    coverage = []
     if anoncrypt_passed:
+        coverage.append("encrypted DIDComm v2 delivery with holder-key decryption")
         coverage.append(
             "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"
         )
@@ -521,7 +523,9 @@ def write_summary(
             "claim": "This lane is not an official standards-compliance result.",
         },
         "didcomm_interoperability": didcomm_interop,
+        "planned_coverage": planned_coverage,
         "coverage": coverage,
+        "coverage_scope": "Successful DIDComm testcase evidence only; full observed verdicts are retained in pytest.xml.",
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "summary.json").write_text(
