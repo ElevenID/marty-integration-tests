@@ -258,6 +258,43 @@ def test_oidf_startup_failure_is_diagnosed_before_retained_projects_are_removed(
     assert "--retain-on-up-failure" in up
 
 
+@pytest.mark.parametrize("failure", ["return", "exception", "diagnostic"])
+def test_issuer_startup_failure_preserves_logs_before_cleanup_without_changing_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str,
+) -> None:
+    events: list[str] = []
+
+    def fake_run(command: list[str], _environment: dict[str, str], **kwargs: object) -> int:
+        if "up" in command:
+            assert "--retain-on-up-failure" in command
+            if failure == "exception":
+                raise RuntimeError("original startup failure")
+            return 17
+        if "logs" in command:
+            events.append("logs")
+            if failure == "diagnostic":
+                raise OSError("log transport unavailable")
+            capture = kwargs["capture"]
+            assert isinstance(capture, Path)
+            capture.write_text("private service startup failure", encoding="utf-8")
+        if "down" in command:
+            events.append("down")
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "emit_keycloak_initializer_diagnostic", lambda _run_id: None)
+    args = SimpleNamespace(marty_ui=tmp_path / "marty", run_id="run-1", oidf_runner=tmp_path / "runner",
+                           output_dir=tmp_path / "output", stack_manifest=tmp_path / "stack.json")
+    if failure == "exception":
+        with pytest.raises(RuntimeError, match="original startup failure"):
+            lane.run_oid4vci_issuer(args, {})
+    else:
+        assert lane.run_oid4vci_issuer(args, {}) == 1
+    assert events == ["logs", "down"]
+    if failure != "diagnostic":
+        assert (args.output_dir / "private/startup-compose.log").read_text() == "private service startup failure"
+
+
 def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

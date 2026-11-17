@@ -76,7 +76,7 @@ def test_local_evidence_binds_three_sources_and_refuses_release_shape(tmp_path: 
         module.local_native_functional_evidence(binding)
 
 
-def test_partial_local_up_always_downs_exact_project_even_if_diagnostic_fails(monkeypatch) -> None:
+def test_partial_local_up_always_downs_exact_project_even_if_diagnostic_fails(tmp_path: Path, monkeypatch) -> None:
     calls: list[str] = []
 
     def run(command, _environment, **_kwargs):
@@ -89,10 +89,9 @@ def test_partial_local_up_always_downs_exact_project_even_if_diagnostic_fails(mo
     monkeypatch.setattr(lane, "run", run)
     monkeypatch.setattr(lane, "compose_command", lambda _args, action, **_kwargs: [action])
     monkeypatch.setattr(lane, "emit_keycloak_initializer_diagnostic", failed_diagnostic)
-    args = SimpleNamespace(run_id="owned", local_native_functional_binding="private-binding")
-    with pytest.raises(RuntimeError, match="diagnostic failed"):
-        lane.run_oid4vci_issuer(args, {})
-    assert calls == ["up", "down"]
+    args = SimpleNamespace(run_id="owned", local_native_functional_binding="private-binding", output_dir=tmp_path)
+    assert lane.run_oid4vci_issuer(args, {}) == 1
+    assert calls == ["up", "logs", "down"]
 
 
 def test_local_log_failure_still_cleans_project_and_failed_down_surfaces(tmp_path: Path, monkeypatch) -> None:
@@ -100,6 +99,7 @@ def test_local_log_failure_still_cleans_project_and_failed_down_surfaces(tmp_pat
     monkeypatch.setattr(lane, "wait_for_public_stack",
                         lambda _env: (_ for _ in ()).throw(RuntimeError("readiness failed")))
     monkeypatch.setattr(lane, "emit_oid4vci_runtime_diagnostic", lambda _path: None)
+    monkeypatch.setattr(lane, "emit_keycloak_initializer_diagnostic", lambda _run_id: None)
     args = SimpleNamespace(run_id="owned", local_native_functional_binding="private-binding",
                            output_dir=tmp_path)
     calls: list[str] = []
@@ -135,7 +135,7 @@ def test_local_log_failure_still_cleans_project_and_failed_down_surfaces(tmp_pat
     monkeypatch.setattr(lane, "run", timed_out)
     with pytest.raises(OSError, match="timed out"):
         lane.run_oid4vci_issuer(args, {})
-    assert calls == ["up", "down"]
+    assert calls == ["up", "logs", "down"]
 
 
 def test_native_binding_drift_rejected_after_official_issuer_test() -> None:

@@ -1719,6 +1719,22 @@ def down_local_native_issuer(args: argparse.Namespace, environment: dict[str, st
         raise RuntimeError("local native issuer project cleanup failed")
 
 
+def preserve_issuer_startup_failure(args: argparse.Namespace, environment: dict[str, str]) -> None:
+    """Collect private service logs while the failed owned project still exists."""
+    try:
+        capture = args.output_dir / "private" / "startup-compose.log"
+        capture.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(capture, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        run(compose_command(args, "logs", oidf=True), environment, capture=capture)
+        emit_keycloak_initializer_diagnostic(args.run_id)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        print("Official issuer startup diagnostics unavailable.", file=sys.stderr)
+    finally:
+        if run(compose_command(args, "down", oidf=True), environment):
+            raise RuntimeError("official issuer startup cleanup failed")
+
+
 def run_oid4vci_issuer(
     args: argparse.Namespace,
     environment: dict[str, str],
@@ -1726,17 +1742,13 @@ def run_oid4vci_issuer(
     """Run the active official issuer plan against the public Marty boundary."""
     local_binding = getattr(args, "local_native_functional_binding", None)
     try:
-        started = run(compose_command(args, "up", oidf=True), environment, native_attestation=True) == 0
+        started = run(compose_command(args, "up", oidf=True, retain_on_up_failure=True),
+                      environment, native_attestation=True) == 0
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-        if local_binding:
-            down_local_native_issuer(args, environment)
+        preserve_issuer_startup_failure(args, environment)
         raise
     if not started:
-        try:
-            emit_keycloak_initializer_diagnostic(args.run_id)
-        finally:
-            if local_binding:
-                down_local_native_issuer(args, environment)
+        preserve_issuer_startup_failure(args, environment)
         return 1
     result = 1
     native_before = None
