@@ -475,9 +475,9 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     assert pytest_calls == [output / "private" / "pytest.log"]
     pytest_command = next(command for command, _capture in calls if command[:3] == [sys.executable, "-m", "pytest"])
     assert pytest_command[-3:] == [
-        lane.DIDCOMM_TEST_PATH,
-        lane.DIDCOMM_AUTHCRYPT_TEST_PATH,
-        lane.TEST_PATH,
+        str(lane.ROOT / lane.DIDCOMM_TEST_PATH),
+        str(lane.ROOT / lane.DIDCOMM_AUTHCRYPT_TEST_PATH),
+        str(lane.ROOT / lane.TEST_PATH),
     ]
     assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"
     policy_file = Path(execution_environment["MARTY_DIDCOMM_TEST_POLICY_FILE"])
