@@ -918,3 +918,14 @@ def test_down_always_runs_eudi_oidf_then_marty(tmp_path: Path, monkeypatch: pyte
         ("oidf", "down"),
         ("marty", "down"),
     ]
+
+
+def test_non_start_missing_wallet_attester_gets_only_inert_substitution(monkeypatch):
+    monkeypatch.setattr(lifecycle, "docker_endpoint_is_local", lambda *_args: True)
+    monkeypatch.setattr(lifecycle, "validate_environment_contract", lambda env: {})
+    monkeypatch.delenv("EUDI_WALLET_ATTESTER_JWKS_FILE", raising=False)
+    environment = lifecycle.child_environment(require_eudi=True, validate_eudi=False)
+    assert environment["EUDI_WALLET_ATTESTER_JWKS_FILE"].endswith("cleanup/wallet-attester.jwks.json")
+    monkeypatch.setenv("EUDI_WALLET_ATTESTER_JWKS_FILE", "/preserved/actual-attester.json")
+    environment = lifecycle.child_environment(require_eudi=True, validate_eudi=False)
+    assert environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] == "/preserved/actual-attester.json"

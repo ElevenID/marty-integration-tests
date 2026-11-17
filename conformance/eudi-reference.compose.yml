@@ -56,6 +56,9 @@ services:
     mem_limit: 2g
     environment:
       JAVA_TOOL_OPTIONS: "-XX:ActiveProcessorCount=2 -Xss512k"
+      # Upstream v0.12 requires an explicit intendedUses collection. This
+      # fixture provisions no registration certificate or intended-use authority.
+      SPRING_APPLICATION_JSON: '{"verifier":{"intendedUses":[]}}'
       SERVER_PORT: "8080"
       VERIFIER_PUBLICURL: ${EUDI_VERIFIER_PUBLIC_URL:?set the verifier HTTPS URL}
       VERIFIER_REQUESTJWT_EMBED: "ByReference"
