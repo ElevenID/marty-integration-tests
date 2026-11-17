@@ -141,7 +141,7 @@ jobs:
           printf '%s  %s\n' "${digest#sha256:}" "$wheel" | sha256sum --check --strict
           gh attestation verify "$wheel" --repo "$repository"
           python -m pip install --disable-pip-version-check --no-deps --no-index "$wheel"
-          python -c "from marty_rs import _marty_rs; assert callable(_marty_rs.didcomm_decrypt); assert callable(_marty_rs.didcomm_decrypt_authcrypt)"
+          python -c "from marty_rs import _marty_rs; assert callable(_marty_rs.didcomm_unpack_message); assert not hasattr(_marty_rs, 'didcomm_decrypt'); assert not hasattr(_marty_rs, 'didcomm_decrypt_authcrypt')"
 
       - name: Checkout released deployment adapter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -168,7 +168,7 @@ jobs:
 
       - name: Generate disposable TLS material
         run: |
-          python scripts/eudi_test_material.py generate --output work/material --marty-port 18443
+          python scripts/eudi_test_material.py generate --output work/material --marty-port 18443 --staging-ca-key work/material/official-ca.key
           python scripts/eudi_test_material.py validate --material work/material
           python -c "import json; from urllib.parse import urlsplit; data=json.load(open('work/material/report.json', encoding='utf-8')); hosts=sorted({urlsplit(value).hostname for value in data['urls'].values()}); print('127.0.0.1 ' + ' '.join(host for host in hosts if host and host != 'localhost'))" | sudo tee -a /etc/hosts
 
@@ -182,6 +182,16 @@ jobs:
           echo "MARTY_CONFORMANCE_ADMIN_PASSWORD=$admin_password" >> "$GITHUB_ENV"
           echo "MARTY_CONFORMANCE_REVIEWER_PASSWORD=$reviewer_password" >> "$GITHUB_ENV"
 
+      - name: Stage disposable managed KMS and bounded sender creation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/official_kms_bootstrap.py --didcomm-fixture
+          --run-id "$PUBLIC_BOUNDARY_RUN_ID" --marty-ui work/marty-ui
+          --stack-manifest work/stack/stack-manifest.json
+          --stack-env work/stack/.env.stack --material work/material
+          --output-dir work/kms
+
       - name: Run ElevenID-owned public-boundary matrix
         id: boundary
         shell: bash
@@ -194,10 +204,23 @@ jobs:
             --stack-metadata work/stack/stack-metadata.json \
             --stack-env work/stack/.env.stack \
             --material work/material \
+            --kms-env work/kms/.env.kms \
+            --didcomm-fixture work/kms/didcomm-sender-bootstrap.json \
             --output-dir work/evidence
           status=$?
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           exit 0
+
+      - name: Retire admitted disposable projects after early failures
+        if: always() && hashFiles('work/kms/owned-project.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/official_kms_bootstrap.py --cleanup-only
+          --run-id "$PUBLIC_BOUNDARY_RUN_ID" --marty-ui work/marty-ui
+          --stack-manifest work/stack/stack-manifest.json
+          --stack-env work/stack/.env.stack --material work/material
+          --output-dir work/kms
 
       - name: Upload public product-security evidence
         if: always() && hashFiles('work/evidence/summary.json') != ''

@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -15,6 +16,77 @@ SPEC = importlib.util.spec_from_file_location("official_kms_bootstrap", SOURCE)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
+
+
+@pytest.mark.parametrize("key", ["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "COMPOSE_FILE",
+                                "COMPOSE_PROJECT_NAME", "GH_TOKEN", "GITHUB_TOKEN", "PATH", "LD_PRELOAD"])
+def test_runtime_data_cannot_redirect_controller_authority(key: str) -> None:
+    with pytest.raises(MODULE.SafeBootstrapError, match="controller authority"):
+        MODULE.reject_controller_overrides({key: "synthetic-untrusted-input"})
+
+
+def test_project_admission_never_adopts_existing_resources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    args = SimpleNamespace(run_id="owned-run", stack_manifest=manifest)
+    calls = []
+
+    def existing(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(command)
+        return SimpleNamespace(stdout=json.dumps("engine-owned-run") if command[1] == "info"
+                               else "existing-owned-by-another-controller\n")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", existing)
+    with pytest.raises(MODULE.SafeBootstrapError, match="refusing adoption"):
+        MODULE.admit_owned_projects(args, tmp_path)
+    assert not (tmp_path / "owned-project.json").exists()
+    assert len(calls) == 2
+    assert all("up" not in command and "down" not in command for command in calls)
+
+
+@pytest.mark.parametrize("engine", ["engine-owned-run", "engine-other-controller"])
+def test_cleanup_attempts_both_projects_and_census_when_runtime_input_is_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    engine: str,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    material = tmp_path / "material"
+    material.mkdir()
+    (private / ".env.kms").write_text("synthetic-sensitive-corrupt-input", encoding="utf-8")
+    projects = ["marty-conformance-owned-run", "marty-conformance-owned-run-trust-registry"]
+    ownership = private / "owned-project.json"
+    ownership.write_text(json.dumps({
+        "schema": "elevenid.disposable-project-ownership/v1", "run_id": "owned-run",
+        "projects": projects, "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "engine_id": "engine-owned-run", "cleanup_environment": {},
+    }), encoding="utf-8")
+    ownership.chmod(0o600)
+    args = SimpleNamespace(output_dir=private, run_id="owned-run", stack_manifest=manifest,
+                           marty_ui=tmp_path, material=material)
+    monkeypatch.setattr(MODULE, "checked_release", lambda _args: ({}, ["docker", "compose"], {}))
+    monkeypatch.setattr(MODULE, "compose_sources", lambda _compose: set())
+    calls = []
+
+    def run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(engine) if command[1] == "info" else "")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", run)
+    if engine != "engine-owned-run":
+        with pytest.raises(MODULE.SafeBootstrapError, match="Engine differs"):
+            MODULE.cleanup_owned_projects(args)
+        assert len(calls) == 1
+        assert "down" not in calls[0]
+        return
+    assert MODULE.cleanup_owned_projects(args) == 0
+    assert sum("down" in command for command in calls) == 2
+    assert sum("--filter" in command for command in calls) == 6
+    output = capsys.readouterr().out
+    assert "synthetic-sensitive" not in output
+    assert json.loads(output)["retired"] is True
 
 
 @pytest.mark.parametrize("stage", ["workload-tls", "keycloak-kms", "extra-workloads", "official-edge", "runtime-files"])

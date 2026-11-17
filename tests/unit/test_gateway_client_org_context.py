@@ -202,6 +202,8 @@ async def test_didcomm_key_agreement_publication_sends_only_public_x25519() -> N
         await client.publish_issuer_didcomm_key_agreement(
             organization_id="org-1",
             issuer_did="did:web:issuer.example:orgs:test",
+            service_id="managed-openbao",
+            key_reference="didcomm/keys/org-1/sender/versions/" + "a" * 32,
             public_x=public_x,
         )
     finally:
@@ -213,6 +215,9 @@ async def test_didcomm_key_agreement_publication_sends_only_public_x25519() -> N
         json={
             "organization_id": "org-1",
             "issuer_did": "did:web:issuer.example:orgs:test",
+            "service_id": "managed-openbao",
+            "key_reference": "didcomm/keys/org-1/sender/versions/" + "a" * 32,
+            "enabled": True,
             "key_purpose": "vc_jwt_issuer",
             "credential_format": "SD_JWT_VC",
             "algorithm": "ES256",

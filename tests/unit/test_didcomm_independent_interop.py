@@ -109,9 +109,14 @@ def test_pinned_independent_verifier_decrypts_anoncrypt(
     monkeypatch.setenv("DIDCOMM_INDEPENDENT_VERIFIER_REQUIRED", "true")
     monkeypatch.setenv("DIDCOMM_INTEROP_CLI", str(cli))
     monkeypatch.setenv("DIDCOMM_INTEROP_IMPLEMENTATION", didcomm.INDEPENDENT_IMPLEMENTATION)
+    monkeypatch.setenv("GH_TOKEN", "synthetic-unrelated-authority")
+    monkeypatch.setenv("SIGNING_KEYS_TLS_KMS_TOKEN_FILE", "/synthetic/provider-only.token")
     captured: dict[str, object] = {}
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        assert set(environment) == {"PATH", "LANG"}
         captured["command"] = command
         captured["input"] = kwargs["input"]
         keys = Path(command[command.index("--key-file") + 1])
@@ -209,12 +214,14 @@ def test_authcrypt_policy_update_is_atomic_and_exact(
     policy_file.write_text('{"version":1,"issuers":{}}\n', encoding="utf-8")
     monkeypatch.setenv("DIDCOMM_ENCRYPTION_POLICY_DIR", str(tmp_path))
     monkeypatch.setenv(didcomm.AUTHCRYPT_POLICY_FILE_ENV, str(policy_file))
-    private_key = bytes(range(32))
+    organization_id = "00000000-0000-0000-0000-000000000011"
+    reference = f"didcomm/keys/{organization_id}/sender/versions/{'a' * 32}"
 
     assert didcomm._configure_didcomm_issuer_policy(
         "did:web:issuer.example:orgs:test",
         mode="authcrypt",
-        sender_private_key=private_key,
+        sender_key_ref=reference,
+        organization_id=organization_id,
     )
 
     policy = json.loads(policy_file.read_text(encoding="utf-8"))
@@ -223,7 +230,7 @@ def test_authcrypt_policy_update_is_atomic_and_exact(
         "issuers": {
             "did:web:issuer.example:orgs:test": {
                 "mode": "authcrypt",
-                "sender_x25519_private_key": didcomm._base64url_encode(private_key),
+                "sender_key_ref": reference,
             }
         },
     }

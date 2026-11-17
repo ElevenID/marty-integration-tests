@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import tempfile
@@ -211,6 +212,22 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
 
     result = os.environ.copy()
     result.update(stack_environment)
+    from official_kms_bootstrap import load_assignments, validate_runtime_environment
+
+    kms_env = getattr(args, "kms_env", None)
+    descriptor = getattr(args, "didcomm_fixture", None)
+    if kms_env is None or descriptor is None:
+        raise ValueError("released boundary evidence requires disposable KMS and DIDComm fixture inputs")
+    kms_root = kms_env.resolve().parent
+    if (kms_env.is_symlink() or not kms_env.is_file()
+            or descriptor.is_symlink() or not descriptor.is_file()
+            or descriptor.resolve() != kms_root / "didcomm-sender-bootstrap.json"
+            or descriptor.stat().st_mode & 0o077):
+        raise ValueError("invalid disposable DIDComm fixture inputs")
+    kms_values = load_assignments(kms_env)
+    result.update(kms_values)
+    args.kms_prestarted = True
+    args.release_ui_revision = str(metadata["marty_commit"])
     result.update(load_material_environment(args.material))
     gateway_url = result.get(
         "OIDF_PUBLIC_BASE_URL",
@@ -219,6 +236,19 @@ def environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, obj
     gateway = urlsplit(gateway_url)
     if gateway.scheme != "https" or not gateway.hostname or gateway.path:
         raise ValueError("generated public base URL must be an HTTPS origin")
+    validate_runtime_environment(kms_values, kms_root, gateway_url)
+    bootstrap = json.loads(descriptor.read_text(encoding="utf-8"))
+    if (bootstrap.get("schema") != "elevenid.didcomm-sender-bootstrap/v1"
+            or bootstrap.get("run_id") != args.run_id
+            or bootstrap.get("public_origin") != gateway_url
+            or bootstrap.get("origin") != "https://openbao:8200"):
+        raise ValueError("DIDComm fixture does not belong to this released run")
+    result.update({
+        "DIDCOMM_FIXTURE_DESCRIPTOR_FILE": str(descriptor.resolve()),
+        "DIDCOMM_FIXTURE_CA_FILE": str((kms_root / "openbao_tls_ca_cert").resolve()),
+        "DIDCOMM_FIXTURE_MODULE": str((ROOT / "scripts/didcomm_sender_fixture.py").resolve()),
+        "DIDCOMM_FIXTURE_RUN_ID": args.run_id,
+    })
 
     for name in (
         "MARTY_CONFORMANCE_ADMIN_PASSWORD",
@@ -439,21 +469,21 @@ def write_summary(
             "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"
         )
         coverage.append(
-            "released Marty and independent affinidi-messaging-didcomm rejection of ciphertext, "
+            "independent affinidi-messaging-didcomm rejection of ciphertext, "
             "authentication-tag, protected-header, and wrapped-key tampering"
         )
     if authcrypt_passed:
         coverage.append(
-            "released Marty and independent affinidi-messaging-didcomm authentication and decryption "
+            "independent affinidi-messaging-didcomm authentication and decryption "
             "of Marty's managed-issuer authcrypt envelope"
         )
         coverage.append(
-            "released Marty and independent affinidi-messaging-didcomm rejection of authcrypt "
+            "independent affinidi-messaging-didcomm rejection of authcrypt "
             "ciphertext, authentication-tag, protected-header, and wrapped-key tampering"
         )
         coverage.append(
             "managed issuer authcrypt fails closed before transport when private custody "
-            "does not match the published sender key, without issuing the transaction"
+            "reference does not match the registered sender binding, without issuing the transaction"
         )
     summary = {
         "schema": "elevenid.product-security-evidence/v1",
@@ -521,9 +551,11 @@ def didcomm_test_passed(junit_path: Path, *, test_name: str) -> bool:
 def initialize_didcomm_policy(policy_dir: Path) -> Path:
     """Create the empty fail-closed policy before the issuance container starts."""
 
-    policy_dir = policy_dir.resolve()
     if not policy_dir.is_dir() or policy_dir.is_symlink():
         raise ValueError("DIDComm policy directory must be an exact real directory")
+    policy_dir = policy_dir.resolve()
+    if policy_dir.stat().st_uid != os.getuid() or stat.S_IMODE(policy_dir.stat().st_mode) != 0o700:
+        raise ValueError("DIDComm policy directory must be private to its controller")
     policy_file = policy_dir / "didcomm-encryption-policy.json"
     descriptor = os.open(
         policy_file,
@@ -531,6 +563,9 @@ def initialize_didcomm_policy(policy_dir: Path) -> Path:
         0o600,
     )
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        # Policy contains public references only. The host directory remains
+        # 0700; the single read-only bind is readable by the native UID10001.
+        os.fchmod(stream.fileno(), 0o644)
         json.dump({"version": 1, "issuers": {}}, stream, separators=(",", ":"))
         stream.write("\n")
         stream.flush()
@@ -539,7 +574,7 @@ def initialize_didcomm_policy(policy_dir: Path) -> Path:
 
 
 def execute(args: argparse.Namespace) -> int:
-    """Run the lane with ephemeral sender custody removed on every exit path."""
+    """Run the lane with ephemeral controller capability and sender-reference policy removed on every exit path."""
 
     with tempfile.TemporaryDirectory(
         prefix=f"marty-{args.run_id}-didcomm-authcrypt-"
@@ -610,6 +645,24 @@ def _execute_with_didcomm_policy(
                 email=lane_environment["MARTY_CONFORMANCE_REVIEWER_EMAIL"],
                 password=lane_environment["MARTY_CONFORMANCE_REVIEWER_PASSWORD"],
             )
+            peer_environment = lane_environment.copy()
+            kms_env = getattr(args, "kms_env", None)
+            if kms_env is not None:
+                peer_environment["DIDCOMM_POLICY_OWNER_FILE"] = str(kms_env.resolve().parent / "owned-project.json")
+            from official_kms_bootstrap import RUNTIME_CREDENTIALS, load_assignments
+
+            if kms_env is not None:
+                for name in load_assignments(kms_env):
+                    peer_environment.pop(name, None)
+            for name in RUNTIME_CREDENTIALS:
+                peer_environment.pop(name, None)
+            for name in list(peer_environment):
+                if (name in {"GH_TOKEN", "GITHUB_TOKEN", "BAO_TOKEN", "VAULT_TOKEN"}
+                        or name.endswith(("_KMS_TOKEN_FILE", "_KMS_KEY_NAME", "_KMS_KEY_VERSION"))
+                        or name.endswith("_API_KEY") or name.startswith("KEYCLOAK_")):
+                    peer_environment.pop(name, None)
+            for name in ("DIDCOMM_FIXTURE_DESCRIPTOR_FILE", "DIDCOMM_FIXTURE_CA_FILE"):
+                peer_environment.pop(name, None)
             exit_code = run(
                 [
                     sys.executable,
@@ -618,11 +671,11 @@ def _execute_with_didcomm_policy(
                     "-q",
                     "--junitxml",
                     str(private / "pytest.xml"),
-                    TEST_PATH,
                     DIDCOMM_TEST_PATH,
                     DIDCOMM_AUTHCRYPT_TEST_PATH,
+                    TEST_PATH,
                 ],
-                lane_environment,
+                peer_environment,
                 capture=private / "pytest.log",
             )
             if exit_code:
@@ -662,6 +715,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--stack-metadata", type=Path, required=True)
     result.add_argument("--stack-env", type=Path, required=True)
     result.add_argument("--material", type=Path, required=True)
+    result.add_argument("--kms-env", type=Path)
+    result.add_argument("--didcomm-fixture", type=Path)
     result.add_argument("--output-dir", type=Path, required=True)
     result.add_argument(
         "--local-build",

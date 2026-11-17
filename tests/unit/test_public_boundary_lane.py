@@ -473,9 +473,9 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     assert pytest_calls == [output / "private" / "pytest.log"]
     pytest_command = next(command for command, _capture in calls if command[:3] == [sys.executable, "-m", "pytest"])
     assert pytest_command[-3:] == [
-        lane.TEST_PATH,
         lane.DIDCOMM_TEST_PATH,
         lane.DIDCOMM_AUTHCRYPT_TEST_PATH,
+        lane.TEST_PATH,
     ]
     assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"
     policy_file = Path(execution_environment["MARTY_DIDCOMM_TEST_POLICY_FILE"])
@@ -509,7 +509,10 @@ def test_registry_fixture_compose_is_project_scoped_and_immutable() -> None:
         "--wait",
     ]
     compose = lane.TRUST_REGISTRY_FIXTURE_COMPOSE.read_text(encoding="utf-8")
-    assert "${MARTY_SERVICES_IMAGE:" in compose
+    assert "image: python@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db" in compose
+    assert "pull_policy: if_not_present" in compose
+    assert "mem_limit: 128m" in compose
+    assert "pids_limit: 32" in compose
     assert "build:" not in compose
     assert '"127.0.0.1::8080"' in compose
     assert "external: true" in compose
@@ -624,8 +627,8 @@ def test_public_boundary_workflow_installs_manifest_pinned_didcomm_verifier() ->
     assert 'printf \'%s  %s\\n\' "${digest#sha256:}" "$wheel"' in workflow
     assert 'gh attestation verify "$wheel" --repo "$repository"' in workflow
     assert "--no-deps --no-index" in workflow
-    assert "callable(_marty_rs.didcomm_decrypt)" in workflow
-    assert "callable(_marty_rs.didcomm_decrypt_authcrypt)" in workflow
+    assert "not hasattr(_marty_rs, 'didcomm_decrypt')" in workflow
+    assert "not hasattr(_marty_rs, 'didcomm_decrypt_authcrypt')" in workflow
 
 
 def test_public_boundary_workflow_uses_runner_browser_without_live_download() -> None:

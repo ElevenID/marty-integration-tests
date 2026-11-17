@@ -1675,12 +1675,15 @@ class GatewayClient:
         *,
         organization_id: str,
         issuer_did: str,
+        service_id: str,
+        key_reference: str,
         public_x: str,
+        enabled: bool = True,
         key_purpose: str = "vc_jwt_issuer",
         credential_format: str = "SD_JWT_VC",
         algorithm: str = "ES256",
     ) -> Dict[str, Any]:
-        """Publish public X25519 material for one exact managed issuer tuple."""
+        """Bind public X25519 material to an existing non-exportable remote key."""
 
         return await self._request(
             "PUT",
@@ -1688,6 +1691,9 @@ class GatewayClient:
             json={
                 "organization_id": organization_id,
                 "issuer_did": issuer_did,
+                "service_id": service_id,
+                "key_reference": key_reference,
+                "enabled": enabled,
                 "key_purpose": key_purpose,
                 "credential_format": credential_format,
                 "algorithm": algorithm,
