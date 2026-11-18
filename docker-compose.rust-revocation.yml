@@ -25,8 +25,6 @@ x-rust-issuance-grants: &rust-issuance-grants
   BAO_ADDR: https://openbao:8200
   BAO_CACERT: /bao/public-ca/vault-ca.pem
   ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/credential
-  ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/canvas
-  ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/readiness
   ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: /run/grant-issuance/passport
 
 services:

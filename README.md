@@ -161,3 +161,8 @@ See `CONTRIBUTING.md`, `SECURITY.md`, and `SUPPORT.md` for project policies.
 ## License
 
 MIT
+
+## External connectors
+
+See the [external connector boundary](docs/external-connector-boundary.md) for
+platform test ownership and the separately owned connector qualification TODO.
