@@ -8,6 +8,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -18,6 +19,39 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load trust registry fixture")
 fixture = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(fixture)
+
+
+def test_sender_creation_is_control_only_and_never_serializes_provider_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Sender:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def provision(self, _organization_id: str, _issuer_did: str) -> dict[str, str]:
+            self.calls += 1
+            raise ValueError("synthetic-provider-authority-must-not-be-serialized")
+
+    sender = Sender()
+    monkeypatch.setattr(fixture, "SENDER", sender)
+    monkeypatch.setattr(fixture, "CONTROL_TOKEN", "synthetic-controller-token-long-enough")
+    headers = {"Authorization": f"Bearer {fixture.CONTROL_TOKEN}"}
+    body = {"organization_id": "public-organization", "issuer_did": "did:web:owned.test"}
+    for server_type, expected_status in ((ThreadingHTTPServer, 404), (fixture.ControlServer, 409)):
+        server = server_type(("127.0.0.1", 0), fixture.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            origin = f"http://127.0.0.1:{server.server_port}"
+            response = httpx.post(origin + "/control/didcomm/sender", json=body)
+            assert response.status_code == 401
+            response = httpx.post(origin + "/control/didcomm/sender", json=body, headers=headers)
+            assert response.status_code == expected_status
+            assert "synthetic-provider-authority" not in response.text
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+        assert not thread.is_alive()
+    assert sender.calls == 1
 
 
 def test_control_api_configures_feed_and_records_the_product_request() -> None:

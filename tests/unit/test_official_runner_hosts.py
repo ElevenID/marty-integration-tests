@@ -1,4 +1,5 @@
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -59,3 +60,51 @@ def test_conflicting_alias_is_preserved_and_rejected() -> None:
 def test_workflow_uses_the_shared_material_host_setup() -> None:
     workflow = (SOURCE.parents[1] / ".github/workflows/official-interoperability.yml").read_text(encoding="utf-8")
     assert "python scripts/official_runner_hosts.py --material-report work/material/report.json --install" in workflow
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux private hosts custody")
+def test_owned_namespace_hosts_preserves_existing_records_without_elevation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hosts = tmp_path / "hosts"
+    hosts.write_bytes(b"127.0.0.1 localhost\n# preserved fixture comment\n")
+    hosts.chmod(0o600)
+    monkeypatch.setenv("MARTY_OFFICIAL_PRIVATE_HOSTS", "1")
+    monkeypatch.setattr(MODULE, "HOSTS_FILE", hosts)
+    monkeypatch.setattr(MODULE.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("sudo writer used"))
+    MODULE.append_host_aliases("192.0.2.1", ["openbao"])
+    assert hosts.read_bytes() == b"127.0.0.1 localhost\n# preserved fixture comment\n\n192.0.2.1 openbao\n"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux private hosts custody")
+def test_owned_hosts_refuses_symlinks_and_writable_custody(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "target"
+    target.write_bytes(b"preserve")
+    link = tmp_path / "hosts"
+    link.symlink_to(target)
+    monkeypatch.setenv("MARTY_OFFICIAL_PRIVATE_HOSTS", "1")
+    monkeypatch.setattr(MODULE, "HOSTS_FILE", link)
+    with pytest.raises(ValueError, match="regular"):
+        MODULE.append_host_aliases("127.0.0.1", ["openbao"])
+    monkeypatch.setattr(MODULE, "HOSTS_FILE", target)
+    target.chmod(0o666)
+    with pytest.raises(ValueError, match="custody"):
+        MODULE.append_host_aliases("127.0.0.1", ["openbao"])
+    assert target.read_bytes() == b"preserve"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux private hosts custody")
+def test_private_hosts_wrong_owner_refuses_privileged_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hosts = tmp_path / "hosts"
+    hosts.write_bytes(b"preserve")
+    monkeypatch.setenv("MARTY_OFFICIAL_PRIVATE_HOSTS", "1")
+    monkeypatch.setattr(MODULE, "HOSTS_FILE", hosts)
+    monkeypatch.setattr(MODULE.os, "getuid", lambda: hosts.stat().st_uid + 1)
+    monkeypatch.setattr(MODULE.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("sudo writer used"))
+    with pytest.raises(ValueError, match="custody is unavailable"):
+        MODULE.append_host_aliases("127.0.0.1", ["openbao"])
+    assert hosts.read_bytes() == b"preserve"

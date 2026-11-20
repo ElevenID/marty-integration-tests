@@ -258,6 +258,43 @@ def test_oidf_startup_failure_is_diagnosed_before_retained_projects_are_removed(
     assert "--retain-on-up-failure" in up
 
 
+@pytest.mark.parametrize("failure", ["return", "exception", "diagnostic"])
+def test_issuer_startup_failure_preserves_logs_before_cleanup_without_changing_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str,
+) -> None:
+    events: list[str] = []
+
+    def fake_run(command: list[str], _environment: dict[str, str], **kwargs: object) -> int:
+        if "up" in command:
+            assert "--retain-on-up-failure" in command
+            if failure == "exception":
+                raise RuntimeError("original startup failure")
+            return 17
+        if "logs" in command:
+            events.append("logs")
+            if failure == "diagnostic":
+                raise OSError("log transport unavailable")
+            capture = kwargs["capture"]
+            assert isinstance(capture, Path)
+            capture.write_text("private service startup failure", encoding="utf-8")
+        if "down" in command:
+            events.append("down")
+        return 0
+
+    monkeypatch.setattr(lane, "run", fake_run)
+    monkeypatch.setattr(lane, "emit_keycloak_initializer_diagnostic", lambda _run_id: None)
+    args = SimpleNamespace(marty_ui=tmp_path / "marty", run_id="run-1", oidf_runner=tmp_path / "runner",
+                           output_dir=tmp_path / "output", stack_manifest=tmp_path / "stack.json")
+    if failure == "exception":
+        with pytest.raises(RuntimeError, match="original startup failure"):
+            lane.run_oid4vci_issuer(args, {})
+    else:
+        assert lane.run_oid4vci_issuer(args, {}) == 1
+    assert events == ["logs", "down"]
+    if failure != "diagnostic":
+        assert (args.output_dir / "private/startup-compose.log").read_text() == "private service startup failure"
+
+
 def test_w3c_issuance_diagnostic_prints_only_redacted_error_lines(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1703,6 +1740,8 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import eudi_registration_fixture
+    monkeypatch.setattr(eudi_registration_fixture, "load_bootstrap_configuration", lambda *_args, **_kwargs: "{}")
     commands: list[list[str]] = []
     lifecycle_environments: list[dict[str, str]] = []
     suite_environment: dict[str, str] = {}
@@ -1769,6 +1808,8 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
             {
                 "OIDF_MARTY_GATEWAY_URL": "https://marty.test",
                 "EUDI_VERIFIER_PUBLIC_URL": "https://verifier.test",
+                "EUDI_VERIFIER_REGISTRATION_RECORD_FILE": "/owned/mock-registration.json",
+                "EUDI_VERIFIER_REGISTRATION_RECORD_SHA256": "a" * 64,
                 "EUDI_WALLET_KIT_URL": "http://wallet-kit:9090",
             },
         )
@@ -1879,3 +1920,36 @@ def test_w3c_lane_diagnoses_fixture_bootstrap_failure(
 
     assert diagnostics == ["w3c-bootstrap-1"]
     assert commands[-1][-1] == "down"
+
+
+@pytest.mark.parametrize("diagnostic_failure", [False, True])
+def test_eudi_startup_failure_preserves_private_logs_then_always_retires(tmp_path, monkeypatch, diagnostic_failure):
+    args = SimpleNamespace(output_dir=tmp_path, run_id="startup-test")
+    events = []
+    monkeypatch.setattr(lane, "compose_command", lambda args, action, **kw: [action])
+    monkeypatch.setattr(lane, "emit_keycloak_initializer_diagnostic", lambda run_id: events.append("diagnostic"))
+    def fake_run(command, environment, **kw):
+        action = command[0]
+        events.append(action)
+        if action == "logs":
+            capture = kw["capture"]
+            assert capture.is_file()
+            if os.name != "nt":
+                assert capture.stat().st_mode & 0o777 == 0o600
+            if diagnostic_failure:
+                raise OSError("controlled unavailable diagnostics")
+            capture.write_text("private fixture diagnostics", encoding="utf-8")
+        return 0
+    monkeypatch.setattr(lane, "run", fake_run)
+    lane.preserve_eudi_startup_failure(args, {})
+    assert events[0] == "logs"
+    assert events[-1] == "down"
+    assert (tmp_path / "private/startup-compose.log").exists()
+
+
+def test_eudi_requires_pinned_registration_before_allocating_fixture(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected_start(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Missing registration must fail before fixture startup")
+    monkeypatch.setattr(lane,"run",unexpected_start)
+    with pytest.raises(ValueError,match="isolated bootstrap registration"):
+        lane.run_eudi(SimpleNamespace(output_dir=tmp_path),{})

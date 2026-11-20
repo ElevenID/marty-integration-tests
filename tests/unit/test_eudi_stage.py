@@ -5,6 +5,7 @@ import pytest
 from tests.integration.gateway.helpers.eudi_stage import (
     EUDIInteropStageError,
     eudi_stage,
+    optional_verification_diagnostic,
     require_presentation_accepted,
 )
 from tests.integration.gateway.helpers.gateway_client import GatewayClientError
@@ -208,3 +209,35 @@ def test_presentation_acceptance_classifies_preverification_failures(
         f"eudi-stage-mdoc-presentation-verifier-rejected-{code}"
     )
     assert reason not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_diagnostic_preserves_original_dispatch_failure(caplog):
+    async def unavailable():
+        raise GatewayClientError("private-credential-must-not-escape", status_code=409)
+    diagnostic = await optional_verification_diagnostic(unavailable, stage="dtc-lifecycle-presentation-verification-result")
+    assert diagnostic is None
+    assert "http-409" in caplog.text
+    assert "private-credential" not in caplog.text
+    with pytest.raises(EUDIInteropStageError, match="^eudi-stage-resolution-invalid-request$"):
+        require_presentation_accepted(
+            {"success":False, "error":"presentation-resolution-invalid-request"},
+            stage="dtc-lifecycle-presentation", verification_result=diagnostic,
+        )
+
+
+@pytest.mark.asyncio
+async def test_available_diagnostic_is_returned_unchanged():
+    result = {"decision_reason":"required credentials not satisfied"}
+    async def available():
+        return result
+    assert await optional_verification_diagnostic(available, stage="dtc-result") is result
+
+
+@pytest.mark.asyncio
+async def test_optional_diagnostic_does_not_swallow_cancellation():
+    import asyncio
+    async def cancelled():
+        raise asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await optional_verification_diagnostic(cancelled, stage="dtc-result")

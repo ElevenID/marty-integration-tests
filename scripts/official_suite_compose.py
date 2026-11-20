@@ -334,6 +334,14 @@ def child_environment(
         except ValueError:
             environment = cleanup_eudi_environment(environment, ROOT / "conformance" / "eudi-material" / "cleanup")
             material_mode = "external"
+    if needs_eudi and not validate_eudi and not environment.get("EUDI_WALLET_ATTESTER_JWKS_FILE", "").strip():
+        # Compose parses bind substitutions even for down/logs/ps. This path
+        # is inert: only non-start operations can receive the missing default.
+        environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(
+            ROOT / "conformance" / "eudi-material" / "cleanup" / "wallet-attester.jwks.json"
+        )
+    if needs_eudi and not validate_eudi:
+        environment.setdefault("EUDI_VERIFIER_APPLICATION_JSON", '{"verifier":{"intendedUses":[]}}')
     local_docker = docker_endpoint_is_local(environment) if needs_eudi else True
     if not local_docker and material_mode == "generated":
         raise ValueError(

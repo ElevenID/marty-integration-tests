@@ -2,7 +2,7 @@
   "schema": "elevenid.official-vc-suite/v1",
   "official_suite": {
     "repository": "https://github.com/w3c/vc-data-model-2.0-test-suite.git",
-    "commit": "e92936564867da9150b99b167fe1c73b9370ad6c",
+    "commit": "62836458636bd1b8309214626ec8fc85de43f8bd",
     "branch": "main",
     "source_policy": "unmodified",
     "node": "24",
@@ -10,19 +10,31 @@
     "npm_tarball": "https://registry.npmjs.org/npm/-/npm-11.11.0.tgz",
     "npm_integrity": "sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
     "package_lock_path": "conformance/locks/w3c-vc-data-model-v2.npm-lock.json",
-    "package_lock_sha256": "sha256:47769e63f449a60e05fa1569fec39813771bd5c22ce38161b42fe386ba2c4445",
+    "package_lock_sha256": "sha256:226896dff42d1dc74142a46be66580ee3eb24049eb7b89e1071b8ccbecc982cd",
     "review_cadence": "monthly"
   },
   "adapter": {
     "path": "/v1/vc-api",
     "authentication": "disposable organization-scoped API key",
-    "required_scopes": ["credentials:issue", "credentials:read"],
-    "issuer_selection": ["organization_id", "credential_template_id", "issuer_did"],
-    "verification_selection": ["organization_id", "presentation_policy_id"],
+    "required_scopes": [
+      "credentials:issue",
+      "credentials:read"
+    ],
+    "issuer_selection": [
+      "organization_id",
+      "credential_template_id",
+      "issuer_did"
+    ],
+    "verification_selection": [
+      "organization_id",
+      "presentation_policy_id"
+    ],
     "target": "Marty gateway -> ordinary issuance and presentation-policy services"
   },
   "supported": {
-    "serializations": ["w3c_vcdm_v2_di"],
+    "serializations": [
+      "w3c_vcdm_v2_di"
+    ],
     "verification_path": "Marty presentation-policy evaluator"
   },
   "deployment": {

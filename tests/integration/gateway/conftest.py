@@ -532,6 +532,7 @@ async def sd_jwt_mdl_template(
         compliance_code="MDL_SD_JWT",
         credential_format="sd_jwt_vc",
         frameworks=["aamva"],
+        activate=True,
     )
     revocation_profile = await gateway_client.create_revocation_profile(
         organization_id=str(test_organization["id"]),
@@ -547,7 +548,7 @@ async def sd_jwt_mdl_template(
         compliance_profile_id=str(compliance_profile["id"]),
         revocation_profile_id=str(revocation_profile["id"]),
     )
-    template = await gateway_client.create_credential_template(**template_data)
+    template = await gateway_client.create_credential_template(**template_data, activate=True)
     return template
 
 

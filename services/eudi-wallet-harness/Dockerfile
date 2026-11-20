@@ -4,7 +4,7 @@
 # Uses the official EUDI Wallet Kit JVM libraries to exercise Marty's
 # OID4VCI/OID4VP endpoints as a real wallet would.
 
-FROM gradle:8.11-jdk17@sha256:91d559b8d55f522de5bc6882f73bcedc4e2cc7b0a58e839a9fa0ed95811a988d AS builder
+FROM gradle:9.8.0-jdk21@sha256:4debe478645a3ad9208f3403ac021859fdf4d1a819d59970d75309b098f28f76 AS builder
 WORKDIR /build
 COPY build.gradle.kts settings.gradle.kts ./
 COPY gradle/ gradle/
@@ -14,7 +14,7 @@ RUN gradle dependencies --no-daemon
 COPY src/ src/
 RUN gradle installDist --no-daemon
 
-FROM eclipse-temurin:17-jre@sha256:92999aea37688157a53a40bfcb187c30f317422e028045fd5fc5c548fde9e626
+FROM eclipse-temurin:21-jre@sha256:ca73b4d3961703d6d7830a4361f49ef0478f8f28b39defc07bb72f4cc7f834f6
 WORKDIR /app
 COPY --from=builder /build/build/install/eudi-wallet-harness/ ./
 

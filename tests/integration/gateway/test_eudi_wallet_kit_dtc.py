@@ -35,7 +35,7 @@ from typing import Any, Dict
 import pytest
 
 from .helpers.eudi_attestation import required_eudi_key_attestation_policy
-from .helpers.eudi_stage import eudi_stage, require_presentation_accepted
+from .helpers.eudi_stage import eudi_stage, optional_verification_diagnostic, require_presentation_accepted
 from .helpers.eudi_wallet_kit_client import EUDIWalletKitClient
 from .helpers.gateway_client import GatewayClient
 from .helpers.mdoc_test_certificate import create_disposable_mdoc_certificate_chain
@@ -500,8 +500,10 @@ class TestDtcWalletPresentation:
 
         verification = None
         if result.get("success") is not True:
-            with eudi_stage("dtc-presentation-verification-result"):
-                verification = await authenticated_gateway_client.get_verification_decision(flow["instance_id"])
+            verification = await optional_verification_diagnostic(
+                lambda: authenticated_gateway_client.get_verification_decision(flow["instance_id"]),
+                stage="dtc-presentation-verification-result",
+            )
         require_presentation_accepted(
             result,
             stage="dtc-presentation",
@@ -536,8 +538,10 @@ class TestDtcWalletPresentation:
 
         verification = None
         if result.get("success") is not True:
-            with eudi_stage("dtc-identity-presentation-verification-result"):
-                verification = await authenticated_gateway_client.get_verification_decision(flow["instance_id"])
+            verification = await optional_verification_diagnostic(
+                lambda: authenticated_gateway_client.get_verification_decision(flow["instance_id"]),
+                stage="dtc-identity-presentation-verification-result",
+            )
         require_presentation_accepted(
             result,
             stage="dtc-identity-presentation",
@@ -646,8 +650,10 @@ class TestDtcWalletEndToEnd:
         )
         verification = None
         if post_result.get("success") is not True:
-            with eudi_stage("dtc-lifecycle-presentation-verification-result"):
-                verification = await authenticated_gateway_client.get_verification_decision(instance_id)
+            verification = await optional_verification_diagnostic(
+                lambda: authenticated_gateway_client.get_verification_decision(instance_id),
+                stage="dtc-lifecycle-presentation-verification-result",
+            )
         require_presentation_accepted(
             post_result,
             stage="dtc-lifecycle-presentation",

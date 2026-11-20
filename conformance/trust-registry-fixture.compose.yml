@@ -1,7 +1,13 @@
 services:
   trust-registry-fixture:
-    image: ${MARTY_SERVICES_IMAGE:?MARTY_SERVICES_IMAGE must pin the released services image}
-    pull_policy: always
+    # Controller-only Python 3.12.10 runtime; the released native services
+    # image intentionally contains no Python. This is not a product artifact.
+    image: python@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db
+    pull_policy: if_not_present
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 32
+    cpus: 0.25
     entrypoint: ["python"]
     command: ["/fixture/trust_registry_fixture.py"]
     # Generated private material remains mode 0600. Run as the owning host
@@ -19,8 +25,14 @@ services:
       - /tmp:size=16m,mode=1777
     environment:
       TRUST_REGISTRY_FIXTURE_TOKEN: ${TRUST_REGISTRY_FIXTURE_TOKEN:?generate a disposable control token}
+      DIDCOMM_FIXTURE_DESCRIPTOR: /fixture/didcomm-sender-bootstrap.json
+      DIDCOMM_FIXTURE_CA: /fixture/openbao-ca.pem
+      DIDCOMM_FIXTURE_RUN_ID: ${DIDCOMM_FIXTURE_RUN_ID:?set the exact owned run}
     volumes:
       - ${TRUST_REGISTRY_FIXTURE_SCRIPT:?set the absolute fixture script path}:/fixture/trust_registry_fixture.py:ro
+      - ${DIDCOMM_FIXTURE_MODULE:?set the sender controller module}:/fixture/didcomm_sender_fixture.py:ro
+      - ${DIDCOMM_FIXTURE_DESCRIPTOR_FILE:?set the private two-use capability}:/fixture/didcomm-sender-bootstrap.json:ro
+      - ${DIDCOMM_FIXTURE_CA_FILE:?set the public OpenBao CA}:/fixture/openbao-ca.pem:ro
       - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to generated conformance material}:/material:ro
     ports:
       - "127.0.0.1::8080"

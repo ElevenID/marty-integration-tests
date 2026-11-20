@@ -11,12 +11,16 @@ import hmac
 import json
 import os
 import ssl
+import sys
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from didcomm_sender_fixture import SenderProvisioner  # noqa: E402
 
 MAX_CONTROL_BYTES = 2 * 1024 * 1024
 FEED_PATH = "/marty-sync/v1"
@@ -60,6 +64,11 @@ class FixtureState:
 
 STATE = FixtureState()
 CONTROL_TOKEN = os.environ.get("TRUST_REGISTRY_FIXTURE_TOKEN", "")
+SENDER: SenderProvisioner | None = None
+
+
+class ControlServer(ThreadingHTTPServer):
+    """The listener published only on runner loopback, separate from the feed."""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -120,6 +129,28 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
             return
+        if self.path == "/control/didcomm/sender":
+            # Creation authority is reachable only on the loopback-published
+            # controller listener, never the product-facing HTTPS feed.
+            if not isinstance(self.server, ControlServer):
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            body = self._control_body()
+            if SENDER is None:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "sender fixture unavailable"})
+                return
+            if (body is None or set(body) != {"organization_id", "issuer_did"}
+                    or any(not isinstance(value, str) for value in body.values())):
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid sender binding"})
+                return
+            try:
+                public = SENDER.provision(body["organization_id"], body["issuer_did"])
+            except Exception:
+                # Never serialize a provider exception, descriptor or token.
+                self._json(HTTPStatus.CONFLICT, {"error": "sender provisioning refused"})
+                return
+            self._json(HTTPStatus.OK, public)
+            return
         if self.path == "/control/reset":
             STATE.reset()
             self._json(HTTPStatus.OK, {"reset": True})
@@ -140,14 +171,24 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global SENDER
     if len(CONTROL_TOKEN) < 32:
         raise SystemExit("TRUST_REGISTRY_FIXTURE_TOKEN must contain at least 32 characters")
     certificate = Path(os.environ.get("TRUST_REGISTRY_FIXTURE_CERT", "/material/tls.crt"))
     key = Path(os.environ.get("TRUST_REGISTRY_FIXTURE_KEY", "/material/tls.key"))
     if not certificate.is_file() or not key.is_file():
         raise SystemExit("fixture TLS material is missing")
+    descriptor = os.environ.get("DIDCOMM_FIXTURE_DESCRIPTOR", "")
+    if descriptor:
+        try:
+            SENDER = SenderProvisioner(
+                Path(descriptor), Path(os.environ["DIDCOMM_FIXTURE_CA"]),
+                os.environ["DIDCOMM_FIXTURE_RUN_ID"],
+            )
+        except Exception:
+            raise SystemExit("DIDComm fixture bootstrap is invalid") from None
 
-    control = ThreadingHTTPServer(("0.0.0.0", 8080), Handler)
+    control = ControlServer(("0.0.0.0", 8080), Handler)
     control_thread = threading.Thread(target=control.serve_forever, daemon=True)
     control_thread.start()
 

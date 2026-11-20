@@ -177,27 +177,25 @@ def create_runtime_worktree(
         ],
         check=True,
     )
-    try:
-        validate_checkout(runtime_suite, manifest)
-    except (OSError, ValueError, subprocess.CalledProcessError):
-        remove_runtime_worktree(canonical_suite, runtime_suite)
-        raise
+    # A failed validation does not establish that the resulting checkout or
+    # its data is disposable. The caller records retention without removing it.
+    validate_checkout(runtime_suite, manifest)
 
 
-def remove_runtime_worktree(canonical_suite: Path, runtime_suite: Path) -> None:
-    """Remove only the explicitly created disposable worktree."""
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(canonical_suite),
-            "worktree",
-            "remove",
-            "--force",
-            str(runtime_suite),
-        ],
-        check=True,
-    )
+def runtime_retention_metadata(canonical_suite: Path, runtime_suite: Path, manifest: dict) -> dict:
+    """Describe the controller's attempted runtime, never deletion authority."""
+    return {
+        "schema": "elevenid.w3c-runtime-lifecycle/v1",
+        "canonical_path": str(canonical_suite),
+        "runtime_path": str(runtime_suite),
+        "expected_commit": manifest["official_suite"]["commit"],
+        "controller_pid": os.getpid(),
+        "controller_uid": os.getuid() if hasattr(os, "getuid") else None,
+        "creation_attempted": False,
+        "creation_validated": False,
+        "cleanup": "retained_pending_lifecycle_checks",
+        "next_action": "Preserve private data and retire readers; inspect lifecycle gates before normal removal.",
+    }
 
 
 def clear_runtime_reports(suite: Path) -> None:
@@ -494,6 +492,9 @@ def write_evidence(
     result: int,
     stack_manifest: Path,
     runtime_mutations: list[str] | None = None,
+    *,
+    raw_exit_code: int | None = None,
+    runtime_lifecycle: dict | None = None,
 ) -> None:
     executed_capabilities = report_executed_capabilities(output / "reports" / "index.json", manifest)
     artifacts = [
@@ -513,6 +514,7 @@ def write_evidence(
             "disposable_exact_commit_worktree": True,
             "test_or_assertion_source_modified": False,
             "upstream_owned_runtime_mutations": runtime_mutations or [],
+            "runtime_lifecycle": runtime_lifecycle,
         },
         "marty": {
             "commit": os.environ.get("MARTY_COMMIT", "unrecorded"),
@@ -522,6 +524,7 @@ def write_evidence(
         "exclusions": manifest["exclusions"],
         "result": {
             "exit_code": result,
+            "raw_official_exit_code": raw_exit_code,
             "passed": result == 0 and executed_capabilities >= REQUIRED_EVIDENCE_CAPABILITIES,
             "evidence_class": "official-unmodified-suite",
             "required_capabilities": sorted(REQUIRED_EVIDENCE_CAPABILITIES),
@@ -550,8 +553,7 @@ def run_suite(
     The canonical upstream checkout is never used as an execution directory.
     A detached disposable worktree at the exact pinned commit receives ignored
     configuration/dependency inputs and the upstream suite's own runtime
-    outputs. Install is explicit because the upstream suite has no lockfile;
-    the repository-owned reviewed lock is copied into that disposable
+    outputs. Install is explicit: the repository-owned reviewed lock is copied into that disposable
     worktree, verified, and used with ``npm ci``. Upstream dependency changes
     therefore arrive only through a reviewed manifest/lock update and cannot
     drift during a run.
@@ -560,8 +562,15 @@ def run_suite(
     validate_checkout(suite, manifest)
     stack_manifest_metadata(stack_manifest)
     runtime_suite = output.parent / f".w3c-suite-runtime-{os.getpid()}"
-    create_runtime_worktree(suite, runtime_suite, manifest)
+    if runtime_suite.exists():
+        raise ValueError(f"W3C VC disposable runtime already exists: {runtime_suite}")
+    lifecycle = runtime_retention_metadata(suite, runtime_suite, manifest)
+    raw_exit_code: int | None = None
+    evidence_written = False
     try:
+        lifecycle["creation_attempted"] = True
+        create_runtime_worktree(suite, runtime_suite, manifest)
+        lifecycle["creation_validated"] = True
         write_local_config(
             runtime_suite / "localConfig.cjs",
             adapter_url,
@@ -586,6 +595,12 @@ def run_suite(
             cwd=runtime_suite,
             check=False,
         ).returncode
+        raw_exit_code = result
+        # Capture the unchanged command result before source/role checks can
+        # reject qualification. Never overwrite a previous invocation's data.
+        with (output / "official-suite-result.json").open("x", encoding="utf-8") as stream:
+            json.dump({"official_commit": manifest["official_suite"]["commit"], "exit_code": result}, stream)
+            stream.write("\n")
         runtime_mutations = validate_runtime_checkout(runtime_suite, manifest)
         validate_checkout(suite, manifest)
         report = runtime_suite / "reports" / "index.json"
@@ -617,12 +632,26 @@ def run_suite(
             result,
             stack_manifest,
             runtime_mutations,
+            raw_exit_code=raw_exit_code,
+            runtime_lifecycle=lifecycle,
         )
+        evidence_written = True
         validate_checkout(suite, manifest)
         return result
     finally:
-        remove_runtime_worktree(suite, runtime_suite)
-        validate_checkout(suite, manifest)
+        # Reports, local configuration and ignored dependencies remain private
+        # review inputs. Neither a normal verdict nor a failed setup authorizes
+        # deleting them, restoring tracked mutations or force-removing Git state.
+        if not evidence_written and lifecycle["creation_attempted"]:
+            try:
+                output.mkdir(mode=0o700, parents=True, exist_ok=True)
+                with (output / "runtime-lifecycle.json").open("x", encoding="utf-8") as stream:
+                    json.dump({**lifecycle, "raw_official_exit_code": raw_exit_code}, stream, indent=2)
+                    stream.write("\n")
+            except OSError:
+                # Preserve the original setup/protocol/source failure. This
+                # message is not a successful cleanup or qualification receipt.
+                print("W3C runtime retained; lifecycle receipt unavailable.", file=sys.stderr)
 
 
 def main() -> int:
@@ -655,7 +684,7 @@ def main() -> int:
         help="attested marty.stack/v1 manifest for the deployment under test",
     )
     execute.add_argument(
-        "--install", action="store_true", help="generate the upstream lockfile and install its dependencies"
+        "--install", action="store_true", help="install the reviewed dependency lock with npm ci"
     )
     args = parser.parse_args()
     manifest = load_manifest()

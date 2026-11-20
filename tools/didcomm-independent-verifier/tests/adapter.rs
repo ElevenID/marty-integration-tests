@@ -114,6 +114,51 @@ fn cli_unpacks_authcrypt_envelope() {
 }
 
 #[test]
+fn cli_unpacks_anoncrypt_envelope() {
+    let (_, keys, _) = fixture();
+    let recipient = PrivateKeyAgreement::from_raw_bytes(Curve::X25519, &[9; 32]).unwrap();
+    let envelope = encrypt::anoncrypt(
+        br#"{"id":"anonymous-adapter-vector","body":{"content":"synthetic"}}"#,
+        &[(RECIPIENT_KID, &recipient.public_key())],
+    )
+    .unwrap();
+    let output = invoke(&envelope, &keys, &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["anonymous"], true);
+    assert_eq!(result["signed"], false);
+    assert_eq!(result["message"]["id"], "anonymous-adapter-vector");
+
+    let mut altered: Value = serde_json::from_str(&envelope).unwrap();
+    let ciphertext = altered["ciphertext"].as_str().unwrap();
+    let replacement = if ciphertext.starts_with('A') {
+        'B'
+    } else {
+        'A'
+    };
+    altered["ciphertext"] = Value::String(format!("{replacement}{}", &ciphertext[1..]));
+    assert!(
+        !invoke(&serde_json::to_string(&altered).unwrap(), &keys, &[])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn cli_rejects_sender_key_without_the_exact_document_key_id() {
+    let (envelope, keys, mut docs) = fixture();
+    docs[0]["verificationMethod"][0]["id"] =
+        Value::String("did:example:mallory#key-x25519-1".into());
+    let output = invoke(&envelope, &keys, &docs);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("sender key is not present"));
+}
+
+#[test]
 fn cli_rejects_tampered_authcrypt_envelope() {
     let (envelope, keys, did_docs) = fixture();
     let mut envelope: Value = serde_json::from_str(&envelope).unwrap();

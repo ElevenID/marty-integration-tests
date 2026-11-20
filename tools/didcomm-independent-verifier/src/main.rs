@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Value};
 
-const IMPLEMENTATION: &str = "affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.15.8#2bec127b171b8fcf69a6c0e6aedca516a3e201b7";
+const IMPLEMENTATION: &str = "affinidi/affinidi-tdk-rs:affinidi-messaging-didcomm@v0.16.0#9eb3b42b81bbd83395a66926c70bcfd276d0f126";
 
 struct Inputs {
     key_file: PathBuf,
@@ -199,20 +199,19 @@ fn main() -> Result<()> {
         .as_deref()
         .map(|kid| load_sender_public(&inputs.did_docs, kid))
         .transpose()?;
-    let decrypted = decrypt::decrypt(
-        &packed,
-        &recipient_kid,
-        &recipient_private,
-        sender_public.as_ref(),
-    )
-    .context("decrypt DIDComm message")?;
+    let bound_sender = expected_sender
+        .as_deref()
+        .zip(sender_public.as_ref())
+        .map(|(kid, key)| decrypt::SenderKey::new(kid, key));
+    let decrypted =
+        decrypt::decrypt_bound(&packed, &recipient_kid, &recipient_private, bound_sender)
+            .context("decrypt DIDComm message")?;
 
     if decrypted.recipient_kid != recipient_kid {
         bail!("independent verifier returned a different recipient key");
     }
-    if decrypted.legacy_kek_used {
-        bail!("message only decrypted with the nonstandard legacy ECDH-1PU derivation");
-    }
+    // The pinned 0.16 implementation rejects the obsolete ECDH-1PU KEK
+    // inside decrypt_bound; its deprecated legacy_kek_used field is always false.
     if decrypted.authenticated != expected_sender.is_some() {
         bail!("independent verifier authentication classification is inconsistent");
     }
