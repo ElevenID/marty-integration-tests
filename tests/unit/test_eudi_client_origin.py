@@ -140,14 +140,17 @@ async def test_submit_wallet_response_rejects_a_different_origin() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("format_name", "includes_anchor"), [("dc+sd-jwt", True), ("mso_mdoc", False)])
-async def test_issuer_anchor_is_scoped_to_sd_jwt_transactions(format_name: str, includes_anchor: bool) -> None:
+@pytest.mark.parametrize(
+    ("formats", "includes_anchor"),
+    [(["dc+sd-jwt"], True), (["mso_mdoc"], False), (["mso_mdoc", "dc+sd-jwt"], True)],
+)
+async def test_issuer_anchor_is_scoped_to_sd_jwt_transactions(formats: list[str], includes_anchor: bool) -> None:
     client = EUDIVerifierClient("https://verifier.example", sd_jwt_issuer_trust_anchor_pem="enrolled-ca")
     request = httpx.Request("POST", "https://verifier.example/ui/presentations")
     post = AsyncMock(return_value=httpx.Response(200, request=request, json={"transaction_id": "local"}))
     client.client.post = post
     try:
-        await client.initialize_transaction({"credentials": [{"id": "badge", "format": format_name}]})
+        await client.initialize_transaction({"credentials": [{"id": name, "format": name} for name in formats]})
     finally:
         await client.close()
     payload = post.await_args.kwargs["json"]

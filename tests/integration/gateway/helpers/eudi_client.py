@@ -219,7 +219,7 @@ class EUDIVerifierClient:
             "intended_use_id": self.intended_use_id,
         }
         credentials = dcql_query.get("credentials", [])
-        if self.sd_jwt_issuer_trust_anchor_pem and credentials and all(
+        if self.sd_jwt_issuer_trust_anchor_pem and any(
             isinstance(item, dict) and item.get("format") == "dc+sd-jwt" for item in credentials
         ):
             payload["issuer_chain"] = self.sd_jwt_issuer_trust_anchor_pem
