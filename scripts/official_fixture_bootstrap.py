@@ -1057,7 +1057,7 @@ def bootstrap_eudi(
         *,
         attach_certificate: bool = False,
         trust_wallet_attester: bool = False,
-    ) -> str:
+    ) -> tuple[str, str | None]:
         credential_format = "SD_JWT_VC"
         payload = issuer_identity_payload(
             organization_id,
@@ -1078,6 +1078,7 @@ def bootstrap_eudi(
         identity = issuer_identity_response(created, require_fresh=trust_wallet_attester)
         if identity.get("issuer_did") != payload["issuer_did"]:
             raise RuntimeError("issuer identity response changed the requested DID")
+        issuer_anchor = None
         if attach_certificate:
             public_jwk = resolve_issuer_identity_public_jwk(
                 gateway_url,
@@ -1115,15 +1116,16 @@ def bootstrap_eudi(
                 or attached.get("credential_format") != credential_format
             ):
                 raise RuntimeError("issuer identity certificate attachment was not confirmed")
-        return str(payload["issuer_did"])
+            issuer_anchor = certificate.trust_anchor_pem
+        return str(payload["issuer_did"]), issuer_anchor
 
-    issuer_did = provision_identity(
+    issuer_did, issuer_anchor = provision_identity(
         "EUDI SD-JWT",
         "vc_jwt_issuer",
         attach_certificate=True,
         trust_wallet_attester=True,
     )
-    request_issuer_did = provision_identity(
+    request_issuer_did, _ = provision_identity(
         "EUDI OID4VP request",
         "oid4vp_request_signing",
     )
@@ -1168,6 +1170,7 @@ def bootstrap_eudi(
     result = {
         "organization_id": organization_id,
         "eudi_issuer_did": issuer_did,
+        "eudi_sd_jwt_issuer_trust_anchor_pem": issuer_anchor,
         "eudi_request_issuer_did": request_issuer_did,
         "eudi_request_issuer_public_jwk": request_issuer_public_jwk,
         "eudi_compliance_profile_id": compliance_profile_id,

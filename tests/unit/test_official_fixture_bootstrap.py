@@ -757,6 +757,7 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
         lambda *_args, **_kwargs: SimpleNamespace(
             leaf_pem="leaf-certificate",
             chain_pem="issuer-certificate",
+            trust_anchor_pem="issuer-root",
         ),
     )
     responses = iter(
@@ -811,6 +812,7 @@ def test_eudi_bootstrap_keeps_custody_binding_behind_issuer_profile(
         "eudi_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
         "eudi_request_issuer_did": f"did:web:marty.test:orgs:{fixtures.DEFAULT_ORGANIZATION}",
         "eudi_request_issuer_public_jwk": PUBLIC_SIGNING_JWK,
+        "eudi_sd_jwt_issuer_trust_anchor_pem": "issuer-root",
         "eudi_compliance_profile_id": "compliance-profile",
         "eudi_revocation_profile_id": "revocation-profile",
         "eudi_passport_template_id": "passport-template",
