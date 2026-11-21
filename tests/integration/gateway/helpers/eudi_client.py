@@ -142,9 +142,11 @@ class EUDIVerifierClient:
         base_url: str | None = None,
         *,
         intended_use_id: str | None = None,
+        sd_jwt_issuer_trust_anchor_pem: str | None = None,
     ) -> None:
         self.base_url = (base_url or os.getenv("EUDI_VERIFIER_URL") or "http://localhost:8090").rstrip("/")
         self.intended_use_id = intended_use_id or os.getenv("EUDI_VERIFIER_INTENDED_USE_ID") or "1"
+        self.sd_jwt_issuer_trust_anchor_pem = sd_jwt_issuer_trust_anchor_pem
         self._verifier_origin = self._absolute_origin(self.base_url, "base_url")
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -216,6 +218,11 @@ class EUDIVerifierClient:
             # Its reference configuration and examples publish intended use 1.
             "intended_use_id": self.intended_use_id,
         }
+        credentials = dcql_query.get("credentials", [])
+        if self.sd_jwt_issuer_trust_anchor_pem and any(
+            isinstance(item, dict) and item.get("format") == "dc+sd-jwt" for item in credentials
+        ):
+            payload["issuer_chain"] = self.sd_jwt_issuer_trust_anchor_pem
         if nonce:
             payload["nonce"] = nonce
 

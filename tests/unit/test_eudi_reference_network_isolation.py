@@ -45,8 +45,10 @@ def test_eudi_reference_services_use_real_ca_and_access_certificate_contracts() 
     assert "VERIFIER_CLIENTIDPREFIX" in compose
     assert "VERIFIER_ORIGINALCLIENTID" in compose
     assert "VERIFIER_ATTESTATIONCLASSIFICATIONS" in verifier
-    assert '"${OIDF_PUBLIC_BASE_URL:' in verifier
-    assert '/credentials/OpenBadge"' in verifier
+    assert (
+        '"${EUDI_SD_JWT_VCT:-${OIDF_PUBLIC_BASE_URL:?set the Marty HTTPS origin without a trailing slash}'
+        '/credentials/OpenBadge}"'
+    ) in verifier
     assert "signing_service_id" not in verifier
     assert "signing_key_reference" not in verifier
     assert "-Djavax.net.ssl.trustStoreType=JKS" in compose

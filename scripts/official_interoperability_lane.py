@@ -1278,9 +1278,21 @@ def bootstrap_fixtures(
             or any(name in public_jwk for name in ("d", "p", "q", "k"))
         ):
             raise RuntimeError(f"{mode} public fixture bootstrap returned an invalid request-signing public JWK")
-    identifiers = {
-        key: value for key, value in fixtures.items() if key != "w3c_api_key" and key not in public_jwk_fields
-    }
+    public_fields = public_jwk_fields | {"w3c_api_key"}
+    if mode == "eudi":
+        anchor_field = "eudi_sd_jwt_issuer_trust_anchor_pem"
+        try:
+            pem = fixtures[anchor_field]
+            cert = x509.load_pem_x509_certificate(pem.encode("ascii"))
+            if (
+                cert.public_bytes(serialization.Encoding.PEM).decode("ascii").strip() != pem.strip()
+                or not cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+            ):
+                raise ValueError("expected one public CA certificate")
+        except (KeyError, AttributeError, ValueError, x509.ExtensionNotFound) as error:
+            raise RuntimeError("EUDI bootstrap returned an invalid SD-JWT issuer trust anchor") from error
+        public_fields.add(anchor_field)
+    identifiers = {key: value for key, value in fixtures.items() if key not in public_fields}
     if any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value) for value in identifiers.values()):
         raise RuntimeError(f"{mode} public fixture bootstrap returned invalid identifiers")
     return fixtures
@@ -1954,6 +1966,7 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
             {
                 "TEST_ORG_ID": fixtures["organization_id"],
                 "EUDI_TEST_ISSUER_DID": fixtures["eudi_issuer_did"],
+                "EUDI_SD_JWT_ISSUER_TRUST_ANCHOR_PEM": fixtures["eudi_sd_jwt_issuer_trust_anchor_pem"],
                 "EUDI_TEST_REQUEST_ISSUER_DID": fixtures["eudi_request_issuer_did"],
                 "EUDI_TEST_PASSPORT_TEMPLATE_ID": fixtures["eudi_passport_template_id"],
                 "EUDI_TEST_MDL_TEMPLATE_ID": fixtures["eudi_mdl_template_id"],

@@ -632,6 +632,9 @@ def test_eudi_fixture_bootstrap_accepts_only_public_request_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _, root_path = lane.oidf_key_attestation_material(tmp_path)
+    issuer_anchor = root_path.read_text(encoding="ascii")
+
     def fake_run(
         command: list[str],
         _environment: dict[str, str],
@@ -643,6 +646,7 @@ def test_eudi_fixture_bootstrap_accepts_only_public_request_identity(
             json.dumps(
                 {
                     "organization_id": "org-1",
+                    "eudi_sd_jwt_issuer_trust_anchor_pem": issuer_anchor,
                     "eudi_issuer_did": "did:web:marty.test:orgs:org-1",
                     "eudi_request_issuer_did": "did:web:marty.test:orgs:org-1",
                     "eudi_request_issuer_public_jwk": {
@@ -672,6 +676,7 @@ def test_eudi_fixture_bootstrap_accepts_only_public_request_identity(
         oidf_key_attestation_trust_anchor=tmp_path / "attester-root.pem",
     )
 
+    assert result["eudi_sd_jwt_issuer_trust_anchor_pem"] == issuer_anchor
     assert result["eudi_request_issuer_public_jwk"] == {
         "kty": "EC",
         "crv": "P-256",
@@ -1726,6 +1731,7 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
             "organization_id": "org-1",
             "eudi_issuer_did": "did:web:marty.test:orgs:org-1",
             "eudi_request_issuer_did": "did:web:marty.test:orgs:org-1",
+            "eudi_sd_jwt_issuer_trust_anchor_pem": "issuer-root",
             "eudi_request_issuer_public_jwk": {
                 "kty": "EC",
                 "crv": "P-256",
@@ -1791,6 +1797,7 @@ def test_eudi_lane_starts_marty_haip_without_the_oidf_runner(
     assert all("VERIFIER_X509_CERT_PEM" not in item for item in lifecycle_environments)
     assert suite_environment[lane.OID4VP_TRUST_ANCHOR_FILE_ENV] == "/haip/request-object-root.pem"
     assert suite_environment["VERIFIER_X509_CERT_PEM"] == "certificate-chain"
+    assert suite_environment["EUDI_SD_JWT_ISSUER_TRUST_ANCHOR_PEM"] == "issuer-root"
     assert suite_environment["TEST_ORG_ID"] == "org-1"
     assert suite_environment["EUDI_TEST_OPEN_BADGE_TEMPLATE_ID"] == "badge-1"
     assert "EUDI_TEST_ISSUER_PROFILE_ID" not in suite_environment

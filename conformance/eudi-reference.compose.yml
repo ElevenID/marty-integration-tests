@@ -73,7 +73,7 @@ services:
       # this to the deterministic interoperability VCT. Issuer signing still
       # selects the Marty issuer profile and asserts that profile's DID.
       VERIFIER_ATTESTATIONCLASSIFICATIONS: >-
-        {"pid":{"vcts":[],"docTypes":[]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":[],"docTypes":[]},"eaa":[{"useCase":"marty-interop","vcts":["${OIDF_PUBLIC_BASE_URL:?set the Marty HTTPS origin without a trailing slash}/credentials/OpenBadge"],"docTypes":[]}]}
+        {"pid":{"vcts":[],"docTypes":[]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":[],"docTypes":[]},"eaa":[{"useCase":"marty-interop","vcts":["${EUDI_SD_JWT_VCT:-${OIDF_PUBLIC_BASE_URL:?set the Marty HTTPS origin without a trailing slash}/credentials/OpenBadge}"],"docTypes":[]}]}
     depends_on:
       eudi-verifier-material-init:
         condition: service_completed_successfully

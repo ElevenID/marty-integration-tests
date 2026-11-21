@@ -92,7 +92,10 @@ pytestmark = [
 
 @pytest.fixture
 async def eudi_verifier() -> EUDIVerifierClient:
-    client = EUDIVerifierClient(base_url=EUDI_VERIFIER_URL)
+    client = EUDIVerifierClient(
+        base_url=EUDI_VERIFIER_URL,
+        sd_jwt_issuer_trust_anchor_pem=os.getenv("EUDI_SD_JWT_ISSUER_TRUST_ANCHOR_PEM"),
+    )
     yield client
     await client.close()
 

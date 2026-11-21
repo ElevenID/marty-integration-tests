@@ -371,6 +371,22 @@ use those normal public protocol URLs. No request URI or response URI is
 rewritten to an internal container address, and the JVM harness uses the
 generated truststore instead of a trust-all TLS manager.
 
+For certificate-backed SD-JWT issuance, select the organization's active
+`SD_JWT_VC` identity with key purpose `vc_jwt_issuer`. Enroll the public
+leaf and issuing chain through `PUT /v1/signing-keys/issuer-identities/certificate`
+using its organization, issuer DID, key purpose, format, algorithm,
+`cert_pem` and `cert_chain_pem`. The signing service checks the leaf against
+the active KMS public key. The issuance service uses the resolved chain in the
+protected `x5c` header.
+
+The local EUDI fixture creates this enrollment and passes its public CA to
+the reference verifier as `issuer_chain` on transactions requesting SD-JWT.
+For an independently enrolled issuer, set `EUDI_SD_JWT_ISSUER_TRUST_ANCHOR_PEM`
+to that issuer's trusted CA PEM in the test process. To qualify another
+credential type, set `EUDI_SD_JWT_VCT` before starting the verifier and select
+the same type in the issuance template and DCQL request. The default type is
+`$OIDF_PUBLIC_BASE_URL/credentials/OpenBadge`.
+
 Externally issued TLS certificates and an externally managed verifier
 keystore remain the certification path. Export the same environment contract
 (`OIDF_TLS_CERT_DIR`, `EUDI_VERIFIER_KEYSTORE_FILE`, its type/alias/passwords,
