@@ -28,13 +28,14 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 import pytest
 
 import _marty_rs
 
+from .helpers.credential_cases import CREDENTIAL_TYPE_CASES
 from .helpers.gateway_client import GatewayClient, GatewayClientError
 from .helpers.waltid_wallet_client import WaltIdWalletClient
 
@@ -184,52 +185,6 @@ def _assert_credential_document(raw_doc: str, expected_label: str = "") -> None:
         if not payload.get("sub"):
             logger.warning("%sJWT payload missing 'sub' — no holder DID bound at issuance", prefix)
         logger.info("%s✓ JWT-VC structure valid (typ=%s)", prefix, typ)
-
-
-# ---------------------------------------------------------------------------
-# Credential type test matrix
-# ---------------------------------------------------------------------------
-
-# Claims common to identity-type credentials
-_ID_CLAIMS = {
-    "given_name": "Integration",
-    "family_name": "Test",
-    "date_of_birth": "1990-01-01",
-}
-# Same but includes a document_number (required by passport, visa, DTC)
-_DOC_CLAIMS = {**_ID_CLAIMS, "document_number": "ITG-TEST-001"}
-
-# (template_id, credential_config_id, claims, human_label)
-CREDENTIAL_TYPE_CASES: List = [
-    pytest.param(
-        "40000000-0000-0000-0000-000000000001",
-        "passport",
-        _DOC_CLAIMS,
-        "passport",
-        id="passport",
-    ),
-    pytest.param(
-        "40000000-0000-0000-0000-000000000002",
-        "org.iso.18013.5.1.mDL",
-        _ID_CLAIMS,
-        "drivers_license",
-        id="drivers_license",
-    ),
-    pytest.param(
-        "40000000-0000-0000-0000-000000000005",
-        "access_badge",
-        _ID_CLAIMS,
-        "access_badge",
-        id="access_badge",
-    ),
-    pytest.param(
-        "40000000-0000-0000-0000-000000000007",
-        "open_badge",
-        _ID_CLAIMS,
-        "open_badge",
-        id="open_badge",
-    ),
-]
 
 
 # ---------------------------------------------------------------------------
