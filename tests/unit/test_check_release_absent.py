@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -11,11 +13,16 @@ from urllib.request import Request
 import pytest
 
 SCRIPT = Path(__file__).parents[2] / "scripts" / "check_release_absent.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("check_release_absent", SCRIPT)
 assert SPEC is not None
 assert SPEC.loader is not None
 release_check = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release_check)
+
+
+def test_vendored_lookup_matches_immutable_pin() -> None:
+    subprocess.run([sys.executable, str(SCRIPT.with_name("sync_release_lookup.py"))], check=True)
 
 
 class Response(io.BytesIO):

@@ -18,6 +18,7 @@ from urllib.request import Request
 import pytest
 
 SCRIPTS = Path(__file__).parents[2] / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 REPOSITORY = "ElevenID/marty-integration-tests"
 TAG = "v1.2.91"
 
