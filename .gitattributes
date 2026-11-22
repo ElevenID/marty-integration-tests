@@ -1,1 +1,2 @@
 scripts/*.sh text eol=lf
+scripts/release_lookup.py text eol=lf
