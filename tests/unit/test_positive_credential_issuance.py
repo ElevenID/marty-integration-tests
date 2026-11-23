@@ -101,72 +101,59 @@ def test_missing_malformed_or_uncorrelated_criteria_fails(present: bool, criteri
         )
 
 
-def _record_cleanup(operations: list[str], *, extension_uri: str) -> None:
-    operations.append(f"deactivate:{extension_uri}")
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("credential_response", [{"transaction_id": "pending"}, {"credentials": []}])
-async def test_missing_issued_credential_fails_and_cleans_up(
-    monkeypatch: pytest.MonkeyPatch, credential_response: dict[str, object]
+@pytest.mark.parametrize("failure", ["missing_credential", "empty_credentials", "wrong_transaction"])
+async def test_invalid_issuance_fails_and_deprecates_template(
+    monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     operations: list[str] = []
     gateway_url = "http://127.0.0.1:38541"
+    offer_uri = "openid-credential-offer://?credential_offer=bound"
     monkeypatch.setattr(journey, "GATEWAY_URL", gateway_url)
-    monkeypatch.setattr(
-        journey,
-        "_deactivate_disposable_application_flows",
-        lambda *, extension_uri: _record_cleanup(operations, extension_uri=extension_uri),
-    )
 
-    def post_offer(_url: str, event: dict[str, object], _headers: dict[str, str]) -> dict[str, object]:
-        data = event["data"]
-        assert isinstance(data, dict)
-        claims = data["claims"]
-        assert isinstance(claims, dict)
-        assert {
-            "member_id",
-            "email",
-            "organization_id",
-            "role",
-            "achievement_name",
-            "achievement_description",
-            "achievement_criteria",
-            "issued_at",
-        } <= claims.keys()
-        assert isinstance(claims["achievement_criteria"], dict)
-        assert claims["achievement_criteria"]["narrative"]
-        return {
-            "status": 200,
-            "body": {
-                "flows_triggered": 2,
-                "offers": [
-                    {
-                        "flow_definition_id": "seeded-production-flow",
-                        "credential_offer_transaction_id": "seeded-transaction",
-                        "credential_offer_uri": "openid-credential-offer://?credential_offer=seeded",
-                    },
-                    {
-                        "flow_definition_id": operations[-1],
-                        "credential_offer_transaction_id": "transaction-1",
-                        "credential_offer_uri": f"openid-credential-offer://?credential_offer={operations[-1]}",
-                    },
-                ],
-            },
-        }
+    def post_issuance(url: str, payload: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
+        assert url.startswith("http://issuance-native:8005/")
+        path = url.removeprefix("http://issuance-native:8005")
+        assert headers["x-organization-id"] == journey._ORGANIZATION_ID
+        operations.append(path)
+        match path:
+            case "/v1/application-templates":
+                assert headers["idempotency-key"] == payload["name"]
+                body = {"id": "template-1"}
+            case "/v1/application-templates/template-1/activate":
+                body = {"status": "active"}
+            case "/internal/applications":
+                assert payload["application_template_id"] == "template-1"
+                claims = payload["applicant_data"]
+                assert isinstance(claims, dict)
+                assert claims["member_id"].startswith("artifact-issuance-")
+                assert claims["achievement_criteria"]["narrative"]
+                body = {"id": "app-1", "organization_id": journey._ORGANIZATION_ID}
+            case "/internal/applications/app-1/approve":
+                body = {"id": "app-1", "status": "approved", "issuance_transaction_id": "bound"}
+            case "/internal/applications/app-1/issuance-offer":
+                transaction = "unrelated" if failure == "wrong_transaction" else "bound"
+                body = {"status": "active", "transaction_id": transaction, "offer_url": offer_uri}
+            case "/v1/application-templates/template-1/deprecate":
+                body = {"status": "deprecated"}
+            case _:
+                pytest.fail(f"unexpected Issuance path {path}")
+        return {"status": 200, "body": body}
 
-    monkeypatch.setattr(
-        journey,
-        "post_json",
-        post_offer,
-    )
+    monkeypatch.setattr(journey, "post_json", post_issuance)
 
     class FakeWallet:
         def __init__(self, *, issuer_base_url: str) -> None:
             assert issuer_base_url == gateway_url
-            async def redeem(offer_uri: str, *, org_id: str) -> dict[str, object]:
-                assert offer_uri == f"openid-credential-offer://?credential_offer={operations[-1]}"
+            if failure == "wrong_transaction":
+                pytest.fail("wallet must not redeem an unrelated offer")
+
+            async def redeem(uri: str, *, org_id: str) -> dict[str, object]:
+                assert uri == offer_uri
                 assert org_id == journey._ORGANIZATION_ID
+                credential_response = {"transaction_id": "pending"} if failure == "missing_credential" else {
+                    "credentials": []
+                }
                 return {
                     "offer": {"credential_issuer": "https://issuer.example"},
                     "token": {"access_token": "opaque"},
@@ -179,69 +166,19 @@ async def test_missing_issued_credential_fails_and_cleans_up(
             operations.append("close")
 
     monkeypatch.setattr(journey, "OID4VCIWalletClient", FakeWallet)
-    # Keep the generated Flow ID while making the mock response use it.
-    def install(flow_id: str, *, extension_uri: str) -> None:
-        assert extension_uri.endswith(flow_id)
-        operations.append(flow_id)
-
-    monkeypatch.setattr(journey, "_install_disposable_application_flow", install)
     with pytest.raises(AssertionError):
         await journey.test_application_offer_redeems_to_issued_credential()
-    assert operations[0] == operations[-1].rsplit(":", 1)[-1]
-    assert operations[-2] == "close"
-    assert operations[-1].startswith("deactivate:urn:elevenid:test:released-stack-positive-issuance:")
-
-
-@pytest.mark.asyncio
-async def test_uncertain_flow_insert_still_cleans_up(monkeypatch: pytest.MonkeyPatch) -> None:
-    cleanup_uris: list[str] = []
-
-    def fail_install(_flow_id: str, *, extension_uri: str) -> None:
-        raise RuntimeError(f"insert uncertain for {extension_uri}")
-
-    def cleanup(*, extension_uri: str) -> None:
-        cleanup_uris.append(extension_uri)
-
-    monkeypatch.setattr(journey, "_install_disposable_application_flow", fail_install)
-    monkeypatch.setattr(journey, "_deactivate_disposable_application_flows", cleanup)
-    with pytest.raises(RuntimeError, match="insert uncertain"):
-        await journey.test_application_offer_redeems_to_issued_credential()
-    assert len(cleanup_uris) == 1
-    assert cleanup_uris[0].startswith("urn:elevenid:test:released-stack-positive-issuance:")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("own_count", [0, 2])
-async def test_missing_or_duplicate_own_offer_fails_with_cleanup(
-    monkeypatch: pytest.MonkeyPatch, own_count: int
-) -> None:
-    flow_ids: list[str] = []
-    cleanup_uris: list[str] = []
-
-    def install(flow_id: str, *, extension_uri: str) -> None:
-        assert extension_uri.endswith(flow_id)
-        flow_ids.append(flow_id)
-
-    def post_offer(_url: str, _event: dict[str, object], _headers: dict[str, str]) -> dict[str, object]:
-        offers = [
-            {"flow_definition_id": "seeded-flow", "credential_offer_uri": "openid-credential-offer://?seeded"},
-            *(
-                {"flow_definition_id": flow_ids[0], "credential_offer_uri": f"openid-credential-offer://?own={index}"}
-                for index in range(own_count)
-            ),
-        ]
-        return {"status": 200, "body": {"flows_triggered": len(offers), "offers": offers}}
-
-    monkeypatch.setattr(journey, "_install_disposable_application_flow", install)
-    monkeypatch.setattr(journey, "post_json", post_offer)
-    monkeypatch.setattr(
-        journey, "_deactivate_disposable_application_flows", lambda *, extension_uri: cleanup_uris.append(extension_uri)
-    )
-    monkeypatch.setattr(journey, "OID4VCIWalletClient", lambda **_kwargs: pytest.fail("wallet must not run"))
-    with pytest.raises(AssertionError):
-        await journey.test_application_offer_redeems_to_issued_credential()
-    assert len(cleanup_uris) == 1
-    assert cleanup_uris[0].endswith(flow_ids[0])
+    assert operations[:5] == [
+        "/v1/application-templates",
+        "/v1/application-templates/template-1/activate",
+        "/internal/applications",
+        "/internal/applications/app-1/approve",
+        "/internal/applications/app-1/issuance-offer",
+    ]
+    expected_cleanup = ["/v1/application-templates/template-1/deprecate"]
+    if failure != "wrong_transaction":
+        expected_cleanup.insert(0, "close")
+    assert operations[5:] == expected_cleanup
 
 
 def test_disposable_flow_cleanup_uses_only_its_extension_uri(monkeypatch: pytest.MonkeyPatch) -> None:
