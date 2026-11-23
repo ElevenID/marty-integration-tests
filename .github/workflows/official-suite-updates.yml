@@ -44,15 +44,24 @@ jobs:
           branch="automation/official-suite-updates"
           title="chore: review official interoperability suite updates"
           body="Upstream drift was detected. Review the recorded revisions, update immutable pins and image digests intentionally, then run the affected official suites or independent interoperability lane before merging. This bot never changes pins or merges the PR."
+          existing_pr="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing_pr" ]; then
+            echo "::notice::Preserving open review PR #$existing_pr and its branch; refresh upstream observations manually."
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" > /dev/null; then
+            echo "::error::The review branch already exists without an open PR; reconcile it manually."
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then exit "$status"; fi
+          fi
           git config user.name "elevenid-automation[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$branch"
+          git checkout -b "$branch"
           git add conformance/upstream-review.json
           git commit -m "chore: review official suite upstream updates"
-          git push --force-with-lease origin "$branch"
-          existing_pr="$(gh pr list --state open --head "$branch" --json number,isDraft --jq 'map(select(.isDraft)) | .[0].number // empty')"
-          if [ -n "$existing_pr" ]; then
-            gh pr edit "$existing_pr" --title "$title" --body "$body"
-          else
-            gh pr create --draft --base main --head "$branch" --title "$title" --body "$body"
-          fi
+          # An empty expected value requires the remote branch to remain absent.
+          # It cannot replace a branch created concurrently after the check above.
+          git push --force-with-lease="refs/heads/$branch:" origin "HEAD:refs/heads/$branch"
+          gh pr create --draft --base main --head "$branch" --title "$title" --body "$body"

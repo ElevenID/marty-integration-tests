@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -15,6 +16,77 @@ SPEC = importlib.util.spec_from_file_location("official_kms_bootstrap", SOURCE)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
+
+
+@pytest.mark.parametrize("key", ["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "COMPOSE_FILE",
+                                "COMPOSE_PROJECT_NAME", "GH_TOKEN", "GITHUB_TOKEN", "PATH", "LD_PRELOAD"])
+def test_runtime_data_cannot_redirect_controller_authority(key: str) -> None:
+    with pytest.raises(MODULE.SafeBootstrapError, match="controller authority"):
+        MODULE.reject_controller_overrides({key: "synthetic-untrusted-input"})
+
+
+def test_project_admission_never_adopts_existing_resources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    args = SimpleNamespace(run_id="owned-run", stack_manifest=manifest)
+    calls = []
+
+    def existing(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(command)
+        return SimpleNamespace(stdout=json.dumps("engine-owned-run") if command[1] == "info"
+                               else "existing-owned-by-another-controller\n")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", existing)
+    with pytest.raises(MODULE.SafeBootstrapError, match="refusing adoption"):
+        MODULE.admit_owned_projects(args, tmp_path)
+    assert not (tmp_path / "owned-project.json").exists()
+    assert len(calls) == 2
+    assert all("up" not in command and "down" not in command for command in calls)
+
+
+@pytest.mark.parametrize("engine", ["engine-owned-run", "engine-other-controller"])
+def test_cleanup_attempts_both_projects_and_census_when_runtime_input_is_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    engine: str,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    material = tmp_path / "material"
+    material.mkdir()
+    (private / ".env.kms").write_text("synthetic-sensitive-corrupt-input", encoding="utf-8")
+    projects = ["marty-conformance-owned-run", "marty-conformance-owned-run-trust-registry"]
+    ownership = private / "owned-project.json"
+    ownership.write_text(json.dumps({
+        "schema": "elevenid.disposable-project-ownership/v1", "run_id": "owned-run",
+        "projects": projects, "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "engine_id": "engine-owned-run", "cleanup_environment": {},
+    }), encoding="utf-8")
+    ownership.chmod(0o600)
+    args = SimpleNamespace(output_dir=private, run_id="owned-run", stack_manifest=manifest,
+                           marty_ui=tmp_path, material=material)
+    monkeypatch.setattr(MODULE, "checked_release", lambda _args: ({}, ["docker", "compose"], {}))
+    monkeypatch.setattr(MODULE, "compose_sources", lambda _compose: set())
+    calls = []
+
+    def run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(engine) if command[1] == "info" else "")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", run)
+    if engine != "engine-owned-run":
+        with pytest.raises(MODULE.SafeBootstrapError, match="Engine differs"):
+            MODULE.cleanup_owned_projects(args)
+        assert len(calls) == 1
+        assert "down" not in calls[0]
+        return
+    assert MODULE.cleanup_owned_projects(args) == 0
+    assert sum("down" in command for command in calls) == 2
+    assert sum("--filter" in command for command in calls) == 6
+    output = capsys.readouterr().out
+    assert "synthetic-sensitive" not in output
+    assert json.loads(output)["retired"] is True
 
 
 @pytest.mark.parametrize("stage", ["workload-tls", "keycloak-kms", "extra-workloads", "official-edge", "runtime-files"])
@@ -351,6 +423,70 @@ def test_runtime_mount_permissions_preserve_the_private_authority_boundary(tmp_p
     assert stat.S_IMODE(environment_file.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux public certificate bind mounts")
+@pytest.mark.parametrize("fault", [None, "private-key", "symlink", "hardlink", "public-parent", "writable",
+                                   "short-read", "changed"])
+def test_public_ca_mount_preserves_keys_and_refuses_other_material(
+    tmp_path: Path, fault: str | None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    key = MODULE.ec.generate_private_key(MODULE.ec.SECP256R1())
+    name = MODULE.x509.Name([MODULE.x509.NameAttribute(MODULE.NameOID.COMMON_NAME, "owned fixture CA")])
+    now = MODULE.datetime.now(MODULE.UTC)
+    certificate = (MODULE.x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                   .public_key(key.public_key()).serial_number(MODULE.x509.random_serial_number())
+                   .not_valid_before(now - MODULE.timedelta(minutes=1))
+                   .not_valid_after(now + MODULE.timedelta(days=1))
+                   .add_extension(MODULE.x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                   .sign(key, MODULE.hashes.SHA256()))
+    pem = certificate.public_bytes(MODULE.serialization.Encoding.PEM)
+    private = key.private_bytes(MODULE.serialization.Encoding.PEM, MODULE.serialization.PrivateFormat.PKCS8,
+                                MODULE.serialization.NoEncryption())
+    authority = tmp_path / "official-ca.key"
+    MODULE.private_file(authority, private.decode("ascii"))
+    path = tmp_path / "root-ca.pem"
+    MODULE.private_file(path, pem.decode("ascii"))
+    if fault == "private-key":
+        path.write_bytes(pem + private)
+    elif fault == "symlink":
+        path.unlink()
+        path.symlink_to(authority)
+    elif fault == "hardlink":
+        os.link(path, tmp_path / "other")
+    elif fault == "public-parent":
+        tmp_path.chmod(0o755)
+    elif fault == "writable":
+        path.chmod(0o666)
+    elif fault == "short-read":
+        path.write_bytes(pem + private)
+        read = os.read
+        monkeypatch.setattr(MODULE.os, "read", lambda descriptor, _size: read(descriptor, len(pem)))
+    elif fault == "changed":
+        read = os.read
+
+        def change_after_read(descriptor: int, size: int) -> bytes:
+            content = read(descriptor, size)
+            metadata = path.stat()
+            os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1))
+            return content
+
+        monkeypatch.setattr(MODULE.os, "read", change_after_read)
+    if fault:
+        before = path.read_bytes()
+        mode = path.stat().st_mode
+        with pytest.raises((ValueError, OSError)):
+            MODULE.prepare_public_ca_mount(tmp_path)
+        assert path.read_bytes() == before
+        assert path.stat().st_mode == mode
+    else:
+        MODULE.prepare_public_ca_mount(tmp_path)
+        MODULE.prepare_public_ca_mount(tmp_path)
+        assert path.read_bytes() == pem
+        assert stat.S_IMODE(path.stat().st_mode) == 0o444
+    assert authority.read_bytes() == private
+    assert stat.S_IMODE(authority.stat().st_mode) == 0o600
+
+
 def test_scoped_transit_token_proves_only_its_bound_sign_route() -> None:
     class Bao:
         def __init__(self):
@@ -457,3 +593,19 @@ def test_extra_workloads_bind_trust_server_to_scoped_remote_key(
     assert policy == (
         'path "transit/keys/workload-tls-trust-profile-server" { capabilities = ["read"] }\n'
         'path "transit/sign/workload-tls-trust-profile-server" { capabilities = ["update"] }')
+
+
+def test_registration_environment_requires_exact_public_bundle_and_pin_pair(tmp_path: Path) -> None:
+    values, origin = runtime_inputs(tmp_path)
+    path = tmp_path / "eudi-registration.json"
+    path.write_text("{}",encoding="ascii")
+    fields = {"EUDI_VERIFIER_REGISTRATION_RECORD_FILE":str(path),
+              "EUDI_VERIFIER_REGISTRATION_RECORD_SHA256":"a" * 64}
+    MODULE.validate_runtime_environment({**values,**fields},tmp_path,origin)
+    for name in fields:
+        with pytest.raises(ValueError,match="both bootstrap provenance"):
+            MODULE.validate_runtime_environment({**values,name:fields[name]},tmp_path,origin)
+    for name,value in [("EUDI_VERIFIER_REGISTRATION_RECORD_FILE",str(tmp_path/"other.json")),
+                       ("EUDI_VERIFIER_REGISTRATION_RECORD_SHA256","invalid")]:
+        with pytest.raises(ValueError,match="provenance is invalid"):
+            MODULE.validate_runtime_environment({**values,**fields,name:value},tmp_path,origin)

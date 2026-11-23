@@ -192,7 +192,8 @@ def test_summary_labels_new_tenant_evidence_as_owned_not_official(
             "browser-driven issuance and verification through the shipped UI, "
             "including adversarial organization and policy substitution"
         ),
-    } <= set(summary["coverage"])
+    } <= set(summary["planned_coverage"])
+    assert summary["coverage"] == []
     assert summary["test_source"]["additional_paths"] == [
         lane.DIDCOMM_TEST_PATH,
         lane.DIDCOMM_AUTHCRYPT_TEST_PATH,
@@ -269,8 +270,8 @@ def test_summary_records_only_executed_independent_didcomm_evidence(
     assert interop["cross_implementation_decryption_passed"] is True
     assert interop["implementation"] == {
         "repository": "https://github.com/affinidi/affinidi-tdk-rs.git",
-        "release": "v0.15.8",
-        "commit": "2bec127b171b8fcf69a6c0e6aedca516a3e201b7",
+        "release": "v0.16.0",
+        "commit": "9eb3b42b81bbd83395a66926c70bcfd276d0f126",
     }
     assert (
         "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"
@@ -332,6 +333,9 @@ def test_summary_does_not_claim_failed_or_unexecuted_didcomm_evidence(
         "independent affinidi-messaging-didcomm decryption of Marty's released anoncrypt envelope"
         not in summary["coverage"]
     )
+
+    assert summary["coverage"] == []
+    assert "encrypted DIDComm v2 delivery with holder-key decryption" in summary["planned_coverage"]
 
 
 def test_summary_preserves_didcomm_success_when_an_unrelated_tenant_test_fails(
@@ -462,7 +466,9 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
         _environment: dict[str, str],
         *,
         capture: Path | None = None,
+        native_attestation: bool = False,
     ) -> int:
+        assert native_attestation is (command == ["compose", "up"])
         calls.append((command, capture))
         return 0
 
@@ -473,9 +479,9 @@ def test_execute_retains_owned_pytest_diagnostics_as_private_evidence(
     assert pytest_calls == [output / "private" / "pytest.log"]
     pytest_command = next(command for command, _capture in calls if command[:3] == [sys.executable, "-m", "pytest"])
     assert pytest_command[-3:] == [
-        lane.TEST_PATH,
-        lane.DIDCOMM_TEST_PATH,
-        lane.DIDCOMM_AUTHCRYPT_TEST_PATH,
+        str(lane.ROOT / lane.DIDCOMM_TEST_PATH),
+        str(lane.ROOT / lane.DIDCOMM_AUTHCRYPT_TEST_PATH),
+        str(lane.ROOT / lane.TEST_PATH),
     ]
     assert execution_environment["DIDCOMM_PRIVATE_AGENT_TESTS"] == "true"
     policy_file = Path(execution_environment["MARTY_DIDCOMM_TEST_POLICY_FILE"])
@@ -509,7 +515,10 @@ def test_registry_fixture_compose_is_project_scoped_and_immutable() -> None:
         "--wait",
     ]
     compose = lane.TRUST_REGISTRY_FIXTURE_COMPOSE.read_text(encoding="utf-8")
-    assert "${MARTY_SERVICES_IMAGE:" in compose
+    assert "image: python@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db" in compose
+    assert "pull_policy: if_not_present" in compose
+    assert "mem_limit: 128m" in compose
+    assert "pids_limit: 32" in compose
     assert "build:" not in compose
     assert '"127.0.0.1::8080"' in compose
     assert "external: true" in compose
@@ -556,6 +565,7 @@ def test_failed_registry_start_is_diagnosed_and_cleaned_up(
         _environment: dict[str, str],
         *,
         capture: Path | None = None,
+        native_attestation: bool = False,
     ) -> int:
         calls.append((command, capture))
         if command == ["registry-compose", "up"]:
@@ -624,8 +634,8 @@ def test_public_boundary_workflow_installs_manifest_pinned_didcomm_verifier() ->
     assert 'printf \'%s  %s\\n\' "${digest#sha256:}" "$wheel"' in workflow
     assert 'gh attestation verify "$wheel" --repo "$repository"' in workflow
     assert "--no-deps --no-index" in workflow
-    assert "callable(_marty_rs.didcomm_decrypt)" in workflow
-    assert "callable(_marty_rs.didcomm_decrypt_authcrypt)" in workflow
+    assert "not hasattr(_marty_rs, 'didcomm_decrypt')" in workflow
+    assert "not hasattr(_marty_rs, 'didcomm_decrypt_authcrypt')" in workflow
 
 
 def test_public_boundary_workflow_uses_runner_browser_without_live_download() -> None:

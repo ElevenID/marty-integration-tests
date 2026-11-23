@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -41,7 +42,8 @@ EXTENDS = re.compile(r"^\s*file:\s*(docker-compose[^\s]+\.yml)\s*$", re.MULTILIN
 KMS_ORIGIN = "https://openbao:8200"
 BOOTSTRAP_STAGES = frozenset({
     "kms-image-binding", "openbao-initialization", "bootstrap-inputs", "openbao-network",
-    "workload-tls", "keycloak-kms", "extra-workloads", "official-edge", "runtime-files",
+    "workload-tls", "keycloak-kms", "extra-workloads", "official-edge", "runtime-files", "eudi-registration",
+    "didcomm-fixture",
 })
 
 
@@ -168,6 +170,14 @@ def validate_runtime_environment(values: dict[str, str], root: Path, origin: str
         "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE", "FLOW_WORKLOAD_CLIENT_CERT_FILE",
         "ENVOY_ISSUANCE_CLIENT_CERT_FILE", *KEYCLOAK_FILES,
     }
+    registration_fields = {"EUDI_VERIFIER_REGISTRATION_RECORD_FILE", "EUDI_VERIFIER_REGISTRATION_RECORD_SHA256"}
+    if registration_fields & set(values):
+        if not registration_fields <= set(values):
+            raise ValueError("registration fixture requires both bootstrap provenance fields")
+        expected.update(registration_fields)
+        if (values["EUDI_VERIFIER_REGISTRATION_RECORD_FILE"] != str(root / "eudi-registration.json")
+                or not re.fullmatch(r"[0-9a-f]{64}",values["EUDI_VERIFIER_REGISTRATION_RECORD_SHA256"])):
+            raise ValueError("registration fixture bootstrap provenance is invalid")
     role_values = role_environment(root / "tls", root / "extra")
     expected.update(role_values)
     if set(values) != expected:
@@ -216,11 +226,56 @@ def prepare_runtime_mount_files(values: dict[str, str], root: Path, origin: str)
         *(Path(value) for name, value in role_environment(root / "tls", root / "extra").items()
           if name.endswith("_FILE")),
     }
+    if "EUDI_VERIFIER_REGISTRATION_RECORD_FILE" in values:
+        # Public record/certificates/JWT only; no registrar keys or authority token.
+        allowed.add(root / "eudi-registration.json")
     paths = {Path(value) for name, value in values.items() if name.endswith("_FILE")}
     if not paths.issubset(allowed):
         raise ValueError("runtime KMS mount is not an approved leaf export")
     for path in paths:
         path.chmod(0o444)
+
+
+def prepare_public_ca_mount(material: Path) -> None:
+    """Make the public CA leaf readable by the product's container identity.
+
+    The host directory remains private. No key, keystore or scoped credential
+    is opened or has its permissions changed by this operation.
+    The fixture controller owns all writers until staging is complete.
+    """
+    if sys.platform != "linux":
+        raise ValueError("public CA bind mounts require Linux")
+    if (material.resolve() != material or material.stat().st_uid != os.getuid()
+            or stat.S_IMODE(material.stat().st_mode) != 0o700):
+        raise ValueError("public CA mount requires an owned private material directory")
+    path = material / "root-ca.pem"
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        held = os.fstat(descriptor)
+        if (not stat.S_ISREG(held.st_mode) or held.st_uid != os.getuid() or held.st_nlink != 1
+                or held.st_size > 65536 or stat.S_IMODE(held.st_mode) not in {0o600, 0o444}):
+            raise ValueError("public CA mount has invalid custody")
+        content = os.read(descriptor, 65537)
+        if len(content) != held.st_size or os.read(descriptor, 1):
+            raise ValueError("public CA mount could not be read completely")
+        certificate = x509.load_pem_x509_certificate(content)
+        if certificate.public_bytes(serialization.Encoding.PEM).strip() != content.strip():
+            raise ValueError("public CA mount must contain only one certificate")
+        try:
+            is_ca = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+        except x509.ExtensionNotFound:
+            is_ca = False
+        if not is_ca:
+            raise ValueError("public CA mount is not a CA certificate")
+        def identity(metadata: os.stat_result) -> tuple[int, ...]:
+            return (metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_mode,
+                    metadata.st_nlink, metadata.st_size, metadata.st_ctime_ns, metadata.st_mtime_ns)
+
+        if identity(os.fstat(descriptor)) != identity(held) or identity(path.lstat()) != identity(held):
+            raise ValueError("public CA mount changed during validation")
+        os.fchmod(descriptor, 0o444)
+    finally:
+        os.close(descriptor)
 
 
 def checked_release(args: argparse.Namespace) -> tuple[dict[str, str], list[str], dict]:
@@ -235,6 +290,7 @@ def checked_release(args: argparse.Namespace) -> tuple[dict[str, str], list[str]
     if actual != ui[0]["commit"]:
         raise ValueError("KMS bootstrap source differs from the attested release")
     images = load_assignments(args.stack_env)
+    reject_controller_overrides(images)
     artifacts = ui[0].get("artifacts", [])
     references = {f"{item['uri']}@{item['digest']}" for item in artifacts if item.get("type") == "oci"}
     for key in ("MARTY_SERVICES_IMAGE", "MARTY_OPENBAO_DIDCOMM_IMAGE", "MARTY_KEYCLOAK_IMAGE"):
@@ -244,6 +300,123 @@ def checked_release(args: argparse.Namespace) -> tuple[dict[str, str], list[str]
     project = project_names(args.run_id)["marty"]
     compose = source["compose_command"](project)
     return images, compose, source
+
+
+def reject_controller_overrides(values: dict[str, str]) -> None:
+    for key in values:
+        if (key.startswith(("DOCKER_", "COMPOSE_", "GIT_", "GH_", "GITHUB_", "AWS_", "PYTHON", "LD_"))
+                or key in {"PATH", "HOME", "SHELL", "ENV", "BASH_ENV", "WSLENV", "SSH_AUTH_SOCK", "XDG_CONFIG_HOME"}):
+            raise SafeBootstrapError("runtime input cannot override controller authority")
+
+
+def docker_engine_identity(environment: dict[str, str] | None = None) -> str:
+    value = subprocess.run(["docker", "info", "--format", "{{json .ID}}"], env=environment,
+                           capture_output=True, text=True, check=True, timeout=30).stdout
+    identity = json.loads(value)
+    if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9:_-]{10,256}", identity):
+        raise SafeBootstrapError("disposable Docker Engine identity unavailable")
+    return identity
+
+
+def admit_owned_projects(args: argparse.Namespace, private: Path,
+                         cleanup_values: dict[str, str] | None = None) -> None:
+    """Refuse adoption and retain a scoped receipt before creating resources."""
+    project = project_names(args.run_id)["marty"]
+    projects = [project, f"{project}-trust-registry"]
+    engine = docker_engine_identity()
+    for name in projects:
+        for command in (["docker", "ps", "-aq"], ["docker", "network", "ls", "-q"],
+                        ["docker", "volume", "ls", "-q"]):
+            for selector in (f"label=com.docker.compose.project={name}", f"name={name}"):
+                found = subprocess.run([*command, "--filter", selector], capture_output=True,
+                                       text=True, check=True, timeout=30).stdout.strip()
+                if found:
+                    raise SafeBootstrapError("disposable project already exists; refusing adoption")
+    payload = json.dumps({
+        "schema": "elevenid.disposable-project-ownership/v1", "run_id": args.run_id,
+        "projects": projects,
+        "engine_id": engine, "cleanup_environment": cleanup_values or {},
+        "manifest_sha256": hashlib.sha256(args.stack_manifest.read_bytes()).hexdigest(),
+    })
+    if len(payload.encode("utf-8")) > 128 * 1024:
+        raise SafeBootstrapError("disposable ownership inputs exceed their bound")
+    private_file(private / "owned-project.json", payload)
+
+
+def cleanup_owned_projects(args: argparse.Namespace) -> int:
+    """Recover only newly admitted fixture projects, including pre-dispatch failure."""
+    private = args.output_dir.resolve()
+    ownership = private / "owned-project.json"
+    if (args.output_dir.is_symlink() or private.stat().st_uid != os.getuid()
+            or private.stat().st_mode & 0o077
+            or ownership.is_symlink() or not ownership.is_file()
+            or ownership.stat().st_uid != os.getuid() or ownership.stat().st_mode & 0o077
+            or ownership.stat().st_size > 128 * 1024):
+        raise SafeBootstrapError("no disposable project ownership receipt")
+    record = json.loads(ownership.read_text(encoding="utf-8"))
+    project = project_names(args.run_id)["marty"]
+    projects = [project, f"{project}-trust-registry"]
+    if (record.get("schema") != "elevenid.disposable-project-ownership/v1"
+            or record.get("run_id") != args.run_id or record.get("projects") != projects
+            or record.get("manifest_sha256") != hashlib.sha256(args.stack_manifest.read_bytes()).hexdigest()):
+        raise SafeBootstrapError("disposable project ownership mismatch")
+    images, compose, _ = checked_release(args)
+    trusted_controls = os.environ.copy()
+    if record.get("engine_id") != docker_engine_identity(trusted_controls):
+        raise SafeBootstrapError("disposable Docker Engine differs from admitted owner")
+    values = record.get("cleanup_environment")
+    if not isinstance(values, dict) or any(not isinstance(key, str) or not isinstance(value, str)
+                                           for key, value in values.items()):
+        raise SafeBootstrapError("invalid admitted cleanup inputs")
+    reject_controller_overrides(values)
+    environment = {**trusted_controls, **values, **images, "MARTY_CONFORMANCE_PROJECT": project}
+    placeholder = private / "cleanup-placeholder"
+    if not placeholder.exists():
+        private_file(placeholder, "cleanup-only\n")
+    if placeholder.is_symlink() or placeholder.read_bytes() != b"cleanup-only\n":
+        raise SafeBootstrapError("invalid disposable cleanup placeholder")
+    for source in compose_sources(compose):
+        for key in REQUIRED.findall(source.read_text(encoding="utf-8")):
+            environment.setdefault(key, str(placeholder) if key.endswith("_FILE") else "cleanup-only")
+    errors = []
+    # Never recover mutable material/.env.kms into controller authority. Use
+    # only the bounded interpolation snapshot admitted before allocation.
+    environment.update({
+        "TRUST_REGISTRY_FIXTURE_UID": str(os.getuid()), "TRUST_REGISTRY_FIXTURE_GID": str(os.getgid()),
+        "TRUST_REGISTRY_FIXTURE_TOKEN": "cleanup-only",
+        "TRUST_REGISTRY_FIXTURE_SCRIPT": str(Path(__file__).with_name("trust_registry_fixture.py")),
+        "DIDCOMM_FIXTURE_MODULE": str(Path(__file__).with_name("didcomm_sender_fixture.py")),
+        "DIDCOMM_FIXTURE_DESCRIPTOR_FILE": str(private / "didcomm-sender-bootstrap.json"),
+        "DIDCOMM_FIXTURE_CA_FILE": str(private / "openbao_tls_ca_cert"),
+        "DIDCOMM_FIXTURE_RUN_ID": args.run_id,
+    })
+    environment.setdefault("OIDF_TLS_CERT_DIR", str(args.material.resolve()))
+    registry_compose = Path(__file__).resolve().parents[1] / "conformance/trust-registry-fixture.compose.yml"
+    commands = [
+        ["docker", "compose", "--project-name", projects[1], "--file", str(registry_compose),
+         "down", "--volumes", "--remove-orphans"],
+        [*compose, "down", "--volumes", "--remove-orphans"],
+    ]
+    for index, command in enumerate(commands):
+        try:
+            result = subprocess.run(command, env=environment, cwd=args.marty_ui,
+                                    capture_output=True, check=False, timeout=180)
+            if result.returncode:
+                errors.append(f"owned project {index} teardown failed")
+        except Exception:
+            errors.append(f"owned project {index} teardown unavailable")
+    for name in projects:
+        for command in (["docker", "ps", "-aq"], ["docker", "network", "ls", "-q"],
+                        ["docker", "volume", "ls", "-q"]):
+            try:
+                result = subprocess.run([*command, "--filter", f"label=com.docker.compose.project={name}"],
+                                        env=environment, capture_output=True, text=True, check=True, timeout=30)
+                if result.stdout.strip():
+                    errors.append("owned project resources remain")
+            except Exception:
+                errors.append("owned project absence census failed")
+    print(json.dumps({"projects": projects, "retired": not errors, "errors": errors}))
+    return 1 if errors else 0
 
 
 def compose_sources(compose: list[str]) -> set[Path]:
@@ -509,6 +682,9 @@ def runtime_environment(tls: Path, keycloak: Path, extra: Path, ca: Path,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--eudi-registration", action="store_true", help="provision an isolated reference-verifier registration before root retirement")
+    parser.add_argument("--didcomm-fixture", action="store_true", help="stage a two-use create-only capability for the owned DIDComm controller")
+    parser.add_argument("--cleanup-only", action="store_true", help="retire only receipt-bound disposable projects")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--marty-ui", required=True, type=Path)
     parser.add_argument("--stack-manifest", required=True, type=Path)
@@ -518,6 +694,8 @@ def main() -> int:
     args = parser.parse_args()
     if os.name != "posix":
         raise SafeRuntimeBootstrapError("official disposable KMS bootstrap requires a Linux Docker host")
+    if args.cleanup_only:
+        return cleanup_owned_projects(args)
     images, compose, _source = checked_release(args)
     private = args.output_dir.resolve()
     private.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -527,7 +705,21 @@ def main() -> int:
     material = json.loads((args.material / "environment.json").read_text(encoding="utf-8"))["environment"]
     if not isinstance(material, dict) or not material.get("OIDF_PUBLIC_BASE_URL", "").startswith("https://"):
         raise ValueError("official TLS material is incomplete")
+    reject_controller_overrides(material)
     bootstrap_env = placeholder_environment(compose, images, private, project, material)
+    cleanup_keys = set(images)
+    for source in compose_sources(compose):
+        cleanup_keys.update(REQUIRED.findall(source.read_text(encoding="utf-8")))
+    cleanup_values = {}
+    for key in cleanup_keys:
+        value = bootstrap_env[key]
+        if (not key.endswith("_FILE")
+                and (key in RUNTIME_CREDENTIALS or key.endswith("_KEY")
+                     or any(marker in key for marker in ("TOKEN", "PASSWORD", "SECRET", "API_KEY")))):
+            value = "cleanup-only"
+        cleanup_values[key] = value
+    reject_controller_overrides(cleanup_values)
+    admit_owned_projects(args, private, cleanup_values)
     tls = private / "tls"
     keycloak = private / "keycloak"
     extra = private / "extra"
@@ -575,13 +767,40 @@ def main() -> int:
                 env=keycloak_env)
         with bootstrap_stage("extra-workloads"):
             provision_extra_workloads(args.marty_ui, extra, ca, root)
+        registration_inputs = {}
+        if getattr(args, "eudi_registration", False):
+            with bootstrap_stage("eudi-registration"):
+                import hashlib
+                from selfhost_openbao_client import Bao
+                from eudi_registration_fixture import canonical, provision
+                authority = root.read_text(encoding="ascii").strip()
+                registrar_bao = Bao(KMS_ORIGIN,ca,authority)
+                registration = provision(registrar_bao,args.run_id,material["EUDI_VERIFIER_PUBLIC_URL"],
+                    provision_key=provision_nonexportable_transit_key,
+                    scoped_signer=scoped_transit_signing_token,authority=authority)
+                content = canonical(registration)
+                private_file(private / "eudi-registration.json",content.decode("ascii"))
+                registration_inputs = {
+                    "EUDI_VERIFIER_REGISTRATION_RECORD_FILE":str(private / "eudi-registration.json"),
+                    "EUDI_VERIFIER_REGISTRATION_RECORD_SHA256":hashlib.sha256(content).hexdigest(),
+                }
         with bootstrap_stage("official-edge"):
             edge = provision_oidf_edge(args.marty_ui, extra, args.material, ca, root,
                                        material["OIDF_PUBLIC_BASE_URL"])
             (args.material / "official-ca.key").unlink()
+        if getattr(args, "didcomm_fixture", False):
+            with bootstrap_stage("didcomm-fixture"):
+                from didcomm_sender_fixture import stage
+                from selfhost_openbao_client import Bao
+
+                authority = root.read_text(encoding="ascii").strip()
+                stage(Bao(KMS_ORIGIN, ca, authority), authority, private,
+                      args.run_id, material["OIDF_PUBLIC_BASE_URL"], ca)
         with bootstrap_stage("runtime-files"):
             environment = runtime_environment(tls, keycloak, extra, ca, material, edge)
+            environment.update(registration_inputs)
             prepare_runtime_mount_files(environment, private, material["OIDF_PUBLIC_BASE_URL"])
+            prepare_public_ca_mount(args.material.resolve())
             private_file(
                 private / ".env.kms", "".join(f"{key}={value}\n" for key, value in sorted(environment.items())),
             )

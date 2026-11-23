@@ -6,21 +6,63 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
 HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z")
+HOSTS_FILE = Path("/etc/hosts")
+
+
+def append_owned_hosts(payload: bytes) -> bool:
+    """Support a caller-owned hosts file in an isolated mount namespace.
+
+    No elevation, replacement, symlink following or permission change occurs.
+    A normal root-owned runner file retains the existing sudo writer below.
+    """
+    if sys.platform != "linux":
+        return False
+    before = HOSTS_FILE.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError("runner hosts file is not a regular file")
+    if before.st_uid != os.getuid():
+        return False
+    if before.st_mode & 0o022 or before.st_nlink != 1:
+        raise ValueError("owned runner hosts file has unsafe custody")
+    descriptor = os.open(HOSTS_FILE, os.O_WRONLY | os.O_APPEND | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        held = os.fstat(descriptor)
+        if (held.st_dev, held.st_ino, held.st_uid, held.st_mode, held.st_nlink) != (
+            before.st_dev, before.st_ino, before.st_uid, before.st_mode, before.st_nlink
+        ):
+            raise ValueError("owned runner hosts file changed")
+        if os.write(descriptor, payload) != len(payload):
+            raise RuntimeError("runner hosts append was incomplete")
+        after = HOSTS_FILE.lstat()
+        if (after.st_dev, after.st_ino, after.st_uid, after.st_mode, after.st_nlink) != (
+            held.st_dev, held.st_ino, held.st_uid, held.st_mode, held.st_nlink
+        ):
+            raise ValueError("owned runner hosts file changed after append")
+    finally:
+        os.close(descriptor)
+    return True
 
 
 def append_host_aliases(address: str, aliases: list[str]) -> None:
     address = str(ipaddress.ip_address(address))
     if not aliases or any(not HOST.fullmatch(host) or len(host) > 253 for host in aliases):
         raise ValueError("disposable runner host alias is invalid")
+    payload = f"\n{address} {' '.join(aliases)}\n".encode("ascii")
+    if os.environ.get("MARTY_OFFICIAL_PRIVATE_HOSTS") == "1":
+        if not append_owned_hosts(payload):
+            raise ValueError("private runner hosts custody is unavailable")
+        return
     with subprocess.Popen(["sudo", "tee", "-a", "/etc/hosts"], stdin=subprocess.PIPE,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as writer:
         # Docker-generated hosts files can lack an EOF newline.
-        writer.communicate(f"\n{address} {' '.join(aliases)}\n".encode("ascii"), timeout=10)
+        writer.communicate(payload, timeout=10)
         if writer.returncode:
             raise RuntimeError("runner cannot stage disposable host aliases")
 

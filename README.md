@@ -40,6 +40,10 @@ make stop
 
 `scripts/render_stack_env.py` rejects commerce markers, mutable image tags, missing digests, duplicate image roles, and unsupported manifest schemas. Current stacks require the UI, services, migrations, and OpenBao DIDComm image digests. The generated `.env.stack` contains digest-pinned GHCR and base-image references and is never committed.
 
+The owned public-boundary lane stages managed KMS with `official_kms_bootstrap.py --didcomm-fixture` and passes its `.env.kms` and `didcomm-sender-bootstrap.json` paths through `public_boundary_lane.py --kms-env ... --didcomm-fixture ...`. Before retiring root authority, bootstrap issues a two-use, ten-minute capability that can create only two fixed run-named plugin keys. The existing fixture controller consumes it for one tenant/issuer pair; peer tests receive only public sender bindings. Signing Keys publishes and revalidates the versioned non-exportable reference through authenticated owners. Atomic public-reference policy updates are rebound only in the admitted native Issuance container; the controller verifies its image, read-only mount, container-visible hash and readiness before proceeding. The pinned independent implementation decrypts and rejects tampering; Marty's released Python API parses public plaintext and must exclude raw-key decryption. These are product-boundary tests, not an imported official suite or inbound-agent qualification.
+
+Bootstrap refuses existing project resources and records the admitted Docker Engine, immutable stack manifest and bounded cleanup inputs. `official_kms_bootstrap.py --cleanup-only` uses that receipt to retire only the admitted projects, including failure before boundary dispatch. Mutable runtime input files cannot change Docker/Compose authority during recovery. Private capabilities, scoped runtime credentials and recovery inputs must never be committed or uploaded as public evidence.
+
 `make start` combines the public Compose model with the required Rust service
 wiring. Issuance runtime and migrations use the same signed services digest;
 the renderer rejects a retired Credentials issuance image. Evidence runs

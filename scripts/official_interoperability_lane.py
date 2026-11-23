@@ -1361,6 +1361,22 @@ def discard_disposable_certificate_authority(material_dir: Path) -> None:
     authority.unlink()
 
 
+def protocol_deployment_bindings(gateway_url: str, run_id: str, organization_id: str) -> dict[str, str]:
+    """Native fixture bindings shared by owned and imported protocol lanes."""
+    from official_fixture_bootstrap import issuer_did_for_gateway
+
+    return {
+        "MARTY_ORG_ID": organization_id,
+        "MARTY_ISSUER_DID": issuer_did_for_gateway(gateway_url),
+        # The beta compatibility adapter and credential-login route are not
+        # protocol-suite authentication. Keep those separate paths fail-closed.
+        "VERIFICATION_GOVERNANCE_JSON": "{}",
+        "CREDENTIAL_LOGIN_POLICY_ID": "official-protocol-only-" + run_id,
+        "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER": "true",
+        "CREDENTIAL_LOGIN_CREATE_USERS": "false",
+    }
+
+
 def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, object]]:
     if args.lane not in LANES:
         raise ValueError(f"unknown lane: {args.lane}")
@@ -1428,24 +1444,12 @@ def base_environment(args: argparse.Namespace) -> tuple[dict[str, str], dict[str
     # Startup provisions a default identity. Protocol fixtures must create
     # their own organization identity with the reviewed attestation policy;
     # idempotent identity creation does not overwrite an existing policy.
-    from official_fixture_bootstrap import issuer_did_for_gateway
-
     organization_id = environment.get(
         "MARTY_CONFORMANCE_ORGANIZATION_ID", "00000000-0000-0000-0000-000000000001"
     )
     environment.update(
         {
-            "MARTY_ORG_ID": organization_id,
-            "MARTY_ISSUER_DID": issuer_did_for_gateway(gateway_url),
-            # Satisfy beta's interpolation without enabling its separate
-            # Credentials compatibility adapter in these protocol suites.
-            "VERIFICATION_GOVERNANCE_JSON": "{}",
-            # These suites authenticate their operator with Keycloak, not
-            # credential login. An unprovisioned run-specific policy keeps
-            # that separate login path fail-closed without borrowing beta's.
-            "CREDENTIAL_LOGIN_POLICY_ID": "official-protocol-only-" + args.run_id,
-            "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER": "true",
-            "CREDENTIAL_LOGIN_CREATE_USERS": "false",
+            **protocol_deployment_bindings(gateway_url, args.run_id, organization_id),
             "OFFICIAL_SUITE_RUN_ID": args.run_id,
             "MARTY_COMMIT": str(metadata["marty_commit"]),
             "MARTY_CONFORMANCE_ORGANIZATION_ID": environment.get(
@@ -1731,6 +1735,22 @@ def down_local_native_issuer(args: argparse.Namespace, environment: dict[str, st
         raise RuntimeError("local native issuer project cleanup failed")
 
 
+def preserve_issuer_startup_failure(args: argparse.Namespace, environment: dict[str, str]) -> None:
+    """Collect private service logs while the failed owned project still exists."""
+    try:
+        capture = args.output_dir / "private" / "startup-compose.log"
+        capture.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(capture, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        run(compose_command(args, "logs", oidf=True), environment, capture=capture)
+        emit_keycloak_initializer_diagnostic(args.run_id)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        print("Official issuer startup diagnostics unavailable.", file=sys.stderr)
+    finally:
+        if run(compose_command(args, "down", oidf=True), environment):
+            raise RuntimeError("official issuer startup cleanup failed")
+
+
 def run_oid4vci_issuer(
     args: argparse.Namespace,
     environment: dict[str, str],
@@ -1738,17 +1758,13 @@ def run_oid4vci_issuer(
     """Run the active official issuer plan against the public Marty boundary."""
     local_binding = getattr(args, "local_native_functional_binding", None)
     try:
-        started = run(compose_command(args, "up", oidf=True), environment, native_attestation=True) == 0
+        started = run(compose_command(args, "up", oidf=True, retain_on_up_failure=True),
+                      environment, native_attestation=True) == 0
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-        if local_binding:
-            down_local_native_issuer(args, environment)
+        preserve_issuer_startup_failure(args, environment)
         raise
     if not started:
-        try:
-            emit_keycloak_initializer_diagnostic(args.run_id)
-        finally:
-            if local_binding:
-                down_local_native_issuer(args, environment)
+        preserve_issuer_startup_failure(args, environment)
         return 1
     result = 1
     native_before = None
@@ -1923,6 +1939,22 @@ def run_w3c(args: argparse.Namespace, environment: dict[str, str]) -> int:
         run([*base, "down"], environment)
 
 
+def preserve_eudi_startup_failure(args: argparse.Namespace, environment: dict[str, str]) -> None:
+    """Preserve private EUDI service diagnostics before retiring its fixture."""
+    try:
+        capture = args.output_dir / "private" / "startup-compose.log"
+        capture.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(capture, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        run(compose_command(args, "logs", eudi=True, haip=True), environment, capture=capture)
+        emit_keycloak_initializer_diagnostic(args.run_id)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        print("Official EUDI startup diagnostics unavailable.", file=sys.stderr)
+    finally:
+        if run(compose_command(args, "down", eudi=True, haip=True), environment):
+            raise RuntimeError("official EUDI startup cleanup failed")
+
+
 def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # EUDI's official wallet library must exercise the same production HAIP
     # request-object path as a real wallet. The dedicated HAIP chain signs the
@@ -1933,15 +1965,29 @@ def run_eudi(args: argparse.Namespace, environment: dict[str, str]) -> int:
     # *after* it merges EUDI material, so EUDI's TLS CA cannot accidentally
     # replace the independent request-object trust anchor.
     environment = dict(environment)
+    from eudi_registration_fixture import load_bootstrap_configuration
+    registration_path = environment.get("EUDI_VERIFIER_REGISTRATION_RECORD_FILE", "")
+    registration_digest = environment.get("EUDI_VERIFIER_REGISTRATION_RECORD_SHA256", "")
+    if not registration_path or not registration_digest:
+        raise ValueError("EUDI lane requires an isolated bootstrap registration with exact-byte provenance")
+    environment["EUDI_VERIFIER_APPLICATION_JSON"] = load_bootstrap_configuration(
+        Path(registration_path),registration_digest,args.run_id,environment["EUDI_VERIFIER_PUBLIC_URL"],
+        client_id_prefix=environment.get("EUDI_VERIFIER_CLIENT_ID_PREFIX", ""),
+        original_client_id=environment.get("EUDI_VERIFIER_ORIGINAL_CLIENT_ID", ""),
+    )
     key_attestation_jwks, key_attestation_root = oidf_key_attestation_material(args.output_dir)
     wallet_attester_file = args.output_dir / "private" / "eudi-wallet-attester.jwks.json"
     write_private_json(wallet_attester_file, key_attestation_jwks)
     environment["EUDI_WALLET_ATTESTER_JWKS_FILE"] = str(wallet_attester_file)
     environment["EUDI_KEY_ATTESTATION_TRUST_ANCHOR_FILE"] = str(key_attestation_root)
-    up = compose_command(args, "up", eudi=True, haip=True)
-    started = run(up, environment, native_attestation=True) == 0
+    up = compose_command(args, "up", eudi=True, haip=True, retain_on_up_failure=True)
+    try:
+        started = run(up, environment, native_attestation=True) == 0
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        preserve_eudi_startup_failure(args, environment)
+        raise
     if not started:
-        emit_keycloak_initializer_diagnostic(args.run_id)
+        preserve_eudi_startup_failure(args, environment)
         return 1
     result = 1
     try:

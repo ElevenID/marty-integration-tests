@@ -136,6 +136,33 @@ def test_policy_must_be_revisited_on_runner_upgrade() -> None:
         evaluate(unit_document(), commit="0" * 40)
 
 
+@pytest.mark.parametrize("condition", [
+    "EnsureVerifierFetchedRevocationList",
+    "EnsureRevocationListRequestAcceptedServedMediaType",
+])
+def test_final_status_obligations_cannot_hide_under_aggregate_review(condition: str) -> None:
+    document = unit_document()
+    document["results"].append({"testId": "test1", "src": condition, "result": "WARNING"})
+    before = copy.deepcopy(document)
+    with pytest.raises(ValueError, match="warning|failure|unknown"):
+        evaluate(document)
+    assert document == before
+    assert document["testInfo"]["result"] == "REVIEW"
+
+
+@pytest.mark.parametrize("module", [
+    "oid4vp-1final-verifier-present-credential-on-identifier-list",
+    "oid4vp-1final-verifier-wrong-vct",
+    "oid4vp-1final-verifier-present-revoked-credential",
+    "oid4vp-1final-verifier-present-credential-without-status",
+])
+def test_new_official_modules_are_outside_positive_review_assessment(module: str) -> None:
+    document = unit_document()
+    document["testInfo"]["testName"] = module
+    with pytest.raises(ValueError, match="allowed finished positive"):
+        evaluate(document)
+
+
 @pytest.mark.parametrize("result", ["UNKNOWN", "SKIPPED", "INTERRUPTED", "future-result", "", None, 1])
 def test_unknown_incomplete_and_malformed_log_results_cannot_be_ignored(result: object) -> None:
     document = unit_document()

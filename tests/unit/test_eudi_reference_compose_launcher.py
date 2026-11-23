@@ -94,3 +94,18 @@ def test_launcher_requires_explicit_roots_for_remote_external_mode(monkeypatch: 
 
     with pytest.raises(SystemExit, match="EUDI_CONFORMANCE_CONFIG_ROOT"):
         launcher.main(["--marty-project", "marty-conformance-run1", "--", "ps"])
+
+
+@pytest.mark.parametrize("action", ["down", "logs", "ps"])
+def test_retirement_and_diagnostics_do_not_require_retired_bridge(monkeypatch, action):
+    calls = []
+    monkeypatch.setattr(launcher, "docker_endpoint_is_local", lambda: True)
+    monkeypatch.setattr(launcher, "docker_command", lambda args: ["docker", *args])
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        assert "network" not in command
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(launcher.subprocess, "run", fake_run)
+    assert launcher.main(["--marty-project", "marty-conformance-run1", "--", action]) == 0
+    assert len(calls) == 1
+    assert calls[0][-1] == action

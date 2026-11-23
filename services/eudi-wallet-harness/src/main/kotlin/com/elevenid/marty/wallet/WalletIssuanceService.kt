@@ -124,6 +124,8 @@ object WalletIssuanceService {
                 "offer-credential-configuration-invalid"
             is CredentialOfferRequestValidationError.InvalidGrants ->
                 "offer-grants-invalid"
+            is CredentialOfferRequestValidationError.UnsupportedGrants ->
+                "offer-grants-unsupported"
             is CredentialOfferRequestError.UnableToResolveCredentialIssuerMetadata ->
                 classifyMetadataFailure(offerError.reason, "issuer")
             is CredentialOfferRequestError.UnableToResolveAuthorizationServerMetadata ->
@@ -364,7 +366,7 @@ object WalletIssuanceService {
     private fun createP256ProofSigner(): HolderProofMaterial {
         val ecKey: ECKey = ECKeyGenerator(Curve.P_256).generate()
         val jcaAlgorithm = "SHA256withECDSA"
-        val proofs = ProofSpecification.JwtProof { nonce, preferredPeriod ->
+        val proofs = ProofSpecification.JwtProofWithKeyAttestation { nonce, preferredPeriod ->
             val attestation = keyAttestation(ecKey, nonce, preferredPeriod)
             object : Signer<KeyAttestationJWT> {
                 override val javaAlgorithm: String = jcaAlgorithm

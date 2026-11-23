@@ -40,7 +40,7 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert url_query["status"] == "active"
     assert "[request_method=url_query]" in url_query["test_plan"]
     assert "[client_id_prefix=redirect_uri]" in url_query["test_plan"]
-    assert "Exact unmodified OIDF release-v5.3.3 evidence" in url_query["qualification"]
+    assert f"Exact unmodified OIDF {manifest['official_runner']['release']} evidence" in url_query["qualification"]
     assert "distinct from Marty's signed by-value Request Object" in url_query["qualification"]
     mdoc = manifest["profiles"]["oid4vp-mdoc-verifier"]
     assert mdoc["status"] == "active"
@@ -54,8 +54,10 @@ def test_pinned_official_runner_manifest_is_valid() -> None:
     assert fixture["upstream_profile_issue"].endswith("/work_items/1891")
     assert fixture["state"] == "historical-fixture-replaced-upstream"
     assert fixture["runner_release"] == "release-v5.2.2"
-    assert fixture["resolved_runner_release"] == manifest["official_runner"]["release"]
-    assert fixture["resolved_runner_commit"] == manifest["official_runner"]["commit"]
+    # Preserve the historical replacement observation on the runner actually
+    # observed. Adopting a candidate must not rewrite it as new qualification.
+    assert fixture["resolved_runner_release"] == "release-v5.3.3"
+    assert fixture["resolved_runner_commit"] == "7d420f716e49d44f8a6b04f0a3e240ad6d68ab55"
     assert fixture["certificate_not_before"] == "2026-08-03T16:12:01+00:00"
     assert fixture["certificate_not_after"] == "2027-08-03T16:12:01+00:00"
     assert fixture["certificate_sha256"] == "6cb412be8d1e78f77b1bce09592b0c88f690034855753b1954d6bcadf3b92b53"

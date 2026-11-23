@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Mapping
+import logging
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -138,3 +139,19 @@ def require_presentation_accepted(
             assert result.get("responseMode") == expected_mode
     with eudi_stage(f"{stage}-verifier-accepted"):
         assert result.get("verifierAccepted") is True
+
+
+async def optional_verification_diagnostic(
+    fetch: Callable[[], Awaitable[Mapping[str, Any]]], *, stage: str,
+) -> Mapping[str, Any] | None:
+    """A failed diagnostic cannot replace the original failed wallet verdict."""
+    if not _STAGE.fullmatch(stage):
+        raise ValueError("EUDI interoperability stage must be a bounded slug")
+    try:
+        return await fetch()
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        suffix = f"-http-{status}" if isinstance(status, int) and 400 <= status <= 599 else ""
+        # Only a code-owned bounded stage and numeric HTTP status are public.
+        logging.getLogger(__name__).warning("eudi-diagnostic-%s-unavailable%s", stage, suffix)
+        return None

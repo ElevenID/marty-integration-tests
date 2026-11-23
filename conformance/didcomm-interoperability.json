@@ -3,9 +3,9 @@
   "independent_implementation": {
     "name": "affinidi-messaging-didcomm",
     "repository": "https://github.com/affinidi/affinidi-tdk-rs.git",
-    "release": "v0.15.8",
-    "commit": "2bec127b171b8fcf69a6c0e6aedca516a3e201b7",
-    "crate_checksum": "7e50820cf32736246a5e918a5eb1773c31ffcec898ad2ab5b26477cf7a547fa5",
+    "release": "v0.16.0",
+    "commit": "9eb3b42b81bbd83395a66926c70bcfd276d0f126",
+    "crate_checksum": "c215ca87545c8c4fd3638e2ef10912bc42f28cb5d14c2fb4adf4290a5386a799",
     "command_package": "tools/didcomm-independent-verifier",
     "license": "Apache-2.0"
   },
@@ -40,13 +40,14 @@
     "holder_did_method": "did:peer:2",
     "sender_did_method": "did:web",
     "negative_cases": [
-      "sender private key and published key mismatch",
+      "registered sender reference and published binding mismatch",
       "ciphertext tampering",
       "authentication-tag tampering",
       "protected-header tampering",
       "wrapped-content-key tampering"
-    ]
+    ],
+    "sender_custody": "non-exportable OpenBao plugin key, versioned tenant-bound reference and registered Signing Keys owner"
   },
-  "claim": "Cross-implementation decryption and cryptographic tamper-rejection evidence for Marty's selected outbound anoncrypt and managed-issuer authcrypt credential-delivery profiles, including wrong-sender-key fail-closed behavior; not full DIDComm conformance, certification, or inbound-agent support.",
+  "claim": "Independent-peer decryption and cryptographic tamper-rejection evidence for Marty's selected outbound anoncrypt and non-exportable managed-issuer authcrypt credential-delivery profiles, including mismatched-reference fail-closed behavior. Marty checks only public plaintext through its released codec; no raw-key decryption API is restored. Not full DIDComm conformance, certification, or inbound-agent support.",
   "update_policy": "The monthly interoperability updater reports newer upstream releases. Pins change only after source review and the immutable public-boundary lane passes."
 }
