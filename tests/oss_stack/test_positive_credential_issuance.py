@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
 from tests.integration.gateway.helpers.oid4vc_wallet_client import OID4VCIWalletClient
-from tests.oss_stack.application_event_probe import post_json, sign_application_event
+from tests.oss_stack.application_event_probe import post_json
 from tests.oss_stack.test_application_offer_recovery import (
     _CREDENTIAL_TEMPLATE_ID,
     _ORGANIZATION_ID,
-    _deactivate_disposable_application_flows,
-    _install_disposable_application_flow,
 )
 from tests.oss_stack.test_public_stack import GATEWAY_URL
 
@@ -29,7 +29,7 @@ def assert_member_badge_credential(
     achievement_description: str,
     achievement_criteria_narrative: str,
 ) -> None:
-    """Check JWT-VC shape and event correlation, not its signature."""
+    """Check JWT-VC shape and application correlation, not its signature."""
     assert credential
     assert all(credential.split("."))
     decoded = wallet.validate_credential_format(credential, "jwt_vc_json")
@@ -52,59 +52,73 @@ def assert_member_badge_credential(
     assert criteria.get("narrative") == achievement_criteria_narrative
 
 
+def _post_issuance(path: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    response = post_json(f"http://issuance-native:8005{path}", payload, headers)
+    assert response["status"] == 200, f"Issuance {path} returned HTTP {response['status']}"
+    body = response["body"]
+    assert isinstance(body, dict)
+    return body
+
+
 @pytest.mark.asyncio
 @pytest.mark.nightly_public_smoke
 async def test_application_offer_redeems_to_issued_credential() -> None:
-    """Exercise Flow -> Issuance -> public gateway -> wallet without login mocks."""
-    flow_id = str(uuid.uuid4())
-    extension_uri = f"urn:elevenid:test:released-stack-positive-issuance:{flow_id}"
-    application_id = f"artifact-issuance-{uuid.uuid4()}"
-    issued_at = datetime.now(UTC).isoformat()
+    """Approve an issuance-owned application and redeem its bound offer through the gateway."""
+    member_id = f"artifact-issuance-{uuid.uuid4()}"
     achievement_name = "Disposable member badge"
     achievement_description = "Disposable released-stack issuance check"
     achievement_criteria_narrative = "Complete the disposable application approval journey"
-    event = {
-        "event_type": "application.approved",
-        "aggregate_id": application_id,
-        "aggregate_type": "application",
+    claims = {
+        "member_id": member_id,
+        "email": "nightly-issuance@example.invalid",
         "organization_id": _ORGANIZATION_ID,
-        "data": {
-            "applicant_id": f"applicant-{application_id}",
-            "credential_template_id": _CREDENTIAL_TEMPLATE_ID,
-            "claims": {
-                "member_id": application_id,
-                "email": "nightly-issuance@example.invalid",
-                "organization_id": _ORGANIZATION_ID,
-                "role": "applicant",
-                "achievement_name": achievement_name,
-                "achievement_description": achievement_description,
-                "achievement_criteria": {"narrative": achievement_criteria_narrative},
-                "issued_at": issued_at,
-            },
-        },
-        "timestamp": datetime.now(UTC).isoformat(),
+        "role": "applicant",
+        "achievement_name": achievement_name,
+        "achievement_description": achievement_description,
+        "achievement_criteria": {"narrative": achievement_criteria_narrative},
+        "issued_at": datetime.now(UTC).isoformat(),
     }
+    # The Compose fixture accepts this override for the same private Issuance listener.
+    headers = {
+        "x-api-key": os.environ.get("ISSUANCE_API_KEY") or "oss-ci-issuance-internal-key-32-bytes",
+        "x-organization-id": _ORGANIZATION_ID,
+    }
+    template = _post_issuance(
+        "/v1/application-templates",
+        {
+            "organization_id": _ORGANIZATION_ID,
+            "name": member_id,
+            "credential_template_id": _CREDENTIAL_TEMPLATE_ID,
+            "form_fields": [
+                {"field_id": "member_id", "label": "Member ID", "field_type": "TEXT", "required": True}
+            ],
+        },
+        {**headers, "idempotency-key": member_id},
+    )
+    template_id = template["id"]
+    assert isinstance(template_id, str) and template_id
+    template_path = f"/v1/application-templates/{template_id}"
     try:
-        _install_disposable_application_flow(flow_id, extension_uri=extension_uri)
-        response = post_json(
-            "http://flow-service:8011/v1/flows/webhooks/application-approved",
-            event,
-            sign_application_event(event),
+        activated = _post_issuance(f"{template_path}/activate", {}, headers)
+        assert activated["status"].lower() == "active"
+        application = _post_issuance(
+            "/internal/applications",
+            {"application_template_id": template_id, "applicant_data": claims},
+            headers,
         )
-        assert response["status"] == 200
-        body = response["body"]
-        assert isinstance(body, dict)
-        assert body["flows_triggered"] >= 1
-        offers = body["offers"]
-        assert isinstance(offers, list)
-        assert len(offers) == body["flows_triggered"]
-        own_offers = [offer for offer in offers if offer.get("flow_definition_id") == flow_id]
-        assert len(own_offers) == 1
-        offer = own_offers[0]
-        assert isinstance(offer, dict)
-        assert offer["flow_definition_id"] == flow_id
-        assert offer["credential_offer_transaction_id"]
-        offer_uri = offer["credential_offer_uri"]
+        assert application["organization_id"] == _ORGANIZATION_ID
+        application_id = application["id"]
+        assert isinstance(application_id, str) and application_id
+        application_path = f"/internal/applications/{application_id}"
+        approved = _post_issuance(f"{application_path}/approve", {}, headers)
+        assert approved["id"] == application_id
+        assert approved["status"] == "approved"
+        transaction_id = approved["issuance_transaction_id"]
+        assert isinstance(transaction_id, str) and transaction_id
+        offer = _post_issuance(f"{application_path}/issuance-offer", {}, headers)
+        assert offer["status"] == "active"
+        assert offer["transaction_id"] == transaction_id
+        offer_uri = offer["offer_url"]
         assert isinstance(offer_uri, str)
         assert offer_uri.startswith("openid-credential-offer://")
 
@@ -126,10 +140,10 @@ async def test_application_offer_redeems_to_issued_credential() -> None:
         assert_member_badge_credential(
             wallet,
             credential,
-            member_id=application_id,
+            member_id=member_id,
             achievement_name=achievement_name,
             achievement_description=achievement_description,
             achievement_criteria_narrative=achievement_criteria_narrative,
         )
     finally:
-        _deactivate_disposable_application_flows(extension_uri=extension_uri)
+        _post_issuance(f"{template_path}/deprecate", {}, headers)
